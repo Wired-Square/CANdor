@@ -16,6 +16,7 @@ use crate::{
         CsvReader, CsvReaderOptions,
         GvretReader,
         GvretUsbConfig, GvretUsbReader,
+        MqttConfig, MqttReader,
         Parity, PostgresConfig, PostgresReader, PostgresReaderOptions, PostgresSourceType,
         SerialConfig, SerialFramingConfig, SerialReader,
         SlcanConfig, SlcanReader,
@@ -26,6 +27,9 @@ use crate::{
     serial_framer::{FrameIdConfig, FramingEncoding},
     settings::{self, AppSettings, IOProfile},
 };
+
+#[cfg(target_os = "windows")]
+use crate::io::{GsUsbConfig, GsUsbReader};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -456,9 +460,154 @@ pub async fn create_reader_session(
 
             Box::new(SocketIODevice::new(app.clone(), session_id.clone(), config))
         }
+        "gs_usb" => {
+            // gs_usb (candleLight) support
+            // - Linux: Uses SocketCAN (kernel gs_usb driver exposes device as canX interface)
+            // - Windows: Uses direct USB access via nusb
+
+            #[cfg(target_os = "linux")]
+            {
+                // On Linux, gs_usb devices appear as SocketCAN interfaces
+                let interface = profile
+                    .connection
+                    .get("interface")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        "CAN interface is required for gs_usb on Linux. \
+                        Run 'sudo ip link set canX up type can bitrate NNNN' first."
+                            .to_string()
+                    })?
+                    .to_string();
+
+                let config = SocketCanConfig {
+                    interface,
+                    limit,
+                    display_name: Some(profile.name.clone()),
+                };
+
+                Box::new(SocketIODevice::new(app.clone(), session_id.clone(), config))
+            }
+
+            #[cfg(target_os = "windows")]
+            {
+                let bus = profile
+                    .connection
+                    .get("bus")
+                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                    .unwrap_or(0) as u8;
+
+                let address = profile
+                    .connection
+                    .get("address")
+                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                    .unwrap_or(0) as u8;
+
+                let bitrate = profile
+                    .connection
+                    .get("bitrate")
+                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                    .unwrap_or(500_000) as u32;
+
+                let listen_only = profile
+                    .connection
+                    .get("listen_only")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+
+                let channel = profile
+                    .connection
+                    .get("channel")
+                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                    .unwrap_or(0) as u8;
+
+                let config = GsUsbConfig {
+                    bus,
+                    address,
+                    bitrate,
+                    listen_only,
+                    channel,
+                    limit,
+                    display_name: Some(profile.name.clone()),
+                };
+
+                Box::new(GsUsbReader::new(app.clone(), session_id.clone(), config))
+            }
+
+            #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+            {
+                return Err(
+                    "gs_usb is not supported on this platform. \
+                    Consider using slcan firmware instead."
+                        .to_string(),
+                );
+            }
+        }
+        "mqtt" => {
+            let host = profile
+                .connection
+                .get("host")
+                .and_then(|v| v.as_str())
+                .unwrap_or("localhost")
+                .to_string();
+
+            let port = profile
+                .connection
+                .get("port")
+                .and_then(|v| {
+                    v.as_str()
+                        .and_then(|s| s.parse().ok())
+                        .or_else(|| v.as_i64().map(|n| n as u16))
+                })
+                .unwrap_or(1883);
+
+            let username = profile
+                .connection
+                .get("username")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+
+            // Get password from keyring if stored, otherwise from profile
+            let password_stored = profile
+                .connection
+                .get("_password_stored")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            let password = if password_stored {
+                credentials::get_credential(&profile.id, "password").ok().flatten()
+            } else {
+                profile
+                    .connection
+                    .get("password")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            };
+
+            // Get subscription topic from savvycan format config
+            let topic = profile
+                .connection
+                .get("formats")
+                .and_then(|f| f.get("savvycan"))
+                .and_then(|s| s.get("topic"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("candor/#")
+                .to_string();
+
+            let config = MqttConfig {
+                host,
+                port,
+                username,
+                password,
+                topic,
+                client_id: None,
+                display_name: Some(profile.name.clone()),
+            };
+
+            Box::new(MqttReader::new(app.clone(), session_id.clone(), config))
+        }
         kind => {
             return Err(format!(
-                "Unsupported reader type '{}'. Supported: gvret_tcp, gvret_usb, postgres, csv_file, serial, slcan, socketcan",
+                "Unsupported reader type '{}'. Supported: mqtt, gvret_tcp, gvret_usb, postgres, csv_file, serial, slcan, socketcan, gs_usb",
                 kind
             ));
         }

@@ -4,6 +4,8 @@ import { ArrowLeft, ChevronDown, ChevronRight } from "lucide-react";
 import Dialog from "../../../components/Dialog";
 import type { IOProfile } from "../stores/settingsStore";
 import SerialPortPicker from "../components/SerialPortPicker";
+import GsUsbDevicePicker from "../components/GsUsbDevicePicker";
+import LinuxCanSetupHelper from "../components/LinuxCanSetupHelper";
 import SecurePasswordField from "../components/SecurePasswordField";
 import IODeviceStatus, { type DeviceProbeState, type DeviceProbeResult } from "../components/IODeviceStatus";
 import { Input, Select, FormField, PrimaryButton, SecondaryButton } from "../../../components/forms";
@@ -16,6 +18,8 @@ import {
   alertWarning,
 } from "../../../styles";
 import { probeSlcanDevice } from "../../../api/serial";
+import { probeGsUsbDevice } from "../../../api/gs_usb";
+import { isWindows, isLinux } from "../../../utils/platform";
 
 export type MqttFormatKind = "json" | "savvycan" | "decode";
 export type MqttFormatField = "topic" | "enabled";
@@ -139,6 +143,72 @@ export default function IOProfileDialog({
     }
   }, [isOpen, profileForm.kind]);
 
+  // Platform detection state
+  const [platformIsWindows, setPlatformIsWindows] = useState(false);
+  const [platformIsLinux, setPlatformIsLinux] = useState(false);
+
+  useEffect(() => {
+    isWindows().then(setPlatformIsWindows);
+    isLinux().then(setPlatformIsLinux);
+  }, []);
+
+  // gs_usb device probe state (Windows only)
+  const [gsUsbProbeState, setGsUsbProbeState] = useState<DeviceProbeState>("idle");
+  const [gsUsbProbeResult, setGsUsbProbeResult] = useState<DeviceProbeResult | null>(null);
+
+  // Probe gs_usb device (Windows only)
+  const probeGsUsb = useCallback(async () => {
+    if (!platformIsWindows) return;
+
+    const bus = parseInt(profileForm.connection.bus || "0", 10);
+    const address = parseInt(profileForm.connection.address || "0", 10);
+
+    if (!bus && !address) {
+      setGsUsbProbeState("idle");
+      setGsUsbProbeResult(null);
+      return;
+    }
+
+    setGsUsbProbeState("probing");
+    try {
+      const result = await probeGsUsbDevice(bus, address);
+      setGsUsbProbeResult({
+        success: result.success,
+        primaryInfo: result.channel_count ? `${result.channel_count} channel(s)` : undefined,
+        secondaryInfo: result.supports_fd ? "CAN FD supported" : undefined,
+        error: result.error || undefined,
+      });
+      setGsUsbProbeState(result.success ? "success" : "error");
+    } catch (e) {
+      setGsUsbProbeResult({
+        success: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      setGsUsbProbeState("error");
+    }
+  }, [platformIsWindows, profileForm.connection.bus, profileForm.connection.address]);
+
+  // Auto-probe gs_usb device when bus/address changes (Windows only)
+  useEffect(() => {
+    if (profileForm.kind === "gs_usb" && platformIsWindows && (profileForm.connection.bus || profileForm.connection.address)) {
+      const timer = setTimeout(() => {
+        probeGsUsb();
+      }, 500);
+      return () => clearTimeout(timer);
+    } else if (profileForm.kind === "gs_usb") {
+      setGsUsbProbeState("idle");
+      setGsUsbProbeResult(null);
+    }
+  }, [profileForm.kind, platformIsWindows, profileForm.connection.bus, profileForm.connection.address, probeGsUsb]);
+
+  // Reset gs_usb probe state when dialog closes or profile type changes
+  useEffect(() => {
+    if (!isOpen || profileForm.kind !== "gs_usb") {
+      setGsUsbProbeState("idle");
+      setGsUsbProbeResult(null);
+    }
+  }, [isOpen, profileForm.kind]);
+
   return (
     <Dialog isOpen={isOpen} maxWidth="max-w-2xl">
       <div className="max-h-[90vh] overflow-y-auto">
@@ -182,7 +252,9 @@ export default function IOProfileDialog({
               <option value="csv_file">CSV File</option>
               <option value="serial">Serial Port</option>
               <option value="slcan">slcan (CANable, USB-CAN)</option>
-              <option value="socketcan">SocketCAN (Linux)</option>
+              {/* Platform-specific options */}
+              {platformIsLinux && <option value="socketcan">SocketCAN (Linux)</option>}
+              {platformIsWindows && <option value="gs_usb">gs_usb (candleLight)</option>}
             </Select>
           </FormField>
 
@@ -792,6 +864,88 @@ export default function IOProfileDialog({
                 <code className="block mt-2 p-2 bg-amber-100 dark:bg-amber-900/40 rounded text-xs">
                   sudo ip link set can0 up type can bitrate 500000
                 </code>
+              </div>
+            </div>
+          )}
+
+          {/* gs_usb (candleLight) */}
+          {profileForm.kind === "gs_usb" && (
+            <div className={`${spaceYDefault} border-t ${borderDefault} pt-6`}>
+              <h3 className={h3}>gs_usb (candleLight)</h3>
+
+              {/* Device Selection */}
+              <FormField label="Device" variant="default">
+                <GsUsbDevicePicker
+                  value={profileForm.connection.device_id || ""}
+                  onChange={(deviceId, device) => {
+                    onUpdateConnectionField("device_id", deviceId);
+                    if (device) {
+                      onUpdateConnectionField("bus", String(device.bus));
+                      onUpdateConnectionField("address", String(device.address));
+                      if (device.interface_name) {
+                        onUpdateConnectionField("interface", device.interface_name);
+                      }
+                    }
+                  }}
+                />
+              </FormField>
+
+              {/* CAN Bitrate */}
+              <FormField label="CAN Bitrate" variant="default">
+                <Select
+                  variant="default"
+                  value={profileForm.connection.bitrate || "500000"}
+                  onChange={(e) => onUpdateConnectionField("bitrate", e.target.value)}
+                >
+                  <option value="125000">125 Kbit/s</option>
+                  <option value="250000">250 Kbit/s</option>
+                  <option value="500000">500 Kbit/s</option>
+                  <option value="1000000">1 Mbit/s</option>
+                </Select>
+              </FormField>
+
+              {/* Listen-only mode */}
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="gs_usb_listen_only"
+                  checked={profileForm.connection.listen_only !== false}
+                  onChange={(e) => onUpdateConnectionField("listen_only", e.target.checked)}
+                  className="w-4 h-4 text-blue-600 bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 rounded focus:ring-blue-500"
+                />
+                <label htmlFor="gs_usb_listen_only" className="text-sm text-slate-700 dark:text-slate-300">
+                  Listen-only mode (no ACK, no transmit)
+                </label>
+              </div>
+
+              {/* Linux: Setup command helper */}
+              {platformIsLinux && profileForm.connection.interface && (
+                <LinuxCanSetupHelper
+                  interfaceName={profileForm.connection.interface}
+                  bitrate={parseInt(profileForm.connection.bitrate || "500000", 10)}
+                />
+              )}
+
+              {/* Windows: Device status indicator */}
+              {platformIsWindows && profileForm.connection.device_id && (
+                <IODeviceStatus
+                  state={gsUsbProbeState}
+                  result={gsUsbProbeResult}
+                  primaryLabel="Channels"
+                  secondaryLabel="Features"
+                  onRefresh={probeGsUsb}
+                  probingText="Checking device..."
+                  successText="Device connected"
+                  errorText="Device not responding"
+                />
+              )}
+
+              <div className={alertInfo}>
+                <p className="text-sm text-blue-800 dark:text-blue-200">
+                  Works with CANable, CANable Pro (candleLight firmware), and other gs_usb-compatible devices.
+                  {platformIsWindows && " WinUSB driver should install automatically."}
+                  {platformIsLinux && " On Linux, the kernel gs_usb driver exposes devices as SocketCAN interfaces."}
+                </p>
               </div>
             </div>
           )}

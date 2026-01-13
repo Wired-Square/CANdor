@@ -9,7 +9,7 @@ import { WINDOW_EVENTS } from '../events/registry';
 export interface IOProfile {
   id: string;
   name: string;
-  kind: 'mqtt' | 'postgres' | 'gvret_tcp' | 'gvret_usb' | 'csv_file' | 'serial' | 'slcan' | 'socketcan';
+  kind: 'mqtt' | 'postgres' | 'gvret_tcp' | 'gvret_usb' | 'csv_file' | 'serial' | 'slcan' | 'socketcan' | 'gs_usb';
   connection: Record<string, any>;
 }
 
@@ -23,6 +23,7 @@ export function getReaderProtocols(kind: IOProfile['kind'], connection?: Record<
     case 'gvret_usb':
     case 'slcan':
     case 'socketcan':
+    case 'gs_usb':
       return ['can'];
     case 'serial':
       return ['serial'];
@@ -56,6 +57,7 @@ export function isReaderRealtime(kind: IOProfile['kind']): boolean {
     case 'gvret_tcp':
     case 'slcan':
     case 'socketcan':
+    case 'gs_usb':
     case 'serial':
       return true;
     case 'postgres':

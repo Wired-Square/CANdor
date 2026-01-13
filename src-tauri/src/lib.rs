@@ -110,6 +110,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Create About/Settings menu items (App submenu on macOS)
@@ -297,6 +298,10 @@ pub fn run() {
             io::serial::list_serial_ports,
             // slcan device probing
             io::slcan::probe_slcan_device,
+            // gs_usb device enumeration and setup commands
+            io::gs_usb::list_gs_usb_devices,
+            io::gs_usb::get_can_setup_command,
+            io::gs_usb::probe_gs_usb_device,
             // Credential storage API
             credentials::store_credential,
             credentials::get_credential,

@@ -28,7 +28,7 @@ export interface DirectoryValidation {
 export interface IOProfile {
   id: string;
   name: string;
-  kind: 'mqtt' | 'postgres' | 'gvret_tcp' | 'gvret_usb' | 'csv_file' | 'serial' | 'slcan' | 'socketcan';
+  kind: 'mqtt' | 'postgres' | 'gvret_tcp' | 'gvret_usb' | 'csv_file' | 'serial' | 'slcan' | 'socketcan' | 'gs_usb';
   connection: Record<string, any>;
 }
 

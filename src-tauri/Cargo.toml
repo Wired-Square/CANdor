@@ -20,6 +20,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-os = "2"
 tauri-plugin-store = "2"
 tauri-plugin-dialog = "2"
 # Keyring has no default features - must specify platform backends explicitly
@@ -36,12 +37,14 @@ async-trait = "0.1"
 toml = "0.8"
 serialport = "4.3"
 reqwest = { version = "0.12", features = ["json"] }
+rumqttc = "0.24"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
+nusb = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 socketcan = "3.3"

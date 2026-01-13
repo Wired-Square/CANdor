@@ -6,9 +6,11 @@
 
 mod buffer;
 mod csv;
+pub mod gs_usb; // pub for Tauri command access
 mod gvret_common;
 mod gvret_tcp;
 mod gvret_usb;
+mod mqtt;
 mod postgres;
 pub mod serial; // pub for Tauri command access (list_serial_ports)
 mod serial_utils;
@@ -18,8 +20,13 @@ mod socketcan;
 // Re-export device implementations
 pub use buffer::BufferReader;
 pub use csv::{parse_csv_file, CsvReader, CsvReaderOptions};
+#[cfg(target_os = "windows")]
+pub use gs_usb::{GsUsbConfig, GsUsbDeviceInfo};
+#[cfg(target_os = "windows")]
+pub use gs_usb::windows::GsUsbReader;
 pub use gvret_tcp::GvretReader;
 pub use gvret_usb::{GvretUsbConfig, GvretUsbReader};
+pub use mqtt::{MqttConfig, MqttReader};
 pub use postgres::{PostgresConfig, PostgresReader, PostgresReaderOptions, PostgresSourceType};
 pub use serial::{Parity, SerialConfig, SerialFramingConfig, SerialReader};
 pub use slcan::{SlcanConfig, SlcanReader};
