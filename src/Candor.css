@@ -1,0 +1,229 @@
+@import "tailwindcss";
+
+/* DSEG7 Classic - 7-segment LED display font */
+@font-face {
+  font-family: 'DSEG7';
+  src: url('https://cdn.jsdelivr.net/npm/dseg@0.46.0/fonts/DSEG7-Classic/DSEG7Classic-Regular.woff2') format('woff2'),
+       url('https://cdn.jsdelivr.net/npm/dseg@0.46.0/fonts/DSEG7-Classic/DSEG7Classic-Regular.woff') format('woff');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+.font-ubuntu {
+  font-family: 'Ubuntu', sans-serif;
+}
+
+.font-ubuntu-mono {
+  font-family: 'Ubuntu Mono', monospace;
+}
+
+/* LED segment-style display font */
+.font-led {
+  font-family: 'DSEG7', 'Courier New', monospace;
+  letter-spacing: 0.05em;
+}
+
+/* Dockview header action buttons - reset global button styles */
+.dockview-theme-abyss .dv-tabs-and-actions-container button {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+/* Logo button - white background matching logo's inner shape */
+.dockview-theme-abyss .dv-tabs-and-actions-container button[title="Open app menu"] {
+  width: 32px;
+  height: 32px;
+  padding: 3px;
+  background-color: white;
+  border-radius: 6px;
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
+}
+
+/* Ensure header action containers are visible and properly sized */
+.dockview-theme-abyss .dv-tabs-and-actions-container {
+  display: flex;
+  align-items: center;
+}
+
+/* DEBUG: Make prefix actions visible */
+.dockview-theme-abyss .dv-tabs-and-actions-container > div:first-child {
+  min-width: 40px;
+}
+
+/* Tab content - make it flexbox to align icon and title */
+.dockview-theme-abyss .dv-default-tab-content {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Dockview resize sash - make it more visible and easier to grab */
+.dockview-theme-abyss .dv-split-view-container .dv-sash-container .dv-sash {
+  transition: background-color 0.15s ease;
+  z-index: 10;
+}
+
+.dockview-theme-abyss .dv-split-view-container .dv-sash-container .dv-sash:not(.disabled):hover,
+.dockview-theme-abyss .dv-split-view-container .dv-sash-container .dv-sash:not(.disabled):active {
+  background-color: rgba(59, 130, 246, 0.6) !important;
+}
+
+/* Horizontal split (side by side) - vertical sash for col-resize */
+.dockview-theme-abyss .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash {
+  cursor: col-resize !important;
+  width: 6px !important;
+}
+
+/* Vertical split (stacked) - horizontal sash for row-resize */
+.dockview-theme-abyss .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash {
+  cursor: row-resize !important;
+  height: 6px !important;
+}
+
+.logo.vite:hover {
+  filter: drop-shadow(0 0 2em #747bff);
+}
+
+.logo.react:hover {
+  filter: drop-shadow(0 0 2em #61dafb);
+}
+:root {
+  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+
+  color: #0f0f0f;
+  background-color: #f6f6f6;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+
+.container {
+  margin: 0;
+  padding-top: 10vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+}
+
+.logo {
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: 0.75s;
+}
+
+.logo.tauri:hover {
+  filter: drop-shadow(0 0 2em #24c8db);
+}
+
+.row {
+  display: flex;
+  justify-content: center;
+}
+
+a {
+  font-weight: 500;
+  color: #646cff;
+  text-decoration: inherit;
+}
+
+a:hover {
+  color: #535bf2;
+}
+
+h1 {
+  text-align: center;
+}
+
+/* Scope form styles to avoid affecting Dockview's internal elements */
+.container input,
+.container button,
+form input,
+form button {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  color: #0f0f0f;
+  background-color: #ffffff;
+  transition: border-color 0.25s;
+  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
+}
+
+.container button,
+form button {
+  cursor: pointer;
+}
+
+.container button:hover,
+form button:hover {
+  border-color: #396cd8;
+}
+.container button:active,
+form button:active {
+  border-color: #396cd8;
+  background-color: #e8e8e8;
+}
+
+.container input,
+.container button,
+form input,
+form button {
+  outline: none;
+}
+
+#greet-input {
+  margin-right: 5px;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #f6f6f6;
+    background-color: #2f2f2f;
+  }
+
+  a:hover {
+    color: #24c8db;
+  }
+
+  .container input,
+  .container button,
+  form input,
+  form button {
+    color: #ffffff;
+    background-color: #0f0f0f98;
+  }
+  .container button:active,
+  form button:active {
+    background-color: #0f0f0f69;
+  }
+}

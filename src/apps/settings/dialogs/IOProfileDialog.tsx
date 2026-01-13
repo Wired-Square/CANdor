@@ -1,0 +1,810 @@
+// ui/src/apps/settings/dialogs/IOProfileDialog.tsx
+import { useState, useEffect, useCallback } from "react";
+import { ArrowLeft, ChevronDown, ChevronRight } from "lucide-react";
+import Dialog from "../../../components/Dialog";
+import type { IOProfile } from "../stores/settingsStore";
+import SerialPortPicker from "../components/SerialPortPicker";
+import SecurePasswordField from "../components/SecurePasswordField";
+import IODeviceStatus, { type DeviceProbeState, type DeviceProbeResult } from "../components/IODeviceStatus";
+import { Input, Select, FormField, PrimaryButton, SecondaryButton } from "../../../components/forms";
+import {
+  h2,
+  h3,
+  borderDefault,
+  spaceYDefault,
+  alertInfo,
+  alertWarning,
+} from "../../../styles";
+import { probeSlcanDevice } from "../../../api/serial";
+
+export type MqttFormatKind = "json" | "savvycan" | "decode";
+export type MqttFormatField = "topic" | "enabled";
+
+type Props = {
+  isOpen: boolean;
+  editingProfileId: string | null;
+  profileForm: IOProfile;
+  /** Original profile from settings (before edits) - used to detect legacy passwords */
+  originalProfile?: IOProfile | null;
+
+  onCancel: () => void;
+  onSave: () => void;
+  /** Called when user wants to migrate a legacy password to secure storage */
+  onMigratePassword?: () => void;
+
+  onUpdateProfileField: (field: keyof IOProfile, value: any) => void;
+  onUpdateConnectionField: (key: string, value: string | boolean) => void;
+  onUpdateMqttFormat: (
+    format: MqttFormatKind,
+    field: MqttFormatField,
+    value: string | boolean
+  ) => void;
+};
+
+export default function IOProfileDialog({
+  isOpen,
+  editingProfileId,
+  profileForm,
+  originalProfile,
+  onCancel,
+  onSave,
+  onMigratePassword,
+  onUpdateProfileField,
+  onUpdateConnectionField,
+  onUpdateMqttFormat,
+}: Props) {
+  // Check password storage status
+  const isPasswordSecurelyStored = !!profileForm.connection._password_stored;
+  // Legacy password exists if there's a password in the original profile that isn't marked as securely stored
+  const hasLegacyPassword = !!(
+    originalProfile?.connection?.password &&
+    !originalProfile?.connection?._password_stored
+  );
+
+  // slcan device probe state
+  const [slcanProbeState, setSlcanProbeState] = useState<DeviceProbeState>("idle");
+  const [slcanProbeResult, setSlcanProbeResult] = useState<DeviceProbeResult | null>(null);
+
+  // slcan advanced options collapsed state
+  const [slcanAdvancedOpen, setSlcanAdvancedOpen] = useState(false);
+
+  // Probe slcan device
+  const probeSlcan = useCallback(async () => {
+    const port = profileForm.connection.port;
+    const baudRate = parseInt(profileForm.connection.baud_rate || "115200", 10);
+
+    if (!port) {
+      setSlcanProbeState("idle");
+      setSlcanProbeResult(null);
+      return;
+    }
+
+    // Get serial framing parameters (advanced options)
+    const dataBits = parseInt(profileForm.connection.data_bits || "8", 10);
+    const stopBits = parseInt(profileForm.connection.stop_bits || "1", 10);
+    const parity = profileForm.connection.parity || "none";
+
+    setSlcanProbeState("probing");
+    try {
+      const result = await probeSlcanDevice(port, baudRate, { dataBits, stopBits, parity });
+      setSlcanProbeResult({
+        success: result.success,
+        primaryInfo: result.version,
+        secondaryInfo: result.hardware_version,
+        error: result.error,
+      });
+      setSlcanProbeState(result.success ? "success" : "error");
+    } catch (e) {
+      setSlcanProbeResult({
+        success: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      setSlcanProbeState("error");
+    }
+  }, [
+    profileForm.connection.port,
+    profileForm.connection.baud_rate,
+    profileForm.connection.data_bits,
+    profileForm.connection.stop_bits,
+    profileForm.connection.parity,
+  ]);
+
+  // Auto-probe when slcan port, baud rate, or framing options change
+  useEffect(() => {
+    if (profileForm.kind === "slcan" && profileForm.connection.port) {
+      // Debounce to avoid probing while user is still changing settings
+      const timer = setTimeout(() => {
+        probeSlcan();
+      }, 500);
+      return () => clearTimeout(timer);
+    } else if (profileForm.kind === "slcan") {
+      setSlcanProbeState("idle");
+      setSlcanProbeResult(null);
+    }
+  }, [
+    profileForm.kind,
+    profileForm.connection.port,
+    profileForm.connection.baud_rate,
+    profileForm.connection.data_bits,
+    profileForm.connection.stop_bits,
+    profileForm.connection.parity,
+    probeSlcan,
+  ]);
+
+  // Reset probe state when dialog closes or profile type changes
+  useEffect(() => {
+    if (!isOpen || profileForm.kind !== "slcan") {
+      setSlcanProbeState("idle");
+      setSlcanProbeResult(null);
+    }
+  }, [isOpen, profileForm.kind]);
+
+  return (
+    <Dialog isOpen={isOpen} maxWidth="max-w-2xl">
+      <div className="max-h-[90vh] overflow-y-auto">
+        <div className={`p-6 border-b ${borderDefault} flex items-center justify-between`}>
+          <h2 className={h2}>
+            {editingProfileId ? "Edit IO Profile" : "Add IO Profile"}
+          </h2>
+          <button
+            onClick={onCancel}
+            className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+            title="Go back without saving"
+          >
+            <ArrowLeft className="w-5 h-5 text-slate-600 dark:text-slate-400" />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-4">
+          {/* Profile Name */}
+          <FormField label="Profile Name" required variant="default">
+            <Input
+              variant="default"
+              value={profileForm.name}
+              onChange={(e) => onUpdateProfileField("name", e.target.value)}
+              placeholder="My IO Profile"
+            />
+          </FormField>
+
+          {/* Profile Type */}
+          <FormField label="Type" variant="default">
+            <Select
+              variant="default"
+              value={profileForm.kind}
+              onChange={(e) =>
+                onUpdateProfileField("kind", e.target.value as IOProfile["kind"])
+              }
+            >
+              <option value="mqtt">MQTT</option>
+              <option value="postgres">PostgreSQL</option>
+              <option value="gvret_tcp">GVRET TCP</option>
+              <option value="gvret_usb">GVRET USB (Serial)</option>
+              <option value="csv_file">CSV File</option>
+              <option value="serial">Serial Port</option>
+              <option value="slcan">slcan (CANable, USB-CAN)</option>
+              <option value="socketcan">SocketCAN (Linux)</option>
+            </Select>
+          </FormField>
+
+          {/* MQTT */}
+          {profileForm.kind === "mqtt" && (
+            <div className={`${spaceYDefault} border-t ${borderDefault} pt-6`}>
+              <h3 className={h3}>MQTT Connection</h3>
+
+              <div className="grid grid-cols-2 gap-4">
+                <FormField label="Host" variant="default">
+                  <Input
+                    variant="default"
+                    value={profileForm.connection.host || ""}
+                    onChange={(e) => onUpdateConnectionField("host", e.target.value)}
+                    placeholder="localhost"
+                  />
+                </FormField>
+                <FormField label="Port" variant="default">
+                  <Input
+                    variant="default"
+                    type="number"
+                    value={profileForm.connection.port || ""}
+                    onChange={(e) => onUpdateConnectionField("port", e.target.value)}
+                    placeholder="1883"
+                  />
+                </FormField>
+              </div>
+
+              <FormField label="Username (optional)" variant="default">
+                <Input
+                  variant="default"
+                  value={profileForm.connection.username || ""}
+                  onChange={(e) => onUpdateConnectionField("username", e.target.value)}
+                />
+              </FormField>
+
+              <SecurePasswordField
+                value={profileForm.connection.password || ""}
+                onChange={(value) => onUpdateConnectionField("password", value)}
+                isSecurelyStored={isPasswordSecurelyStored}
+                hasLegacyPassword={hasLegacyPassword}
+                onMigrate={onMigratePassword}
+                optional
+              />
+
+              {/* MQTT Formats */}
+              <div className={`border-t ${borderDefault} pt-4 mt-6`}>
+                <h4 className="text-md font-semibold text-slate-900 dark:text-white mb-4">
+                  Message Formats
+                </h4>
+
+                {/* JSON */}
+                <div className="mb-4 p-4 bg-slate-100 dark:bg-slate-900/50 rounded-lg">
+                  <div className="flex items-center gap-2 mb-3">
+                    <input
+                      type="checkbox"
+                      id="format-json"
+                      checked={profileForm.connection.formats?.json?.enabled || false}
+                      onChange={(e) =>
+                        onUpdateMqttFormat("json", "enabled", e.target.checked)
+                      }
+                      className="w-4 h-4 text-blue-600 bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 rounded focus:ring-blue-500"
+                    />
+                    <label
+                      htmlFor="format-json"
+                      className="text-sm font-medium text-slate-900 dark:text-white"
+                    >
+                      JSON Format
+                    </label>
+                  </div>
+                  <FormField label="Base Topic" variant="default">
+                    <Input
+                      variant="default"
+                      value={profileForm.connection.formats?.json?.topic || ""}
+                      onChange={(e) => onUpdateMqttFormat("json", "topic", e.target.value)}
+                      placeholder="candor/json/{bus}/{id_hex}/{signal}"
+                    />
+                  </FormField>
+                </div>
+
+                {/* SavvyCAN */}
+                <div className="mb-4 p-4 bg-slate-100 dark:bg-slate-900/50 rounded-lg">
+                  <div className="flex items-center gap-2 mb-3">
+                    <input
+                      type="checkbox"
+                      id="format-savvycan"
+                      checked={profileForm.connection.formats?.savvycan?.enabled || false}
+                      onChange={(e) =>
+                        onUpdateMqttFormat("savvycan", "enabled", e.target.checked)
+                      }
+                      className="w-4 h-4 text-blue-600 bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 rounded focus:ring-blue-500"
+                    />
+                    <label
+                      htmlFor="format-savvycan"
+                      className="text-sm font-medium text-slate-900 dark:text-white"
+                    >
+                      SavvyCAN Format
+                    </label>
+                  </div>
+                  <FormField label="Base Topic" variant="default">
+                    <Input
+                      variant="default"
+                      value={profileForm.connection.formats?.savvycan?.topic || ""}
+                      onChange={(e) =>
+                        onUpdateMqttFormat("savvycan", "topic", e.target.value)
+                      }
+                      placeholder="candor-savvycan/{id_dec}"
+                    />
+                  </FormField>
+                </div>
+
+                {/* Decode */}
+                <div className="mb-4 p-4 bg-slate-100 dark:bg-slate-900/50 rounded-lg">
+                  <div className="flex items-center gap-2 mb-3">
+                    <input
+                      type="checkbox"
+                      id="format-decode"
+                      checked={profileForm.connection.formats?.decode?.enabled || false}
+                      onChange={(e) =>
+                        onUpdateMqttFormat("decode", "enabled", e.target.checked)
+                      }
+                      className="w-4 h-4 text-blue-600 bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 rounded focus:ring-blue-500"
+                    />
+                    <label
+                      htmlFor="format-decode"
+                      className="text-sm font-medium text-slate-900 dark:text-white"
+                    >
+                      Decode Format
+                    </label>
+                  </div>
+                  <FormField label="Base Topic" variant="default">
+                    <Input
+                      variant="default"
+                      value={profileForm.connection.formats?.decode?.topic || ""}
+                      onChange={(e) => onUpdateMqttFormat("decode", "topic", e.target.value)}
+                      placeholder="candor/decode/{signal_name}/{id_hex}/{signal}"
+                    />
+                  </FormField>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* PostgreSQL */}
+          {profileForm.kind === "postgres" && (
+            <div className={`${spaceYDefault} border-t ${borderDefault} pt-6`}>
+              <h3 className={h3}>PostgreSQL Connection</h3>
+
+              <div className="grid grid-cols-2 gap-4">
+                <FormField label="Host" variant="default">
+                  <Input
+                    variant="default"
+                    value={profileForm.connection.host || ""}
+                    onChange={(e) => onUpdateConnectionField("host", e.target.value)}
+                    placeholder="localhost"
+                  />
+                </FormField>
+                <FormField label="Port" variant="default">
+                  <Input
+                    variant="default"
+                    type="number"
+                    value={profileForm.connection.port || ""}
+                    onChange={(e) => onUpdateConnectionField("port", e.target.value)}
+                    placeholder="5432"
+                  />
+                </FormField>
+              </div>
+
+              <FormField label="Database" variant="default">
+                <Input
+                  variant="default"
+                  value={profileForm.connection.database || ""}
+                  onChange={(e) => onUpdateConnectionField("database", e.target.value)}
+                  placeholder="candor"
+                />
+              </FormField>
+
+              <FormField label="Username" variant="default">
+                <Input
+                  variant="default"
+                  value={profileForm.connection.username || ""}
+                  onChange={(e) => onUpdateConnectionField("username", e.target.value)}
+                />
+              </FormField>
+
+              <SecurePasswordField
+                value={profileForm.connection.password || ""}
+                onChange={(value) => onUpdateConnectionField("password", value)}
+                isSecurelyStored={isPasswordSecurelyStored}
+                hasLegacyPassword={hasLegacyPassword}
+                onMigrate={onMigratePassword}
+              />
+
+              <FormField label="SSL Mode" variant="default">
+                <Select
+                  variant="default"
+                  value={profileForm.connection.sslmode || "prefer"}
+                  onChange={(e) => onUpdateConnectionField("sslmode", e.target.value)}
+                >
+                  <option value="disable">Disable</option>
+                  <option value="allow">Allow</option>
+                  <option value="prefer">Prefer</option>
+                  <option value="require">Require</option>
+                  <option value="verify-ca">Verify CA</option>
+                  <option value="verify-full">Verify Full</option>
+                </Select>
+              </FormField>
+
+              <FormField label="Source Type" variant="default">
+                <Select
+                  variant="default"
+                  value={profileForm.connection.source_type || "can_frame"}
+                  onChange={(e) => onUpdateConnectionField("source_type", e.target.value)}
+                >
+                  <option value="can_frame">CAN Frames (public.can_frame)</option>
+                  <option value="modbus_frame">Modbus Frames (public.modbus_frame)</option>
+                  <option value="serial_frame">Serial Frames (public.serial_frame)</option>
+                  <option value="serial_raw">Serial Raw (public.serial_raw)</option>
+                </Select>
+              </FormField>
+
+              {/* Note: Framing for serial_raw is handled client-side in Discovery mode */}
+
+              <FormField label="Default Playback Speed" variant="default">
+                <Select
+                  variant="default"
+                  value={profileForm.connection.default_speed || "1"}
+                  onChange={(e) => onUpdateConnectionField("default_speed", e.target.value)}
+                >
+                  <option value="0.25">0.25x</option>
+                  <option value="0.5">0.5x</option>
+                  <option value="1">1x (realtime)</option>
+                  <option value="2">2x</option>
+                  <option value="10">10x</option>
+                  <option value="30">30x</option>
+                  <option value="60">60x</option>
+                  <option value="0">No Limit</option>
+                </Select>
+              </FormField>
+            </div>
+          )}
+
+          {/* GVRET */}
+          {profileForm.kind === "gvret_tcp" && (
+            <div className={`${spaceYDefault} border-t ${borderDefault} pt-6`}>
+              <h3 className={h3}>GVRET TCP Connection</h3>
+
+              <div className="grid grid-cols-2 gap-4">
+                <FormField label="Host" variant="default">
+                  <Input
+                    variant="default"
+                    value={profileForm.connection.host || ""}
+                    onChange={(e) => onUpdateConnectionField("host", e.target.value)}
+                    placeholder="192.168.1.100"
+                  />
+                </FormField>
+                <FormField label="Port" variant="default">
+                  <Input
+                    variant="default"
+                    type="number"
+                    value={profileForm.connection.port || ""}
+                    onChange={(e) => onUpdateConnectionField("port", e.target.value)}
+                    placeholder="23"
+                  />
+                </FormField>
+              </div>
+
+              <FormField label="Connection Timeout (seconds)" variant="default">
+                <Input
+                  variant="default"
+                  type="number"
+                  value={profileForm.connection.timeout || "5"}
+                  onChange={(e) => onUpdateConnectionField("timeout", e.target.value)}
+                  placeholder="5"
+                />
+              </FormField>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="tcp-keepalive"
+                  checked={profileForm.connection.tcp_keepalive !== false}
+                  onChange={(e) =>
+                    onUpdateConnectionField("tcp_keepalive", e.target.checked)
+                  }
+                  className="w-4 h-4 text-blue-600 bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 rounded focus:ring-blue-500"
+                />
+                <label
+                  htmlFor="tcp-keepalive"
+                  className="text-sm font-medium text-slate-900 dark:text-white"
+                >
+                  TCP Keepalive
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* GVRET USB */}
+          {profileForm.kind === "gvret_usb" && (
+            <div className={`${spaceYDefault} border-t ${borderDefault} pt-6`}>
+              <h3 className={h3}>GVRET USB Connection</h3>
+
+              {/* Port Selection */}
+              <FormField label="Serial Port" variant="default">
+                <SerialPortPicker
+                  value={profileForm.connection.port || ""}
+                  onChange={(port) => onUpdateConnectionField("port", port)}
+                />
+              </FormField>
+
+              {/* Serial Baud Rate */}
+              <FormField label="Serial Baud Rate" variant="default">
+                <Select
+                  variant="default"
+                  value={profileForm.connection.baud_rate || "115200"}
+                  onChange={(e) => onUpdateConnectionField("baud_rate", e.target.value)}
+                >
+                  <option value="115200">115200 (default)</option>
+                  <option value="460800">460800</option>
+                  <option value="921600">921600</option>
+                  <option value="1000000">1000000</option>
+                  <option value="2000000">2000000</option>
+                </Select>
+              </FormField>
+
+              <div className={alertInfo}>
+                <p className="text-sm text-blue-800 dark:text-blue-200">
+                  Works with ESP32-RET, M2RET, CANDue, and other GVRET-compatible hardware over USB serial.
+                  Supports multi-bus devices (CAN0, CAN1, SWCAN) and frame transmission.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* CSV File */}
+          {profileForm.kind === "csv_file" && (
+            <div className={`${spaceYDefault} border-t ${borderDefault} pt-6`}>
+              <h3 className={h3}>CSV File Reader</h3>
+
+              <div className={alertInfo}>
+                <p className="text-sm text-blue-800 dark:text-blue-200">
+                  CSV files are selected when starting the stream. Supports GVRET/SavvyCAN CSV format.
+                </p>
+              </div>
+
+              <FormField label="Default Playback Speed" variant="default">
+                <Select
+                  variant="default"
+                  value={profileForm.connection.default_speed || "0"}
+                  onChange={(e) => onUpdateConnectionField("default_speed", e.target.value)}
+                >
+                  <option value="0.25">0.25x</option>
+                  <option value="0.5">0.5x</option>
+                  <option value="1">1x (realtime)</option>
+                  <option value="2">2x</option>
+                  <option value="10">10x</option>
+                  <option value="30">30x</option>
+                  <option value="60">60x</option>
+                  <option value="0">No Limit (Recommended)</option>
+                </Select>
+              </FormField>
+            </div>
+          )}
+
+          {/* Serial Port */}
+          {profileForm.kind === "serial" && (
+            <div className={`${spaceYDefault} border-t ${borderDefault} pt-6`}>
+              <h3 className={h3}>Serial Port Connection</h3>
+
+              {/* Port Selection */}
+              <FormField label="Port" variant="default">
+                <SerialPortPicker
+                  value={profileForm.connection.port || ""}
+                  onChange={(port) => onUpdateConnectionField("port", port)}
+                />
+              </FormField>
+
+              {/* Baud Rate */}
+              <FormField label="Baud Rate" variant="default">
+                <Select
+                  variant="default"
+                  value={profileForm.connection.baud_rate || "115200"}
+                  onChange={(e) => onUpdateConnectionField("baud_rate", e.target.value)}
+                >
+                  <option value="9600">9600</option>
+                  <option value="19200">19200</option>
+                  <option value="38400">38400</option>
+                  <option value="57600">57600</option>
+                  <option value="115200">115200</option>
+                  <option value="230400">230400</option>
+                  <option value="460800">460800</option>
+                  <option value="921600">921600</option>
+                </Select>
+              </FormField>
+
+              {/* Data Bits, Stop Bits, Parity */}
+              <div className="grid grid-cols-3 gap-4">
+                <FormField label="Data Bits" variant="default">
+                  <Select
+                    variant="default"
+                    value={profileForm.connection.data_bits || "8"}
+                    onChange={(e) => onUpdateConnectionField("data_bits", e.target.value)}
+                  >
+                    <option value="8">8</option>
+                    <option value="7">7</option>
+                    <option value="6">6</option>
+                    <option value="5">5</option>
+                  </Select>
+                </FormField>
+                <FormField label="Stop Bits" variant="default">
+                  <Select
+                    variant="default"
+                    value={profileForm.connection.stop_bits || "1"}
+                    onChange={(e) => onUpdateConnectionField("stop_bits", e.target.value)}
+                  >
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                  </Select>
+                </FormField>
+                <FormField label="Parity" variant="default">
+                  <Select
+                    variant="default"
+                    value={profileForm.connection.parity || "none"}
+                    onChange={(e) => onUpdateConnectionField("parity", e.target.value)}
+                  >
+                    <option value="none">None</option>
+                    <option value="odd">Odd</option>
+                    <option value="even">Even</option>
+                  </Select>
+                </FormField>
+              </div>
+
+              {/* Note: Framing is now handled client-side in Discovery mode */}
+            </div>
+          )}
+
+          {/* slcan (CANable) */}
+          {profileForm.kind === "slcan" && (
+            <div className={`${spaceYDefault} border-t ${borderDefault} pt-6`}>
+              <h3 className={h3}>slcan Connection (CANable)</h3>
+
+              {/* Port Selection */}
+              <FormField label="Serial Port" variant="default">
+                <SerialPortPicker
+                  value={profileForm.connection.port || ""}
+                  onChange={(port) => onUpdateConnectionField("port", port)}
+                />
+              </FormField>
+
+              {/* Serial Baud Rate */}
+              <FormField label="Serial Baud Rate" variant="default">
+                <Select
+                  variant="default"
+                  value={profileForm.connection.baud_rate || "115200"}
+                  onChange={(e) => onUpdateConnectionField("baud_rate", e.target.value)}
+                >
+                  <option value="115200">115200 (default for CANable)</option>
+                  <option value="460800">460800</option>
+                  <option value="921600">921600</option>
+                  <option value="1000000">1000000</option>
+                  <option value="2000000">2000000</option>
+                  <option value="3000000">3000000</option>
+                </Select>
+              </FormField>
+
+              {/* Device Status */}
+              {profileForm.connection.port && (
+                <IODeviceStatus
+                  state={slcanProbeState}
+                  result={slcanProbeResult}
+                  primaryLabel="Firmware"
+                  secondaryLabel="HW"
+                  onRefresh={probeSlcan}
+                  probingText="Checking CANable..."
+                  successText="CANable connected"
+                  errorText="CANable not responding"
+                  idleText="Select a port to check device"
+                />
+              )}
+
+              {/* CAN Bus Bitrate */}
+              <FormField label="CAN Bitrate" variant="default">
+                <Select
+                  variant="default"
+                  value={profileForm.connection.bitrate || "500000"}
+                  onChange={(e) => onUpdateConnectionField("bitrate", e.target.value)}
+                >
+                  <option value="10000">10 Kbit/s (S0)</option>
+                  <option value="20000">20 Kbit/s (S1)</option>
+                  <option value="50000">50 Kbit/s (S2)</option>
+                  <option value="100000">100 Kbit/s (S3)</option>
+                  <option value="125000">125 Kbit/s (S4)</option>
+                  <option value="250000">250 Kbit/s (S5)</option>
+                  <option value="500000">500 Kbit/s (S6)</option>
+                  <option value="750000">750 Kbit/s (S7)</option>
+                  <option value="1000000">1 Mbit/s (S8)</option>
+                </Select>
+              </FormField>
+
+              {/* Silent mode */}
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="silent-mode"
+                  checked={profileForm.connection.silent_mode !== false}
+                  onChange={(e) => onUpdateConnectionField("silent_mode", e.target.checked)}
+                  className="w-4 h-4 text-blue-600 bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 rounded focus:ring-blue-500"
+                />
+                <label
+                  htmlFor="silent-mode"
+                  className="text-sm font-medium text-slate-900 dark:text-white"
+                >
+                  Silent mode (no ACK, no transmit)
+                </label>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 -mt-2">
+                Does not participate in bus arbitration. Ideal for passive monitoring.
+              </p>
+
+              {/* Advanced Serial Options */}
+              <div className="border-t border-slate-200 dark:border-slate-700 pt-4 mt-4">
+                <button
+                  type="button"
+                  onClick={() => setSlcanAdvancedOpen(!slcanAdvancedOpen)}
+                  className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors"
+                >
+                  {slcanAdvancedOpen ? (
+                    <ChevronDown className="w-4 h-4" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4" />
+                  )}
+                  Advanced Serial Options
+                </button>
+
+                {slcanAdvancedOpen && (
+                  <div className="mt-3 space-y-3 pl-6">
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Most slcan devices use 8N1 (8 data bits, no parity, 1 stop bit). Only change these if your device requires different settings.
+                    </p>
+                    <div className="grid grid-cols-3 gap-4">
+                      <FormField label="Data Bits" variant="default">
+                        <Select
+                          variant="default"
+                          value={profileForm.connection.data_bits || "8"}
+                          onChange={(e) => onUpdateConnectionField("data_bits", e.target.value)}
+                        >
+                          <option value="8">8</option>
+                          <option value="7">7</option>
+                          <option value="6">6</option>
+                          <option value="5">5</option>
+                        </Select>
+                      </FormField>
+                      <FormField label="Stop Bits" variant="default">
+                        <Select
+                          variant="default"
+                          value={profileForm.connection.stop_bits || "1"}
+                          onChange={(e) => onUpdateConnectionField("stop_bits", e.target.value)}
+                        >
+                          <option value="1">1</option>
+                          <option value="2">2</option>
+                        </Select>
+                      </FormField>
+                      <FormField label="Parity" variant="default">
+                        <Select
+                          variant="default"
+                          value={profileForm.connection.parity || "none"}
+                          onChange={(e) => onUpdateConnectionField("parity", e.target.value)}
+                        >
+                          <option value="none">None</option>
+                          <option value="odd">Odd</option>
+                          <option value="even">Even</option>
+                        </Select>
+                      </FormField>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className={alertInfo}>
+                <p className="text-sm text-blue-800 dark:text-blue-200">
+                  Works with CANable, CANable Pro (slcan firmware), and other USB-CAN adapters
+                  using the Lawicel/slcan ASCII protocol.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* SocketCAN (Linux) */}
+          {profileForm.kind === "socketcan" && (
+            <div className={`${spaceYDefault} border-t ${borderDefault} pt-6`}>
+              <h3 className={h3}>SocketCAN (Linux)</h3>
+
+              <FormField label="Interface Name" variant="default">
+                <Input
+                  variant="default"
+                  value={profileForm.connection.interface || "can0"}
+                  onChange={(e) => onUpdateConnectionField("interface", e.target.value)}
+                  placeholder="can0"
+                />
+              </FormField>
+
+              <div className={alertWarning}>
+                <p className="text-sm text-amber-800 dark:text-amber-200">
+                  <strong>Linux only.</strong> Requires CANable Pro with Candlelight firmware
+                  or native CAN hardware. The interface must be configured first:
+                </p>
+                <code className="block mt-2 p-2 bg-amber-100 dark:bg-amber-900/40 rounded text-xs">
+                  sudo ip link set can0 up type can bitrate 500000
+                </code>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Actions */}
+        <div className={`p-6 border-t ${borderDefault} flex justify-end gap-3`}>
+          <SecondaryButton onClick={onCancel}>Cancel</SecondaryButton>
+          <PrimaryButton onClick={onSave}>
+            {editingProfileId ? "Update Profile" : "Add Profile"}
+          </PrimaryButton>
+        </div>
+      </div>
+    </Dialog>
+  );
+}

@@ -1,0 +1,224 @@
+// ui/src/apps/discovery/views/SerialDiscoveryView.tsx
+//
+// Tabbed view for serial discovery:
+// - Raw Bytes tab: scrolling hex dump of raw bytes with timestamps
+// - Framed Data tab: frames after framing is applied
+// - Toolbar with framing controls
+
+import { useEffect, useRef, useState } from 'react';
+import { useDiscoveryStore, useDiscoverySerialStore } from '../../../stores/discoveryStore';
+import {
+  ByteView,
+  FramedDataView,
+  TabBar,
+  FramingModeDialog,
+  FilterDialog,
+  RawBytesViewDialog,
+} from './serial';
+import SerialAnalysisResultView from './tools/SerialAnalysisResultView';
+
+interface SerialDiscoveryViewProps {
+  isStreaming?: boolean;
+  displayTimeFormat?: 'delta-last' | 'delta-start' | 'timestamp' | 'human';
+  isRecorded?: boolean;
+}
+
+export default function SerialDiscoveryView({ isStreaming = false, displayTimeFormat = 'human', isRecorded = false }: SerialDiscoveryViewProps) {
+  const [showFramingDialog, setShowFramingDialog] = useState(false);
+  const [showFilterDialog, setShowFilterDialog] = useState(false);
+  const [showRawBytesViewDialog, setShowRawBytesViewDialog] = useState(false);
+
+  // Use serial store directly for data that needs reliable reactivity
+  // The composed useDiscoveryStore can lose reactivity when other stores trigger re-renders
+  const serialBytes = useDiscoverySerialStore((s) => s.serialBytes);
+  const serialBytesBuffer = useDiscoverySerialStore((s) => s.serialBytesBuffer);
+  const framingConfig = useDiscoverySerialStore((s) => s.framingConfig);
+  const framedData = useDiscoverySerialStore((s) => s.framedData);
+  const framingAccepted = useDiscoverySerialStore((s) => s.framingAccepted);
+  const rawBytesViewConfig = useDiscoverySerialStore((s) => s.rawBytesViewConfig);
+  const activeTab = useDiscoverySerialStore((s) => s.activeTab);
+  const setActiveTab = useDiscoverySerialStore((s) => s.setActiveTab);
+
+  // Get main frames store for real-time streaming with backend framing
+  // During streaming, frames from backend framing go to the main frames store
+  const mainFrames = useDiscoveryStore((s) => s.frames);
+  const setFramingConfig = useDiscoverySerialStore((s) => s.setFramingConfig);
+  const applyFrameIdMapping = useDiscoverySerialStore((s) => s.applyFrameIdMapping);
+  const applySourceMapping = useDiscoverySerialStore((s) => s.applySourceMapping);
+  const setRawBytesViewConfig = useDiscoverySerialStore((s) => s.setRawBytesViewConfig);
+  const serialViewConfig = useDiscoverySerialStore((s) => s.serialViewConfig);
+  const backendByteCount = useDiscoverySerialStore((s) => s.backendByteCount);
+  const framedBufferId = useDiscoverySerialStore((s) => s.framedBufferId);
+  const backendFrameCount = useDiscoverySerialStore((s) => s.backendFrameCount);
+  const minFrameLength = useDiscoverySerialStore((s) => s.minFrameLength);
+  const setMinFrameLength = useDiscoverySerialStore((s) => s.setMinFrameLength);
+  const frameIdExtractionConfig = useDiscoverySerialStore((s) => s.frameIdExtractionConfig);
+  const sourceExtractionConfig = useDiscoverySerialStore((s) => s.sourceExtractionConfig);
+
+  // Use composed store for actions that need coordination between stores
+  const applyFraming = useDiscoveryStore((s) => s.applyFraming);
+  const acceptFraming = useDiscoveryStore((s) => s.acceptFraming);
+  const setSerialConfig = useDiscoveryStore((s) => s.setSerialConfig);
+  const serialFramingResults = useDiscoveryStore((s) => s.toolbox.serialFramingResults);
+  const serialPayloadResults = useDiscoveryStore((s) => s.toolbox.serialPayloadResults);
+
+  // Count frames (excluding incomplete ones for unique ID count)
+  const completeFrames = framedData.filter(f => !f.incomplete);
+
+  // Track previous values to detect meaningful changes
+  const prevFramingConfigRef = useRef<typeof framingConfig>(null);
+  const prevByteCountRef = useRef<number>(0);
+  const prevMinFrameLengthRef = useRef<number>(0);
+  const prevFrameIdConfigRef = useRef<typeof frameIdExtractionConfig>(null);
+  const prevSourceConfigRef = useRef<typeof sourceExtractionConfig>(null);
+
+  // Track pending framing operation to serialize calls and avoid race conditions
+  // When a framing operation is in progress, we queue the next one to run after it completes
+  const pendingFramingRef = useRef<Promise<unknown> | null>(null);
+  const queuedFramingRef = useRef<boolean>(false);
+
+  // Auto-apply framing when config changes, filter changes, extraction config changes, OR when new bytes arrive (live framing)
+  // Uses backendByteCount which tracks total bytes in Rust backend (not capped like serialBytesBuffer)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const configChanged = JSON.stringify(framingConfig) !== JSON.stringify(prevFramingConfigRef.current);
+    const bytesChanged = backendByteCount !== prevByteCountRef.current;
+    const filterChanged = minFrameLength !== prevMinFrameLengthRef.current;
+    const frameIdConfigChanged = JSON.stringify(frameIdExtractionConfig) !== JSON.stringify(prevFrameIdConfigRef.current);
+    const sourceConfigChanged = JSON.stringify(sourceExtractionConfig) !== JSON.stringify(prevSourceConfigRef.current);
+
+    prevFramingConfigRef.current = framingConfig;
+    prevByteCountRef.current = backendByteCount;
+    prevMinFrameLengthRef.current = minFrameLength;
+    prevFrameIdConfigRef.current = frameIdExtractionConfig;
+    prevSourceConfigRef.current = sourceExtractionConfig;
+
+    // Apply framing if we have a config and any relevant setting changed or new bytes arrived
+    if (framingConfig && backendByteCount > 0 && (configChanged || bytesChanged || filterChanged || frameIdConfigChanged || sourceConfigChanged)) {
+      // Serialize framing calls to avoid race conditions
+      // If a framing operation is already in progress, queue this one
+      if (pendingFramingRef.current) {
+        queuedFramingRef.current = true;
+        return;
+      }
+
+      const runFraming = async () => {
+        pendingFramingRef.current = applyFraming();
+        await pendingFramingRef.current;
+        pendingFramingRef.current = null;
+
+        // If another framing was queued while we were running, run it now
+        if (queuedFramingRef.current) {
+          queuedFramingRef.current = false;
+          runFraming();
+        }
+      };
+
+      runFraming();
+    }
+  }, [framingConfig, backendByteCount, minFrameLength, frameIdExtractionConfig, sourceExtractionConfig]); // Intentionally omit applyFraming - it's unstable
+
+  // Track if we've already auto-switched to framed tab
+  const hasAutoSwitchedRef = useRef(false);
+
+  // Auto-switch to framed tab when frames are first generated (only once)
+  // Check multiple sources:
+  // - framedData.length > 0: client-side framing produced frames
+  // - framedBufferId !== null: client-side framing created a backend buffer
+  // - backendFrameCount > 0: real-time backend framing is producing frames
+  useEffect(() => {
+    const hasFrames = framedData.length > 0 || framedBufferId !== null || backendFrameCount > 0;
+    if (hasFrames && !hasAutoSwitchedRef.current) {
+      hasAutoSwitchedRef.current = true;
+      setActiveTab('framed');
+    }
+    // Reset when frames are cleared
+    if (!hasFrames) {
+      hasAutoSwitchedRef.current = false;
+    }
+  }, [framedData.length, framedBufferId, backendFrameCount, setActiveTab]);
+
+  // Switch to framed tab when framing is accepted (Raw Bytes tab will be hidden)
+  useEffect(() => {
+    if (framingAccepted && activeTab === 'raw') {
+      setActiveTab('framed');
+    }
+  }, [framingAccepted, activeTab, setActiveTab]);
+
+  // Handle filter change - set independent minFrameLength (0 = no filter)
+  const handleFilterChange = (newMinLength: number) => {
+    setMinFrameLength(newMinLength);
+  };
+
+  // Handle accept framing - save serial config and accept framing
+  const handleAcceptFraming = (serialConfig?: import('../../../utils/frameExport').SerialFrameConfig) => {
+    if (serialConfig) {
+      setSerialConfig(serialConfig);
+    }
+    acceptFraming();
+  };
+
+  return (
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden rounded-lg border border-gray-700">
+      {/* Tab Bar with Controls */}
+      <TabBar
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        frameCount={framedBufferId ? backendFrameCount : (backendFrameCount > 0 ? backendFrameCount : completeFrames.length)}
+        byteCount={backendByteCount > 0 ? backendByteCount : serialBytesBuffer.length}
+        framingConfig={framingConfig}
+        minFrameLength={minFrameLength}
+        hasAnalysisResults={serialFramingResults !== null || serialPayloadResults !== null}
+        isStreaming={isStreaming}
+        isRecorded={isRecorded}
+        onOpenRawBytesViewDialog={() => setShowRawBytesViewDialog(true)}
+        onOpenFramingDialog={() => setShowFramingDialog(true)}
+        onOpenFilterDialog={() => setShowFilterDialog(true)}
+        framingAccepted={framingAccepted}
+      />
+
+      {/* Tab Content */}
+      <div className="flex-1 min-h-0 overflow-hidden">
+        {activeTab === 'raw' && (
+          <ByteView entries={serialBytes} viewConfig={rawBytesViewConfig} displayTimeFormat={displayTimeFormat} showAscii={serialViewConfig.showAscii} isStreaming={isStreaming} />
+        )}
+        {activeTab === 'framed' && (
+          <FramedDataView
+            frames={isStreaming && framedData.length === 0 ? mainFrames : framedData}
+            onAccept={handleAcceptFraming}
+            onApplyIdMapping={applyFrameIdMapping}
+            onApplySourceMapping={applySourceMapping}
+            accepted={framingAccepted}
+            framingMode={framingConfig?.mode}
+            displayTimeFormat={displayTimeFormat}
+            showAscii={serialViewConfig.showAscii}
+            isStreaming={isStreaming}
+          />
+        )}
+        {activeTab === 'analysis' && (
+          <SerialAnalysisResultView />
+        )}
+      </div>
+
+      {/* Dialogs */}
+      <FramingModeDialog
+        isOpen={showFramingDialog}
+        onClose={() => setShowFramingDialog(false)}
+        config={framingConfig}
+        onApply={setFramingConfig}
+      />
+      <FilterDialog
+        isOpen={showFilterDialog}
+        onClose={() => setShowFilterDialog(false)}
+        minLength={minFrameLength}
+        onApply={handleFilterChange}
+      />
+      <RawBytesViewDialog
+        isOpen={showRawBytesViewDialog}
+        onClose={() => setShowRawBytesViewDialog(false)}
+        config={rawBytesViewConfig}
+        onApply={setRawBytesViewConfig}
+      />
+    </div>
+  );
+}

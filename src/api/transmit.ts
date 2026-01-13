@@ -1,0 +1,240 @@
+// ui/src/api/transmit.ts
+//
+// Tauri API wrappers for CAN frame and serial byte transmission.
+// Uses IO session-based transmit - the session must be started first.
+
+import { invoke } from "@tauri-apps/api/core";
+
+// ============================================================================
+// Types
+// ============================================================================
+
+/** CAN frame for transmission */
+export interface CanTransmitFrame {
+  /** CAN frame ID (11-bit standard or 29-bit extended) */
+  frame_id: number;
+  /** Frame data (up to 8 bytes for classic CAN, up to 64 for CAN FD) */
+  data: number[];
+  /** Bus number (0 for single-bus adapters, 0-4 for multi-bus like GVRET) */
+  bus: number;
+  /** Extended (29-bit) frame ID */
+  is_extended: boolean;
+  /** CAN FD frame */
+  is_fd: boolean;
+  /** Bit Rate Switch (CAN FD only) */
+  is_brs: boolean;
+  /** Remote Transmission Request */
+  is_rtr: boolean;
+}
+
+/** Result of a transmit operation */
+export interface TransmitResult {
+  /** Whether the transmission was successful */
+  success: boolean;
+  /** Timestamp when the frame was sent (microseconds since UNIX epoch) */
+  timestamp_us: number;
+  /** Error message if transmission failed */
+  error?: string;
+}
+
+/** Writer capabilities - what a transmit-capable profile supports */
+export interface WriterCapabilities {
+  /** Can transmit CAN frames */
+  can_transmit_can: boolean;
+  /** Can transmit serial bytes */
+  can_transmit_serial: boolean;
+  /** Supports CAN FD (64 bytes, BRS) */
+  supports_canfd: boolean;
+  /** Supports extended (29-bit) CAN IDs */
+  supports_extended_id: boolean;
+  /** Supports Remote Transmission Request frames */
+  supports_rtr: boolean;
+  /** Available bus numbers (empty = single bus, [0,1,2,3,4] = multi-bus like GVRET) */
+  available_buses: number[];
+}
+
+/** Profile info with transmit capabilities */
+export interface TransmitProfile {
+  /** Profile ID */
+  id: string;
+  /** Display name */
+  name: string;
+  /** Profile kind (slcan, gvret_tcp, socketcan, serial) */
+  kind: string;
+  /** Writer capabilities */
+  capabilities: WriterCapabilities;
+}
+
+/** Information about active profile usage */
+export interface ProfileUsage {
+  /** ID of the session using this profile */
+  session_id: string;
+}
+
+// ============================================================================
+// Profile Query API
+// ============================================================================
+
+/**
+ * Get all IO profiles that support transmission.
+ * Filters out profiles that can't transmit (databases, buffers, silent mode slcan).
+ */
+export async function getTransmitCapableProfiles(): Promise<TransmitProfile[]> {
+  return invoke("get_transmit_capable_profiles");
+}
+
+/**
+ * Get the current usage of a profile (if any).
+ * Used to check if a profile is in use by a reader or writer session
+ * before attempting to connect.
+ * @param profileId - Profile to check
+ * @returns Usage info or null if profile is not in use
+ */
+export async function getProfileUsage(
+  profileId: string
+): Promise<ProfileUsage | null> {
+  return invoke("get_profile_usage", { profileId });
+}
+
+// ============================================================================
+// IO Session-Based Transmit API
+// ============================================================================
+//
+// These functions transmit through existing IO sessions, avoiding the need
+// for separate writer connections. The IO session must be started first.
+// This is the preferred approach as it uses the same connection for both
+// reading and transmitting.
+
+/** IO capabilities - what an IO session supports (including transmit) */
+export interface IOCapabilities {
+  /** Supports pause/resume */
+  can_pause: boolean;
+  /** Supports time range filtering */
+  supports_time_range: boolean;
+  /** Is realtime data source */
+  is_realtime: boolean;
+  /** Supports playback speed control */
+  supports_speed_control: boolean;
+  /** Supports seeking to timestamp */
+  supports_seek: boolean;
+  /** Can transmit CAN frames */
+  can_transmit: boolean;
+  /** Can transmit serial bytes */
+  can_transmit_serial: boolean;
+  /** Supports CAN FD (64 bytes, BRS) */
+  supports_canfd: boolean;
+  /** Supports extended (29-bit) CAN IDs */
+  supports_extended_id: boolean;
+  /** Supports Remote Transmission Request frames */
+  supports_rtr: boolean;
+  /** Available bus numbers (empty = single bus) */
+  available_buses: number[];
+}
+
+/**
+ * Get IO session capabilities (includes transmit capabilities).
+ * @param sessionId - IO session to query
+ * @returns Capabilities or null if session doesn't exist
+ */
+export async function getIOSessionCapabilities(
+  sessionId: string
+): Promise<IOCapabilities | null> {
+  return invoke("get_io_session_capabilities", { sessionId });
+}
+
+/**
+ * Transmit a CAN frame through an existing IO session.
+ * The session must be running and support transmission.
+ * @param sessionId - IO session to use for transmission
+ * @param frame - CAN frame to transmit
+ * @returns Transmit result with success/error info
+ */
+export async function ioTransmitCanFrame(
+  sessionId: string,
+  frame: CanTransmitFrame
+): Promise<TransmitResult> {
+  return invoke("io_transmit_can_frame", { sessionId, frame });
+}
+
+/**
+ * Start repeat transmission through an IO session.
+ * @param sessionId - IO session to use
+ * @param queueId - Unique ID for this repeat task
+ * @param frame - CAN frame to repeat
+ * @param intervalMs - Interval between transmissions in milliseconds
+ */
+export async function ioStartRepeatTransmit(
+  sessionId: string,
+  queueId: string,
+  frame: CanTransmitFrame,
+  intervalMs: number
+): Promise<void> {
+  return invoke("io_start_repeat_transmit", {
+    sessionId,
+    queueId,
+    frame,
+    intervalMs,
+  });
+}
+
+/**
+ * Stop repeat transmission for a queue item (IO session).
+ * @param queueId - ID of the repeat task to stop
+ */
+export async function ioStopRepeatTransmit(queueId: string): Promise<void> {
+  return invoke("io_stop_repeat_transmit", { queueId });
+}
+
+/**
+ * Stop all repeat transmissions for an IO session.
+ * @param sessionId - Session to stop all repeats for
+ */
+export async function ioStopAllRepeats(sessionId: string): Promise<void> {
+  return invoke("io_stop_all_repeats", { sessionId });
+}
+
+// ============================================================================
+// IO Session Group Repeat API
+// ============================================================================
+//
+// Group repeat transmits multiple frames in sequence within a single loop.
+// All frames are sent A→B→C with no delay between them, then the system
+// waits for the interval before repeating the sequence.
+
+/**
+ * Start group repeat transmission through an IO session.
+ * Frames are sent sequentially (A→B→C) with no delay between them,
+ * then the system waits for the interval before repeating.
+ * @param sessionId - IO session to use
+ * @param groupId - Unique ID for this group (used to stop it later)
+ * @param frames - CAN frames to transmit in sequence
+ * @param intervalMs - Interval between complete sequences in milliseconds
+ */
+export async function ioStartRepeatGroup(
+  sessionId: string,
+  groupId: string,
+  frames: CanTransmitFrame[],
+  intervalMs: number
+): Promise<void> {
+  return invoke("io_start_repeat_group", {
+    sessionId,
+    groupId,
+    frames,
+    intervalMs,
+  });
+}
+
+/**
+ * Stop repeat transmission for a group.
+ * @param groupId - ID of the group to stop
+ */
+export async function ioStopRepeatGroup(groupId: string): Promise<void> {
+  return invoke("io_stop_repeat_group", { groupId });
+}
+
+/**
+ * Stop all group repeat transmissions.
+ */
+export async function ioStopAllGroupRepeats(): Promise<void> {
+  return invoke("io_stop_all_group_repeats");
+}

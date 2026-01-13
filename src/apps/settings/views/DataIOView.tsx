@@ -1,0 +1,329 @@
+// ui/src/apps/settings/views/DataIOView.tsx
+
+import React from "react";
+import { Cable, Plus, Copy, Edit2, Trash2, Star } from "lucide-react";
+import type { IOProfile } from "../stores/settingsStore";
+import { getReaderProtocols, isReaderRealtime } from "../../../hooks/useSettings";
+import { PrimaryButton } from "../../../components/forms/DialogButtons";
+import {
+  h2,
+  textTertiary,
+  cardDefault,
+  textPrimary,
+  hoverSubtle,
+  roundedDefault,
+  spaceYLarge,
+  spaceYSmall,
+  gapSmall,
+  badgeSuccess,
+  badgePurple,
+  badgeWarning,
+  badgeNeutral,
+  badgeInfo,
+} from "../../../styles";
+
+type DataIOViewProps = {
+  ioProfiles: IOProfile[];
+  onAddProfile: () => void;
+  onEditProfile: (profile: IOProfile) => void;
+  onDeleteProfile: (id: string) => void;
+  onDuplicateProfile: (profile: IOProfile) => void;
+  defaultReadProfile: string | null;
+  onToggleDefaultRead: (profileId: string) => void;
+};
+
+
+const getIOKindLabel = (kind: IOProfile["kind"]) => {
+  switch (kind) {
+    case "mqtt":
+      return "MQTT";
+    case "postgres":
+      return "PostgreSQL";
+    case "gvret_tcp":
+      return "GVRET TCP";
+    case "csv_file":
+      return "CSV File";
+    case "serial":
+      return "Serial";
+    case "slcan":
+      return "slcan";
+    case "socketcan":
+      return "SocketCAN";
+    default:
+      return kind;
+  }
+};
+
+const getProtocolBadgeStyle = (protocol: string) => {
+  switch (protocol) {
+    case "can":
+      return badgeSuccess;
+    case "serial":
+      return badgePurple;
+    case "modbus":
+      return badgeWarning;
+    default:
+      return badgeNeutral;
+  }
+};
+
+const getProtocolLabel = (protocol: string) => {
+  switch (protocol) {
+    case "can":
+      return "CAN";
+    case "serial":
+      return "Serial";
+    case "modbus":
+      return "Modbus";
+    default:
+      return protocol;
+  }
+};
+
+const SummaryBadge = ({ label, value }: { label: string; value: React.ReactNode }) => (
+  <span className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded bg-slate-200/70 dark:bg-slate-700/60 text-slate-700 dark:text-slate-200">
+    <span className="opacity-70">{label}:</span>
+    <span className="font-mono">{value}</span>
+  </span>
+);
+
+const renderConnectionSummary = (profile: IOProfile) => {
+  const c: any = profile.connection || {};
+
+  if (profile.kind === "mqtt") {
+    const host = c.host || "localhost";
+    const port = c.port || "1883";
+    const formats = c.formats || {};
+
+    const enabledFormats = ["json", "savvycan", "decode"].filter(
+      (k) => formats?.[k]?.enabled
+    );
+
+    return (
+      <div className="flex flex-wrap gap-2">
+        <SummaryBadge label="host" value={host} />
+        <SummaryBadge label="port" value={port} />
+        {enabledFormats.length > 0 ? (
+          <SummaryBadge label="formats" value={enabledFormats.join(",")} />
+        ) : (
+          <SummaryBadge label="formats" value="none" />
+        )}
+      </div>
+    );
+  }
+
+  if (profile.kind === "postgres") {
+    const host = c.host || "localhost";
+    const port = c.port || "5432";
+    const db = c.database || "candor";
+    const sourceType = (c.source_type || "can_frame") as string;
+
+    // Friendly labels for source types
+    const sourceTypeLabels: Record<string, string> = {
+      can_frame: "CAN",
+      modbus_frame: "Modbus",
+      serial_frame: "Serial",
+      serial_raw: "Raw",
+    };
+    const sourceTypeLabel = sourceTypeLabels[sourceType] || sourceType;
+
+    return (
+      <div className="flex flex-wrap gap-2">
+        <SummaryBadge label="host" value={host} />
+        <SummaryBadge label="port" value={port} />
+        <SummaryBadge label="db" value={db} />
+        <SummaryBadge label="source" value={sourceTypeLabel} />
+        {sourceType === "serial_raw" && c.framing_mode && (
+          <SummaryBadge label="framing" value={c.framing_mode} />
+        )}
+      </div>
+    );
+  }
+
+  if (profile.kind === "gvret_tcp") {
+    const host = c.host || "192.168.1.100";
+    const port = c.port || "23";
+    const timeout = c.timeout || "5";
+
+    return (
+      <div className="flex flex-wrap gap-2">
+        <SummaryBadge label="host" value={host} />
+        <SummaryBadge label="port" value={port} />
+        <SummaryBadge label="timeout" value={`${timeout}s`} />
+      </div>
+    );
+  }
+
+  if (profile.kind === "csv_file") {
+    const speed = c.default_speed || "0";
+    const speedLabel = speed === "0" ? "No limit" : `${speed}x`;
+
+    return (
+      <div className="flex flex-wrap gap-2">
+        <SummaryBadge label="speed" value={speedLabel} />
+      </div>
+    );
+  }
+
+  if (profile.kind === "serial") {
+    const port = c.port || "(not set)";
+    const baud = c.baud_rate || "115200";
+    const framing = c.framing_mode || "raw";
+
+    return (
+      <div className="flex flex-wrap gap-2">
+        <SummaryBadge label="port" value={port} />
+        <SummaryBadge label="baud" value={baud} />
+        <SummaryBadge label="framing" value={framing} />
+      </div>
+    );
+  }
+
+  if (profile.kind === "slcan") {
+    const port = c.port || "(not set)";
+    const baudRate = c.baud_rate || 115200;
+    const bitrate = c.bitrate || 500000;
+    const bitrateLabel = bitrate >= 1000000 ? `${bitrate / 1000000}M` : `${bitrate / 1000}k`;
+    const silent = c.silent_mode ?? true;
+
+    return (
+      <div className="flex flex-wrap gap-2">
+        <SummaryBadge label="port" value={port} />
+        {baudRate !== 115200 && <SummaryBadge label="baud" value={baudRate} />}
+        <SummaryBadge label="bitrate" value={bitrateLabel} />
+        <SummaryBadge label="mode" value={silent ? "silent" : "active"} />
+      </div>
+    );
+  }
+
+  if (profile.kind === "socketcan") {
+    const iface = c.interface || "can0";
+
+    return (
+      <div className="flex flex-wrap gap-2">
+        <SummaryBadge label="interface" value={iface} />
+      </div>
+    );
+  }
+
+  // Fallback (should be rare)
+  const raw = JSON.stringify(profile.connection ?? {}, null, 0);
+  return (
+    <div className="text-xs font-mono text-slate-600 dark:text-slate-400 break-all">
+      {raw.length > 120 ? raw.slice(0, 120) + "…" : raw}
+    </div>
+  );
+};
+
+export default function DataIOView({
+  ioProfiles,
+  onAddProfile,
+  onEditProfile,
+  onDeleteProfile,
+  onDuplicateProfile,
+  defaultReadProfile,
+  onToggleDefaultRead,
+}: DataIOViewProps) {
+  return (
+    <div className={spaceYLarge}>
+      <div className="flex items-center justify-between">
+        <h2 className={h2}>Data IO Profiles</h2>
+        <PrimaryButton onClick={onAddProfile}>
+          <Plus className="w-4 h-4" />
+          Add Profile
+        </PrimaryButton>
+      </div>
+
+      {ioProfiles.length === 0 ? (
+        <div className={`text-center py-12 ${textTertiary}`}>
+          <Cable className="w-12 h-12 mx-auto mb-4 opacity-50" />
+          <p>No IO profiles configured</p>
+          <p className="text-sm mt-2">Click "Add Profile" to create your first IO profile</p>
+        </div>
+      ) : (
+        <div className={spaceYSmall}>
+          {ioProfiles.map((profile) => (
+            <div
+              key={profile.id}
+              className={`flex items-center justify-between p-4 ${cardDefault}`}
+            >
+              <div className="flex-1">
+                <div className={`flex items-center ${gapSmall}`}>
+                  <h3 className={`font-medium ${textPrimary}`}>{profile.name}</h3>
+                  <span className={badgeInfo}>
+                    {getIOKindLabel(profile.kind)}
+                  </span>
+
+                  {/* Protocol badge(s) */}
+                  {getReaderProtocols(profile.kind, profile.connection).map((protocol) => (
+                    <span
+                      key={protocol}
+                      className={getProtocolBadgeStyle(protocol)}
+                    >
+                      {getProtocolLabel(protocol)}
+                    </span>
+                  ))}
+
+                  {/* Realtime indicator */}
+                  {!isReaderRealtime(profile.kind) && (
+                    <span className={badgeNeutral}>
+                      Recorded
+                    </span>
+                  )}
+
+                  {/* Star icon for default */}
+                  <button
+                    onClick={() => onToggleDefaultRead(profile.id)}
+                    className={`p-1 ${hoverSubtle} rounded transition-colors`}
+                    title={
+                      defaultReadProfile === profile.id
+                        ? "Unset as default"
+                        : "Set as default"
+                    }
+                  >
+                    <Star
+                      className={`w-4 h-4 ${
+                        defaultReadProfile === profile.id
+                          ? "fill-yellow-500 text-yellow-500"
+                          : "text-slate-400 dark:text-slate-500"
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Connection summary */}
+                <div className="mt-2">
+                  {renderConnectionSummary(profile)}
+                </div>
+              </div>
+
+              <div className={`flex items-center ${gapSmall}`}>
+                <button
+                  onClick={() => onDuplicateProfile(profile)}
+                  className={`p-2 ${hoverSubtle} ${roundedDefault} transition-colors`}
+                  title="Duplicate profile"
+                >
+                  <Copy className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+                </button>
+                <button
+                  onClick={() => onEditProfile(profile)}
+                  className={`p-2 ${hoverSubtle} ${roundedDefault} transition-colors`}
+                  title="Edit profile"
+                >
+                  <Edit2 className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+                </button>
+                <button
+                  onClick={() => onDeleteProfile(profile.id)}
+                  className={`p-2 hover:bg-red-100 dark:hover:bg-red-900/30 ${roundedDefault} transition-colors`}
+                  title="Delete profile"
+                >
+                  <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

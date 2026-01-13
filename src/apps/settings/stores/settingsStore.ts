@@ -1,0 +1,759 @@
+// ui/src/apps/settings/stores/settingsStore.ts
+
+import { create } from 'zustand';
+import {
+  loadSettings as loadSettingsApi,
+  saveSettings as saveSettingsApi,
+  validateDirectory as validateDirectoryApi,
+  listCatalogs,
+} from '../../../api';
+import { emit } from '@tauri-apps/api/event';
+import { WINDOW_EVENTS } from '../../../events/registry';
+import { getOrCreateDefaultDirs } from '../../../utils/defaultPaths';
+import {
+  getAllFavorites,
+  type TimeRangeFavorite,
+} from '../../../utils/favorites';
+import type { SettingsSection } from '../layout/SettingsSidebar';
+
+// Types
+export type DefaultFrameType = 'can' | 'modbus' | 'serial';
+
+export interface DirectoryValidation {
+  exists: boolean;
+  writable: boolean;
+  error?: string;
+}
+
+export interface IOProfile {
+  id: string;
+  name: string;
+  kind: 'mqtt' | 'postgres' | 'gvret_tcp' | 'gvret_usb' | 'csv_file' | 'serial' | 'slcan' | 'socketcan';
+  connection: Record<string, any>;
+}
+
+export interface CatalogFile {
+  name: string;
+  filename: string;
+  path: string;
+}
+
+export interface SignalColours {
+  none: string;
+  low: string;
+  medium: string;
+  high: string;
+}
+
+interface AppSettings {
+  config_path: string;
+  decoder_dir: string;
+  dump_dir: string;
+  report_dir: string;
+  io_profiles: IOProfile[];
+  default_read_profile?: string | null;
+  default_write_profiles?: string[];
+  default_catalog?: string | null;
+  display_frame_id_format?: 'hex' | 'decimal';
+  save_frame_id_format?: 'hex' | 'decimal';
+  display_time_format?: 'delta-last' | 'delta-start' | 'timestamp' | 'human';
+  default_frame_type?: DefaultFrameType;
+  signal_colour_none?: string;
+  signal_colour_low?: string;
+  signal_colour_medium?: string;
+  signal_colour_high?: string;
+  binary_one_colour?: string;
+  binary_zero_colour?: string;
+  binary_unused_colour?: string;
+  discovery_history_buffer?: number;
+}
+
+// Dialog types
+type DialogName =
+  | 'ioProfile'
+  | 'deleteIOProfile'
+  | 'deleteCatalog'
+  | 'duplicateCatalog'
+  | 'editCatalog'
+  | 'editBookmark'
+  | 'deleteBookmark';
+
+interface DialogPayload {
+  editingProfileId: string | null;
+  profileForm: IOProfile;
+  ioProfileToDelete: IOProfile | null;
+  catalogToDelete: CatalogFile | null;
+  catalogToDuplicate: CatalogFile | null;
+  catalogToEdit: CatalogFile | null;
+  bookmarkToEdit: TimeRangeFavorite | null;
+  bookmarkToDelete: TimeRangeFavorite | null;
+}
+
+const initialDialogs: Record<DialogName, boolean> = {
+  ioProfile: false,
+  deleteIOProfile: false,
+  deleteCatalog: false,
+  duplicateCatalog: false,
+  editCatalog: false,
+  editBookmark: false,
+  deleteBookmark: false,
+};
+
+const initialDialogPayload: DialogPayload = {
+  editingProfileId: null,
+  profileForm: { id: '', name: '', kind: 'mqtt', connection: {} },
+  ioProfileToDelete: null,
+  catalogToDelete: null,
+  catalogToDuplicate: null,
+  catalogToEdit: null,
+  bookmarkToEdit: null,
+  bookmarkToDelete: null,
+};
+
+const defaultSignalColours: SignalColours = {
+  none: '#94a3b8',
+  low: '#f59e0b',
+  medium: '#3b82f6',
+  high: '#22c55e',
+};
+
+// Stable stringify helper for change detection
+function stableStringify(value: any): string {
+  if (value === null || value === undefined) return String(value);
+  if (typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
+  const keys = Object.keys(value).sort();
+  return '{' + keys.map((k) => JSON.stringify(k) + ':' + stableStringify((value as any)[k])).join(',') + '}';
+}
+
+// Store state interface
+interface SettingsState {
+  // Locations
+  locations: {
+    configPath: string;
+    decoderDir: string;
+    dumpDir: string;
+    reportDir: string;
+    decoderValidation: DirectoryValidation | null;
+    dumpValidation: DirectoryValidation | null;
+    reportValidation: DirectoryValidation | null;
+  };
+
+  // IO Profiles
+  ioProfiles: {
+    profiles: IOProfile[];
+    defaultReadProfile: string | null;
+    defaultWriteProfiles: string[];
+  };
+
+  // Catalogs
+  catalogs: {
+    list: CatalogFile[];
+    defaultCatalog: string | null;
+  };
+
+  // Bookmarks
+  bookmarks: TimeRangeFavorite[];
+
+  // Display settings
+  display: {
+    frameIdFormat: 'hex' | 'decimal';
+    saveFrameIdFormat: 'hex' | 'decimal';
+    timeFormat: 'delta-last' | 'delta-start' | 'timestamp' | 'human';
+    signalColours: SignalColours;
+    binaryOneColour: string;
+    binaryZeroColour: string;
+    binaryUnusedColour: string;
+  };
+
+  // General settings
+  general: {
+    discoveryHistoryBuffer: number;
+    defaultFrameType: DefaultFrameType;
+  };
+
+  // UI state
+  ui: {
+    currentSection: SettingsSection;
+    dialogs: Record<DialogName, boolean>;
+    dialogPayload: DialogPayload;
+  };
+
+  // Change tracking
+  originalSettings: AppSettings | null;
+
+  // Actions - Loading
+  loadSettings: () => Promise<void>;
+  loadCatalogs: () => Promise<void>;
+  loadBookmarks: () => Promise<void>;
+
+  // Actions - Saving
+  saveSettings: () => Promise<void>;
+  hasUnsavedChanges: () => boolean;
+
+  // Actions - Navigation
+  setSection: (section: SettingsSection) => void;
+
+  // Actions - Dialogs
+  openDialog: (name: DialogName) => void;
+  closeDialog: (name: DialogName) => void;
+  setDialogPayload: (payload: Partial<DialogPayload>) => void;
+
+  // Actions - Locations
+  setDecoderDir: (dir: string) => void;
+  setDumpDir: (dir: string) => void;
+  setReportDir: (dir: string) => void;
+
+  // Actions - IO Profiles
+  setProfiles: (profiles: IOProfile[]) => void;
+  addProfile: (profile: IOProfile) => void;
+  updateProfile: (id: string, profile: IOProfile) => void;
+  removeProfile: (id: string) => void;
+  setDefaultReadProfile: (id: string | null) => void;
+  setDefaultWriteProfiles: (ids: string[]) => void;
+
+  // Actions - Catalogs
+  setCatalogList: (catalogs: CatalogFile[]) => void;
+  setDefaultCatalog: (filename: string | null) => void;
+
+  // Actions - Bookmarks
+  setBookmarks: (bookmarks: TimeRangeFavorite[]) => void;
+
+  // Actions - Display
+  setDisplayFrameIdFormat: (format: 'hex' | 'decimal') => void;
+  setSaveFrameIdFormat: (format: 'hex' | 'decimal') => void;
+  setDisplayTimeFormat: (format: 'delta-last' | 'delta-start' | 'timestamp' | 'human') => void;
+  setSignalColour: (level: keyof SignalColours, colour: string) => void;
+  resetSignalColour: (level: keyof SignalColours) => void;
+  setBinaryOneColour: (colour: string) => void;
+  setBinaryZeroColour: (colour: string) => void;
+  setBinaryUnusedColour: (colour: string) => void;
+  resetBinaryOneColour: () => void;
+  resetBinaryZeroColour: () => void;
+  resetBinaryUnusedColour: () => void;
+
+  // Actions - General
+  setDiscoveryHistoryBuffer: (buffer: number) => void;
+  setDefaultFrameType: (type: DefaultFrameType) => void;
+}
+
+// Auto-save debounce
+let saveTimeout: number | null = null;
+
+const scheduleSave = (save: () => Promise<void>) => {
+  if (saveTimeout) {
+    window.clearTimeout(saveTimeout);
+  }
+  saveTimeout = window.setTimeout(() => {
+    save();
+  }, 1000);
+};
+
+export const useSettingsStore = create<SettingsState>((set, get) => ({
+  // Initial state
+  locations: {
+    configPath: '',
+    decoderDir: '',
+    dumpDir: '',
+    reportDir: '',
+    decoderValidation: null,
+    dumpValidation: null,
+    reportValidation: null,
+  },
+
+  ioProfiles: {
+    profiles: [],
+    defaultReadProfile: null,
+    defaultWriteProfiles: [],
+  },
+
+  catalogs: {
+    list: [],
+    defaultCatalog: null,
+  },
+
+  bookmarks: [],
+
+  display: {
+    frameIdFormat: 'hex',
+    saveFrameIdFormat: 'hex',
+    timeFormat: 'human',
+    signalColours: { ...defaultSignalColours },
+    binaryOneColour: '#14b8a6',
+    binaryZeroColour: '#94a3b8',
+    binaryUnusedColour: '#64748b',
+  },
+
+  general: {
+    discoveryHistoryBuffer: 100000,
+    defaultFrameType: 'can',
+  },
+
+  ui: {
+    currentSection: 'general',
+    dialogs: { ...initialDialogs },
+    dialogPayload: { ...initialDialogPayload },
+  },
+
+  originalSettings: null,
+
+  // Loading actions
+  loadSettings: async () => {
+    try {
+      const settings = await loadSettingsApi();
+
+      // Get default directories for empty paths
+      let defaultDirs: { decoders: string; dumps: string; reports: string } | null = null;
+      if (!settings.decoder_dir || !settings.dump_dir || !settings.report_dir) {
+        try {
+          defaultDirs = await getOrCreateDefaultDirs();
+        } catch (err) {
+          console.warn('Could not get/create default directories:', err);
+        }
+      }
+
+      const decoderDir = settings.decoder_dir || defaultDirs?.decoders || '';
+      const dumpDir = settings.dump_dir || defaultDirs?.dumps || '';
+      const reportDir = settings.report_dir || defaultDirs?.reports || '';
+
+      // Validate directories
+      const validateDir = async (path: string): Promise<DirectoryValidation | null> => {
+        if (!path) return null;
+        try {
+          return await validateDirectoryApi(path);
+        } catch {
+          return { exists: false, writable: false, error: 'Validation failed' };
+        }
+      };
+
+      const [decoderValidation, dumpValidation, reportValidation] = await Promise.all([
+        validateDir(decoderDir),
+        validateDir(dumpDir),
+        validateDir(reportDir),
+      ]);
+
+      const normalized: AppSettings = {
+        config_path: settings.config_path || '',
+        decoder_dir: decoderDir,
+        dump_dir: dumpDir,
+        report_dir: reportDir,
+        io_profiles: settings.io_profiles || [],
+        default_read_profile: settings.default_read_profile ?? null,
+        default_write_profiles: settings.default_write_profiles ?? [],
+        default_catalog: settings.default_catalog ?? null,
+        display_frame_id_format: settings.display_frame_id_format === 'decimal' ? 'decimal' : 'hex',
+        save_frame_id_format: settings.save_frame_id_format === 'decimal' ? 'decimal' : 'hex',
+        display_time_format: settings.display_time_format ?? 'human',
+        signal_colour_none: settings.signal_colour_none || defaultSignalColours.none,
+        signal_colour_low: settings.signal_colour_low || defaultSignalColours.low,
+        signal_colour_medium: settings.signal_colour_medium || defaultSignalColours.medium,
+        signal_colour_high: settings.signal_colour_high || defaultSignalColours.high,
+        binary_one_colour: settings.binary_one_colour || '#14b8a6',
+        binary_zero_colour: settings.binary_zero_colour || '#94a3b8',
+        binary_unused_colour: settings.binary_unused_colour || '#64748b',
+        discovery_history_buffer: settings.discovery_history_buffer ?? 100000,
+        default_frame_type: (settings.default_frame_type as DefaultFrameType) ?? 'can',
+      };
+
+      set({
+        locations: {
+          configPath: normalized.config_path,
+          decoderDir: normalized.decoder_dir,
+          dumpDir: normalized.dump_dir,
+          reportDir: normalized.report_dir,
+          decoderValidation,
+          dumpValidation,
+          reportValidation,
+        },
+        ioProfiles: {
+          profiles: normalized.io_profiles,
+          defaultReadProfile: normalized.default_read_profile || null,
+          defaultWriteProfiles: normalized.default_write_profiles || [],
+        },
+        catalogs: {
+          ...get().catalogs,
+          defaultCatalog: normalized.default_catalog || null,
+        },
+        display: {
+          frameIdFormat: normalized.display_frame_id_format === 'decimal' ? 'decimal' : 'hex',
+          saveFrameIdFormat: normalized.save_frame_id_format === 'decimal' ? 'decimal' : 'hex',
+          timeFormat: (['delta-last', 'delta-start', 'timestamp'].includes(normalized.display_time_format || '')
+            ? normalized.display_time_format
+            : 'human') as 'delta-last' | 'delta-start' | 'timestamp' | 'human',
+          signalColours: {
+            none: normalized.signal_colour_none || defaultSignalColours.none,
+            low: normalized.signal_colour_low || defaultSignalColours.low,
+            medium: normalized.signal_colour_medium || defaultSignalColours.medium,
+            high: normalized.signal_colour_high || defaultSignalColours.high,
+          },
+          binaryOneColour: normalized.binary_one_colour || '#14b8a6',
+          binaryZeroColour: normalized.binary_zero_colour || '#94a3b8',
+          binaryUnusedColour: normalized.binary_unused_colour || '#64748b',
+        },
+        general: {
+          discoveryHistoryBuffer: normalized.discovery_history_buffer ?? 100000,
+          defaultFrameType: normalized.default_frame_type ?? 'can',
+        },
+        originalSettings: normalized,
+      });
+
+      // Load catalogs after we have the decoder dir
+      get().loadCatalogs();
+    } catch (error) {
+      console.error('Failed to load settings:', error);
+    }
+  },
+
+  loadCatalogs: async () => {
+    try {
+      const { decoderDir } = get().locations;
+      if (!decoderDir) return;
+      const catalogList = await listCatalogs(decoderDir);
+      set((state) => ({
+        catalogs: { ...state.catalogs, list: catalogList },
+      }));
+    } catch (error) {
+      console.error('Failed to load catalogs:', error);
+    }
+  },
+
+  loadBookmarks: async () => {
+    try {
+      const allBookmarks = await getAllFavorites();
+      allBookmarks.sort((a, b) => a.name.localeCompare(b.name));
+      set({ bookmarks: allBookmarks });
+    } catch (error) {
+      console.error('Failed to load bookmarks:', error);
+    }
+  },
+
+  // Saving actions
+  saveSettings: async () => {
+    if (!get().hasUnsavedChanges()) return;
+
+    try {
+      const { locations, ioProfiles, catalogs, display, general } = get();
+
+      const settings = {
+        config_path: locations.configPath,
+        decoder_dir: locations.decoderDir,
+        dump_dir: locations.dumpDir,
+        report_dir: locations.reportDir,
+        io_profiles: ioProfiles.profiles,
+        default_read_profile: ioProfiles.defaultReadProfile,
+        default_write_profiles: ioProfiles.defaultWriteProfiles,
+        default_catalog: catalogs.defaultCatalog,
+        display_frame_id_format: display.frameIdFormat,
+        save_frame_id_format: display.saveFrameIdFormat,
+        display_time_format: display.timeFormat,
+        default_frame_type: general.defaultFrameType,
+        signal_colour_none: display.signalColours.none,
+        signal_colour_low: display.signalColours.low,
+        signal_colour_medium: display.signalColours.medium,
+        signal_colour_high: display.signalColours.high,
+        binary_one_colour: display.binaryOneColour,
+        binary_zero_colour: display.binaryZeroColour,
+        binary_unused_colour: display.binaryUnusedColour,
+        discovery_history_buffer: general.discoveryHistoryBuffer,
+      };
+
+      await saveSettingsApi(settings);
+      set({ originalSettings: settings });
+
+      // Notify other windows
+      await emit(WINDOW_EVENTS.SETTINGS_CHANGED, {
+        settings,
+        timestamp: Date.now(),
+      });
+    } catch (error) {
+      console.error('Failed to save settings:', error);
+    }
+  },
+
+  hasUnsavedChanges: () => {
+    const { locations, ioProfiles, catalogs, display, general, originalSettings } = get();
+    if (!originalSettings) return false;
+
+    const currentSettings = {
+      config_path: locations.configPath,
+      decoder_dir: locations.decoderDir,
+      dump_dir: locations.dumpDir,
+      report_dir: locations.reportDir,
+      io_profiles: ioProfiles.profiles,
+      default_read_profile: ioProfiles.defaultReadProfile,
+      default_write_profiles: ioProfiles.defaultWriteProfiles,
+      default_catalog: catalogs.defaultCatalog,
+      display_frame_id_format: display.frameIdFormat,
+      save_frame_id_format: display.saveFrameIdFormat,
+      display_time_format: display.timeFormat,
+      default_frame_type: general.defaultFrameType,
+      signal_colour_none: display.signalColours.none,
+      signal_colour_low: display.signalColours.low,
+      signal_colour_medium: display.signalColours.medium,
+      signal_colour_high: display.signalColours.high,
+      binary_one_colour: display.binaryOneColour,
+      binary_zero_colour: display.binaryZeroColour,
+      binary_unused_colour: display.binaryUnusedColour,
+      discovery_history_buffer: general.discoveryHistoryBuffer,
+    };
+
+    return stableStringify(currentSettings) !== stableStringify(originalSettings);
+  },
+
+  // Navigation
+  setSection: (section) => set((state) => ({
+    ui: { ...state.ui, currentSection: section },
+  })),
+
+  // Dialog management
+  openDialog: (name) => set((state) => ({
+    ui: { ...state.ui, dialogs: { ...state.ui.dialogs, [name]: true } },
+  })),
+
+  closeDialog: (name) => set((state) => ({
+    ui: { ...state.ui, dialogs: { ...state.ui.dialogs, [name]: false } },
+  })),
+
+  setDialogPayload: (payload) => set((state) => ({
+    ui: {
+      ...state.ui,
+      dialogPayload: { ...state.ui.dialogPayload, ...payload },
+    },
+  })),
+
+  // Location setters with validation
+  setDecoderDir: async (dir) => {
+    set((state) => ({
+      locations: { ...state.locations, decoderDir: dir, decoderValidation: null },
+    }));
+    if (dir) {
+      try {
+        const validation = await validateDirectoryApi(dir);
+        set((state) => ({
+          locations: { ...state.locations, decoderValidation: validation },
+        }));
+      } catch {
+        set((state) => ({
+          locations: {
+            ...state.locations,
+            decoderValidation: { exists: false, writable: false, error: 'Validation failed' },
+          },
+        }));
+      }
+    }
+    scheduleSave(get().saveSettings);
+  },
+
+  setDumpDir: async (dir) => {
+    set((state) => ({
+      locations: { ...state.locations, dumpDir: dir, dumpValidation: null },
+    }));
+    if (dir) {
+      try {
+        const validation = await validateDirectoryApi(dir);
+        set((state) => ({
+          locations: { ...state.locations, dumpValidation: validation },
+        }));
+      } catch {
+        set((state) => ({
+          locations: {
+            ...state.locations,
+            dumpValidation: { exists: false, writable: false, error: 'Validation failed' },
+          },
+        }));
+      }
+    }
+    scheduleSave(get().saveSettings);
+  },
+
+  setReportDir: async (dir) => {
+    set((state) => ({
+      locations: { ...state.locations, reportDir: dir, reportValidation: null },
+    }));
+    if (dir) {
+      try {
+        const validation = await validateDirectoryApi(dir);
+        set((state) => ({
+          locations: { ...state.locations, reportValidation: validation },
+        }));
+      } catch {
+        set((state) => ({
+          locations: {
+            ...state.locations,
+            reportValidation: { exists: false, writable: false, error: 'Validation failed' },
+          },
+        }));
+      }
+    }
+    scheduleSave(get().saveSettings);
+  },
+
+  // IO Profile actions
+  setProfiles: (profiles) => {
+    set((state) => ({
+      ioProfiles: { ...state.ioProfiles, profiles },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  addProfile: (profile) => {
+    set((state) => ({
+      ioProfiles: {
+        ...state.ioProfiles,
+        profiles: [...state.ioProfiles.profiles, profile],
+      },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  updateProfile: (id, profile) => {
+    set((state) => ({
+      ioProfiles: {
+        ...state.ioProfiles,
+        profiles: state.ioProfiles.profiles.map((p) => (p.id === id ? profile : p)),
+      },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  removeProfile: (id) => {
+    const { ioProfiles } = get();
+    set((state) => ({
+      ioProfiles: {
+        ...state.ioProfiles,
+        profiles: state.ioProfiles.profiles.filter((p) => p.id !== id),
+        defaultReadProfile: ioProfiles.defaultReadProfile === id ? null : ioProfiles.defaultReadProfile,
+        defaultWriteProfiles: ioProfiles.defaultWriteProfiles.filter((wId) => wId !== id),
+      },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  setDefaultReadProfile: (id) => {
+    set((state) => ({
+      ioProfiles: { ...state.ioProfiles, defaultReadProfile: id },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  setDefaultWriteProfiles: (ids) => {
+    set((state) => ({
+      ioProfiles: { ...state.ioProfiles, defaultWriteProfiles: ids },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  // Catalog actions
+  setCatalogList: (catalogs) => set((state) => ({
+    catalogs: { ...state.catalogs, list: catalogs },
+  })),
+
+  setDefaultCatalog: (filename) => {
+    set((state) => ({
+      catalogs: { ...state.catalogs, defaultCatalog: filename },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  // Bookmark actions
+  setBookmarks: (bookmarks) => set({ bookmarks }),
+
+  // Display actions
+  setDisplayFrameIdFormat: (format) => {
+    set((state) => ({
+      display: { ...state.display, frameIdFormat: format },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  setSaveFrameIdFormat: (format) => {
+    set((state) => ({
+      display: { ...state.display, saveFrameIdFormat: format },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  setDisplayTimeFormat: (format) => {
+    set((state) => ({
+      display: { ...state.display, timeFormat: format },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  setSignalColour: (level, colour) => {
+    set((state) => ({
+      display: {
+        ...state.display,
+        signalColours: { ...state.display.signalColours, [level]: colour },
+      },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  resetSignalColour: (level) => {
+    set((state) => ({
+      display: {
+        ...state.display,
+        signalColours: { ...state.display.signalColours, [level]: defaultSignalColours[level] },
+      },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  setBinaryOneColour: (colour) => {
+    set((state) => ({
+      display: { ...state.display, binaryOneColour: colour },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  setBinaryZeroColour: (colour) => {
+    set((state) => ({
+      display: { ...state.display, binaryZeroColour: colour },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  setBinaryUnusedColour: (colour) => {
+    set((state) => ({
+      display: { ...state.display, binaryUnusedColour: colour },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  resetBinaryOneColour: () => {
+    set((state) => ({
+      display: { ...state.display, binaryOneColour: '#14b8a6' },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  resetBinaryZeroColour: () => {
+    set((state) => ({
+      display: { ...state.display, binaryZeroColour: '#94a3b8' },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  resetBinaryUnusedColour: () => {
+    set((state) => ({
+      display: { ...state.display, binaryUnusedColour: '#64748b' },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  // General actions
+  setDiscoveryHistoryBuffer: (buffer) => {
+    set((state) => ({
+      general: { ...state.general, discoveryHistoryBuffer: buffer },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  setDefaultFrameType: (type) => {
+    set((state) => ({
+      general: { ...state.general, defaultFrameType: type },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+}));

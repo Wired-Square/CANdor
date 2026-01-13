@@ -1,0 +1,753 @@
+// ui/src/dialogs/IoReaderPickerDialog.tsx
+
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { X } from "lucide-react";
+import { emit, listen } from "@tauri-apps/api/event";
+import Dialog from "../components/Dialog";
+import {
+  cardElevated,
+  h3,
+  borderDefault,
+  paddingCard,
+  hoverLight,
+  roundedDefault,
+} from "../styles";
+import type { IOProfile } from "../hooks/useSettings";
+import { useSessionStore } from "../stores/sessionStore";
+import { pickCsvToOpen } from "../api/dialogs";
+import {
+  importCsvToBuffer,
+  listBuffers,
+  deleteBuffer,
+  setActiveBuffer,
+  clearBuffer,
+  type BufferMetadata,
+} from "../api/buffer";
+import { WINDOW_EVENTS, type BufferChangedPayload } from "../events/registry";
+import {
+  createIOSession,
+  startReaderSession,
+  stopReaderSession,
+  destroyReaderSession,
+  updateReaderSpeed,
+  type StreamEndedPayload,
+} from '../api/io';
+import { getAllFavorites, type TimeRangeFavorite } from "../utils/favorites";
+
+// Import extracted components
+import { BufferList } from "./io-reader-picker";
+import { ReaderList } from "./io-reader-picker";
+import { IngestOptions } from "./io-reader-picker";
+import { FramingOptions, FilterOptions } from "./io-reader-picker";
+import { ActionButtons } from "./io-reader-picker";
+import { IngestStatus } from "./io-reader-picker";
+import {
+  localToIsoWithOffset,
+  getLocalTimezoneAbbr,
+  BUFFER_PROFILE_ID,
+  CSV_EXTERNAL_ID,
+  INGEST_SESSION_ID,
+  isRealtimeProfile,
+} from "./io-reader-picker";
+import type { FramingConfig } from "./io-reader-picker";
+
+// Re-export constants for backward compatibility
+export { BUFFER_PROFILE_ID, INGEST_SESSION_ID } from "./io-reader-picker";
+
+/** Options passed when starting ingest */
+export interface IngestOptions {
+  /** Playback speed (0 = no limit, 1 = realtime, etc.) */
+  speed: number;
+  /** Start time in ISO-8601 format (for recorded sources) */
+  startTime?: string;
+  /** End time in ISO-8601 format (for recorded sources) */
+  endTime?: string;
+  /** Maximum number of frames to read (for all sources) */
+  maxFrames?: number;
+  /** Frame ID extraction: start byte position (0-indexed) - for serial sources */
+  frameIdStartByte?: number;
+  /** Frame ID extraction: number of bytes (1 or 2) - for serial sources */
+  frameIdBytes?: number;
+  /** Source address extraction: start byte position (0-indexed) - for serial sources */
+  sourceAddressStartByte?: number;
+  /** Source address extraction: number of bytes (1 or 2) - for serial sources */
+  sourceAddressBytes?: number;
+  /** Source address extraction: byte order - for serial sources */
+  sourceAddressEndianness?: "big" | "little";
+  /** Minimum frame length to accept - for serial sources (default: 4) */
+  minFrameLength?: number;
+  /** Framing encoding for serial sources */
+  framingEncoding?: "slip" | "modbus_rtu" | "delimiter" | "raw";
+  /** Delimiter bytes for delimiter-based framing */
+  delimiter?: number[];
+  /** Maximum frame length for delimiter-based framing */
+  maxFrameLength?: number;
+  /** Also emit raw bytes in addition to frames */
+  emitRawBytes?: boolean;
+}
+
+type Props = {
+  isOpen: boolean;
+  onClose: () => void;
+  ioProfiles: IOProfile[];
+  selectedId: string | null;
+  defaultId?: string | null;
+  onSelect: (id: string | null) => void;
+  /** Called when CSV is imported - passes the buffer metadata */
+  onImport?: (metadata: BufferMetadata) => void;
+  /** Called when buffer is confirmed with framing config (for applying framing to bytes buffer) */
+  onBufferFramingConfig?: (config: FramingConfig | null) => void;
+  /** Current buffer metadata (if any) */
+  bufferMetadata?: BufferMetadata | null;
+  /** Default directory for file picker */
+  defaultDir?: string;
+  /** External ingest state - when provided, dialog uses external state instead of internal */
+  isIngesting?: boolean;
+  /** Profile ID currently being ingested */
+  ingestProfileId?: string | null;
+  /** Current frame count during ingest */
+  ingestFrameCount?: number;
+  /** Current ingest speed */
+  ingestSpeed?: number;
+  /** Called when ingest speed changes */
+  onIngestSpeedChange?: (speed: number) => void;
+  /** Called to start ingest/watch */
+  onStartIngest?: (profileId: string, closeDialog: boolean, options: IngestOptions) => void;
+  /** Called to stop ingest */
+  onStopIngest?: () => void;
+  /** Error message during ingest */
+  ingestError?: string | null;
+  /** Called when user wants to join an existing streaming session */
+  onJoinSession?: (profileId: string) => void;
+  /** Hide buffers section (for transmit-only mode) */
+  hideBuffers?: boolean;
+};
+
+export default function IoReaderPickerDialog({
+  isOpen,
+  onClose,
+  ioProfiles,
+  selectedId,
+  defaultId,
+  onSelect,
+  onImport,
+  onBufferFramingConfig,
+  bufferMetadata: _bufferMetadata, // Deprecated - dialog now fetches buffers directly
+  defaultDir,
+  // External ingest state (optional - if provided, dialog uses external state)
+  isIngesting: externalIsIngesting,
+  ingestProfileId: externalIngestProfileId,
+  ingestFrameCount: externalIngestFrameCount,
+  ingestSpeed: externalIngestSpeed,
+  onIngestSpeedChange,
+  onStartIngest,
+  onStopIngest,
+  ingestError: externalIngestError,
+  onJoinSession,
+  hideBuffers = false,
+}: Props) {
+  // Get session helpers from session store
+  const isProfileInUse = useSessionStore((s) => s.isProfileInUse);
+  const getSessionForProfile = useSessionStore((s) => s.getSessionForProfile);
+  const startSession = useSessionStore((s) => s.startSession);
+
+  const [isImporting, setIsImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+
+  // Multi-buffer state
+  const [buffers, setBuffers] = useState<BufferMetadata[]>([]);
+  const [selectedBufferId, setSelectedBufferId] = useState<string | null>(null);
+
+  // Internal ingest state (used when external state not provided)
+  const [internalIsIngesting, setInternalIsIngesting] = useState(false);
+  const [internalIngestProfileId, setInternalIngestProfileId] = useState<string | null>(null);
+  const [internalIngestFrameCount, setInternalIngestFrameCount] = useState(0);
+  const [internalIngestError, setInternalIngestError] = useState<string | null>(null);
+  const unlistenRefs = useRef<Array<() => void>>([]);
+
+  // Currently checked IO reader (for radio selection)
+  const [checkedReaderId, setCheckedReaderId] = useState<string | null>(null);
+
+  // Time range and limit state for recorded sources
+  const [startTime, setStartTime] = useState<string>("");
+  const [endTime, setEndTime] = useState<string>("");
+  const [maxFrames, setMaxFrames] = useState<string>("");
+  const [bookmarks, setBookmarks] = useState<TimeRangeFavorite[]>([]);
+  const [selectedSpeed, setSelectedSpeed] = useState(0);
+  // Timezone mode: "local" (default) or "utc"
+  const [timezoneMode, setTimezoneMode] = useState<"local" | "utc">("local");
+  const localTzAbbr = useMemo(() => getLocalTimezoneAbbr(), []);
+
+  // Framing configuration for serial sources
+  const [framingConfig, setFramingConfig] = useState<FramingConfig | null>(null);
+  // Filter configuration for serial sources
+  const [minFrameLength, setMinFrameLength] = useState(0);
+
+  // Use external state if provided, otherwise use internal state
+  const useExternalState = onStartIngest !== undefined;
+  const isIngesting = useExternalState ? (externalIsIngesting ?? false) : internalIsIngesting;
+  const ingestProfileId = useExternalState ? (externalIngestProfileId ?? null) : internalIngestProfileId;
+  const ingestFrameCount = useExternalState ? (externalIngestFrameCount ?? 0) : internalIngestFrameCount;
+  const ingestError = useExternalState ? (externalIngestError ?? null) : internalIngestError;
+
+  // All profiles are read profiles now (mode field removed)
+  const readProfiles = ioProfiles;
+
+  // Get the checked profile object (null for CSV external)
+  const checkedProfile = useMemo(() => {
+    if (!checkedReaderId || checkedReaderId === CSV_EXTERNAL_ID) return null;
+    return readProfiles.find((p) => p.id === checkedReaderId) || null;
+  }, [checkedReaderId, readProfiles]);
+
+  // Is the checked profile a real-time source?
+  const isCheckedRealtime = checkedProfile ? isRealtimeProfile(checkedProfile) : false;
+
+  // Is the checked profile currently live (has an active session)?
+  const isCheckedProfileLive = checkedReaderId ? isProfileInUse(checkedReaderId) : false;
+
+  // Get the session for the checked profile (if any) to check its state
+  const checkedProfileSession = checkedReaderId ? getSessionForProfile(checkedReaderId) : undefined;
+  const isCheckedProfileStopped = checkedProfileSession?.ioState === "stopped";
+
+  // Load bookmarks and buffers when dialog opens
+  useEffect(() => {
+    if (isOpen) {
+      getAllFavorites().then(setBookmarks).catch(console.error);
+      // Load all buffers from the registry and initialize selected buffer
+      listBuffers().then((loadedBuffers) => {
+        setBuffers(loadedBuffers);
+        // If a buffer is currently selected, try to find which one
+        // Default to the most recent buffer (last in list) if buffer source is active
+        if (selectedId === BUFFER_PROFILE_ID && loadedBuffers.length > 0) {
+          // Sort by created_at descending and pick the most recent
+          const sorted = [...loadedBuffers].sort((a, b) => b.created_at - a.created_at);
+          setSelectedBufferId(sorted[0].id);
+        } else {
+          setSelectedBufferId(null);
+        }
+      }).catch(console.error);
+      // Reset options when dialog opens
+      setStartTime("");
+      setEndTime("");
+      setMaxFrames("");
+      setSelectedSpeed(externalIngestSpeed ?? 0);
+      setFramingConfig(null);
+      // If currently ingesting, pre-select that profile; otherwise use currently selected profile
+      // But don't pre-select buffer profile as checkedReaderId (it's shown separately)
+      const initialReaderId = ingestProfileId ?? (selectedId === BUFFER_PROFILE_ID ? null : selectedId);
+      setCheckedReaderId(initialReaderId);
+      setImportError(null);
+    }
+  }, [isOpen, externalIngestSpeed, ingestProfileId, selectedId]);
+
+  // Refresh buffer list periodically while dialog is open
+  // This catches transitions from streaming to stopped even if the stream-ended
+  // event wasn't received (e.g., stream stopped by another window)
+  useEffect(() => {
+    if (!isOpen) return;
+    if (buffers.length === 0) return;
+
+    // Poll more frequently while streaming, less frequently when not
+    const hasStreamingBuffer = buffers.some(b => b.is_streaming);
+    const pollInterval = hasStreamingBuffer ? 500 : 2000;
+
+    const intervalId = setInterval(() => {
+      listBuffers().then(setBuffers).catch(console.error);
+    }, pollInterval);
+
+    return () => clearInterval(intervalId);
+  }, [isOpen, buffers]);
+
+  // Filter bookmarks for the checked profile
+  const profileBookmarks = useMemo(() => {
+    if (!checkedReaderId || checkedReaderId === CSV_EXTERNAL_ID) return [];
+    return bookmarks.filter((b) => b.profileId === checkedReaderId);
+  }, [bookmarks, checkedReaderId]);
+
+  // Cleanup listeners on unmount
+  useEffect(() => {
+    return () => {
+      unlistenRefs.current.forEach((unlisten) => unlisten());
+      unlistenRefs.current = [];
+    };
+  }, []);
+
+  // Handle ingest completion (internal state only)
+  const handleInternalIngestComplete = useCallback(
+    async (payload: StreamEndedPayload) => {
+      console.log("Ingest complete:", payload);
+      setInternalIsIngesting(false);
+      setInternalIngestProfileId(null);
+
+      // Cleanup listeners
+      unlistenRefs.current.forEach((unlisten) => unlisten());
+      unlistenRefs.current = [];
+
+      // Destroy the ingest session
+      try {
+        await destroyReaderSession(INGEST_SESSION_ID);
+      } catch (e) {
+        console.error("Failed to destroy ingest session:", e);
+      }
+
+      if (payload.buffer_available && payload.count > 0) {
+        // Refresh the buffer list
+        const allBuffers = await listBuffers();
+        setBuffers(allBuffers);
+
+        // Get the specific buffer that was created (if we have its ID)
+        if (payload.buffer_id) {
+          const meta = allBuffers.find((b) => b.id === payload.buffer_id);
+          if (meta) {
+            onImport?.(meta);
+
+            // Notify other windows that buffer has changed
+            const bufferPayload: BufferChangedPayload = {
+              metadata: meta,
+              timestamp: Date.now(),
+            };
+            await emit(WINDOW_EVENTS.BUFFER_CHANGED, bufferPayload);
+          }
+        }
+      }
+    },
+    [onImport]
+  );
+
+  // Start ingesting from a profile (internal state mode)
+  const handleInternalStartIngest = async (profileId: string, options: IngestOptions) => {
+    setInternalIngestError(null);
+    setInternalIngestFrameCount(0);
+
+    try {
+      // Clear existing buffer first
+      await clearBuffer();
+
+      // Set up event listeners for this session
+      const unlistenStreamEnded = await listen<StreamEndedPayload>(
+        `stream-ended:${INGEST_SESSION_ID}`,
+        (event) => handleInternalIngestComplete(event.payload)
+      );
+      const unlistenError = await listen<string>(`can-bytes-error:${INGEST_SESSION_ID}`, (event) => {
+        setInternalIngestError(event.payload);
+      });
+      const unlistenFrames = await listen<unknown[]>(`frame-message:${INGEST_SESSION_ID}`, (event) => {
+        setInternalIngestFrameCount((prev) => prev + event.payload.length);
+      });
+
+      unlistenRefs.current = [unlistenStreamEnded, unlistenError, unlistenFrames];
+
+      // Create and start the reader session with all options
+      await createIOSession({
+        sessionId: INGEST_SESSION_ID,
+        profileId,
+        speed: options.speed,
+        startTime: options.startTime,
+        endTime: options.endTime,
+        limit: options.maxFrames,
+        // Framing configuration
+        framingEncoding: options.framingEncoding,
+        delimiter: options.delimiter,
+        maxFrameLength: options.maxFrameLength,
+        emitRawBytes: options.emitRawBytes,
+      });
+
+      // Apply speed setting
+      if (options.speed > 0) {
+        await updateReaderSpeed(INGEST_SESSION_ID, options.speed);
+      }
+
+      await startReaderSession(INGEST_SESSION_ID);
+
+      setInternalIsIngesting(true);
+      setInternalIngestProfileId(profileId);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setInternalIngestError(msg);
+      // Cleanup on error
+      unlistenRefs.current.forEach((unlisten) => unlisten());
+      unlistenRefs.current = [];
+    }
+  };
+
+  // Build ingest options from current state
+  const buildIngestOptions = (speed: number): IngestOptions => {
+    const opts: IngestOptions = { speed };
+
+    // Add time range for recorded sources
+    // Convert datetime-local values based on timezone mode
+    if (!isCheckedRealtime) {
+      if (startTime) {
+        // If UTC mode, the user entered UTC time - append Z
+        // If Local mode, convert to ISO with timezone offset so PostgreSQL interprets correctly
+        opts.startTime = timezoneMode === "utc" ? `${startTime}:00Z` : localToIsoWithOffset(startTime);
+      }
+      if (endTime) {
+        opts.endTime = timezoneMode === "utc" ? `${endTime}:00Z` : localToIsoWithOffset(endTime);
+      }
+    }
+
+    // Add max frames limit for all sources
+    const maxFramesNum = maxFrames ? parseInt(maxFrames, 10) : undefined;
+    if (maxFramesNum && maxFramesNum > 0) {
+      opts.maxFrames = maxFramesNum;
+    }
+
+    // Add framing configuration for serial sources
+    if (framingConfig) {
+      opts.framingEncoding = framingConfig.encoding;
+      opts.delimiter = framingConfig.delimiter;
+      opts.maxFrameLength = framingConfig.maxFrameLength;
+      opts.emitRawBytes = framingConfig.emitRawBytes;
+    }
+
+    // Add filter configuration for serial sources
+    if (minFrameLength > 0) {
+      opts.minFrameLength = minFrameLength;
+    }
+
+    console.log("[buildIngestOptions] Built options:", opts);
+    console.log("[buildIngestOptions] framingConfig state:", framingConfig);
+
+    return opts;
+  };
+
+  // Handle Ingest button - runs at max speed (speed=0), keeps dialog open
+  const handleIngestClick = () => {
+    if (!checkedReaderId || !checkedProfile) return;
+    const options = buildIngestOptions(0); // 0 = max speed / no limit
+    if (useExternalState) {
+      onStartIngest?.(checkedReaderId, false, options);
+    } else {
+      handleInternalStartIngest(checkedReaderId, options);
+    }
+  };
+
+  // Handle Watch button - uses selected speed, closes dialog
+  const handleWatchClick = () => {
+    if (!checkedReaderId || !checkedProfile) return;
+    const options = buildIngestOptions(selectedSpeed);
+    if (useExternalState) {
+      onStartIngest?.(checkedReaderId, true, options);
+    } else {
+      handleInternalStartIngest(checkedReaderId, options);
+    }
+    onClose();
+  };
+
+  // Handle Join button - join an existing live session (no options needed)
+  const handleJoinClick = () => {
+    if (onJoinSession && checkedReaderId) {
+      onJoinSession(checkedReaderId);
+    }
+    onClose();
+  };
+
+  // Handle Resume button - start a stopped session and join it
+  const handleStartClick = async () => {
+    if (checkedProfileSession) {
+      try {
+        await startSession(checkedProfileSession.id);
+        // After starting, join the session
+        if (onJoinSession && checkedReaderId) {
+          onJoinSession(checkedReaderId);
+        }
+        onClose();
+      } catch (e) {
+        console.error("Failed to start session:", e);
+      }
+    }
+  };
+
+  // Handle bookmark selection - fills in time range
+  // Bookmarks are stored in local time format (from microsToDatetimeLocal)
+  const handleSelectBookmark = (bookmark: TimeRangeFavorite) => {
+    setStartTime(bookmark.startTime);
+    setEndTime(bookmark.endTime);
+    setTimezoneMode("local"); // Bookmarks use local time
+  };
+
+  // Stop ingesting
+  const handleStopIngest = async () => {
+    if (useExternalState) {
+      onStopIngest?.();
+    } else {
+      try {
+        await stopReaderSession(INGEST_SESSION_ID);
+        // The stream-ended event will handle the rest
+      } catch (e) {
+        console.error("Failed to stop ingest:", e);
+        // Force cleanup
+        setInternalIsIngesting(false);
+        setInternalIngestProfileId(null);
+        unlistenRefs.current.forEach((unlisten) => unlisten());
+        unlistenRefs.current = [];
+      }
+    }
+  };
+
+  // Handle speed change
+  const handleSpeedChange = (speed: number) => {
+    setSelectedSpeed(speed);
+    if (useExternalState) {
+      onIngestSpeedChange?.(speed);
+    }
+  };
+
+  const handleImport = async () => {
+    setImportError(null);
+    setIsImporting(true);
+
+    try {
+      const filePath = await pickCsvToOpen(defaultDir);
+      if (!filePath) {
+        // User cancelled
+        setIsImporting(false);
+        return;
+      }
+
+      const metadata = await importCsvToBuffer(filePath);
+
+      // Refresh buffer list
+      const allBuffers = await listBuffers();
+      setBuffers(allBuffers);
+
+      onImport?.(metadata);
+
+      // Notify other windows that buffer has changed
+      const payload: BufferChangedPayload = {
+        metadata,
+        timestamp: Date.now(),
+      };
+      await emit(WINDOW_EVENTS.BUFFER_CHANGED, payload);
+
+      // Auto-select the buffer
+      onSelect(BUFFER_PROFILE_ID);
+      onClose();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setImportError(msg);
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  // Delete a specific buffer by ID
+  const handleDeleteBuffer = async (bufferId: string) => {
+    try {
+      await deleteBuffer(bufferId);
+
+      // Refresh buffer list
+      const allBuffers = await listBuffers();
+      setBuffers(allBuffers);
+
+      // If no buffers left and buffer was selected, clear selection
+      if (allBuffers.length === 0 && selectedId === BUFFER_PROFILE_ID) {
+        onSelect(null);
+      }
+
+      // Notify other windows that buffer has been deleted
+      const payload: BufferChangedPayload = {
+        metadata: null, // Signal a buffer was deleted
+        timestamp: Date.now(),
+      };
+      await emit(WINDOW_EVENTS.BUFFER_CHANGED, payload);
+    } catch (e) {
+      console.error("Failed to delete buffer:", e);
+    }
+  };
+
+  // Clear all non-streaming buffers
+  const handleClearAllBuffers = async () => {
+    try {
+      // Only delete buffers that are not streaming
+      const nonStreamingBuffers = buffers.filter(b => !b.is_streaming);
+      for (const buffer of nonStreamingBuffers) {
+        await deleteBuffer(buffer.id);
+      }
+
+      // Refresh buffer list (keep streaming buffers)
+      const streamingBuffers = buffers.filter(b => b.is_streaming);
+      setBuffers(streamingBuffers);
+
+      // If buffer was selected and it was deleted, clear selection
+      const deletedIds = new Set(nonStreamingBuffers.map(b => b.id));
+      if (selectedId === BUFFER_PROFILE_ID) {
+        // Check if the selected buffer was deleted
+        const selectedBuffer = buffers.find(b => b.id === selectedId);
+        if (selectedBuffer && deletedIds.has(selectedBuffer.id)) {
+          onSelect(null);
+        }
+      }
+
+      // Notify other windows that buffers have been cleared
+      const payload: BufferChangedPayload = {
+        metadata: null,
+        timestamp: Date.now(),
+      };
+      await emit(WINDOW_EVENTS.BUFFER_CHANGED, payload);
+    } catch (e) {
+      console.error("Failed to clear buffers:", e);
+    }
+  };
+
+  // Get all sessions to find streaming buffer owners
+  const allSessions = useSessionStore((s) => s.getAllSessions);
+
+  // Select a specific buffer
+  const handleSelectBuffer = async (bufferId: string) => {
+    // Check if this buffer is currently streaming
+    const buffer = buffers.find(b => b.id === bufferId);
+    if (buffer?.is_streaming && onJoinSession) {
+      // Find the session that owns this buffer to get its profile ID
+      const sessions = allSessions();
+      const ownerSession = sessions.find(s => s.buffer?.id === bufferId);
+      if (ownerSession) {
+        onJoinSession(ownerSession.profileId);
+      }
+      return;
+    }
+
+    try {
+      await setActiveBuffer(bufferId);
+      setCheckedReaderId(null);
+      setSelectedBufferId(bufferId);
+      onSelect(BUFFER_PROFILE_ID);
+    } catch (e) {
+      console.error("Failed to set active buffer:", e);
+    }
+  };
+
+  const isBufferSelected = selectedId === BUFFER_PROFILE_ID;
+
+  // Check if a bytes buffer is selected (for framing options)
+  const selectedBuffer = selectedBufferId ? buffers.find((b) => b.id === selectedBufferId) : null;
+  const isBytesBufferSelected = selectedBuffer?.buffer_type === "bytes" && !checkedReaderId;
+
+  // Handle OK button click for buffer selection - pass framing config if configured
+  const handleBufferOkClick = () => {
+    if (isBytesBufferSelected && onBufferFramingConfig) {
+      onBufferFramingConfig(framingConfig);
+    }
+    onClose();
+  };
+
+  return (
+    <Dialog isOpen={isOpen} onBackdropClick={onClose} maxWidth="max-w-md">
+      <div className={`${cardElevated} shadow-xl overflow-hidden`}>
+        {/* Header */}
+        <div className={`${paddingCard} border-b ${borderDefault} flex items-center justify-between`}>
+          <h2 className={h3}>Data Source</h2>
+          <button
+            onClick={onClose}
+            className={`p-1 ${roundedDefault} ${hoverLight} transition-colors`}
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <IngestStatus
+          isIngesting={isIngesting}
+          ingestFrameCount={ingestFrameCount}
+          ingestError={ingestError}
+          onStopIngest={handleStopIngest}
+        />
+
+        <div className="max-h-[60vh] overflow-y-auto">
+          {!hideBuffers && (
+            <BufferList
+              buffers={buffers}
+              selectedBufferId={selectedBufferId}
+              checkedReaderId={checkedReaderId}
+              onSelectBuffer={handleSelectBuffer}
+              onDeleteBuffer={handleDeleteBuffer}
+              onClearAllBuffers={handleClearAllBuffers}
+              onJoinStreamingBuffer={(bufferId) => {
+                // Find the session that owns this buffer and join it
+                const sessions = allSessions();
+                const ownerSession = sessions.find(s => s.buffer?.id === bufferId);
+                if (ownerSession && onJoinSession) {
+                  onJoinSession(ownerSession.profileId);
+                  onClose();
+                }
+              }}
+            />
+          )}
+
+          <ReaderList
+            ioProfiles={ioProfiles}
+            checkedReaderId={checkedReaderId}
+            defaultId={defaultId}
+            isIngesting={isIngesting}
+            onSelectReader={(id) => {
+              setCheckedReaderId(id);
+              if (id !== null) {
+                setSelectedBufferId(null);
+              }
+            }}
+            isProfileLive={isProfileInUse}
+            getSessionForProfile={getSessionForProfile}
+          />
+
+          {/* Hide ingest options when the checked profile has a running session (show if stopped for reinit) */}
+          {(!isCheckedProfileLive || isCheckedProfileStopped) && (
+            <>
+              <IngestOptions
+                checkedReaderId={checkedReaderId}
+                checkedProfile={checkedProfile}
+                isIngesting={isIngesting}
+                startTime={startTime}
+                endTime={endTime}
+                onStartTimeChange={setStartTime}
+                onEndTimeChange={setEndTime}
+                timezoneMode={timezoneMode}
+                localTzAbbr={localTzAbbr}
+                onTimezoneModeChange={setTimezoneMode}
+                maxFrames={maxFrames}
+                onMaxFramesChange={setMaxFrames}
+                selectedSpeed={selectedSpeed}
+                onSpeedChange={handleSpeedChange}
+                profileBookmarks={profileBookmarks}
+                onSelectBookmark={handleSelectBookmark}
+              />
+
+              <FramingOptions
+                checkedProfile={checkedProfile}
+                isIngesting={isIngesting}
+                framingConfig={framingConfig}
+                onFramingConfigChange={setFramingConfig}
+                isBytesBufferSelected={isBytesBufferSelected}
+              />
+
+              <FilterOptions
+                checkedProfile={checkedProfile}
+                isIngesting={isIngesting}
+                minFrameLength={minFrameLength}
+                onMinFrameLengthChange={setMinFrameLength}
+                isBytesBufferSelected={isBytesBufferSelected}
+              />
+            </>
+          )}
+        </div>
+
+        <ActionButtons
+          isIngesting={isIngesting}
+          ingestProfileId={ingestProfileId}
+          checkedReaderId={checkedReaderId}
+          checkedProfile={checkedProfile}
+          isBufferSelected={isBufferSelected}
+          isCheckedProfileLive={isCheckedProfileLive}
+          isCheckedProfileStopped={isCheckedProfileStopped}
+          isImporting={isImporting}
+          importError={importError}
+          onImport={handleImport}
+          onIngestClick={handleIngestClick}
+          onWatchClick={handleWatchClick}
+          onJoinClick={handleJoinClick}
+          onStartClick={handleStartClick}
+          onClose={handleBufferOkClick}
+        />
+      </div>
+    </Dialog>
+  );
+}

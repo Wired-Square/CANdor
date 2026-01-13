@@ -1,0 +1,340 @@
+// ui/src/apps/catalog/views/CANFrameView.tsx
+
+import { useCallback, useMemo, useState } from "react";
+import { Pencil, Trash2 } from "lucide-react";
+import BitPreview, { BitRange } from "../../../components/BitPreview";
+import type { TomlNode } from "../types";
+import { tomlParse } from "../toml";
+import { formatFrameId } from "../utils";
+
+export type CANFrameViewProps = {
+  selectedNode: TomlNode;
+  catalogContent: string;
+  displayFrameIdFormat?: "hex" | "decimal";
+
+  // Flags
+  editingId: boolean;
+  editingSignal: boolean;
+
+  // Frame actions
+  onEditFrame: (node: TomlNode) => void;
+  onRequestDeleteFrame: (idKey: string) => void;
+
+  // Signal actions
+  onAddSignal: (idKey: string) => void;
+  onEditSignal: (idKey: string, signalIndex: number, signal: any, parentPath?: string[]) => void;
+  onRequestDeleteSignal: (idKey: string, signalIndex: number, signalsParentPath?: string[], signalName?: string) => void;
+
+  // Mux actions
+  onAddMux: (idKey: string) => void;
+};
+
+export default function CANFrameView({
+  selectedNode,
+  catalogContent,
+  editingId,
+  editingSignal,
+  onEditFrame,
+  onRequestDeleteFrame,
+  onAddSignal,
+  onEditSignal,
+  onRequestDeleteSignal,
+  onAddMux,
+  displayFrameIdFormat = "hex",
+}: CANFrameViewProps) {
+  const idKey = selectedNode.metadata?.idValue || selectedNode.key;
+  const [colorForRange, setColorForRange] = useState<(range: BitRange) => string | undefined>(() => () => undefined);
+  const formattedId = formatFrameId(idKey, displayFrameIdFormat);
+  const signalColor = useCallback(
+    (signal: any) =>
+      colorForRange({
+        name: signal.name || "Signal",
+        start_bit: signal.start_bit || 0,
+        bit_length: signal.bit_length || 8,
+        type: "signal",
+      }),
+    [colorForRange]
+  );
+  const muxLegendColor = useMemo(() => {
+    try {
+      const parsed = tomlParse(catalogContent) as any;
+      const existingMux = parsed?.frame?.can?.[idKey]?.mux;
+      if (!existingMux) return undefined;
+      return colorForRange({
+        name: existingMux.name || "Mux",
+        start_bit: existingMux.start_bit || 0,
+        bit_length: existingMux.bit_length || 8,
+        type: "mux",
+      });
+    } catch {
+      return undefined;
+    }
+  }, [catalogContent, idKey, colorForRange]);
+
+  return (
+    <div className="space-y-6">
+      {/* Header actions */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <p className="text-sm text-slate-600 dark:text-slate-400">Configure CAN frame properties</p>
+          <div className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <span>{formattedId.primary}</span>
+            {formattedId.secondary && (
+              <span className="text-slate-500 dark:text-slate-400 text-sm">({formattedId.secondary})</span>
+            )}
+          </div>
+        </div>
+        {!editingId && (
+          <div className="flex gap-2">
+            <button
+              onClick={() => onEditFrame(selectedNode)}
+              className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+              title="Edit frame"
+            >
+              <Pencil className="w-4 h-4 text-slate-700 dark:text-slate-200" />
+            </button>
+
+            {/* Pattern A delete */}
+            <button
+              onClick={() => onRequestDeleteFrame(idKey)}
+              className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+              title="Delete frame"
+            >
+              <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Summary cards (non-edit only) */}
+      {!editingId && (
+        <div className="grid grid-cols-2 gap-4">
+          <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+            <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">ID</div>
+            <div className="font-mono text-sm text-slate-900 dark:text-white flex items-center gap-2">
+              <span>{formattedId.primary}</span>
+              {formattedId.secondary && (
+                <span className="text-slate-500 dark:text-slate-400 text-xs">({formattedId.secondary})</span>
+              )}
+            </div>
+          </div>
+
+          <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+            <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+              Length (DLC) <span className="text-red-500">*</span>
+              {selectedNode.metadata?.lengthInherited && (
+                <span className="ml-1 text-blue-500 dark:text-blue-400" title="Inherited from copied ID">
+                  (inherited)
+                </span>
+              )}
+            </div>
+            <div className="font-mono text-sm text-slate-900 dark:text-white">
+              {selectedNode.metadata?.length || <span className="text-orange-500">Not set</span>}
+            </div>
+          </div>
+
+          <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+            <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+              Transmitter
+              {selectedNode.metadata?.transmitterInherited && (
+                <span className="ml-1 text-blue-500 dark:text-blue-400" title="Inherited from copied ID">
+                  (inherited)
+                </span>
+              )}
+            </div>
+            <div className="font-mono text-sm text-slate-900 dark:text-white">
+              {selectedNode.metadata?.transmitter || <span className="text-slate-400">None</span>}
+            </div>
+          </div>
+
+          <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+            <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+              Interval
+              {selectedNode.metadata?.intervalInherited && (
+                <span
+                  className="ml-1 text-blue-500 dark:text-blue-400"
+                  title="Inherited from copied ID or default_interval"
+                >
+                  (inherited)
+                </span>
+              )}
+            </div>
+            <div className="font-mono text-sm text-slate-900 dark:text-white">
+              {selectedNode.metadata?.interval !== undefined ? (
+                `${selectedNode.metadata.interval} ms`
+              ) : (
+                <span className="text-slate-400">None</span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Notes card */}
+      {!editingId && selectedNode.metadata?.notes && (
+        <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">
+            Notes
+          </div>
+          <div className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap">
+            {Array.isArray(selectedNode.metadata.notes)
+              ? selectedNode.metadata.notes.join("\n")
+              : selectedNode.metadata.notes}
+          </div>
+        </div>
+      )}
+
+      {/* Signals + Bit preview */}
+      {!editingId && !editingSignal && (
+        <div className="mt-6">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+              Signals ({(selectedNode.metadata?.signals?.length || 0) + (selectedNode.metadata?.muxSignalCount || 0)})
+              {selectedNode.metadata?.hasMux && (
+                <span className="ml-2 text-xs font-normal text-purple-600 dark:text-purple-400 inline-flex items-center gap-2">
+                  {muxLegendColor && <span className={`inline-block w-3 h-3 rounded ${muxLegendColor}`} />}
+                  (includes {selectedNode.metadata.muxSignalCount} mux signals)
+                </span>
+              )}
+            </h3>
+
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-slate-500 dark:text-slate-400">
+                {selectedNode.metadata?.length ? `${selectedNode.metadata.length} bytes total` : ""}
+              </span>
+
+              {!selectedNode.metadata?.hasMux && (
+                <button
+                  onClick={() => onAddMux(idKey)}
+                  className="px-3 py-1.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-xs font-medium"
+                >
+                  + Add Mux
+                </button>
+              )}
+
+              <button
+                onClick={() => onAddSignal(idKey)}
+                className="px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-xs font-medium"
+              >
+                + Add Signal
+              </button>
+            </div>
+          </div>
+
+          {selectedNode.metadata?.signals && selectedNode.metadata.signals.length > 0 &&
+            (() => {
+              const signals = [...selectedNode.metadata.signals].sort(
+                (a, b) => (a.start_bit ?? 0) - (b.start_bit ?? 0)
+              );
+
+              const ranges: BitRange[] = [];
+              signals.forEach((signal: any) => {
+                ranges.push({
+                  name: signal.name || "Signal",
+                  start_bit: signal.start_bit || 0,
+                  bit_length: signal.bit_length || 8,
+                  type: "signal",
+                });
+              });
+
+              // mux selector range
+              try {
+                const parsed = tomlParse(catalogContent) as any;
+                const existingMux = parsed?.frame?.can?.[idKey]?.mux;
+                if (existingMux) {
+                  ranges.push({
+                    name: existingMux.name || "Mux",
+                    start_bit: existingMux.start_bit || 0,
+                    bit_length: existingMux.bit_length || 8,
+                    type: "mux",
+                  });
+                }
+              } catch {
+                // ignore parse errors: view should still render signals list
+              }
+
+              const numBytes = selectedNode.metadata?.length || 8;
+
+              return (
+                <>
+                  <div className="mb-4 p-4 bg-slate-100 dark:bg-slate-800 rounded-lg">
+                    <div className="text-xs font-medium text-slate-600 dark:text-slate-400 mb-3">
+                      Byte Layout (LSB first)
+                    </div>
+                    <BitPreview
+                      numBytes={numBytes}
+                      ranges={ranges}
+                      currentStartBit={0}
+                      currentBitLength={0}
+                      interactive={false}
+                      showLegend={false}
+                      onColorMapping={(lookup) => setColorForRange(() => lookup)}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    {signals.map((signal: any, idx: number) => (
+                      <div
+                        key={idx}
+                        className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1 flex gap-3">
+                            <div
+                              className={`w-2 h-6 rounded-sm mt-1 ${
+                                signalColor(signal) || "bg-slate-400 dark:bg-slate-600"
+                              }`}
+                            />
+                            <div>
+                              <div className="font-medium text-slate-900 dark:text-white flex items-center gap-2">
+                                <span>⚡</span>
+                                {signal.name}
+                              </div>
+
+                              <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 space-y-0.5">
+                                <div>
+                                  Bits {signal.start_bit ?? 0} - {(signal.start_bit ?? 0) + (signal.bit_length ?? 0) - 1} ({signal.bit_length ?? 0} bits)
+                                </div>
+                                {signal.unit && <div>Unit: {signal.unit}</div>}
+                                {signal.factor !== undefined && <div>Factor: {signal.factor}</div>}
+                                {signal.offset !== undefined && <div>Offset: {signal.offset}</div>}
+                              </div>
+                              {signal.notes && (
+                                <div className="text-xs text-slate-600 dark:text-slate-400 mt-2 italic whitespace-pre-wrap">
+                                  {Array.isArray(signal.notes) ? signal.notes.join('\n') : signal.notes}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 ml-4">
+                            <button
+                              onClick={() => onEditSignal(idKey, idx, signal, ["frame", "can", idKey])}
+                              className="p-2 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg transition-colors"
+                              title="Edit signal"
+                            >
+                              <Pencil className="w-4 h-4 text-slate-700 dark:text-slate-200" />
+                            </button>
+
+                            {/* Pattern A delete */}
+                            <button
+                              onClick={() => onRequestDeleteSignal(idKey, idx, signal.name)}
+                              className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                              title="Delete signal"
+                            >
+                              <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              );
+            })()}
+        </div>
+      )}
+
+    </div>
+  );
+}

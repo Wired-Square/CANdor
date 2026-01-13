@@ -1,0 +1,101 @@
+// ui/src/apps/settings/views/BookmarksView.tsx
+import { Bookmark, Edit2, Trash2 } from "lucide-react";
+import type { TimeRangeFavorite } from "../../../utils/favorites";
+import type { IOProfile } from "../stores/settingsStore";
+
+type BookmarksViewProps = {
+  bookmarks: TimeRangeFavorite[];
+  ioProfiles: IOProfile[];
+  onEditBookmark: (bookmark: TimeRangeFavorite) => void;
+  onDeleteBookmark: (bookmark: TimeRangeFavorite) => void;
+};
+
+const formatTimeRange = (bookmark: TimeRangeFavorite) => {
+  const start = bookmark.startTime.replace("T", " ");
+  const end = bookmark.endTime.replace("T", " ");
+  return `${start} → ${end}`;
+};
+
+export default function BookmarksView({
+  bookmarks,
+  ioProfiles,
+  onEditBookmark,
+  onDeleteBookmark,
+}: BookmarksViewProps) {
+  // Group bookmarks by profile
+  const bookmarksByProfile = bookmarks.reduce(
+    (acc, b) => {
+      if (!acc[b.profileId]) {
+        acc[b.profileId] = [];
+      }
+      acc[b.profileId].push(b);
+      return acc;
+    },
+    {} as Record<string, TimeRangeFavorite[]>
+  );
+
+  // Get profile name by id
+  const getProfileName = (profileId: string) => {
+    const profile = ioProfiles.find((p) => p.id === profileId);
+    return profile?.name || profileId;
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Time Range Bookmarks</h2>
+      </div>
+
+      {bookmarks.length === 0 ? (
+        <div className="text-center py-12 text-slate-500 dark:text-slate-400">
+          <Bookmark className="w-12 h-12 mx-auto mb-4 opacity-50" />
+          <p>No bookmarks saved yet</p>
+          <p className="text-sm mt-2">Create bookmarks from the Decoder or Discovery apps</p>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {Object.entries(bookmarksByProfile).map(([profileId, profileBookmarks]) => (
+            <div key={profileId} className="space-y-3">
+              <h3 className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                {getProfileName(profileId)}
+              </h3>
+              <div className="space-y-2">
+                {profileBookmarks.map((bookmark) => (
+                  <div
+                    key={bookmark.id}
+                    className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700"
+                  >
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3">
+                        <h4 className="font-medium text-slate-900 dark:text-white">{bookmark.name}</h4>
+                      </div>
+                      <div className="mt-1 text-sm text-slate-500 dark:text-slate-400 font-mono">
+                        {formatTimeRange(bookmark)}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => onEditBookmark(bookmark)}
+                        className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                        title="Edit bookmark"
+                      >
+                        <Edit2 className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+                      </button>
+                      <button
+                        onClick={() => onDeleteBookmark(bookmark)}
+                        className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                        title="Delete bookmark"
+                      >
+                        <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

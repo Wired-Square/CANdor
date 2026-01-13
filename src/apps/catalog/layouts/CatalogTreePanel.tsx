@@ -1,0 +1,171 @@
+// ui/src/apps/catalog/layout/CatalogTreePanel.tsx
+
+import React from "react";
+import { Cable, Filter, Network, Plus, Server, UserPlus } from "lucide-react";
+import ResizableSidebar from "../../../components/ResizableSidebar";
+import type { TomlNode, ProtocolType, CanProtocolConfig, ModbusProtocolConfig, SerialProtocolConfig } from "../types";
+
+export type CatalogTreePanelProps = {
+  // Visibility is controlled by CatalogEditor (only show in UI mode)
+  visible: boolean;
+
+  catalogPath: string | null;
+  parsedTree: TomlNode[];
+  renderTreeNode: (node: TomlNode, depth?: number) => React.ReactNode;
+
+  availablePeers: string[];
+
+  filterByNode: string | null;
+  setFilterByNode: (value: string | null) => void;
+
+  // Protocol detection for badges
+  hasCanFrames?: boolean;
+  hasModbusFrames?: boolean;
+  hasSerialFrames?: boolean;
+  canConfig?: CanProtocolConfig;
+  modbusConfig?: ModbusProtocolConfig;
+  serialConfig?: SerialProtocolConfig;
+
+  onAddNode: () => void;
+  /** Legacy callback for CAN-only frame adding (kept for backward compat) */
+  onAddCanFrame?: () => void;
+  /** Generic callback for adding any protocol frame */
+  onAddFrame?: (protocol?: ProtocolType) => void;
+
+  // Unified config dialog opener
+  onEditConfig?: () => void;
+};
+
+export default function CatalogTreePanel({
+  visible,
+  catalogPath,
+  parsedTree,
+  renderTreeNode,
+  availablePeers,
+  filterByNode,
+  setFilterByNode,
+  hasCanFrames,
+  hasModbusFrames,
+  hasSerialFrames,
+  canConfig,
+  modbusConfig,
+  serialConfig,
+  onAddNode,
+  onAddCanFrame,
+  onAddFrame,
+  onEditConfig,
+}: CatalogTreePanelProps) {
+  // Use generic handler if available, otherwise fall back to CAN-only
+  const handleAddFrame = onAddFrame ?? onAddCanFrame;
+  if (!visible) return null;
+
+  // Determine which badges to show:
+  // - Show badge if has config OR has frames for each protocol
+  const showCanBadge = !!canConfig || hasCanFrames;
+  const showModbusBadge = !!modbusConfig || hasModbusFrames;
+  const showSerialBadge = !!serialConfig || hasSerialFrames;
+  const hasAnyBadge = showCanBadge || showModbusBadge || showSerialBadge;
+
+  return (
+    <ResizableSidebar defaultWidth={320} minWidth={200} maxWidth={500} className="overflow-hidden" collapsible>
+      <div className="flex-1 overflow-y-auto p-4">
+        {/* Protocol badges */}
+        {catalogPath && hasAnyBadge && (
+          <div className="flex flex-wrap gap-2 mb-4">
+            {showCanBadge && (
+              <button
+                onClick={onEditConfig}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-900/50 transition-colors cursor-pointer"
+                title={canConfig ? `CAN config: ${canConfig.default_endianness} endian${canConfig.frame_id_mask !== undefined ? ', masked' : ''}` : "Configure CAN settings"}
+              >
+                <Network className="w-3 h-3" />
+                CAN
+                {!canConfig && <span className="text-green-500">!</span>}
+              </button>
+            )}
+            {showModbusBadge && (
+              <button
+                onClick={onEditConfig}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors cursor-pointer"
+                title={modbusConfig ? `Modbus config: Addr ${modbusConfig.device_address}, Base ${modbusConfig.register_base}` : "Configure Modbus settings"}
+              >
+                <Server className="w-3 h-3" />
+                Modbus
+                {!modbusConfig && <span className="text-amber-500">!</span>}
+              </button>
+            )}
+            {showSerialBadge && (
+              <button
+                onClick={onEditConfig}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-900/50 transition-colors cursor-pointer"
+                title={serialConfig ? `Serial encoding: ${serialConfig.encoding.toUpperCase()}` : "Configure Serial settings"}
+              >
+                <Cable className="w-3 h-3" />
+                Serial
+                {!serialConfig && <span className="text-purple-500">!</span>}
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Action buttons - left aligned */}
+        {catalogPath && (
+          <div className="flex gap-2 mb-4">
+            <button
+              onClick={onAddNode}
+              className="p-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+              title="Add new node"
+            >
+              <UserPlus className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => handleAddFrame?.()}
+              className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              title="Add new frame"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setFilterByNode(filterByNode !== null ? null : "")}
+              title={filterByNode !== null ? "Clear filter" : "Filter by transmitting node"}
+              style={{
+                backgroundColor: filterByNode !== null ? "#2563eb" : undefined,
+                color: filterByNode !== null ? "white" : undefined,
+              }}
+              className="p-2 rounded-lg transition-colors hover:opacity-90 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200"
+            >
+              <Filter className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* Filter dropdown */}
+        {filterByNode !== null && catalogPath && (
+          <div className="mb-3">
+            <select
+              value={filterByNode}
+              onChange={(e) => setFilterByNode(e.target.value || null)}
+              className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-green-500"
+            >
+              <option value="">All nodes</option>
+              <option value="__unknown__">Unknown</option>
+              {availablePeers.map((peer) => (
+                <option key={peer} value={peer}>
+                  {peer}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {!catalogPath ? (
+          <p className="text-sm text-slate-500 dark:text-slate-400">Open a catalog file to view its structure</p>
+        ) : parsedTree.length === 0 ? (
+          <p className="text-sm text-slate-500 dark:text-slate-400">No structure to display</p>
+        ) : (
+          <div className="space-y-1">{parsedTree.map((node) => renderTreeNode(node, 0))}</div>
+        )}
+      </div>
+    </ResizableSidebar>
+  );
+}
