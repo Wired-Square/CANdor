@@ -242,6 +242,7 @@ pub fn run() {
             settings::validate_directory,
             settings::create_directory,
             settings::get_app_version,
+            settings::check_for_updates,
             // Session-based reader API
             sessions::create_reader_session,
             sessions::get_reader_session_state,

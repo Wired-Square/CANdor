@@ -1,8 +1,10 @@
 // ui/src/components/LogoMenu.tsx
 
 import { useState, useRef, useEffect } from "react";
-import { Search, Activity, FileText, Calculator, Settings, Send } from "lucide-react";
+import { Search, Activity, FileText, Calculator, Settings, Send, ArrowUpCircle } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import logo from "../assets/logo.png";
+import { useUpdateStore } from "../stores/updateStore";
 
 export type PanelId = "discovery" | "decoder" | "catalog-editor" | "frame-calculator" | "payload-analysis" | "frame-order-analysis" | "transmit" | "settings";
 
@@ -66,6 +68,13 @@ const menuItems: MenuItem[] = [
 export default function LogoMenu({ onPanelClick }: LogoMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const availableUpdate = useUpdateStore((s) => s.availableUpdate);
+
+  const handleUpdateClick = () => {
+    if (availableUpdate) {
+      openUrl(availableUpdate.url);
+    }
+  };
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -101,7 +110,7 @@ export default function LogoMenu({ onPanelClick }: LogoMenuProps) {
   };
 
   return (
-    <div ref={menuRef} className="relative flex items-center px-2" style={{ height: '35px' }}>
+    <div ref={menuRef} className="relative flex items-center px-2 gap-2" style={{ height: '35px' }}>
       {/* Logo button with white rounded background */}
       <button
         onClick={() => setIsOpen(!isOpen)}
@@ -114,6 +123,18 @@ export default function LogoMenu({ onPanelClick }: LogoMenuProps) {
           className="w-full h-full object-contain"
         />
       </button>
+
+      {/* Update available indicator */}
+      {availableUpdate && (
+        <button
+          onClick={handleUpdateClick}
+          className="flex items-center gap-1 px-2 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 transition-colors"
+          title={`Update available: ${availableUpdate.version}`}
+        >
+          <ArrowUpCircle className="w-4 h-4" />
+          <span className="text-xs font-medium">Update</span>
+        </button>
+      )}
 
       {/* Dropdown menu */}
       {isOpen && (

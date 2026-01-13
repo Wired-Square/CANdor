@@ -4,6 +4,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import "./Candor.css";
 import MainLayout from "./components/MainLayout";
+import { useUpdateStore } from "./stores/updateStore";
 
 // Lazy load AboutDialog since it's rarely used
 const AboutDialog = lazy(() => import("./dialogs/AboutDialog"));
@@ -23,6 +24,12 @@ function LoadingFallback() {
 export default function Candor() {
   const [showAbout, setShowAbout] = useState(false);
   const currentWindow = getCurrentWebviewWindow();
+  const checkForUpdates = useUpdateStore((s) => s.checkForUpdates);
+
+  // Check for updates on launch
+  useEffect(() => {
+    checkForUpdates();
+  }, [checkForUpdates]);
 
   useEffect(() => {
     const unlistenAbout = currentWindow.listen("show-about", () => {

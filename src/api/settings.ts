@@ -38,3 +38,19 @@ export async function createDirectory(path: string): Promise<void> {
 export async function getAppVersion(): Promise<string> {
   return await invoke<string>("get_app_version");
 }
+
+/**
+ * Information about an available update
+ */
+export interface UpdateInfo {
+  version: string;
+  url: string;
+}
+
+/**
+ * Check for available updates from GitHub releases
+ * Returns update info if a newer version is available, null otherwise
+ */
+export async function checkForUpdates(): Promise<UpdateInfo | null> {
+  return await invoke<UpdateInfo | null>("check_for_updates");
+}

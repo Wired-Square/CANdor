@@ -279,3 +279,75 @@ pub async fn get_app_version(app: AppHandle) -> Result<String, String> {
         .clone()
         .unwrap_or_else(|| "unknown".to_string()))
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UpdateInfo {
+    pub version: String,
+    pub url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    html_url: String,
+}
+
+fn parse_version(version: &str) -> Option<(u32, u32, u32)> {
+    let v = version.trim_start_matches('v');
+    let parts: Vec<&str> = v.split('.').collect();
+    if parts.len() >= 3 {
+        let major = parts[0].parse().ok()?;
+        let minor = parts[1].parse().ok()?;
+        let patch = parts[2].parse().ok()?;
+        Some((major, minor, patch))
+    } else {
+        None
+    }
+}
+
+fn is_newer_version(current: &str, latest: &str) -> bool {
+    match (parse_version(current), parse_version(latest)) {
+        (Some((c_maj, c_min, c_pat)), Some((l_maj, l_min, l_pat))) => {
+            (l_maj, l_min, l_pat) > (c_maj, c_min, c_pat)
+        }
+        _ => false,
+    }
+}
+
+#[tauri::command]
+pub async fn check_for_updates(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
+    let current_version = app
+        .config()
+        .version
+        .clone()
+        .unwrap_or_else(|| "0.0.0".to_string());
+
+    let client = reqwest::Client::builder()
+        .user_agent("CANdor-App")
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let response = client
+        .get("https://api.github.com/repos/Wired-Square/CANdor/releases/latest")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch release info: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("GitHub API returned status: {}", response.status()));
+    }
+
+    let release: GitHubRelease = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse release info: {}", e))?;
+
+    if is_newer_version(&current_version, &release.tag_name) {
+        Ok(Some(UpdateInfo {
+            version: release.tag_name,
+            url: release.html_url,
+        }))
+    } else {
+        Ok(None)
+    }
+}
