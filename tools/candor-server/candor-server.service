@@ -1,0 +1,41 @@
+[Unit]
+Description=CANdor GVRET Server
+Documentation=https://github.com/Wired-Square/CANdor
+After=network.target can-interface.service postgresql.service
+Wants=can-interface.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/candor-server
+
+# Main executable - adjust paths as needed
+ExecStart=/usr/bin/python3 /home/pi/candor-server/candor-server.py -C /home/pi/candor-server/candor-server.toml
+
+# Restart on failure
+Restart=on-failure
+RestartSec=5
+
+# Environment variables (uncomment and set as needed)
+# Environment=PG_DSN=postgresql://candor:password@localhost:5432/candor
+
+# Allow binding to privileged ports (< 1024) like port 23
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Security hardening (optional, comment out if causing issues)
+# Note: NoNewPrivileges must be removed when using AmbientCapabilities
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/var/log
+
+# Resource limits (optional)
+# MemoryMax=256M
+# CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

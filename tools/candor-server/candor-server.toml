@@ -1,0 +1,89 @@
+# =============================================================================
+# CANdor Server Configuration
+# =============================================================================
+# This file configures candor-server.py, a GVRET TCP server that bridges
+# Linux SocketCAN interfaces to TCP clients (like CANdor desktop app) and
+# optionally ingests frames to PostgreSQL for historical analysis.
+#
+# Usage:
+#   ./candor-server.py -C candor-server.toml
+#
+# CLI arguments override config file values. Environment variable PG_DSN
+# can be used instead of putting credentials in this file.
+# =============================================================================
+
+[server]
+# SocketCAN interface(s) to read from. Comma-separated for multiple buses.
+# Examples: "can0", "can0,can1", "vcan0"
+# The interface must be up: sudo ip link set can0 up type can bitrate 500000
+iface = "can0"
+
+# GVRET bus number offset. First interface becomes bus N, second becomes N+1.
+# Useful when aggregating multiple servers or matching existing bus numbering.
+# Example: bus_offset=2 means can0→bus2, can1→bus3
+bus_offset = 0
+
+# TCP listen address. Use "0.0.0.0" to accept connections from any interface,
+# or "127.0.0.1" to restrict to localhost only.
+host = "0.0.0.0"
+
+# TCP listen port. Default GVRET port is 23 (requires root or CAP_NET_BIND).
+# Use a high port (e.g., 2323) to run without elevated privileges.
+port = 23
+
+# Print frames to console in candump-like format (useful for debugging).
+echo_console = false
+
+# Enable ANSI color highlighting of printable ASCII bytes in console output.
+# Only has effect when echo_console = true.
+colour = false
+
+# Default direction tag for frames. Used by PostgreSQL ingest if [postgres].dir
+# is not set. Typically "rx" for received frames.
+default_dir = "rx"
+
+# Enable CAN FD support (64-byte payloads). Requires a CAN FD capable interface.
+# When enabled, the server reads 72-byte canfd_frames and supports payloads up to
+# 64 bytes. The interface must be configured for FD:
+#   sudo ip link set can0 up type can bitrate 500000 dbitrate 2000000 fd on
+can_fd = false
+
+[postgres]
+# Enable PostgreSQL ingest. When true, all received frames are queued and
+# batch-inserted via the configured ingest function.
+enable = false
+
+# PostgreSQL connection string. Supports all libpq parameters.
+# Format: postgresql://user:password@host:port/database?sslmode=prefer
+# TIP: Use environment variable PG_DSN instead to avoid storing credentials here.
+dsn = "postgresql://candor:SECRET_PASSWORD@HOST:5432/candor"
+
+# Qualified name of the ingest function. This function receives each frame's
+# fields as parameters. See candor-server.py for the expected signature.
+func = "public.ingest_can_frame"
+
+# Number of frames to batch before writing. Higher values improve throughput
+# but increase latency and memory usage. 500-2000 is typically optimal.
+batch_size = 1000
+
+# Maximum seconds between flushes. Ensures frames are written even during
+# low-traffic periods. Lower values reduce latency but increase DB load.
+flush_interval = 0.25
+
+# Maximum frames to buffer in memory before dropping. Protects against
+# memory exhaustion if DB writes can't keep up. Monitor "queue high water"
+# warnings in logs - if you see 80%+ regularly, increase this or tune DB.
+queue_size = 200000
+
+# Direction tag for PostgreSQL rows. Overrides [server].default_dir if set.
+# Use "rx" for received frames, "tx" for transmitted (if you add TX logging).
+dir = "rx"
+
+[logging]
+# Log level: DEBUG, INFO, WARNING, ERROR
+# DEBUG shows frame-level detail (very verbose on busy buses)
+level = "INFO"
+
+# Seconds between periodic stats output (queue depth, write counts, etc.)
+# Set to 0 to disable periodic stats. Useful for monitoring queue health.
+stats_interval = 60

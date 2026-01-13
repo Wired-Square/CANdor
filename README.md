@@ -25,6 +25,18 @@ A desktop application for CAN bus analysis and signal decoding, built with Tauri
 - CSV file import
 - In-memory buffer replay
 
+## Tools
+
+### [CANdor Server](tools/candor-server/)
+
+A GVRET-compatible TCP server for Linux that bridges SocketCAN interfaces to TCP clients. Deploy on a Raspberry Pi or any Linux system with CAN hardware to:
+
+- Stream live CAN data to the CANdor desktop app over the network
+- Optionally log all frames to PostgreSQL for historical analysis
+- Support multiple CAN interfaces and CAN FD
+
+See [tools/candor-server/README.md](tools/candor-server/README.md) for setup instructions.
+
 ## Tech Stack
 
 - **Frontend**: React 19, TypeScript, Vite, Zustand, Tailwind CSS

@@ -22,6 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+CLAUDE.md
 
 # Rust/Cargo
 src-tauri/target/
