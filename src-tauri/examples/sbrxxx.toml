@@ -73,6 +73,7 @@ unit = "%"
 signed = false
 min = 0
 max = 100
+confidence = "high"
 
 [frame.can."0x512"]
 length = 8
@@ -353,13 +354,14 @@ start_bit = 32
 bit_length = 16
 unit = "Wh"
 signed = false
-confidence = "medium"
+confidence = "high"
 
 [[frame.can."0x707".signals]]
-name = "707_Unknown_Usually_3"
+name = "Info_Battery_Module_Count"
 start_bit = 48
 bit_length = 16
 signed = false
+confidence = "high"
 
 [frame.can."0x708"]
 length = 8
@@ -533,6 +535,7 @@ bit_length = 16
 factor = 0.01
 unit = "%"
 signed = false
+confidence = "medium"
 
 [[frame.can."0x70F".mux."5".signals]]
 name = "Status_Module_2_SoC"
@@ -541,6 +544,7 @@ bit_length = 16
 factor = 0.01
 unit = "%"
 signed = false
+confidence = "medium"
 
 [[frame.can."0x70F".mux."5".signals]]
 name = "Status_Module_3_SoC"
@@ -549,18 +553,58 @@ bit_length = 16
 factor = 0.01
 unit = "%"
 signed = false
+confidence = "medium"
 
 [[frame.can."0x70F".mux."6".signals]]
-name = "70F_Unknown_Mux_6"
-start_bit = 8
-bit_length = 56
+name = "Status_Module_4_SoC"
+start_bit = 16
+bit_length = 16
+factor = 0.01
+unit = "%"
 signed = false
-format = "hex"
+format = "number"
+confidence = "medium"
+
+[[frame.can."0x70F".mux."6".signals]]
+name = "Status_Module_5_SoC"
+start_bit = 32
+bit_length = 16
+factor = 0.01
+unit = "%"
+signed = false
+confidence = "medium"
+
+[[frame.can."0x70F".mux."6".signals]]
+name = "Status_Module_6_SoC"
+start_bit = 48
+bit_length = 16
+factor = 0.01
+unit = "%"
+signed = false
+confidence = "medium"
+
+[[frame.can."0x70F".mux."7".signals]]
+name = "Status_Module_7_SoC"
+start_bit = 16
+bit_length = 16
+factor = 0.01
+unit = "%"
+signed = false
+confidence = "medium"
+
+[[frame.can."0x70F".mux."7".signals]]
+name = "Status_Module_8_SoC"
+start_bit = 32
+bit_length = 16
+factor = 0.01
+unit = "%"
+signed = false
+confidence = "medium"
 
 [[frame.can."0x70F".mux."7".signals]]
 name = "70F_Unknown_Mux_7"
-start_bit = 8
-bit_length = 56
+start_bit = 48
+bit_length = 16
 signed = false
 format = "hex"
 
