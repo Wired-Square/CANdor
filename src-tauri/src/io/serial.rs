@@ -6,17 +6,30 @@
 
 use async_trait::async_trait;
 use serde::Serialize;
-use std::io::Read;
+use std::io::{Read, Write};
+use std::sync::mpsc as std_mpsc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::time::Duration;
 use tauri::AppHandle;
 
 use super::{
-    emit_frames, emit_to_session, now_us, serial_utils, IODevice, FrameMessage, IOCapabilities, IOState, StreamEndedPayload,
+    emit_frames, emit_to_session, now_us, serial_utils, IODevice, FrameMessage, IOCapabilities,
+    IOState, StreamEndedPayload, TransmitResult,
 };
+
+/// Serial transmit request sent through the channel
+struct SerialTransmitRequest {
+    /// Raw bytes to send
+    data: Vec<u8>,
+    /// Sync oneshot channel to send the result back
+    result_tx: std_mpsc::SyncSender<Result<(), String>>,
+}
+
+/// Sender for serial transmit requests
+type SerialTransmitSender = Arc<Mutex<Option<std_mpsc::SyncSender<SerialTransmitRequest>>>>;
 
 // Re-export Parity for external use (sessions.rs imports via serial_reader::Parity)
 pub use super::serial_utils::Parity;
@@ -84,7 +97,7 @@ pub struct SerialPortInfo {
 // Serial Reader
 // ============================================================================
 
-/// Serial port reader implementing IODevice trait
+/// Serial port reader implementing IODevice trait with transmit support
 pub struct SerialReader {
     app: AppHandle,
     session_id: String,
@@ -93,6 +106,8 @@ pub struct SerialReader {
     cancel_flag: Arc<AtomicBool>,
     pause_flag: Arc<AtomicBool>,
     task_handle: Option<tauri::async_runtime::JoinHandle<()>>,
+    /// Channel sender for serial transmit requests
+    transmit_tx: SerialTransmitSender,
 }
 
 impl SerialReader {
@@ -105,6 +120,7 @@ impl SerialReader {
             cancel_flag: Arc::new(AtomicBool::new(false)),
             pause_flag: Arc::new(AtomicBool::new(false)),
             task_handle: None,
+            transmit_tx: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -136,13 +152,23 @@ impl IODevice for SerialReader {
         self.cancel_flag.store(false, Ordering::Relaxed);
         self.pause_flag.store(false, Ordering::Relaxed);
 
+        // Create transmit channel
+        let (transmit_tx, transmit_rx) = std_mpsc::sync_channel::<SerialTransmitRequest>(32);
+        {
+            let mut guard = self
+                .transmit_tx
+                .lock()
+                .map_err(|e| format!("Failed to lock transmit_tx: {}", e))?;
+            *guard = Some(transmit_tx);
+        }
+
         let app = self.app.clone();
         let session_id = self.session_id.clone();
         let config = self.config.clone();
         let cancel_flag = self.cancel_flag.clone();
         let pause_flag = self.pause_flag.clone();
 
-        let handle = spawn_serial_stream(app, session_id, config, cancel_flag, pause_flag);
+        let handle = spawn_serial_stream(app, session_id, config, cancel_flag, pause_flag, transmit_rx);
         self.task_handle = Some(handle);
         self.state = IOState::Running;
 
@@ -151,6 +177,11 @@ impl IODevice for SerialReader {
 
     async fn stop(&mut self) -> Result<(), String> {
         self.cancel_flag.store(true, Ordering::Relaxed);
+
+        // Clear the transmit sender
+        if let Ok(mut guard) = self.transmit_tx.lock() {
+            *guard = None;
+        }
 
         if let Some(handle) = self.task_handle.take() {
             let _ = handle.await;
@@ -192,6 +223,40 @@ impl IODevice for SerialReader {
 
     fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    fn transmit_serial(&self, bytes: &[u8]) -> Result<TransmitResult, String> {
+        if bytes.is_empty() {
+            return Ok(TransmitResult::error("No bytes to transmit".to_string()));
+        }
+
+        // Get the transmit sender
+        let tx = {
+            let guard = self
+                .transmit_tx
+                .lock()
+                .map_err(|e| format!("Failed to lock transmit channel: {}", e))?;
+            guard.clone().ok_or("Not connected (no transmit channel)")?
+        };
+
+        // Create a sync channel to receive the result
+        let (result_tx, result_rx) = std_mpsc::sync_channel(1);
+
+        // Send the transmit request
+        tx.try_send(SerialTransmitRequest {
+            data: bytes.to_vec(),
+            result_tx,
+        })
+        .map_err(|e| format!("Failed to queue transmit request: {}", e))?;
+
+        // Wait for the result with a timeout
+        let result = result_rx
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .map_err(|e| format!("Transmit timeout or channel closed: {}", e))?;
+
+        result?;
+
+        Ok(TransmitResult::success())
     }
 }
 
@@ -248,11 +313,12 @@ fn spawn_serial_stream(
     config: SerialConfig,
     cancel_flag: Arc<AtomicBool>,
     pause_flag: Arc<AtomicBool>,
+    transmit_rx: std_mpsc::Receiver<SerialTransmitRequest>,
 ) -> tauri::async_runtime::JoinHandle<()> {
     tauri::async_runtime::spawn(async move {
         // Run blocking serial I/O in a dedicated thread
         let result = tokio::task::spawn_blocking(move || {
-            run_serial_stream_blocking(app_handle, session_id, config, cancel_flag, pause_flag)
+            run_serial_stream_blocking(app_handle, session_id, config, cancel_flag, pause_flag, transmit_rx)
         })
         .await;
 
@@ -272,6 +338,7 @@ fn run_serial_stream_blocking(
     config: SerialConfig,
     cancel_flag: Arc<AtomicBool>,
     pause_flag: Arc<AtomicBool>,
+    transmit_rx: std_mpsc::Receiver<SerialTransmitRequest>,
 ) {
     // Convert config to serialport types
     let data_bits = serial_utils::to_serialport_data_bits(config.data_bits);
@@ -313,7 +380,7 @@ fn run_serial_stream_blocking(
     );
 
     // Open serial port with minimal timeout for better byte-level timing resolution.
-    let mut port = match serialport::new(&config.port, config.baud_rate)
+    let port = match serialport::new(&config.port, config.baud_rate)
         .data_bits(data_bits)
         .stop_bits(stop_bits)
         .parity(parity)
@@ -333,8 +400,11 @@ fn run_serial_stream_blocking(
         }
     };
 
+    // Wrap port in Arc<Mutex> for shared access between read and transmit
+    let port = Arc::new(Mutex::new(port));
+
     eprintln!(
-        "[Serial:{}] Opened {} at {} baud ({}-{}-{}) [framing: {}]",
+        "[Serial:{}] Opened {} at {} baud ({}-{}-{}) [framing: {}, transmit: enabled]",
         session_id, config.port, config.baud_rate, config.data_bits,
         match config.parity { Parity::None => 'N', Parity::Odd => 'O', Parity::Even => 'E' },
         config.stop_bits,
@@ -378,9 +448,21 @@ fn run_serial_stream_blocking(
             }
         }
 
+        // Process pending transmit requests (non-blocking)
+        while let Ok(req) = transmit_rx.try_recv() {
+            let result = {
+                let mut port_guard = port.lock().unwrap();
+                port_guard
+                    .write_all(&req.data)
+                    .and_then(|_| port_guard.flush())
+                    .map_err(|e| format!("Serial write error: {}", e))
+            };
+            let _ = req.result_tx.try_send(result);
+        }
+
         // Handle pause - continue reading to keep port alive but don't emit
         if pause_flag.load(Ordering::Relaxed) {
-            let _ = port.read(&mut buf);
+            let _ = port.lock().unwrap().read(&mut buf);
             pending_bytes.clear();
             pending_frames.clear();
             std::thread::sleep(Duration::from_millis(10));
@@ -388,7 +470,11 @@ fn run_serial_stream_blocking(
         }
 
         // Read bytes
-        match port.read(&mut buf) {
+        let read_result = {
+            let mut port_guard = port.lock().unwrap();
+            port_guard.read(&mut buf)
+        };
+        match read_result {
             Ok(n) if n > 0 => {
                 let base_ts = now_us();
                 let read_bytes = &buf[..n];

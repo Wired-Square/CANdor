@@ -1,10 +1,186 @@
 [meta]
 name = "SBRXXX"
-version = 2
-default_frame = "can"
+version = 3
 
 [meta.can]
-default_endianness = "little"
+default_byte_order = "little"
+
+[frame.can."0x100"]
+length = 8
+transmitter = "Inverter"
+
+[[frame.can."0x100".signals]]
+name = "100"
+start_bit = 0
+bit_length = 64
+signed = false
+format = "hex"
+
+[frame.can."0x101"]
+length = 8
+transmitter = "Inverter"
+
+[[frame.can."0x101".signals]]
+name = "Status_Inverter_Timestamp"
+start_bit = 0
+bit_length = 32
+signed = false
+format = "unix_time"
+confidence = "high"
+notes = "Once per hour when battery connected"
+
+[frame.can."0x102"]
+length = 8
+transmitter = "Inverter"
+
+[[frame.can."0x102".signals]]
+name = "102"
+start_bit = 0
+bit_length = 64
+signed = false
+format = "hex"
+notes = "NOBATT"
+
+[frame.can."0x103"]
+length = 8
+transmitter = "Inverter"
+signals = []
+
+[frame.can."0x103".mux]
+name = "mux_259_0_8"
+start_bit = 0
+bit_length = 8
+
+[[frame.can."0x103".mux."0".signals]]
+name = "Info_Inverter_SN_1"
+start_bit = 8
+bit_length = 56
+signed = false
+format = "utf8"
+confidence = "medium"
+notes = "NOBATT"
+
+[[frame.can."0x103".mux."1".signals]]
+name = "Info_Inverter_SN_2"
+start_bit = 8
+bit_length = 56
+signed = false
+format = "utf8"
+confidence = "medium"
+notes = "NOBATT"
+
+[frame.can."0x104"]
+length = 8
+transmitter = "Inverter"
+signals = []
+
+[frame.can."0x104".mux]
+name = "mux_260_0_8"
+start_bit = 0
+bit_length = 8
+
+[[frame.can."0x104".mux."0".signals]]
+name = "Info_Inverter_Manufacturer_1"
+start_bit = 8
+bit_length = 56
+signed = false
+format = "utf8"
+confidence = "medium"
+notes = "NOBATT"
+
+[[frame.can."0x104".mux."1".signals]]
+name = "Info_Inverter_Manufacturer_2"
+start_bit = 8
+bit_length = 56
+signed = false
+format = "utf8"
+confidence = "medium"
+notes = "NOBATT"
+
+[frame.can."0x105"]
+length = 8
+transmitter = "Inverter"
+signals = []
+
+[frame.can."0x105".mux]
+name = "mux_261_0_8"
+start_bit = 0
+bit_length = 8
+
+[[frame.can."0x105".mux."0".signals]]
+name = "Info_Inverter_Model_1"
+start_bit = 8
+bit_length = 56
+signed = false
+format = "utf8"
+confidence = "medium"
+notes = "NOBATT"
+
+[[frame.can."0x105".mux."1".signals]]
+name = "Info_Inverter_Model_2"
+start_bit = 8
+bit_length = 56
+signed = false
+format = "utf8"
+notes = "NOBATT"
+
+[frame.can."0x106"]
+length = 8
+transmitter = "Inverter"
+
+[[frame.can."0x106".signals]]
+name = "106"
+start_bit = 0
+bit_length = 64
+signed = false
+format = "hex"
+
+[frame.can."0x108"]
+length = 8
+transmitter = "Inverter"
+
+[[frame.can."0x108".signals]]
+name = "108"
+start_bit = 0
+bit_length = 64
+signed = false
+format = "hex"
+
+[frame.can."0x109"]
+length = 8
+transmitter = "Inverter"
+
+[[frame.can."0x109".signals]]
+name = "109_Unknown_1"
+start_bit = 0
+bit_length = 8
+signed = false
+format = "hex"
+
+[[frame.can."0x109".signals]]
+name = "109_Unknown_2"
+start_bit = 8
+bit_length = 16
+signed = false
+
+[[frame.can."0x109".signals]]
+name = "109_Unknown_3"
+start_bit = 24
+bit_length = 40
+signed = false
+format = "hex"
+
+[frame.can."0x191"]
+length = 8
+notes = "NOBATT Discovery Message"
+transmitter = "Inverter"
+
+[[frame.can."0x191".signals]]
+name = "191"
+start_bit = 0
+bit_length = 64
+signed = false
+format = "hex"
 
 [frame.can."0x1E0"]
 length = 8
@@ -59,9 +235,22 @@ length = 8
 transmitter = "BMS"
 
 [[frame.can."0x500".signals]]
-name = "500_Unknown"
+name = "500_Unknown_0"
 start_bit = 0
-bit_length = 56
+bit_length = 8
+signed = false
+
+[[frame.can."0x500".signals]]
+name = "500_Unknown_1"
+start_bit = 8
+bit_length = 16
+signed = false
+format = "hex"
+
+[[frame.can."0x500".signals]]
+name = "500_Unknown_2"
+start_bit = 24
+bit_length = 32
 signed = false
 format = "hex"
 

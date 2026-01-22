@@ -27,8 +27,6 @@ interface DiscoveryUIState {
   maxBuffer: number;
   renderBuffer: number;
   ioProfile: string | null;
-  /** Original source profile ID - preserved when switching to buffer mode */
-  sourceProfileId: string | null;
 
   // Playback control
   playbackSpeed: PlaybackSpeed;
@@ -67,6 +65,7 @@ interface DiscoveryUIState {
 
   // CAN frame view display options
   showAsciiColumn: boolean;
+  showBusColumn: boolean;
 
   // Actions - Error handling
   setError: (error: string | null) => void;
@@ -77,7 +76,6 @@ interface DiscoveryUIState {
   setMaxBuffer: (value: number) => void;
   setRenderBuffer: (value: number) => void;
   setIoProfile: (profile: string | null) => void;
-  setSourceProfileId: (profileId: string | null) => void;
 
   // Actions - Playback control
   setPlaybackSpeed: (speed: PlaybackSpeed, clearBuffer: () => void) => void;
@@ -115,6 +113,8 @@ interface DiscoveryUIState {
 
   // Actions - CAN frame view display options
   toggleShowAsciiColumn: () => void;
+  toggleShowBusColumn: () => void;
+  setShowBusColumn: (show: boolean) => void;
 }
 
 export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
@@ -123,7 +123,6 @@ export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
   maxBuffer: 100000,
   renderBuffer: 20,
   ioProfile: null,
-  sourceProfileId: null,
   playbackSpeed: 1,
   currentTime: null,
   noLimitMode: {
@@ -152,6 +151,7 @@ export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
   selectionSetDirty: false,
   framesViewActiveTab: 'frames',
   showAsciiColumn: false,
+  showBusColumn: false,
 
   // Error handling
   setError: (error) => set({ error }),
@@ -186,8 +186,6 @@ export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
   },
 
   setIoProfile: (profile) => set({ ioProfile: profile }),
-
-  setSourceProfileId: (profileId) => set({ sourceProfileId: profileId }),
 
   // Playback control
   setPlaybackSpeed: (speed, clearBuffer) => {
@@ -363,4 +361,6 @@ export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
 
   // CAN frame view display options
   toggleShowAsciiColumn: () => set((state) => ({ showAsciiColumn: !state.showAsciiColumn })),
+  toggleShowBusColumn: () => set((state) => ({ showBusColumn: !state.showBusColumn })),
+  setShowBusColumn: (show) => set({ showBusColumn: show }),
 }));

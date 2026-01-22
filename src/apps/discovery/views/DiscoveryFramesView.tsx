@@ -1,6 +1,6 @@
 // ui/src/apps/discovery/views/DiscoveryFramesView.tsx
 import React, { useEffect, useRef, useMemo, memo, useState, useCallback } from "react";
-import { FileText } from "lucide-react";
+import { FileText, Network } from "lucide-react";
 import { formatIsoUs, formatHumanUs, renderDeltaNode } from "../../../utils/timeFormat";
 import { useDiscoveryStore } from "../../../stores/discoveryStore";
 import { useDiscoveryUIStore } from "../../../stores/discoveryUIStore";
@@ -82,6 +82,10 @@ function DiscoveryFramesView({
   // ASCII column toggle
   const showAsciiColumn = useDiscoveryUIStore((s) => s.showAsciiColumn);
   const toggleShowAsciiColumn = useDiscoveryUIStore((s) => s.toggleShowAsciiColumn);
+
+  // Bus column toggle
+  const showBusColumn = useDiscoveryUIStore((s) => s.showBusColumn);
+  const toggleShowBusColumn = useDiscoveryUIStore((s) => s.toggleShowBusColumn);
 
   // Pagination state (only used when not streaming)
   const [currentPage, setCurrentPage] = useState(0);
@@ -503,17 +507,30 @@ function DiscoveryFramesView({
               displayTime={displayTime}
               isRecorded={isRecorded}
               tabBarControls={
-                <button
-                  onClick={toggleShowAsciiColumn}
-                  className={`p-1.5 rounded transition-colors ${
-                    showAsciiColumn
-                      ? 'bg-yellow-600 text-white hover:bg-yellow-500'
-                      : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200'
-                  }`}
-                  title={showAsciiColumn ? 'Hide ASCII column' : 'Show ASCII column'}
-                >
-                  <FileText className="w-3.5 h-3.5" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={toggleShowBusColumn}
+                    className={`p-1.5 rounded transition-colors ${
+                      showBusColumn
+                        ? 'bg-cyan-600 text-white hover:bg-cyan-500'
+                        : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200'
+                    }`}
+                    title={showBusColumn ? 'Hide Bus column' : 'Show Bus column'}
+                  >
+                    <Network className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={toggleShowAsciiColumn}
+                    className={`p-1.5 rounded transition-colors ${
+                      showAsciiColumn
+                        ? 'bg-yellow-600 text-white hover:bg-yellow-500'
+                        : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200'
+                    }`}
+                    title={showAsciiColumn ? 'Hide ASCII column' : 'Show ASCII column'}
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               }
 
               // Toolbar
@@ -549,6 +566,7 @@ function DiscoveryFramesView({
               onBookmark={onBookmark}
               emptyMessage={isStreaming ? 'Waiting for frames...' : 'No frames to display'}
               showAscii={showAsciiColumn}
+              showBus={showBusColumn}
             />
           </>
         )}

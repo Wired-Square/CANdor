@@ -37,6 +37,35 @@ export const badgeNeutral = `${badgeBase} bg-slate-100 dark:bg-slate-800 text-sl
 export const badgePurple = `${badgeBase} bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300`;
 
 // ============================================================================
+// Small Badges - compact versions for tight UI spaces (e.g., reader lists)
+// ============================================================================
+
+/**
+ * Small badge base - more compact padding
+ */
+export const badgeSmallBase = "px-1.5 py-0.5 rounded text-[10px] font-medium";
+
+/**
+ * Small neutral badge - gray
+ */
+export const badgeSmallNeutral = `${badgeSmallBase} bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-400`;
+
+/**
+ * Small success badge - green
+ */
+export const badgeSmallSuccess = `${badgeSmallBase} bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300`;
+
+/**
+ * Small warning badge - amber
+ */
+export const badgeSmallWarning = `${badgeSmallBase} bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300`;
+
+/**
+ * Small purple badge - purple
+ */
+export const badgeSmallPurple = `${badgeSmallBase} bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300`;
+
+// ============================================================================
 // Dark Panel Badges - for use in permanently dark panels (e.g., decoder view)
 // These use transparent backgrounds that work well on dark backgrounds
 // ============================================================================

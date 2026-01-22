@@ -1,13 +1,13 @@
 // ui/src/apps/decoder/views/DecoderTopBar.tsx
 
-import { Activity, ChevronRight, ListFilter, Star, FileText, Square, Glasses, Unplug, Plug, Trash2, Users, User, Filter, Eye, EyeOff, Play, Type } from "lucide-react";
+import { Activity, ChevronRight, ListFilter, Star, Glasses, Trash2, Users, User, Filter, Eye, EyeOff, Type } from "lucide-react";
 import type { CatalogMetadata } from "../../../api/catalog";
 import type { IOProfile } from "../../../types/common";
 import type { PlaybackSpeed } from "../../../components/TimeController";
 import type { BufferMetadata } from "../../../api/buffer";
-import { BUFFER_PROFILE_ID } from "../../../dialogs/IoReaderPickerDialog";
 import FlexSeparator from "../../../components/FlexSeparator";
-import { buttonBase, iconButtonBase, dangerButtonBase, warningButtonBase, successButtonBase, successIconButton, toggleButtonClass } from "../../../styles/buttonStyles";
+import { ReaderButton, SessionActionButtons } from "../../../components/SessionControls";
+import { buttonBase, iconButtonBase, toggleButtonClass } from "../../../styles/buttonStyles";
 
 type Props = {
   // Catalog selection
@@ -22,6 +22,10 @@ type Props = {
   onIoProfileChange: (id: string | null) => void;
   defaultReadProfileId?: string | null;
   bufferMetadata?: BufferMetadata | null;
+  /** Whether multi-bus mode is active */
+  multiBusMode?: boolean;
+  /** Profile IDs when in multi-bus mode */
+  multiBusProfiles?: string[];
 
   // Speed (for top bar display, not playback controls)
   speed: PlaybackSpeed;
@@ -88,6 +92,8 @@ export default function DecoderTopBar({
   ioProfile,
   defaultReadProfileId,
   bufferMetadata,
+  multiBusMode = false,
+  multiBusProfiles = [],
   speed,
   supportsSpeed = false,
   isStreaming = false,
@@ -117,24 +123,6 @@ export default function DecoderTopBar({
   onToggleAsciiGutter,
   frameIdFilter = '',
 }: Props) {
-  // All profiles are read profiles now (mode field removed)
-  const readProfiles = ioProfiles;
-
-  // Get display names - handle buffer profile specially
-  const isBufferProfile = ioProfile === BUFFER_PROFILE_ID;
-  const selectedProfile = readProfiles.find((p) => p.id === ioProfile);
-
-  // For buffer profile, use the buffer's display name directly
-  // Buffer names are now set descriptively by readers (e.g., "GVRET host:port", "PostgreSQL db")
-  const getBufferDisplayName = () => {
-    return bufferMetadata?.name || "Buffer";
-  };
-
-  const ioReaderName = isBufferProfile
-    ? `Buffer: ${getBufferDisplayName()}`
-    : (selectedProfile?.name || "No reader");
-  const isDefaultReader = !isBufferProfile && selectedProfile?.id === defaultReadProfileId;
-
   const selectedCatalog = catalogs.find((c) => c.path === catalogPath);
   const hasCatalog = !!selectedCatalog;
   const catalogName = selectedCatalog?.name || "No catalog";
@@ -148,20 +136,17 @@ export default function DecoderTopBar({
 
         <FlexSeparator />
 
-        {/* IO Reader Selection - shows star/file icon + name */}
-        <button
+        {/* IO Reader Selection */}
+        <ReaderButton
+          ioProfile={ioProfile}
+          ioProfiles={ioProfiles}
+          multiBusMode={multiBusMode}
+          multiBusProfiles={multiBusProfiles}
+          bufferMetadata={bufferMetadata}
+          defaultReadProfileId={defaultReadProfileId}
           onClick={onOpenIoReaderPicker}
           disabled={isStreaming}
-          className={buttonBase}
-          title="Select IO Reader"
-        >
-          {isBufferProfile ? (
-            <FileText className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
-          ) : isDefaultReader ? (
-            <Star className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" fill="currentColor" />
-          ) : null}
-          <span className="max-w-40 truncate">{ioReaderName}</span>
-        </button>
+        />
 
         {/* Speed button - only show if reader supports speed */}
         {supportsSpeed && (
@@ -174,50 +159,17 @@ export default function DecoderTopBar({
           </button>
         )}
 
-        {/* Stop button - only shown when actively streaming */}
-        {isStreaming && (
-          <button
-            onClick={onStopStream}
-            className={dangerButtonBase}
-            title="Stop IO Stream"
-          >
-            <Square className="w-3.5 h-3.5" />
-          </button>
-        )}
-
-        {/* Resume button - shown when session is stopped but profile is selected */}
-        {isStopped && !isDetached && onResume && (
-          <button
-            onClick={onResume}
-            className={successIconButton}
-            title="Resume IO Stream"
-          >
-            <Play className="w-3.5 h-3.5" />
-          </button>
-        )}
-
-        {/* Detach button - only shown when streaming and multiple apps are connected */}
-        {isStreaming && joinerCount > 1 && onDetach && (
-          <button
-            onClick={onDetach}
-            className={warningButtonBase}
-            title="Detach IO Stream"
-          >
-            <Unplug className="w-3.5 h-3.5" />
-          </button>
-        )}
-
-        {/* Rejoin button - shown when detached from a session */}
-        {isDetached && onRejoin && (
-          <button
-            onClick={onRejoin}
-            className={successButtonBase}
-            title="Rejoin Session"
-          >
-            <Plug className="w-3.5 h-3.5" />
-            <span>Rejoin</span>
-          </button>
-        )}
+        {/* Session control buttons */}
+        <SessionActionButtons
+          isStreaming={isStreaming}
+          isStopped={isStopped}
+          isDetached={isDetached}
+          joinerCount={joinerCount}
+          onStop={onStopStream}
+          onResume={onResume}
+          onDetach={onDetach}
+          onRejoin={onRejoin}
+        />
 
         {/* Right arrow icon */}
         <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />

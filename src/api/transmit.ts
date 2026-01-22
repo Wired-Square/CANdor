@@ -71,6 +71,46 @@ export interface ProfileUsage {
   session_id: string;
 }
 
+/** Event payload for CAN transmit history (emitted during repeat transmits) */
+export interface TransmitHistoryEvent {
+  /** Session ID that transmitted */
+  session_id: string;
+  /** Queue item or group ID */
+  queue_id: string;
+  /** The frame that was transmitted */
+  frame: CanTransmitFrame;
+  /** Whether transmission succeeded */
+  success: boolean;
+  /** Timestamp in microseconds */
+  timestamp_us: number;
+  /** Error message if failed */
+  error?: string;
+}
+
+/** Event payload for serial transmit history (emitted during repeat transmits) */
+export interface SerialTransmitHistoryEvent {
+  /** Session ID that transmitted */
+  session_id: string;
+  /** Queue item or group ID */
+  queue_id: string;
+  /** The bytes that were transmitted */
+  bytes: number[];
+  /** Whether transmission succeeded */
+  success: boolean;
+  /** Timestamp in microseconds */
+  timestamp_us: number;
+  /** Error message if failed */
+  error?: string;
+}
+
+/** Event payload when a repeat transmission stops due to permanent error */
+export interface RepeatStoppedEvent {
+  /** Queue item or group ID that stopped */
+  queue_id: string;
+  /** Reason for stopping */
+  reason: string;
+}
+
 // ============================================================================
 // Profile Query API
 // ============================================================================
@@ -157,6 +197,20 @@ export async function ioTransmitCanFrame(
 }
 
 /**
+ * Transmit raw serial bytes through an existing IO session.
+ * The session must be running a serial profile with transmit support.
+ * @param sessionId - IO session to use for transmission
+ * @param bytes - Raw bytes to transmit
+ * @returns Transmit result with success/error info
+ */
+export async function ioTransmitSerial(
+  sessionId: string,
+  bytes: number[]
+): Promise<TransmitResult> {
+  return invoke("io_transmit_serial", { sessionId, bytes });
+}
+
+/**
  * Start repeat transmission through an IO session.
  * @param sessionId - IO session to use
  * @param queueId - Unique ID for this repeat task
@@ -191,6 +245,27 @@ export async function ioStopRepeatTransmit(queueId: string): Promise<void> {
  */
 export async function ioStopAllRepeats(sessionId: string): Promise<void> {
   return invoke("io_stop_all_repeats", { sessionId });
+}
+
+/**
+ * Start repeat transmission for serial bytes through an IO session.
+ * @param sessionId - IO session to use
+ * @param queueId - Unique ID for this repeat task
+ * @param bytes - Serial bytes to repeat
+ * @param intervalMs - Interval between transmissions in milliseconds
+ */
+export async function ioStartSerialRepeatTransmit(
+  sessionId: string,
+  queueId: string,
+  bytes: number[],
+  intervalMs: number
+): Promise<void> {
+  return invoke("io_start_serial_repeat_transmit", {
+    sessionId,
+    queueId,
+    bytes,
+    intervalMs,
+  });
 }
 
 // ============================================================================

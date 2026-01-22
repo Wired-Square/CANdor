@@ -24,7 +24,6 @@ export default function CanTransmitView() {
   const sendCanFrame = useTransmitStore((s) => s.sendCanFrame);
   const addCanToQueue = useTransmitStore((s) => s.addCanToQueue);
   const resetCanEditor = useTransmitStore((s) => s.resetCanEditor);
-  const setActiveTab = useTransmitStore((s) => s.setActiveTab);
 
   // Get connection state
   const isConnected = activeSession?.lifecycleState === "connected";
@@ -64,8 +63,7 @@ export default function CanTransmitView() {
   // Handle add to queue
   const handleAddToQueue = useCallback(() => {
     addCanToQueue();
-    setActiveTab("queue");
-  }, [addCanToQueue, setActiveTab]);
+  }, [addCanToQueue]);
 
   // Handle reset
   const handleReset = useCallback(() => {

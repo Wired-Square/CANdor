@@ -550,6 +550,7 @@ export default function IOProfileDialog({
                   TCP Keepalive
                 </label>
               </div>
+
             </div>
           )}
 
@@ -584,7 +585,7 @@ export default function IOProfileDialog({
               <div className={alertInfo}>
                 <p className="text-sm text-blue-800 dark:text-blue-200">
                   Works with ESP32-RET, M2RET, CANDue, and other GVRET-compatible hardware over USB serial.
-                  Supports multi-bus devices (CAN0, CAN1, SWCAN) and frame transmission.
+                  Supports multi-bus devices and frame transmission.
                 </p>
               </div>
             </div>

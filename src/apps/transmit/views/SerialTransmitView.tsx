@@ -2,10 +2,11 @@
 //
 // Serial bytes editor and single-shot transmit view.
 
-import { useCallback, useMemo } from "react";
-import { Plus, RotateCcw } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
+import { Plus, RotateCcw, Send } from "lucide-react";
 import { useTransmitStore } from "../../../stores/transmitStore";
 import { useActiveSession } from "../../../stores/sessionStore";
+import { ioTransmitSerial } from "../../../api/transmit";
 import {
   bgDarkToolbar,
   borderDarkView,
@@ -26,11 +27,14 @@ export default function SerialTransmitView() {
   const addSerialToQueue = useTransmitStore((s) => s.addSerialToQueue);
   const resetSerialEditor = useTransmitStore((s) => s.resetSerialEditor);
   const setActiveTab = useTransmitStore((s) => s.setActiveTab);
+  const addHistoryItem = useTransmitStore((s) => s.addHistoryItem);
 
-  // Get connection state
+  // Local state for transmit
+  const [isSending, setIsSending] = useState(false);
+
+  // Get connection state and capabilities
   const isConnected = activeSession?.lifecycleState === "connected";
-  // Serial transmit is not yet supported through IO sessions
-  const canTransmit = false;
+  const canTransmit = isConnected && activeSession?.capabilities?.can_transmit_serial === true;
 
   // Parse hex input for preview
   const parsedBytes = useMemo(() => {
@@ -96,6 +100,64 @@ export default function SerialTransmitView() {
   const handleReset = useCallback(() => {
     resetSerialEditor();
   }, [resetSerialEditor]);
+
+  // Handle send
+  const handleSend = useCallback(async () => {
+    if (!activeSession?.id || parsedBytes.length === 0) return;
+
+    // Apply framing if needed
+    let bytesToSend = [...parsedBytes];
+    if (serialEditor.framingMode === "slip") {
+      // SLIP framing: END(0xC0), escape special chars, END(0xC0)
+      const SLIP_END = 0xc0;
+      const SLIP_ESC = 0xdb;
+      const SLIP_ESC_END = 0xdc;
+      const SLIP_ESC_ESC = 0xdd;
+      const framed: number[] = [SLIP_END];
+      for (const b of parsedBytes) {
+        if (b === SLIP_END) {
+          framed.push(SLIP_ESC, SLIP_ESC_END);
+        } else if (b === SLIP_ESC) {
+          framed.push(SLIP_ESC, SLIP_ESC_ESC);
+        } else {
+          framed.push(b);
+        }
+      }
+      framed.push(SLIP_END);
+      bytesToSend = framed;
+    } else if (serialEditor.framingMode === "delimiter") {
+      // Append delimiter
+      bytesToSend = [...parsedBytes, ...serialEditor.delimiter];
+    }
+
+    setIsSending(true);
+    try {
+      const result = await ioTransmitSerial(activeSession.id, bytesToSend);
+      // Add to history
+      addHistoryItem({
+        timestamp_us: result.timestamp_us,
+        profileId: activeSession.id,
+        profileName: activeSession.profileId ?? "Serial",
+        type: "serial",
+        bytes: bytesToSend,
+        success: result.success,
+        error: result.error,
+      });
+    } catch (e) {
+      console.error("Serial transmit failed:", e);
+      addHistoryItem({
+        timestamp_us: Date.now() * 1000,
+        profileId: activeSession.id,
+        profileName: activeSession.profileId ?? "Serial",
+        type: "serial",
+        bytes: bytesToSend,
+        success: false,
+        error: String(e),
+      });
+    } finally {
+      setIsSending(false);
+    }
+  }, [activeSession, parsedBytes, serialEditor.framingMode, serialEditor.delimiter, addHistoryItem]);
 
   // If not connected
   if (!isConnected) {
@@ -221,6 +283,16 @@ export default function SerialTransmitView() {
 
       {/* Actions */}
       <div className={`flex items-center gap-3 px-4 py-3 ${bgDarkToolbar}`}>
+        <button
+          onClick={handleSend}
+          disabled={!preview || isSending}
+          className={`${buttonBase} ${preview && !isSending ? "bg-blue-600 hover:bg-blue-500" : ""}`}
+          title="Send bytes now"
+        >
+          <Send size={16} />
+          <span>{isSending ? "Sending..." : "Send"}</span>
+        </button>
+
         <button
           onClick={handleAddToQueue}
           disabled={!preview}

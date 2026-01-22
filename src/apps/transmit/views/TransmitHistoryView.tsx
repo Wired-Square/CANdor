@@ -2,9 +2,9 @@
 //
 // Transmitted packet history view.
 
-import { useCallback, useMemo } from "react";
+import React, { useCallback, useMemo } from "react";
 import { Trash2, Check, X, Download } from "lucide-react";
-import { useTransmitStore, GVRET_BUSES } from "../../../stores/transmitStore";
+import { useTransmitStore } from "../../../stores/transmitStore";
 import { useSettings } from "../../../hooks/useSettings";
 import {
   bgDarkToolbar,
@@ -14,7 +14,7 @@ import {
 } from "../../../styles/colourTokens";
 import { buttonBase } from "../../../styles/buttonStyles";
 import { byteToHex } from "../../../utils/byteUtils";
-import { formatDisplayTime } from "../../../utils/timeFormat";
+import { formatIsoUs, formatHumanUs, renderDeltaNode } from "../../../utils/timeFormat";
 
 export default function TransmitHistoryView() {
   const { settings } = useSettings();
@@ -33,24 +33,45 @@ export default function TransmitHistoryView() {
     clearHistory();
   }, [clearHistory]);
 
-  // Format timestamp based on settings
-  const formatTimestamp = useCallback(
-    (timestampUs: number) => {
-      // Convert microseconds to seconds
-      const timestampSeconds = timestampUs / 1_000_000;
+  // Get the oldest timestamp for delta-start (history is newest-first, so last item is oldest)
+  const oldestTimestampUs = useMemo(() => {
+    if (history.length === 0) return null;
+    return history[history.length - 1].timestamp_us;
+  }, [history]);
 
+  // Format timestamp based on settings - returns React node for delta modes
+  const formatTimestamp = useCallback(
+    (timestampUs: number, prevTimestampUs: number | null): React.ReactNode => {
       switch (timestampFormat) {
         case "timestamp":
-          // Show epoch seconds with milliseconds
-          return `${timestampSeconds.toFixed(3)}`;
+          return formatIsoUs(timestampUs);
         case "delta-start":
+          if (oldestTimestampUs === null) return "0.000000s";
+          return renderDeltaNode(timestampUs - oldestTimestampUs);
         case "delta-last":
-          // For delta formats, just show the raw timestamp since we don't track start/last
-          return `${timestampSeconds.toFixed(3)}s`;
+          if (prevTimestampUs === null) return "0.000000s";
+          return renderDeltaNode(timestampUs - prevTimestampUs);
         case "human":
         default:
-          // Use formatDisplayTime which handles human-readable format
-          return formatDisplayTime(timestampSeconds);
+          return formatHumanUs(timestampUs);
+      }
+    },
+    [timestampFormat, oldestTimestampUs]
+  );
+
+  // Format timestamp as string for CSV export
+  const formatTimestampString = useCallback(
+    (timestampUs: number): string => {
+      switch (timestampFormat) {
+        case "timestamp":
+          return formatIsoUs(timestampUs);
+        case "delta-start":
+        case "delta-last":
+          // For CSV, just use seconds
+          return `${(timestampUs / 1_000_000).toFixed(6)}`;
+        case "human":
+        default:
+          return formatHumanUs(timestampUs);
       }
     },
     [timestampFormat]
@@ -102,7 +123,7 @@ export default function TransmitHistoryView() {
       const formatted = formatHistoryItem(item);
       if (!formatted) continue;
 
-      const timestamp = formatTimestamp(item.timestamp_us);
+      const timestamp = formatTimestampString(item.timestamp_us);
       const id = formatted.id ?? "";
       const dlc = item.frame?.data.length ?? item.bytes?.length ?? 0;
       const data =
@@ -126,7 +147,7 @@ export default function TransmitHistoryView() {
     a.download = `transmit-history-${Date.now()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [history, formatTimestamp]);
+  }, [history, formatTimestampString]);
 
   // Stats
   const stats = useMemo(() => {
@@ -202,9 +223,15 @@ export default function TransmitHistoryView() {
             </tr>
           </thead>
           <tbody>
-            {history.map((item) => {
+            {history.map((item, index) => {
               const formatted = formatHistoryItem(item);
               if (!formatted) return null;
+
+              // Get previous timestamp for delta-last (history is newest-first)
+              // So the "previous" in chronological order is the next item in the array
+              const prevTimestampUs = index < history.length - 1
+                ? history[index + 1].timestamp_us
+                : null;
 
               return (
                 <tr
@@ -222,9 +249,9 @@ export default function TransmitHistoryView() {
 
                   {/* Timestamp */}
                   <td className="px-4 py-2">
-                    <code className="font-mono text-gray-400 text-xs">
-                      {formatTimestamp(item.timestamp_us)}
-                    </code>
+                    <span className="font-mono text-gray-400 text-xs">
+                      {formatTimestamp(item.timestamp_us, prevTimestampUs)}
+                    </span>
                   </td>
 
                   {/* Interface */}
@@ -255,8 +282,7 @@ export default function TransmitHistoryView() {
                       )}
                       {formatted.bus !== null && formatted.bus !== undefined && (
                         <span className="text-xs text-amber-400">
-                          {GVRET_BUSES.find((b) => b.value === formatted.bus)
-                            ?.label ?? `Bus ${formatted.bus}`}
+                          Bus {formatted.bus}
                         </span>
                       )}
                       <code className="font-mono text-gray-400 text-xs">

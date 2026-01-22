@@ -5,7 +5,7 @@
 
 import { useCallback, useMemo } from "react";
 import { Play, Square, Trash2, StopCircle, Settings, Users } from "lucide-react";
-import { useTransmitStore, GVRET_BUSES } from "../../../stores/transmitStore";
+import { useTransmitStore } from "../../../stores/transmitStore";
 import { useActiveSession } from "../../../stores/sessionStore";
 import {
   bgDarkToolbar,
@@ -234,9 +234,12 @@ export default function TransmitQueueView() {
               const isFirstInGroup = item.groupName ? firstItemInGroup.get(item.groupName) === item.id : false;
 
               // All repeat requires IO session with transmit capability
-              const hasIOSession = Boolean(activeSession?.capabilities?.can_transmit);
+              // For CAN items, check can_transmit; for serial items, check can_transmit_serial
+              const hasCanTransmit = Boolean(activeSession?.capabilities?.can_transmit);
+              const hasSerialTransmit = Boolean(activeSession?.capabilities?.can_transmit_serial);
+              const hasIOSession = item.type === "serial" ? hasSerialTransmit : hasCanTransmit;
               const canStartIndividual = !isInGroup && item.enabled && !item.isRepeating && hasIOSession;
-              const canStartGroup = isInGroup && isFirstInGroup && item.enabled && !isGroupRepeating && hasIOSession;
+              const canStartGroup = isInGroup && isFirstInGroup && item.enabled && !isGroupRepeating && hasCanTransmit;
 
               return (
                 <tr
@@ -333,8 +336,7 @@ export default function TransmitQueueView() {
                       )}
                       {formatted.bus !== null && formatted.bus !== undefined && (
                         <span className="text-xs text-amber-400">
-                          {GVRET_BUSES.find((b) => b.value === formatted.bus)
-                            ?.label ?? `Bus ${formatted.bus}`}
+                          Bus {formatted.bus}
                         </span>
                       )}
                       <code className="font-mono text-gray-400 text-xs">

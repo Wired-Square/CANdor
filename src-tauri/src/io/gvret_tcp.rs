@@ -25,7 +25,8 @@ use tokio::{
 
 use super::gvret_common::{
     encode_gvret_frame, emit_stream_ended, gvret_capabilities, parse_gvret_frames,
-    validate_gvret_frame, BINARY_MODE_ENABLE, DEVICE_INFO_PROBE,
+    validate_gvret_frame, BINARY_MODE_ENABLE, DEVICE_INFO_PROBE, GVRET_CMD_NUMBUSES,
+    GvretDeviceInfo, GVRET_SYNC,
 };
 use super::{
     emit_frames, emit_to_session, now_ms, CanBytesPayload, CanTransmitFrame, FrameMessage, IOCapabilities,
@@ -44,7 +45,8 @@ struct TransmitRequest {
     result_tx: std_mpsc::SyncSender<Result<(), String>>,
 }
 
-/// Sender for transmit requests (sync-safe wrapper using std channel)
+/// Sender for transmit requests - uses std sync channel for simplicity
+/// The dedicated transmit task polls this channel independently of the read loop
 type TransmitSender = Arc<Mutex<Option<std_mpsc::SyncSender<TransmitRequest>>>>;
 
 /// GVRET TCP Reader - streams live CAN data over TCP with transmit support
@@ -55,6 +57,9 @@ pub struct GvretReader {
     port: u16,
     timeout_sec: f64,
     limit: Option<i64>,
+    /// Optional bus number override - if set, all frames will use this bus number
+    /// instead of the device-reported bus number
+    bus_override: Option<u8>,
     state: IOState,
     cancel_flag: Arc<AtomicBool>,
     task_handle: Option<tauri::async_runtime::JoinHandle<()>>,
@@ -72,6 +77,7 @@ impl GvretReader {
         port: u16,
         timeout_sec: f64,
         limit: Option<i64>,
+        bus_override: Option<u8>,
     ) -> Self {
         Self {
             app,
@@ -80,6 +86,7 @@ impl GvretReader {
             port,
             timeout_sec,
             limit,
+            bus_override,
             state: IOState::Stopped,
             cancel_flag: Arc::new(AtomicBool::new(false)),
             task_handle: None,
@@ -115,12 +122,19 @@ impl GvretReader {
         let (result_tx, result_rx) = std_mpsc::sync_channel(1);
 
         // Send the transmit request
+        // With channel capacity 32, try_send should rarely fail
         tx.try_send(TransmitRequest { data, result_tx })
-            .map_err(|e| format!("Failed to queue transmit request: {}", e))?;
+            .map_err(|e| match e {
+                std_mpsc::TrySendError::Full(_) => {
+                    "Transmit channel full (too many pending requests)".to_string()
+                }
+                std_mpsc::TrySendError::Disconnected(_) => {
+                    "Transmit channel closed".to_string()
+                }
+            })?;
 
         // Wait for the result with a timeout
-        // When multiple groups are sending frames rapidly, the stream task may be busy
-        // processing received frames, so we allow a longer timeout (500ms)
+        // Dedicated transmit task processes requests immediately, so 500ms is plenty
         let result = result_rx
             .recv_timeout(std::time::Duration::from_millis(500))
             .map_err(|e| format!("Transmit timeout or channel closed: {}", e))?;
@@ -128,11 +142,6 @@ impl GvretReader {
         result?;
 
         let transmit_result = TransmitResult::success();
-
-        eprintln!(
-            "[GVRET:{}] Transmit succeeded, emitting TX frame for ID 0x{:X}",
-            self.session_id, frame.frame_id
-        );
 
         // Emit the transmitted frame back to the session so it shows in Discovery
         let tx_frame = FrameMessage {
@@ -173,7 +182,9 @@ impl IODevice for GvretReader {
         self.state = IOState::Starting;
         self.cancel_flag.store(false, Ordering::Relaxed);
 
-        // Create the transmit channel (bounded to prevent runaway queueing)
+        // Create the transmit channel with capacity 32.
+        // Using std sync channel - a dedicated transmit task will poll this
+        // independently of the read loop, ensuring immediate processing.
         let (transmit_tx, transmit_rx) = std_mpsc::sync_channel::<TransmitRequest>(32);
 
         // Store the sender for transmit_frame calls
@@ -191,6 +202,7 @@ impl IODevice for GvretReader {
         let port = self.port;
         let timeout_sec = self.timeout_sec;
         let limit = self.limit;
+        let bus_override = self.bus_override;
         let cancel_flag = self.cancel_flag.clone();
         let writer = self.writer.clone();
 
@@ -201,6 +213,7 @@ impl IODevice for GvretReader {
             port,
             timeout_sec,
             limit,
+            bus_override,
             cancel_flag,
             writer,
             transmit_rx,
@@ -275,6 +288,7 @@ fn spawn_gvret_stream(
     port: u16,
     timeout_sec: f64,
     limit: Option<i64>,
+    bus_override: Option<u8>,
     cancel_flag: Arc<AtomicBool>,
     shared_writer: SharedTcpWriter,
     transmit_rx: std_mpsc::Receiver<TransmitRequest>,
@@ -346,101 +360,128 @@ fn spawn_gvret_stream(
             "[GVRET:{}] Starting stream (host: {}:{}, limit: {:?})",
             session_id, host, port, limit
         );
+
+        // Spawn a dedicated transmit task that runs independently of the read loop.
+        // This ensures transmits are processed immediately without waiting for reads.
+        let cancel_flag_for_transmit = cancel_flag.clone();
+        let shared_writer_for_transmit = shared_writer.clone();
+        let transmit_task = tokio::spawn(async move {
+            while !cancel_flag_for_transmit.load(Ordering::Relaxed) {
+                // Check for transmit requests with a short timeout to avoid busy loop
+                match transmit_rx.recv_timeout(std::time::Duration::from_millis(10)) {
+                    Ok(req) => {
+                        let result = {
+                            let mut writer_guard = shared_writer_for_transmit.lock().await;
+                            if let Some(ref mut w) = *writer_guard {
+                                w.write_all(&req.data).await
+                                    .map_err(|e| format!("Write failed: {}", e))
+                            } else {
+                                Err("Not connected".to_string())
+                            }
+                        };
+                        // Send result back (ignore errors - caller may have timed out)
+                        let _ = req.result_tx.try_send(result);
+                    }
+                    Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                        // No request, continue loop
+                    }
+                    Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                        // Channel closed, exit
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Read loop - only handles reading, transmit is handled by the dedicated task
         let mut read_buf = vec![0u8; 4096];
         let mut parse_buf: Vec<u8> = Vec::with_capacity(4096);
-        while !cancel_flag.load(Ordering::Relaxed) {
-            // Process any pending transmit requests first (non-blocking)
-            while let Ok(req) = transmit_rx.try_recv() {
-                let result = {
-                    let mut writer_guard = shared_writer.lock().await;
-                    if let Some(ref mut w) = *writer_guard {
-                        match w.write_all(&req.data).await {
-                            Ok(_) => w.flush().await.map_err(|e| format!("Flush failed: {}", e)),
-                            Err(e) => Err(format!("Write failed: {}", e)),
-                        }
-                    } else {
-                        Err("Not connected".to_string())
-                    }
-                };
-                // Send result back to the caller (ignore send errors - they may have timed out)
-                let _ = req.result_tx.try_send(result);
-            }
 
-            // Read with a small timeout so we can check transmits and cancel flag frequently
-            match tokio::time::timeout(Duration::from_millis(10), reader.read(&mut read_buf)).await
-            {
-                Ok(Ok(0)) => break,
-                Ok(Ok(n)) => {
-                    if n > 0 {
-                        parse_buf.extend_from_slice(&read_buf[..n]);
-                        let frames = parse_gvret_frames(&mut parse_buf);
-                        if !frames.is_empty() {
-                            // Calculate how many frames to emit based on limit
-                            let frames_to_emit = if let Some(max) = limit {
-                                let remaining = max - total_frames;
-                                if remaining <= 0 {
-                                    0
-                                } else {
-                                    (remaining as usize).min(frames.len())
-                                }
+        'stream_loop: while !cancel_flag.load(Ordering::Relaxed) {
+            // Read with a timeout for periodic cancel check
+            let read_result = tokio::time::timeout(
+                Duration::from_millis(50),
+                reader.read(&mut read_buf)
+            ).await;
+
+            match read_result {
+                Ok(Ok(0)) => break 'stream_loop, // Connection closed
+                Ok(Ok(n)) if n > 0 => {
+                    parse_buf.extend_from_slice(&read_buf[..n]);
+                    let frames = parse_gvret_frames(&mut parse_buf);
+                    if !frames.is_empty() {
+                        // Calculate how many frames to emit based on limit
+                        let frames_to_emit = if let Some(max) = limit {
+                            let remaining = max - total_frames;
+                            if remaining <= 0 {
+                                0
                             } else {
-                                frames.len()
+                                (remaining as usize).min(frames.len())
+                            }
+                        } else {
+                            frames.len()
+                        };
+
+                        // Skip if no frames to emit (already at limit)
+                        if frames_to_emit == 0 {
+                            stream_reason = "complete";
+                            break 'stream_loop;
+                        }
+
+                        // Take only the frames we need
+                        let frames_subset: Vec<_> =
+                            frames.into_iter().take(frames_to_emit).collect();
+
+                        // Emit per-frame raw payloads (scoped to session)
+                        for (_, raw_hex) in &frames_subset {
+                            let payload = CanBytesPayload {
+                                hex: raw_hex.clone(),
+                                len: raw_hex.len() / 2,
+                                timestamp_ms: now_ms(),
+                                source: source.clone(),
                             };
-
-                            // Skip if no frames to emit (already at limit)
-                            if frames_to_emit == 0 {
-                                stream_reason = "complete";
-                                break;
-                            }
-
-                            // Take only the frames we need
-                            let frames_subset: Vec<_> =
-                                frames.into_iter().take(frames_to_emit).collect();
-
-                            // Emit per-frame raw payloads (scoped to session)
-                            for (_, raw_hex) in &frames_subset {
-                                let payload = CanBytesPayload {
-                                    hex: raw_hex.clone(),
-                                    len: raw_hex.len() / 2,
-                                    timestamp_ms: now_ms(),
-                                    source: source.clone(),
-                                };
-                                emit_to_session(&app_handle, "can-bytes", &session_id, payload);
-                            }
-                            // Emit parsed frames (scoped to session)
-                            let frame_only: Vec<FrameMessage> =
-                                frames_subset.into_iter().map(|(f, _)| f).collect();
-
-                            // Buffer frames for replay
-                            buffer_store::append_frames(frame_only.clone());
-
-                            // Track total frames
-                            total_frames += frame_only.len() as i64;
-                            // Debug: log every 1000 frames
-                            if total_frames % 1000 == 0
-                                || limit.map(|l| total_frames >= l).unwrap_or(false)
-                            {
-                                eprintln!(
-                                    "[GVRET:{}] Emitted {} frames total, limit: {:?}",
-                                    session_id, total_frames, limit
-                                );
-                            }
-                            emit_frames(&app_handle, &session_id, frame_only);
-
-                            // Check if we've reached the frame limit
-                            if let Some(max) = limit {
-                                if total_frames >= max {
-                                    eprintln!(
-                                        "[GVRET:{}] Reached limit of {} frames, stopping",
-                                        session_id, max
-                                    );
-                                    stream_reason = "complete";
-                                    break;
+                            emit_to_session(&app_handle, "can-bytes", &session_id, payload);
+                        }
+                        // Emit parsed frames (scoped to session)
+                        // Apply bus_override if set
+                        let frame_only: Vec<FrameMessage> =
+                            frames_subset.into_iter().map(|(mut f, _)| {
+                                if let Some(bus) = bus_override {
+                                    f.bus = bus;
                                 }
+                                f
+                            }).collect();
+
+                        // Buffer frames for replay
+                        buffer_store::append_frames(frame_only.clone());
+
+                        // Track total frames
+                        total_frames += frame_only.len() as i64;
+                        // Debug: log every 1000 frames
+                        if total_frames % 1000 == 0
+                            || limit.map(|l| total_frames >= l).unwrap_or(false)
+                        {
+                            eprintln!(
+                                "[GVRET:{}] Emitted {} frames total, limit: {:?}",
+                                session_id, total_frames, limit
+                            );
+                        }
+                        emit_frames(&app_handle, &session_id, frame_only);
+
+                        // Check if we've reached the frame limit
+                        if let Some(max) = limit {
+                            if total_frames >= max {
+                                eprintln!(
+                                    "[GVRET:{}] Reached limit of {} frames, stopping",
+                                    session_id, max
+                                );
+                                stream_reason = "complete";
+                                break 'stream_loop;
                             }
                         }
                     }
                 }
+                Ok(Ok(_)) => {} // n == 0 but not EOF, continue
                 Ok(Err(e)) => {
                     emit_to_session(
                         &app_handle,
@@ -449,13 +490,14 @@ fn spawn_gvret_stream(
                         format!("Read failed: {e}"),
                     );
                     stream_reason = "error";
-                    break;
+                    break 'stream_loop;
                 }
-                Err(_) => {
-                    // Read timeout - loop back to check transmits and cancel flag
-                }
+                Err(_) => {} // Timeout - loop back to check cancel flag
             }
         }
+
+        // Abort the transmit task when the read loop exits
+        transmit_task.abort();
 
         // Check if we were stopped by user (but not if we hit the limit)
         if cancel_flag.load(Ordering::Relaxed) && stream_reason == "disconnected" {
@@ -473,4 +515,122 @@ fn spawn_gvret_stream(
         // Emit stream-ended event
         emit_stream_ended(&app_handle, &session_id, stream_reason, "GVRET");
     })
+}
+
+// ============================================================================
+// Device Probing
+// ============================================================================
+
+/// Probe a GVRET TCP device to discover its capabilities
+///
+/// This function connects to the device, queries the number of available buses,
+/// and returns device information. The connection is closed after probing.
+pub async fn probe_gvret_tcp(
+    host: &str,
+    port: u16,
+    timeout_sec: f64,
+) -> Result<GvretDeviceInfo, String> {
+    eprintln!(
+        "[probe_gvret_tcp] Probing GVRET device at {}:{} (timeout: {}s)",
+        host, port, timeout_sec
+    );
+
+    // Connect with timeout
+    let connect_res = tokio::time::timeout(
+        Duration::from_secs_f64(timeout_sec),
+        TcpStream::connect((host, port)),
+    )
+    .await;
+
+    let mut stream = match connect_res {
+        Ok(Ok(s)) => {
+            eprintln!("[probe_gvret_tcp] Connected to {}:{}", host, port);
+            s
+        }
+        Ok(Err(e)) => return Err(format!("Failed to connect to {}:{}: {}", host, port, e)),
+        Err(_) => return Err(format!("Connection to {}:{} timed out", host, port)),
+    };
+
+    // Enter binary mode
+    stream
+        .write_all(&BINARY_MODE_ENABLE)
+        .await
+        .map_err(|e| format!("Failed to enable binary mode: {}", e))?;
+
+    // Wait a moment for the device to process
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Query number of buses
+    stream
+        .write_all(&GVRET_CMD_NUMBUSES)
+        .await
+        .map_err(|e| format!("Failed to send NUMBUSES command: {}", e))?;
+
+    stream
+        .flush()
+        .await
+        .map_err(|e| format!("Failed to flush: {}", e))?;
+
+    // Read response with timeout
+    // Response format: [0xF1][0x0C][bus_count]
+    let mut buf = vec![0u8; 256];
+    let mut total_read = 0;
+    let read_timeout = Duration::from_millis((timeout_sec * 1000.0) as u64);
+
+    let deadline = tokio::time::Instant::now() + read_timeout;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+
+        match tokio::time::timeout(remaining.min(Duration::from_millis(100)), stream.read(&mut buf[total_read..])).await {
+            Ok(Ok(0)) => break, // EOF
+            Ok(Ok(n)) => {
+                total_read += n;
+
+                // Look for NUMBUSES response: [0xF1][0x0C][bus_count]
+                for i in 0..total_read.saturating_sub(2) {
+                    if buf[i] == GVRET_SYNC && buf[i + 1] == 0x0C && i + 2 < total_read {
+                        let bus_count = buf[i + 2];
+                        // Sanity check: GVRET devices have 1-5 buses
+                        let bus_count = if bus_count == 0 || bus_count > 5 {
+                            // Default to 5 if response is invalid
+                            eprintln!(
+                                "[probe_gvret_tcp] Invalid bus count {}, defaulting to 5",
+                                bus_count
+                            );
+                            5
+                        } else {
+                            bus_count
+                        };
+
+                        eprintln!(
+                            "[probe_gvret_tcp] SUCCESS: Device at {}:{} has {} buses available",
+                            host, port, bus_count
+                        );
+                        return Ok(GvretDeviceInfo { bus_count });
+                    }
+                }
+
+                // If we've read enough data without finding the response, give up
+                if total_read > 128 {
+                    break;
+                }
+            }
+            Ok(Err(e)) => {
+                return Err(format!("Failed to read response: {}", e));
+            }
+            Err(_) => {
+                // Timeout on this read, continue if we still have time
+            }
+        }
+    }
+
+    // If we didn't get a response, assume 5 buses (standard GVRET)
+    eprintln!(
+        "[probe_gvret_tcp] No NUMBUSES response received, defaulting to 5 buses"
+    );
+    Ok(GvretDeviceInfo { bus_count: 5 })
 }

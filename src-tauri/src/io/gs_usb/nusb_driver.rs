@@ -8,13 +8,15 @@
 use async_trait::async_trait;
 use nusb::transfer::{ControlIn, ControlOut, ControlType, Recipient};
 use nusb::{Interface, MaybeFuture};
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::mpsc as std_mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::AppHandle;
 
 use super::{
-    can_mode, get_bittiming_for_bitrate, GsDeviceBittiming, GsDeviceConfig,
+    can_id_flags, can_mode, get_bittiming_for_bitrate, GsDeviceBittiming, GsDeviceConfig,
     GsDeviceMode, GsHostFrame, GsUsbBreq, GsUsbConfig, GsUsbDeviceInfo, GsUsbProbeResult,
     GS_USB_HOST_FORMAT, GS_USB_PIDS, GS_USB_VID,
 };
@@ -23,6 +25,53 @@ use crate::io::{
     emit_frames, emit_to_session, now_us, CanTransmitFrame, FrameMessage, IOCapabilities,
     IODevice, IOState, StreamEndedPayload, TransmitResult,
 };
+
+/// Transmit request sent through the channel
+struct TransmitRequest {
+    /// Encoded frame bytes ready to send (GsHostFrame format, 20 bytes)
+    data: [u8; GsHostFrame::SIZE],
+    /// Sync oneshot channel to send the result back
+    result_tx: std_mpsc::SyncSender<Result<(), String>>,
+}
+
+/// Sender for transmit requests (sync-safe wrapper using std channel)
+type TransmitSender = Arc<Mutex<Option<std_mpsc::SyncSender<TransmitRequest>>>>;
+
+/// Encode a CAN frame into gs_usb GsHostFrame format (20 bytes)
+fn encode_gs_usb_frame(frame: &CanTransmitFrame, channel: u8) -> [u8; GsHostFrame::SIZE] {
+    let mut buf = [0u8; GsHostFrame::SIZE];
+
+    // echo_id: non-0xFFFFFFFF for TX (using 0 for simplicity)
+    buf[0..4].copy_from_slice(&0u32.to_le_bytes());
+
+    // can_id with flags
+    let mut can_id = frame.frame_id;
+    if frame.is_extended {
+        can_id |= can_id_flags::EXTENDED;
+    }
+    if frame.is_rtr {
+        can_id |= can_id_flags::RTR;
+    }
+    buf[4..8].copy_from_slice(&can_id.to_le_bytes());
+
+    // can_dlc
+    buf[8] = frame.data.len() as u8;
+
+    // channel
+    buf[9] = channel;
+
+    // flags (0 for standard CAN)
+    buf[10] = 0;
+
+    // reserved
+    buf[11] = 0;
+
+    // data (up to 8 bytes)
+    let len = frame.data.len().min(8);
+    buf[12..12 + len].copy_from_slice(&frame.data[..len]);
+
+    buf
+}
 
 /// Timeout for USB control transfers
 const CONTROL_TIMEOUT: Duration = Duration::from_millis(1000);
@@ -88,9 +137,10 @@ pub fn probe_device(bus: u8, address: u8) -> Result<GsUsbProbeResult, String> {
     // Query device config (blocking via wait)
     let config = get_device_config_sync(&interface)?;
 
+    // icount is 0-indexed (number of interfaces - 1), so add 1 to get count
     Ok(GsUsbProbeResult {
         success: true,
-        channel_count: Some(config.icount),
+        channel_count: Some(config.icount + 1),
         sw_version: Some(config.sw_version),
         hw_version: Some(config.hw_version),
         can_clock: None, // Would need to query BT_CONST
@@ -130,7 +180,7 @@ fn get_device_config_sync(interface: &Interface) -> Result<GsDeviceConfig, Strin
 // GsUsbReader Implementation
 // ============================================================================
 
-/// gs_usb reader for Windows/macOS
+/// gs_usb reader for Windows/macOS with transmit support
 pub struct GsUsbReader {
     app: AppHandle,
     session_id: String,
@@ -138,6 +188,8 @@ pub struct GsUsbReader {
     state: IOState,
     cancel_flag: Arc<AtomicBool>,
     task_handle: Option<tauri::async_runtime::JoinHandle<()>>,
+    /// Channel sender for transmit requests (allows sync transmit_frame calls)
+    transmit_tx: TransmitSender,
 }
 
 impl GsUsbReader {
@@ -149,6 +201,7 @@ impl GsUsbReader {
             state: IOState::Stopped,
             cancel_flag: Arc::new(AtomicBool::new(false)),
             task_handle: None,
+            transmit_tx: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -179,12 +232,28 @@ impl IODevice for GsUsbReader {
         self.state = IOState::Starting;
         self.cancel_flag.store(false, Ordering::Relaxed);
 
+        // Create transmit channel (only if not in listen-only mode)
+        let transmit_rx = if !self.config.listen_only {
+            let (transmit_tx, transmit_rx) = std_mpsc::sync_channel::<TransmitRequest>(32);
+            // Store the sender for transmit_frame calls
+            {
+                let mut guard = self
+                    .transmit_tx
+                    .lock()
+                    .map_err(|e| format!("Failed to lock transmit_tx: {}", e))?;
+                *guard = Some(transmit_tx);
+            }
+            Some(transmit_rx)
+        } else {
+            None
+        };
+
         let app = self.app.clone();
         let session_id = self.session_id.clone();
         let config = self.config.clone();
         let cancel_flag = self.cancel_flag.clone();
 
-        let handle = spawn_gs_usb_stream(app, session_id, config, cancel_flag);
+        let handle = spawn_gs_usb_stream(app, session_id, config, cancel_flag, transmit_rx);
         self.task_handle = Some(handle);
         self.state = IOState::Running;
 
@@ -193,6 +262,11 @@ impl IODevice for GsUsbReader {
 
     async fn stop(&mut self) -> Result<(), String> {
         self.cancel_flag.store(true, Ordering::Relaxed);
+
+        // Clear the transmit sender
+        if let Ok(mut guard) = self.transmit_tx.lock() {
+            *guard = None;
+        }
 
         if let Some(handle) = self.task_handle.take() {
             let _ = handle.await;
@@ -230,15 +304,46 @@ impl IODevice for GsUsbReader {
         &self.session_id
     }
 
-    fn transmit_frame(&self, _frame: &CanTransmitFrame) -> Result<TransmitResult, String> {
+    fn transmit_frame(&self, frame: &CanTransmitFrame) -> Result<TransmitResult, String> {
         if self.config.listen_only {
             return Err(
                 "Cannot transmit in listen-only mode. Disable listen-only in profile settings."
                     .to_string(),
             );
         }
-        // TODO: Implement TX via bulk OUT endpoint
-        Err("Transmission not yet implemented for gs_usb".to_string())
+
+        // Validate frame
+        if frame.data.len() > 8 {
+            return Ok(TransmitResult::error("Data length exceeds 8 bytes".to_string()));
+        }
+
+        // Encode frame as GsHostFrame
+        let data = encode_gs_usb_frame(frame, self.config.channel);
+
+        // Get the transmit sender
+        let tx = {
+            let guard = self
+                .transmit_tx
+                .lock()
+                .map_err(|e| format!("Failed to lock transmit channel: {}", e))?;
+            guard.clone().ok_or("Not connected (no transmit channel)")?
+        };
+
+        // Create a sync channel to receive the result
+        let (result_tx, result_rx) = std_mpsc::sync_channel(1);
+
+        // Send the transmit request
+        tx.try_send(TransmitRequest { data, result_tx })
+            .map_err(|e| format!("Failed to queue transmit request: {}", e))?;
+
+        // Wait for the result with a timeout
+        let result = result_rx
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .map_err(|e| format!("Transmit timeout or channel closed: {}", e))?;
+
+        result?;
+
+        Ok(TransmitResult::success())
     }
 }
 
@@ -251,9 +356,10 @@ fn spawn_gs_usb_stream(
     session_id: String,
     config: GsUsbConfig,
     cancel_flag: Arc<AtomicBool>,
+    transmit_rx: Option<std_mpsc::Receiver<TransmitRequest>>,
 ) -> tauri::async_runtime::JoinHandle<()> {
     tauri::async_runtime::spawn(async move {
-        run_gs_usb_stream(app_handle, session_id, config, cancel_flag).await;
+        run_gs_usb_stream(app_handle, session_id, config, cancel_flag, transmit_rx).await;
     })
 }
 
@@ -262,6 +368,7 @@ async fn run_gs_usb_stream(
     session_id: String,
     config: GsUsbConfig,
     cancel_flag: Arc<AtomicBool>,
+    transmit_rx: Option<std_mpsc::Receiver<TransmitRequest>>,
 ) {
     let buffer_name = config
         .display_name
@@ -344,7 +451,6 @@ async fn run_gs_usb_stream(
     eprintln!("[gs_usb:{}] Device initialized, starting stream", session_id);
 
     // Bulk IN endpoint (usually 0x81 = EP1 IN)
-    // nusb 0.2 uses interface.endpoint() to get an Endpoint handle
     let mut bulk_in = match interface.endpoint::<nusb::transfer::Bulk, nusb::transfer::In>(0x81) {
         Ok(ep) => ep,
         Err(e) => {
@@ -359,16 +465,62 @@ async fn run_gs_usb_stream(
         }
     };
 
+    // Spawn a dedicated transmit task if we have a transmit channel.
+    // This ensures transmits are processed immediately without waiting for reads.
+    let transmit_task = if let Some(rx) = transmit_rx {
+        // Bulk OUT endpoint for transmit (0x02 = EP2 OUT)
+        match interface.endpoint::<nusb::transfer::Bulk, nusb::transfer::Out>(0x02) {
+            Ok(ep) => {
+                eprintln!("[gs_usb:{}] Bulk OUT endpoint opened for transmit", session_id);
+                let mut writer = ep.writer(64);
+                let cancel_flag_for_transmit = cancel_flag.clone();
+
+                // Spawn blocking task for transmit handling (writer uses blocking I/O)
+                let handle = tokio::task::spawn_blocking(move || {
+                    while !cancel_flag_for_transmit.load(Ordering::Relaxed) {
+                        match rx.recv_timeout(std::time::Duration::from_millis(10)) {
+                            Ok(req) => {
+                                let result = match writer.write_all(&req.data) {
+                                    Ok(_) => match writer.flush() {
+                                        Ok(_) => Ok(()),
+                                        Err(e) => Err(format!("Flush failed: {}", e)),
+                                    },
+                                    Err(e) => Err(format!("Write failed: {}", e)),
+                                };
+                                // Send result back (ignore errors - caller may have timed out)
+                                let _ = req.result_tx.try_send(result);
+                            }
+                            Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                                // No request, continue loop
+                            }
+                            Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                                // Channel closed, exit
+                                break;
+                            }
+                        }
+                    }
+                });
+                Some(handle)
+            }
+            Err(e) => {
+                eprintln!("[gs_usb:{}] Warning: could not open bulk OUT endpoint: {} (transmit disabled)", session_id, e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let mut pending_frames: Vec<FrameMessage> = Vec::with_capacity(32);
     let mut last_emit_time = std::time::Instant::now();
     let emit_interval = Duration::from_millis(25);
 
     // Pre-submit multiple read requests for better throughput
-    // Use allocate() to get DMA-friendly buffers
     for _ in 0..4 {
         bulk_in.submit(bulk_in.allocate(64));
     }
 
+    // Read loop - only handles reading, transmit is handled by the dedicated task
     loop {
         if cancel_flag.load(Ordering::Relaxed) {
             stream_reason = "stopped";
@@ -389,7 +541,7 @@ async fn run_gs_usb_stream(
 
         // Wait for next transfer completion with timeout
         let read_result = tokio::time::timeout(
-            Duration::from_millis(100),
+            Duration::from_millis(50),
             bulk_in.next_complete(),
         )
         .await;
@@ -413,7 +565,8 @@ async fn run_gs_usb_stream(
                                     protocol: "can".to_string(),
                                     timestamp_us: now_us(),
                                     frame_id: gs_frame.get_can_id(),
-                                    bus: gs_frame.channel,
+                                    // Use bus_override if configured, otherwise use device channel
+                                    bus: config.bus_override.unwrap_or(gs_frame.channel),
                                     dlc: gs_frame.can_dlc,
                                     bytes: gs_frame.get_data().to_vec(),
                                     is_extended: gs_frame.is_extended(),
@@ -450,6 +603,11 @@ async fn run_gs_usb_stream(
         }
     }
 
+    // Abort the transmit task when the read loop exits
+    if let Some(task) = transmit_task {
+        task.abort();
+    }
+
     // Emit remaining frames
     if !pending_frames.is_empty() {
         buffer_store::append_frames(pending_frames.clone());
@@ -457,13 +615,13 @@ async fn run_gs_usb_stream(
     }
 
     // Stop the device
-    let _ = stop_device(&interface, config.channel).await;
+    let _ = stop_device(&interface, &config).await;
 
     emit_stream_ended(&app_handle, &session_id, stream_reason);
 }
 
 /// Initialize the gs_usb device
-async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> Result<(), String> {
+pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> Result<(), String> {
     // 1. Send HOST_FORMAT
     let host_format = GS_USB_HOST_FORMAT.to_le_bytes();
     interface
@@ -540,7 +698,8 @@ async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> Resul
 }
 
 /// Stop the gs_usb device
-async fn stop_device(interface: &Interface, channel: u8) -> Result<(), String> {
+pub async fn stop_device(interface: &Interface, config: &GsUsbConfig) -> Result<(), String> {
+    let channel = config.channel;
     let mode = GsDeviceMode {
         mode: 0, // Stop
         flags: 0,
@@ -566,6 +725,35 @@ async fn stop_device(interface: &Interface, channel: u8) -> Result<(), String> {
         .map_err(|e| format!("MODE stop failed: {:?}", e))?;
 
     Ok(())
+}
+
+/// Parse a gs_usb host frame from raw bytes
+pub fn parse_host_frame(data: &[u8]) -> Option<FrameMessage> {
+    if data.len() < GsHostFrame::SIZE {
+        return None;
+    }
+
+    let frame_bytes: [u8; GsHostFrame::SIZE] = data[..GsHostFrame::SIZE].try_into().ok()?;
+    let gs_frame: GsHostFrame = unsafe { std::mem::transmute(frame_bytes) };
+
+    // Only process RX frames (not TX echoes)
+    if !gs_frame.is_rx() {
+        return None;
+    }
+
+    Some(FrameMessage {
+        protocol: "can".to_string(),
+        timestamp_us: now_us(),
+        frame_id: gs_frame.get_can_id(),
+        bus: gs_frame.channel,
+        dlc: gs_frame.can_dlc,
+        bytes: gs_frame.get_data().to_vec(),
+        is_extended: gs_frame.is_extended(),
+        is_fd: false,
+        source_address: None,
+        incomplete: None,
+        direction: None,
+    })
 }
 
 /// Emit stream-ended event

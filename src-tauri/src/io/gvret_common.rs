@@ -39,9 +39,71 @@ pub const GVRET_CMD_FRAME: u8 = 0x00;
 pub const BINARY_MODE_ENABLE: [u8; 2] = [0xE7, 0xE7];
 /// Device info probe command
 pub const DEVICE_INFO_PROBE: [u8; 2] = [0xF1, 0x07];
+/// Number of buses query command
+pub const GVRET_CMD_NUMBUSES: [u8; 2] = [0xF1, 0x0C];
 
 /// DLC to payload length mapping (CAN FD DLC codes)
 pub const DLC_LEN: [usize; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64];
+
+// ============================================================================
+// Device Info Types
+// ============================================================================
+
+/// Information about a GVRET device, obtained by probing
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GvretDeviceInfo {
+    /// Number of CAN buses available on this device (1-5)
+    pub bus_count: u8,
+}
+
+/// Configuration for mapping device buses to output buses
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BusMapping {
+    /// Bus number as reported by the device (0-4)
+    pub device_bus: u8,
+    /// Whether to capture frames from this bus
+    pub enabled: bool,
+    /// Bus number to use in emitted frames (0-255)
+    pub output_bus: u8,
+}
+
+impl Default for BusMapping {
+    fn default() -> Self {
+        Self {
+            device_bus: 0,
+            enabled: true,
+            output_bus: 0,
+        }
+    }
+}
+
+/// Create default bus mappings for a device with the given bus count
+#[allow(dead_code)]
+pub fn default_bus_mappings(bus_count: u8) -> Vec<BusMapping> {
+    (0..bus_count)
+        .map(|i| BusMapping {
+            device_bus: i,
+            enabled: true,
+            output_bus: i,
+        })
+        .collect()
+}
+
+/// Apply bus mappings to a frame, returning None if the bus is disabled
+pub fn apply_bus_mapping(frame: &mut FrameMessage, mappings: &[BusMapping]) -> bool {
+    // Find mapping for this device bus
+    if let Some(mapping) = mappings.iter().find(|m| m.device_bus == frame.bus) {
+        if mapping.enabled {
+            frame.bus = mapping.output_bus;
+            true
+        } else {
+            false // Bus is disabled, skip frame
+        }
+    } else {
+        // No mapping found, pass through unchanged
+        true
+    }
+}
 
 // ============================================================================
 // Capabilities

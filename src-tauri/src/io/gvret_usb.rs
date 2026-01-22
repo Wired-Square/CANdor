@@ -21,7 +21,8 @@ use tauri::AppHandle;
 
 use super::gvret_common::{
     encode_gvret_frame, gvret_capabilities, parse_gvret_frames, validate_gvret_frame,
-    emit_stream_ended, BINARY_MODE_ENABLE, DEVICE_INFO_PROBE,
+    emit_stream_ended, BINARY_MODE_ENABLE, DEVICE_INFO_PROBE, GVRET_CMD_NUMBUSES,
+    GvretDeviceInfo, GVRET_SYNC,
 };
 use super::{
     emit_frames, emit_to_session, now_ms, CanBytesPayload, CanTransmitFrame, FrameMessage, IOCapabilities,
@@ -44,6 +45,10 @@ pub struct GvretUsbConfig {
     pub limit: Option<i64>,
     /// Display name for the reader (used in buffer names)
     pub display_name: Option<String>,
+    /// Bus number override - if set, all frames will use this bus number
+    /// instead of the device-reported bus number
+    #[serde(default)]
+    pub bus_override: Option<u8>,
 }
 
 // ============================================================================
@@ -436,7 +441,13 @@ fn run_gvret_usb_stream_blocking(
             }
 
             // Emit parsed frames with active listener filtering
-            let frame_only: Vec<FrameMessage> = frames.into_iter().map(|(f, _)| f).collect();
+            // Apply bus_override if configured
+            let frame_only: Vec<FrameMessage> = frames.into_iter().map(|(mut f, _)| {
+                if let Some(bus) = config.bus_override {
+                    f.bus = bus;
+                }
+                f
+            }).collect();
             buffer_store::append_frames(frame_only.clone());
             emit_frames(&app_handle, &session_id, frame_only);
 
@@ -456,8 +467,14 @@ fn run_gvret_usb_stream_blocking(
             emit_to_session(&app_handle, "can-bytes", &session_id, payload);
         }
 
+        // Apply bus_override if configured
         let frame_only: Vec<FrameMessage> =
-            pending_frames.into_iter().map(|(f, _)| f).collect();
+            pending_frames.into_iter().map(|(mut f, _)| {
+                if let Some(bus) = config.bus_override {
+                    f.bus = bus;
+                }
+                f
+            }).collect();
         buffer_store::append_frames(frame_only.clone());
         emit_frames(&app_handle, &session_id, frame_only);
     }
@@ -646,4 +663,105 @@ mod tests {
         assert!(frames.is_empty());
         assert_eq!(buffer.len(), 4); // Buffer should be preserved
     }
+}
+
+// ============================================================================
+// Device Probing
+// ============================================================================
+
+/// Probe a GVRET USB device to discover its capabilities
+///
+/// This function opens the serial port, queries the number of available buses,
+/// and returns device information. The connection is closed after probing.
+pub fn probe_gvret_usb(port: &str, baud_rate: u32) -> Result<GvretDeviceInfo, String> {
+    eprintln!(
+        "[probe_gvret_usb] Probing GVRET device at {} (baud: {})",
+        port, baud_rate
+    );
+
+    // Open serial port
+    let mut serial_port = serialport::new(port, baud_rate)
+        .timeout(Duration::from_millis(500))
+        .open()
+        .map_err(|e| format!("Failed to open {}: {}", port, e))?;
+
+    eprintln!("[probe_gvret_usb] Opened serial port {}", port);
+
+    // Clear any pending data
+    let _ = serial_port.clear(serialport::ClearBuffer::All);
+
+    // Enter binary mode
+    serial_port
+        .write_all(&BINARY_MODE_ENABLE)
+        .map_err(|e| format!("Failed to enable binary mode: {}", e))?;
+    let _ = serial_port.flush();
+
+    // Wait for device to process
+    std::thread::sleep(Duration::from_millis(100));
+
+    // Query number of buses
+    serial_port
+        .write_all(&GVRET_CMD_NUMBUSES)
+        .map_err(|e| format!("Failed to send NUMBUSES command: {}", e))?;
+    let _ = serial_port.flush();
+
+    // Read response with timeout
+    // Response format: [0xF1][0x0C][bus_count]
+    let mut buf = vec![0u8; 256];
+    let mut total_read = 0;
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+
+    loop {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+
+        match serial_port.read(&mut buf[total_read..]) {
+            Ok(0) => break, // No data
+            Ok(n) => {
+                total_read += n;
+
+                // Look for NUMBUSES response: [0xF1][0x0C][bus_count]
+                for i in 0..total_read.saturating_sub(2) {
+                    if buf[i] == GVRET_SYNC && buf[i + 1] == 0x0C && i + 2 < total_read {
+                        let bus_count = buf[i + 2];
+                        // Sanity check: GVRET devices have 1-5 buses
+                        let bus_count = if bus_count == 0 || bus_count > 5 {
+                            // Default to 5 if response is invalid
+                            eprintln!(
+                                "[probe_gvret_usb] Invalid bus count {}, defaulting to 5",
+                                bus_count
+                            );
+                            5
+                        } else {
+                            bus_count
+                        };
+
+                        eprintln!(
+                            "[probe_gvret_usb] SUCCESS: Device at {} has {} buses available",
+                            port, bus_count
+                        );
+                        return Ok(GvretDeviceInfo { bus_count });
+                    }
+                }
+
+                // If we've read enough data without finding the response, give up
+                if total_read > 128 {
+                    break;
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                // Timeout on this read, continue if we still have time
+            }
+            Err(e) => {
+                return Err(format!("Failed to read response: {}", e));
+            }
+        }
+    }
+
+    // If we didn't get a response, assume 5 buses (standard GVRET)
+    eprintln!(
+        "[probe_gvret_usb] No NUMBUSES response received, defaulting to 5 buses"
+    );
+    Ok(GvretDeviceInfo { bus_count: 5 })
 }

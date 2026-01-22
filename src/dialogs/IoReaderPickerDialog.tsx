@@ -30,7 +30,14 @@ import {
   stopReaderSession,
   destroyReaderSession,
   updateReaderSpeed,
+  probeDevice,
+  createDefaultBusMappings,
+  listActiveSessions,
   type StreamEndedPayload,
+  type GvretDeviceInfo,
+  type BusMapping,
+  type ActiveSessionInfo,
+  type DeviceProbeResult,
 } from '../api/io';
 import { getAllFavorites, type TimeRangeFavorite } from "../utils/favorites";
 
@@ -41,6 +48,8 @@ import { IngestOptions } from "./io-reader-picker";
 import { FramingOptions, FilterOptions } from "./io-reader-picker";
 import { ActionButtons } from "./io-reader-picker";
 import { IngestStatus } from "./io-reader-picker";
+import GvretBusConfig from "./io-reader-picker/GvretBusConfig";
+import SingleBusConfig from "./io-reader-picker/SingleBusConfig";
 import {
   localToIsoWithOffset,
   getLocalTimezoneAbbr,
@@ -84,15 +93,26 @@ export interface IngestOptions {
   maxFrameLength?: number;
   /** Also emit raw bytes in addition to frames */
   emitRawBytes?: boolean;
+  /** Bus mappings per profile (for multi-bus mode) - map from profile ID to bus mappings */
+  busMappings?: Map<string, BusMapping[]>;
+  /** Bus number override for single-bus devices (0-7) */
+  busOverride?: number;
 }
+
+// Stable empty array to avoid re-renders when selectedIds is not provided
+const EMPTY_SELECTED_IDS: string[] = [];
 
 type Props = {
   isOpen: boolean;
   onClose: () => void;
   ioProfiles: IOProfile[];
   selectedId: string | null;
+  /** Selected profile IDs when in multi-select mode */
+  selectedIds?: string[];
   defaultId?: string | null;
   onSelect: (id: string | null) => void;
+  /** Called when multiple profiles are selected in multi-bus mode */
+  onSelectMultiple?: (ids: string[]) => void;
   /** Called when CSV is imported - passes the buffer metadata */
   onImport?: (metadata: BufferMetadata) => void;
   /** Called when buffer is confirmed with framing config (for applying framing to bytes buffer) */
@@ -113,14 +133,22 @@ type Props = {
   onIngestSpeedChange?: (speed: number) => void;
   /** Called to start ingest/watch */
   onStartIngest?: (profileId: string, closeDialog: boolean, options: IngestOptions) => void;
+  /** Called to start ingest/watch with multiple profiles (multi-bus mode) */
+  onStartMultiIngest?: (profileIds: string[], closeDialog: boolean, options: IngestOptions) => void;
   /** Called to stop ingest */
   onStopIngest?: () => void;
   /** Error message during ingest */
   ingestError?: string | null;
-  /** Called when user wants to join an existing streaming session */
-  onJoinSession?: (profileId: string) => void;
+  /** Called when user wants to join an existing streaming session.
+   * For multi-source sessions, sourceProfileIds will contain the individual source profile IDs.
+   */
+  onJoinSession?: (sessionId: string, sourceProfileIds?: string[]) => void;
   /** Hide buffers section (for transmit-only mode) */
   hideBuffers?: boolean;
+  /** Enable multi-select mode for real-time profiles */
+  allowMultiSelect?: boolean;
+  /** Map of profile ID to disabled status with reason (for transmit mode) */
+  disabledProfiles?: Map<string, { canTransmit: boolean; reason?: string }>;
 };
 
 export default function IoReaderPickerDialog({
@@ -128,8 +156,10 @@ export default function IoReaderPickerDialog({
   onClose,
   ioProfiles,
   selectedId,
+  selectedIds: selectedIdsProp,
   defaultId,
   onSelect,
+  onSelectMultiple,
   onImport,
   onBufferFramingConfig,
   bufferMetadata: _bufferMetadata, // Deprecated - dialog now fetches buffers directly
@@ -141,11 +171,17 @@ export default function IoReaderPickerDialog({
   ingestSpeed: externalIngestSpeed,
   onIngestSpeedChange,
   onStartIngest,
+  onStartMultiIngest,
   onStopIngest,
   ingestError: externalIngestError,
   onJoinSession,
   hideBuffers = false,
+  allowMultiSelect = false,
+  disabledProfiles,
 }: Props) {
+  // Use stable empty array when selectedIds is not provided (avoids re-renders)
+  const selectedIds = selectedIdsProp ?? EMPTY_SELECTED_IDS;
+
   // Get session helpers from session store
   const isProfileInUse = useSessionStore((s) => s.isProfileInUse);
   const getSessionForProfile = useSessionStore((s) => s.getSessionForProfile);
@@ -168,6 +204,10 @@ export default function IoReaderPickerDialog({
   // Currently checked IO reader (for radio selection)
   const [checkedReaderId, setCheckedReaderId] = useState<string | null>(null);
 
+  // Multi-select mode state
+  const [multiSelectMode, setMultiSelectMode] = useState(false);
+  const [checkedReaderIds, setCheckedReaderIds] = useState<string[]>([]);
+
   // Time range and limit state for recorded sources
   const [startTime, setStartTime] = useState<string>("");
   const [endTime, setEndTime] = useState<string>("");
@@ -182,6 +222,27 @@ export default function IoReaderPickerDialog({
   const [framingConfig, setFramingConfig] = useState<FramingConfig | null>(null);
   // Filter configuration for serial sources
   const [minFrameLength, setMinFrameLength] = useState(0);
+
+  // Unified device probe state - works for all real-time profiles
+  // Single-select mode
+  const [deviceProbeResult, setDeviceProbeResult] = useState<DeviceProbeResult | null>(null);
+  const [deviceProbeLoading, setDeviceProbeLoading] = useState(false);
+  const [deviceProbeError, setDeviceProbeError] = useState<string | null>(null);
+  // Bus configuration for single-bus devices (bus override number)
+  const [singleBusOverride, setSingleBusOverride] = useState<number | undefined>(undefined);
+  // Bus configuration for multi-bus devices (GVRET)
+  const [gvretBusConfig, setGvretBusConfig] = useState<BusMapping[]>([]);
+
+  // Multi-select mode - per-profile maps
+  const [deviceProbeResultMap, setDeviceProbeResultMap] = useState<Map<string, DeviceProbeResult>>(new Map());
+  const [deviceProbeLoadingMap, setDeviceProbeLoadingMap] = useState<Map<string, boolean>>(new Map());
+  const [gvretBusConfigMap, setGvretBusConfigMap] = useState<Map<string, BusMapping[]>>(new Map());
+  const [singleBusOverrideMap, setSingleBusOverrideMap] = useState<Map<string, number>>(new Map());
+  // Track which profiles have been probed to avoid duplicate probes (refs don't trigger re-renders)
+  const probedProfilesRef = useRef<Set<string>>(new Set());
+
+  // Active multi-source sessions (for sharing between apps)
+  const [activeMultiSourceSessions, setActiveMultiSourceSessions] = useState<ActiveSessionInfo[]>([]);
 
   // Use external state if provided, otherwise use internal state
   const useExternalState = onStartIngest !== undefined;
@@ -202,8 +263,17 @@ export default function IoReaderPickerDialog({
   // Is the checked profile a real-time source?
   const isCheckedRealtime = checkedProfile ? isRealtimeProfile(checkedProfile) : false;
 
+  // Is the checked reader an active multi-source session?
+  const checkedMultiSourceSession = useMemo(() => {
+    if (!checkedReaderId) return null;
+    return activeMultiSourceSessions.find((s) => s.sessionId === checkedReaderId) || null;
+  }, [checkedReaderId, activeMultiSourceSessions]);
+
   // Is the checked profile currently live (has an active session)?
-  const isCheckedProfileLive = checkedReaderId ? isProfileInUse(checkedReaderId) : false;
+  // Also consider multi-source sessions as "live"
+  const isCheckedProfileLive = checkedReaderId
+    ? isProfileInUse(checkedReaderId) || checkedMultiSourceSession !== null
+    : false;
 
   // Get the session for the checked profile (if any) to check its state
   const checkedProfileSession = checkedReaderId ? getSessionForProfile(checkedReaderId) : undefined;
@@ -237,8 +307,25 @@ export default function IoReaderPickerDialog({
       const initialReaderId = ingestProfileId ?? (selectedId === BUFFER_PROFILE_ID ? null : selectedId);
       setCheckedReaderId(initialReaderId);
       setImportError(null);
+
+      // Initialize multi-select state
+      if (selectedIds.length > 1) {
+        setMultiSelectMode(true);
+        setCheckedReaderIds(selectedIds);
+        setCheckedReaderId(null);
+      } else {
+        setMultiSelectMode(false);
+        setCheckedReaderIds([]);
+      }
+
+      // Reset multi-select maps and probed profiles ref
+      setDeviceProbeResultMap(new Map());
+      setDeviceProbeLoadingMap(new Map());
+      setGvretBusConfigMap(new Map());
+      setSingleBusOverrideMap(new Map());
+      probedProfilesRef.current.clear();
     }
-  }, [isOpen, externalIngestSpeed, ingestProfileId, selectedId]);
+  }, [isOpen, externalIngestSpeed, ingestProfileId, selectedId, selectedIds]);
 
   // Refresh buffer list periodically while dialog is open
   // This catches transitions from streaming to stopped even if the stream-ended
@@ -258,11 +345,256 @@ export default function IoReaderPickerDialog({
     return () => clearInterval(intervalId);
   }, [isOpen, buffers]);
 
+  // Fetch active multi-source sessions when dialog opens and periodically refresh
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const fetchSessions = () => {
+      listActiveSessions()
+        .then((sessions) => {
+          console.log("[IoReaderPickerDialog] All active sessions:", sessions);
+          // Only show multi_source type sessions
+          const multiSourceSessions = sessions.filter((s) => s.deviceType === "multi_source");
+          console.log("[IoReaderPickerDialog] Multi-source sessions:", multiSourceSessions);
+          setActiveMultiSourceSessions(multiSourceSessions);
+        })
+        .catch(console.error);
+    };
+
+    // Fetch immediately
+    fetchSessions();
+
+    // Refresh periodically
+    const intervalId = setInterval(fetchSessions, 2000);
+
+    return () => clearInterval(intervalId);
+  }, [isOpen]);
+
   // Filter bookmarks for the checked profile
   const profileBookmarks = useMemo(() => {
     if (!checkedReaderId || checkedReaderId === CSV_EXTERNAL_ID) return [];
     return bookmarks.filter((b) => b.profileId === checkedReaderId);
   }, [bookmarks, checkedReaderId]);
+
+  // Probe real-time device when selected (single-select mode)
+  // Uses unified probeDevice API that works for all device types
+  useEffect(() => {
+    if (!isOpen || multiSelectMode || !isCheckedRealtime || !checkedReaderId) {
+      // Reset probe state when not a real-time profile or in multi-select mode
+      setDeviceProbeResult(null);
+      setDeviceProbeError(null);
+      setGvretBusConfig([]);
+      setSingleBusOverride(undefined);
+      return;
+    }
+
+    // Don't probe if already live (session already running)
+    if (isCheckedProfileLive && !isCheckedProfileStopped) {
+      // Use default config for live session
+      const isMultiBus = checkedProfile?.kind === "gvret_tcp" || checkedProfile?.kind === "gvret_usb";
+      setDeviceProbeResult({
+        success: true,
+        deviceType: isMultiBus ? "gvret" : "single",
+        isMultiBus,
+        busCount: isMultiBus ? 5 : 1,
+        primaryInfo: "Session active",
+        secondaryInfo: null,
+        error: null,
+      });
+      setDeviceProbeError(null);
+      if (isMultiBus) {
+        setGvretBusConfig(createDefaultBusMappings(5));
+      }
+      return;
+    }
+
+    // Start probing
+    setDeviceProbeLoading(true);
+    setDeviceProbeError(null);
+
+    probeDevice(checkedReaderId)
+      .then((result) => {
+        setDeviceProbeResult(result);
+        if (result.isMultiBus) {
+          setGvretBusConfig(createDefaultBusMappings(result.busCount));
+        }
+        setDeviceProbeError(result.error);
+      })
+      .catch((err) => {
+        console.error("[IoReaderPickerDialog] Device probe failed:", err);
+        setDeviceProbeError(String(err));
+        setDeviceProbeResult({
+          success: false,
+          deviceType: "unknown",
+          isMultiBus: false,
+          busCount: 0,
+          primaryInfo: null,
+          secondaryInfo: null,
+          error: String(err),
+        });
+      })
+      .finally(() => {
+        setDeviceProbeLoading(false);
+      });
+  }, [isOpen, multiSelectMode, isCheckedRealtime, checkedReaderId, checkedProfile?.kind, isCheckedProfileLive, isCheckedProfileStopped]);
+
+  // Probe all real-time devices in multi-select mode
+  useEffect(() => {
+    if (!isOpen || !multiSelectMode || checkedReaderIds.length === 0) {
+      return;
+    }
+
+    // Find real-time profiles among the selected ones
+    const realtimeProfileIds = checkedReaderIds.filter((id) => {
+      const profile = readProfiles.find((p) => p.id === id);
+      return profile && isRealtimeProfile(profile);
+    });
+
+    if (realtimeProfileIds.length === 0) {
+      // No real-time profiles selected, clear the maps and ref
+      setDeviceProbeResultMap(new Map());
+      setDeviceProbeLoadingMap(new Map());
+      setGvretBusConfigMap(new Map());
+      setSingleBusOverrideMap(new Map());
+      probedProfilesRef.current.clear();
+      return;
+    }
+
+    // Clean up profiles that are no longer selected
+    const selectedSet = new Set(realtimeProfileIds);
+
+    // Clean up ref for deselected profiles
+    for (const id of probedProfilesRef.current) {
+      if (!selectedSet.has(id)) {
+        probedProfilesRef.current.delete(id);
+      }
+    }
+
+    setDeviceProbeResultMap((prev) => {
+      let changed = false;
+      const newMap = new Map(prev);
+      for (const key of newMap.keys()) {
+        if (!selectedSet.has(key)) {
+          newMap.delete(key);
+          changed = true;
+        }
+      }
+      return changed ? newMap : prev;
+    });
+    setGvretBusConfigMap((prev) => {
+      let changed = false;
+      const newMap = new Map(prev);
+      for (const key of newMap.keys()) {
+        if (!selectedSet.has(key)) {
+          newMap.delete(key);
+          changed = true;
+        }
+      }
+      return changed ? newMap : prev;
+    });
+    setSingleBusOverrideMap((prev) => {
+      let changed = false;
+      const newMap = new Map(prev);
+      for (const key of newMap.keys()) {
+        if (!selectedSet.has(key)) {
+          newMap.delete(key);
+          changed = true;
+        }
+      }
+      return changed ? newMap : prev;
+    });
+    setDeviceProbeLoadingMap((prev) => {
+      let changed = false;
+      const newMap = new Map(prev);
+      for (const key of newMap.keys()) {
+        if (!selectedSet.has(key)) {
+          newMap.delete(key);
+          changed = true;
+        }
+      }
+      return changed ? newMap : prev;
+    });
+
+    // Probe each profile that we haven't probed yet
+    // Use getState() to access store functions without adding them to dependencies
+    realtimeProfileIds.forEach((profileId, profileIndex) => {
+      // Skip if we've already started probing this profile
+      if (probedProfilesRef.current.has(profileId)) {
+        return;
+      }
+
+      // Check if this profile has an active session
+      // Access store functions via getState() to avoid dependency issues
+      const isLive = isProfileInUse(profileId);
+      const session = getSessionForProfile(profileId);
+      const isStopped = session?.ioState === "stopped";
+      const profile = readProfiles.find((p) => p.id === profileId);
+      const isMultiBus = profile?.kind === "gvret_tcp" || profile?.kind === "gvret_usb";
+
+      // Calculate output bus offset based on position in selection list
+      const outputBusOffset = profileIndex;
+
+      if (isLive && !isStopped) {
+        // Use default config for live session
+        probedProfilesRef.current.add(profileId);
+        setDeviceProbeResultMap((prev) => new Map(prev).set(profileId, {
+          success: true,
+          deviceType: isMultiBus ? "gvret" : "single",
+          isMultiBus,
+          busCount: isMultiBus ? 5 : 1,
+          primaryInfo: "Session active",
+          secondaryInfo: null,
+          error: null,
+        }));
+        if (isMultiBus) {
+          setGvretBusConfigMap((prev) => new Map(prev).set(profileId, createDefaultBusMappings(5, outputBusOffset)));
+        } else {
+          setSingleBusOverrideMap((prev) => new Map(prev).set(profileId, outputBusOffset));
+        }
+        return;
+      }
+
+      // Mark as probing
+      probedProfilesRef.current.add(profileId);
+      setDeviceProbeLoadingMap((prev) => new Map(prev).set(profileId, true));
+
+      probeDevice(profileId)
+        .then((result) => {
+          setDeviceProbeResultMap((prev) => new Map(prev).set(profileId, result));
+          if (result.isMultiBus) {
+            setGvretBusConfigMap((prev) => new Map(prev).set(profileId, createDefaultBusMappings(result.busCount, outputBusOffset)));
+          } else {
+            setSingleBusOverrideMap((prev) => new Map(prev).set(profileId, outputBusOffset));
+          }
+        })
+        .catch((err) => {
+          console.error(`[IoReaderPickerDialog] Probe failed for ${profileId}:`, err);
+          setDeviceProbeResultMap((prev) => new Map(prev).set(profileId, {
+            success: false,
+            deviceType: isMultiBus ? "gvret" : "unknown",
+            isMultiBus,
+            busCount: 0,
+            primaryInfo: null,
+            secondaryInfo: null,
+            error: String(err),
+          }));
+          // For multi-bus devices, fall back to default 5 buses
+          if (isMultiBus) {
+            setGvretBusConfigMap((prev) => new Map(prev).set(profileId, createDefaultBusMappings(5, outputBusOffset)));
+          }
+        })
+        .finally(() => {
+          setDeviceProbeLoadingMap((prev) => {
+            const newMap = new Map(prev);
+            newMap.delete(profileId);
+            return newMap;
+          });
+        });
+    });
+    // Note: isProfileInUse and getSessionForProfile are stable store functions,
+    // intentionally excluded from deps to prevent infinite loops
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, multiSelectMode, checkedReaderIds, readProfiles]);
 
   // Cleanup listeners on unmount
   useEffect(() => {
@@ -406,6 +738,11 @@ export default function IoReaderPickerDialog({
       opts.minFrameLength = minFrameLength;
     }
 
+    // Add bus override for single-bus devices (single-select mode only)
+    if (!multiSelectMode && singleBusOverride !== undefined) {
+      opts.busOverride = singleBusOverride;
+    }
+
     console.log("[buildIngestOptions] Built options:", opts);
     console.log("[buildIngestOptions] framingConfig state:", framingConfig);
 
@@ -436,9 +773,13 @@ export default function IoReaderPickerDialog({
   };
 
   // Handle Join button - join an existing live session (no options needed)
+  // This also handles joining active multi-source sessions
   const handleJoinClick = () => {
     if (onJoinSession && checkedReaderId) {
-      onJoinSession(checkedReaderId);
+      // Check if this is a multi-source session and get source profile IDs
+      const multiSourceSession = activeMultiSourceSessions.find((s) => s.sessionId === checkedReaderId);
+      const sourceProfileIds = multiSourceSession?.multiSourceConfigs?.map((c) => c.profileId);
+      onJoinSession(checkedReaderId, sourceProfileIds);
     }
     onClose();
   };
@@ -492,6 +833,86 @@ export default function IoReaderPickerDialog({
     if (useExternalState) {
       onIngestSpeedChange?.(speed);
     }
+  };
+
+  // Handle toggling a reader in multi-select mode
+  const handleToggleReader = (readerId: string) => {
+    setCheckedReaderIds((prev) => {
+      if (prev.includes(readerId)) {
+        return prev.filter((id) => id !== readerId);
+      } else {
+        return [...prev, readerId];
+      }
+    });
+  };
+
+  // Handle toggling multi-select mode
+  const handleToggleMultiSelectMode = (enabled: boolean) => {
+    setMultiSelectMode(enabled);
+    if (enabled) {
+      // If switching to multi-select, add currently checked reader to the list
+      if (checkedReaderId && isRealtimeProfile(readProfiles.find(p => p.id === checkedReaderId)!)) {
+        setCheckedReaderIds([checkedReaderId]);
+        setCheckedReaderId(null);
+      } else {
+        setCheckedReaderIds([]);
+      }
+    } else {
+      // If switching to single-select, use first checked reader or clear
+      if (checkedReaderIds.length > 0) {
+        setCheckedReaderId(checkedReaderIds[0]);
+      }
+      setCheckedReaderIds([]);
+    }
+  };
+
+  // Handle selecting an active multi-source session to join
+  const handleSelectMultiSourceSession = (sessionId: string) => {
+    // Select the multi-source session as the reader
+    setCheckedReaderId(sessionId);
+    setSelectedBufferId(null);
+    // Exit multi-select mode since we're joining an existing session
+    setMultiSelectMode(false);
+    setCheckedReaderIds([]);
+  };
+
+  // Handle Watch button for multi-bus mode
+  const handleMultiWatchClick = () => {
+    if (checkedReaderIds.length === 0) return;
+    const options = buildIngestOptions(selectedSpeed);
+
+    // Build combined bus mappings from both GVRET and single-bus devices
+    const combinedBusMappings = new Map<string, BusMapping[]>();
+
+    // Add GVRET multi-bus device mappings
+    for (const [profileId, mappings] of gvretBusConfigMap.entries()) {
+      combinedBusMappings.set(profileId, mappings);
+    }
+
+    // Convert single-bus device overrides to BusMapping format
+    for (const [profileId, outputBus] of singleBusOverrideMap.entries()) {
+      // Single-bus devices have device bus 0, mapped to the selected output bus
+      combinedBusMappings.set(profileId, [{
+        deviceBus: 0,
+        enabled: true,
+        outputBus,
+      }]);
+    }
+
+    options.busMappings = combinedBusMappings;
+    console.log("[IoReaderPickerDialog] handleMultiWatchClick - bus mappings:", {
+      checkedReaderIds,
+      combinedBusMappingsSize: combinedBusMappings.size,
+      combinedBusMappingsEntries: Array.from(combinedBusMappings.entries()).map(([k, v]) => ({
+        profileId: k,
+        mappings: v,
+      })),
+    });
+    if (onStartMultiIngest) {
+      onStartMultiIngest(checkedReaderIds, true, options);
+    }
+    onSelectMultiple?.(checkedReaderIds);
+    onClose();
   };
 
   const handleImport = async () => {
@@ -677,6 +1098,7 @@ export default function IoReaderPickerDialog({
           <ReaderList
             ioProfiles={ioProfiles}
             checkedReaderId={checkedReaderId}
+            checkedReaderIds={checkedReaderIds}
             defaultId={defaultId}
             isIngesting={isIngesting}
             onSelectReader={(id) => {
@@ -685,9 +1107,119 @@ export default function IoReaderPickerDialog({
                 setSelectedBufferId(null);
               }
             }}
+            onToggleReader={handleToggleReader}
             isProfileLive={isProfileInUse}
             getSessionForProfile={getSessionForProfile}
+            multiSelectMode={multiSelectMode}
+            onToggleMultiSelectMode={allowMultiSelect ? handleToggleMultiSelectMode : undefined}
+            renderProfileExtra={(profileId) => {
+              // Render bus config for all real-time profiles
+              const profile = readProfiles.find((p) => p.id === profileId);
+              if (!profile || !isRealtimeProfile(profile)) return null;
+
+              const probeResult = deviceProbeResultMap.get(profileId) || null;
+              const isLoading = deviceProbeLoadingMap.get(profileId) || false;
+              const isGvret = profile.kind === "gvret_tcp" || profile.kind === "gvret_usb";
+
+              // Collect output buses used by OTHER profiles for duplicate detection
+              const usedOutputBuses = new Set<number>();
+              for (const [otherId, otherConfig] of gvretBusConfigMap.entries()) {
+                if (otherId !== profileId) {
+                  for (const mapping of otherConfig) {
+                    if (mapping.enabled) {
+                      usedOutputBuses.add(mapping.outputBus);
+                    }
+                  }
+                }
+              }
+              for (const [otherId, otherBus] of singleBusOverrideMap.entries()) {
+                if (otherId !== profileId) {
+                  usedOutputBuses.add(otherBus);
+                }
+              }
+
+              // Multi-bus devices (GVRET) - show GvretBusConfig
+              if (isGvret || probeResult?.isMultiBus) {
+                let busConfig = gvretBusConfigMap.get(profileId);
+                if (!busConfig && probeResult) {
+                  const profileIndex = checkedReaderIds.indexOf(profileId);
+                  const offset = profileIndex >= 0 ? profileIndex : 0;
+                  busConfig = createDefaultBusMappings(probeResult.busCount || 5, offset);
+                }
+                busConfig = busConfig || [];
+
+                // Create GvretDeviceInfo-compatible object from probe result
+                const deviceInfo: GvretDeviceInfo | null = probeResult
+                  ? { bus_count: probeResult.busCount || 5 }
+                  : null;
+
+                return (
+                  <GvretBusConfig
+                    deviceInfo={deviceInfo}
+                    isLoading={isLoading}
+                    error={probeResult?.error || null}
+                    busConfig={busConfig}
+                    onBusConfigChange={(config) => {
+                      setGvretBusConfigMap((prev) => new Map(prev).set(profileId, config));
+                    }}
+                    compact
+                    usedOutputBuses={usedOutputBuses}
+                  />
+                );
+              }
+
+              // Single-bus devices - show SingleBusConfig
+              const busOverride = singleBusOverrideMap.get(profileId);
+              return (
+                <SingleBusConfig
+                  probeResult={probeResult}
+                  isLoading={isLoading}
+                  error={probeResult?.error || null}
+                  busOverride={busOverride}
+                  onBusOverrideChange={(bus) => {
+                    setSingleBusOverrideMap((prev) => {
+                      const newMap = new Map(prev);
+                      if (bus === undefined) {
+                        newMap.delete(profileId);
+                      } else {
+                        newMap.set(profileId, bus);
+                      }
+                      return newMap;
+                    });
+                  }}
+                  compact
+                  usedBuses={usedOutputBuses}
+                />
+              );
+            }}
+            activeMultiSourceSessions={activeMultiSourceSessions}
+            onSelectMultiSourceSession={handleSelectMultiSourceSession}
+            disabledProfiles={disabledProfiles}
+            hideExternal={hideBuffers}
+            hideRecorded={hideBuffers}
           />
+
+          {/* Device configuration - single-select mode */}
+          {isCheckedRealtime && !multiSelectMode && deviceProbeResult?.isMultiBus && (
+            <GvretBusConfig
+              deviceInfo={{ bus_count: deviceProbeResult.busCount || 5 }}
+              isLoading={deviceProbeLoading}
+              error={deviceProbeError}
+              busConfig={gvretBusConfig}
+              onBusConfigChange={setGvretBusConfig}
+              profileName={checkedProfile?.name}
+            />
+          )}
+          {isCheckedRealtime && !multiSelectMode && deviceProbeResult && !deviceProbeResult.isMultiBus && (
+            <SingleBusConfig
+              probeResult={deviceProbeResult}
+              isLoading={deviceProbeLoading}
+              error={deviceProbeError}
+              busOverride={singleBusOverride}
+              onBusOverrideChange={setSingleBusOverride}
+              profileName={checkedProfile?.name}
+            />
+          )}
 
           {/* Hide ingest options when the checked profile has a running session (show if stopped for reinit) */}
           {(!isCheckedProfileLive || isCheckedProfileStopped) && (
@@ -746,6 +1278,9 @@ export default function IoReaderPickerDialog({
           onJoinClick={handleJoinClick}
           onStartClick={handleStartClick}
           onClose={handleBufferOkClick}
+          multiSelectMode={multiSelectMode}
+          multiSelectCount={checkedReaderIds.length}
+          onMultiWatchClick={handleMultiWatchClick}
         />
       </div>
     </Dialog>

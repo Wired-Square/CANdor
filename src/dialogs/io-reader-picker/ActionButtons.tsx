@@ -1,6 +1,6 @@
 // ui/src/dialogs/io-reader-picker/ActionButtons.tsx
 
-import { Download, Eye, Loader2, Upload, Check, Plug, Play } from "lucide-react";
+import { Download, Eye, Loader2, Upload, Check, Plug, Play, GitMerge } from "lucide-react";
 import type { IOProfile } from "../../hooks/useSettings";
 import { CSV_EXTERNAL_ID, isRealtimeProfile } from "./utils";
 import { primaryButtonBase, successButtonBase, panelFooter, errorBoxCompact } from "../../styles";
@@ -27,6 +27,13 @@ type Props = {
   /** Called when user wants to start a stopped session */
   onStartClick?: () => void;
   onClose: () => void;
+  // Multi-select mode
+  /** Whether multi-select mode is active */
+  multiSelectMode?: boolean;
+  /** Number of profiles selected in multi-select mode */
+  multiSelectCount?: number;
+  /** Called when user wants to watch multiple profiles (multi-bus mode) */
+  onMultiWatchClick?: () => void;
 };
 
 export default function ActionButtons({
@@ -45,6 +52,9 @@ export default function ActionButtons({
   onJoinClick,
   onStartClick,
   onClose,
+  multiSelectMode = false,
+  multiSelectCount = 0,
+  onMultiWatchClick,
 }: Props) {
   const isCsvSelected = checkedReaderId === CSV_EXTERNAL_ID;
   const isCheckedRealtime = checkedProfile ? isRealtimeProfile(checkedProfile) : false;
@@ -56,6 +66,21 @@ export default function ActionButtons({
           <Loader2 className="w-4 h-4 animate-spin" />
           <span>Ingesting from {ingestProfileId}...</span>
         </div>
+      ) : multiSelectMode ? (
+        // Multi-select mode - show Multi-Bus Watch button
+        multiSelectCount > 0 && onMultiWatchClick ? (
+          <button
+            onClick={onMultiWatchClick}
+            className={`w-full ${successButtonBase}`}
+          >
+            <GitMerge className="w-4 h-4" />
+            <span>Watch {multiSelectCount} Buses</span>
+          </button>
+        ) : (
+          <div className="text-center text-sm text-slate-400 dark:text-slate-500 py-1">
+            Select real-time readers to watch
+          </div>
+        )
       ) : isCsvSelected ? (
         // CSV selected - show Import button
         <div className="space-y-2">

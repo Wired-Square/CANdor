@@ -72,7 +72,6 @@ type CombinedDiscoveryState = {
   maxBuffer: number;
   renderBuffer: number;
   ioProfile: string | null;
-  sourceProfileId: string | null;
   playbackSpeed: PlaybackSpeed;
   currentTime: number | null;
   noLimitMode: {
@@ -129,7 +128,6 @@ type CombinedDiscoveryState = {
   setMaxBuffer: (value: number) => void;
   setRenderBuffer: (value: number) => void;
   setIoProfile: (profile: string | null) => void;
-  setSourceProfileId: (profileId: string | null) => void;
   setPlaybackSpeed: (speed: PlaybackSpeed) => void;
   updateCurrentTime: (time: number) => void;
   setNoLimitActive: (active: boolean) => void;
@@ -236,7 +234,6 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     maxBuffer: uiStore.maxBuffer,
     renderBuffer: uiStore.renderBuffer,
     ioProfile: uiStore.ioProfile,
-    sourceProfileId: uiStore.sourceProfileId,
     playbackSpeed: uiStore.playbackSpeed,
     currentTime: uiStore.currentTime,
     noLimitMode: uiStore.noLimitMode,
@@ -309,7 +306,6 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     setMaxBuffer: uiStore.setMaxBuffer,
     setRenderBuffer: uiStore.setRenderBuffer,
     setIoProfile: uiStore.setIoProfile,
-    setSourceProfileId: uiStore.setSourceProfileId,
     setPlaybackSpeed: (speed) => {
       uiStore.setPlaybackSpeed(speed, frameStore.clearBuffer);
     },

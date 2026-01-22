@@ -11,6 +11,7 @@ mod gvret_common;
 mod gvret_tcp;
 mod gvret_usb;
 mod mqtt;
+mod multi_source;
 mod postgres;
 pub mod serial; // pub for Tauri command access (list_serial_ports)
 mod serial_utils;
@@ -24,8 +25,10 @@ pub use csv::{parse_csv_file, CsvReader, CsvReaderOptions};
 pub use gs_usb::GsUsbConfig;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub use gs_usb::nusb_driver::GsUsbReader;
-pub use gvret_tcp::GvretReader;
-pub use gvret_usb::{GvretUsbConfig, GvretUsbReader};
+pub use gvret_common::{BusMapping, GvretDeviceInfo};
+pub use gvret_tcp::{GvretReader, probe_gvret_tcp};
+pub use gvret_usb::{GvretUsbConfig, GvretUsbReader, probe_gvret_usb};
+pub use multi_source::{MultiSourceReader, SourceConfig};
 pub use mqtt::{MqttConfig, MqttReader};
 pub use postgres::{PostgresConfig, PostgresReader, PostgresReaderOptions, PostgresSourceType};
 pub use serial::{Parity, SerialConfig, SerialFramingConfig, SerialReader};
@@ -265,7 +268,13 @@ pub trait IODevice: Send + Sync {
     /// Transmit a CAN frame (if supported by the device).
     /// Default implementation returns an error indicating transmission is not supported.
     fn transmit_frame(&self, _frame: &CanTransmitFrame) -> Result<TransmitResult, String> {
-        Err("This device does not support transmission".to_string())
+        Err("This device does not support CAN transmission".to_string())
+    }
+
+    /// Transmit raw serial bytes (if supported by the device).
+    /// Default implementation returns an error indicating transmission is not supported.
+    fn transmit_serial(&self, _bytes: &[u8]) -> Result<TransmitResult, String> {
+        Err("This device does not support serial transmission".to_string())
     }
 
     /// Get current state
@@ -274,6 +283,18 @@ pub trait IODevice: Send + Sync {
     /// Get session ID (useful for debugging)
     #[allow(dead_code)]
     fn session_id(&self) -> &str;
+
+    /// Get device type identifier (e.g., "gvret_tcp", "multi_source")
+    /// Default implementation returns "unknown"
+    fn device_type(&self) -> &'static str {
+        "unknown"
+    }
+
+    /// For multi-source sessions, return the source configurations.
+    /// Default implementation returns None.
+    fn multi_source_configs(&self) -> Option<Vec<multi_source::SourceConfig>> {
+        None
+    }
 }
 
 // ============================================================================
@@ -939,26 +960,79 @@ pub async fn session_exists(session_id: &str) -> bool {
     sessions.contains_key(session_id)
 }
 
+/// Info about an active session (for listing)
+#[derive(Clone, Debug, Serialize)]
+pub struct ActiveSessionInfo {
+    /// Session ID
+    pub session_id: String,
+    /// Device type (e.g., "gvret_tcp", "multi_source")
+    pub device_type: String,
+    /// Current state
+    pub state: IOState,
+    /// Session capabilities
+    pub capabilities: IOCapabilities,
+    /// Number of listeners
+    pub listener_count: usize,
+    /// For multi-source sessions: the source configurations
+    pub multi_source_configs: Option<Vec<multi_source::SourceConfig>>,
+}
+
+/// List all active sessions
+pub async fn list_sessions() -> Vec<ActiveSessionInfo> {
+    let sessions = IO_SESSIONS.lock().await;
+    sessions
+        .iter()
+        .map(|(session_id, session)| ActiveSessionInfo {
+            session_id: session_id.clone(),
+            device_type: session.device.device_type().to_string(),
+            state: session.device.state(),
+            capabilities: session.device.capabilities(),
+            listener_count: session.listeners.len(),
+            multi_source_configs: session.device.multi_source_configs(),
+        })
+        .collect()
+}
+
 /// Transmit a CAN frame through a session (if supported)
 pub async fn transmit_frame(session_id: &str, frame: &CanTransmitFrame) -> Result<TransmitResult, String> {
-    // Only hold the lock long enough to get the transmit function
-    // The actual transmit happens outside the lock to avoid blocking other async tasks
+    // Only hold the lock long enough to check capabilities and get what we need
+    // The actual transmit may block (e.g., waiting for channel response), so we
+    // need to minimize lock hold time
     let sessions = IO_SESSIONS.lock().await;
     let session = sessions
         .get(session_id)
         .ok_or_else(|| format!("Session '{}' not found", session_id))?;
 
+    let caps = session.device.capabilities();
+
     // Check if the reader supports transmission
-    if !session.device.capabilities().can_transmit {
+    if !caps.can_transmit {
         return Err("This session does not support transmission".to_string());
     }
 
     // Call transmit_frame - this is sync and may block waiting for result
-    // We do this inside spawn_blocking to not block the async runtime
-    let frame_clone = frame.clone();
-    let result = session.device.transmit_frame(&frame_clone);
+    // For MultiSourceReader, this blocks on recv_timeout(500ms)
+    // We call it while holding the lock, but the actual I/O happens in the
+    // source reader tasks which don't need the IO_SESSIONS lock
+    session.device.transmit_frame(frame)
+}
 
-    result
+/// Transmit raw serial bytes through a session
+pub async fn transmit_serial(session_id: &str, bytes: &[u8]) -> Result<TransmitResult, String> {
+    let sessions = IO_SESSIONS.lock().await;
+    let session = sessions
+        .get(session_id)
+        .ok_or_else(|| format!("Session '{}' not found", session_id))?;
+
+    let caps = session.device.capabilities();
+
+    // Check if the reader supports serial transmission
+    if !caps.can_transmit_serial {
+        return Err("This session does not support serial transmission".to_string());
+    }
+
+    // Call transmit_serial - this is sync and may block waiting for result
+    session.device.transmit_serial(bytes)
 }
 
 // ============================================================================
@@ -1060,7 +1134,7 @@ pub async fn register_listener(session_id: &str, listener_id: &str) -> Result<Re
 }
 
 /// Unregister a listener from a session.
-/// If this was the last listener, the session will be stopped (but not destroyed).
+/// If this was the last listener, the session will be stopped and destroyed.
 /// Returns the remaining listener count.
 pub async fn unregister_listener(session_id: &str, listener_id: &str) -> Result<usize, String> {
     let mut sessions = IO_SESSIONS.lock().await;
@@ -1079,17 +1153,17 @@ pub async fn unregister_listener(session_id: &str, listener_id: &str) -> Result<
             // Emit joiner count change
             emit_joiner_count_change(&app, session_id, remaining);
 
-            // If no listeners left, stop the session
+            // If no listeners left, stop and destroy the session
             if remaining == 0 {
-                eprintln!("[reader] Session '{}' has no listeners left, stopping", session_id);
-                let previous = session.device.state();
-                if !matches!(previous, IOState::Stopped) {
-                    let _ = session.device.stop().await;
-                    let current = session.device.state();
-                    if previous != current {
-                        emit_state_change(&app, session_id, &previous, &current);
-                    }
-                }
+                eprintln!("[reader] Session '{}' has no listeners left, destroying", session_id);
+                let _ = session.device.stop().await;
+                // Remove from the session map (we already hold the lock)
+                sessions.remove(session_id);
+                // Clear any closing flag
+                clear_session_closing(session_id);
+                // Clean up profile tracking (release single-handle device locks)
+                crate::sessions::cleanup_session_profiles(session_id);
+                eprintln!("[reader] Session '{}' destroyed", session_id);
             }
 
             Ok(remaining)

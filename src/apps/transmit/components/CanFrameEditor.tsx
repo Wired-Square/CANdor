@@ -2,8 +2,8 @@
 //
 // CAN frame editor component with ID, DLC, flags, bus selector, and data grid.
 
-import { useCallback, useState } from "react";
-import { useTransmitStore, GVRET_BUSES, CAN_FD_DLC_VALUES } from "../../../stores/transmitStore";
+import { useCallback, useState, useEffect } from "react";
+import { useTransmitStore, CAN_FD_DLC_VALUES } from "../../../stores/transmitStore";
 import { useActiveSession } from "../../../stores/sessionStore";
 import {
   borderDarkView,
@@ -32,6 +32,14 @@ export default function CanFrameEditor() {
   const supportsRtr = capabilities?.supports_rtr ?? false;
   const availableBuses = capabilities?.available_buses ?? [];
   const isMultiBus = availableBuses.length > 1;
+
+  // Reset bus selection when available buses change and current selection is invalid
+  useEffect(() => {
+    if (availableBuses.length > 0 && !availableBuses.includes(canEditor.bus)) {
+      // Select the first available bus
+      updateCanEditor({ bus: availableBuses[0] });
+    }
+  }, [availableBuses, canEditor.bus, updateCanEditor]);
 
   // Classic CAN DLC values
   const classicDlcValues = [0, 1, 2, 3, 4, 5, 6, 7, 8];
@@ -199,14 +207,11 @@ export default function CanFrameEditor() {
               onChange={handleBusChange}
               className={`w-24 ${bgDarkInput} ${textDarkInput} text-sm rounded px-2 py-1.5 border ${borderDarkView} focus:outline-none focus:border-blue-500`}
             >
-              {availableBuses.map((bus) => {
-                const busInfo = GVRET_BUSES.find((b) => b.value === bus);
-                return (
-                  <option key={bus} value={bus}>
-                    {busInfo?.label ?? `Bus ${bus}`}
-                  </option>
-                );
-              })}
+              {availableBuses.map((bus) => (
+                <option key={bus} value={bus}>
+                  Bus {bus}
+                </option>
+              ))}
             </select>
           </div>
         )}

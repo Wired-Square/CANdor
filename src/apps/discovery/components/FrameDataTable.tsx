@@ -20,6 +20,7 @@ import {
   textDataOrange,
   textDataPurple,
   textDataAmber,
+  textDataCyan,
 } from '../../../styles';
 import { tableIconButtonDark } from '../../../styles/buttonStyles';
 
@@ -38,6 +39,8 @@ export interface FrameRow {
   hexBytes?: string[];
   /** Mark frame as incomplete (serial framing) */
   incomplete?: boolean;
+  /** CAN bus number (0-255) */
+  bus?: number;
 }
 
 export interface FrameDataTableProps {
@@ -65,6 +68,8 @@ export interface FrameDataTableProps {
   renderBytes?: (frame: FrameRow) => ReactNode;
   /** Show ASCII column (default: false) */
   showAscii?: boolean;
+  /** Show bus number column (default: false) */
+  showBus?: boolean;
   /** Auto-scroll to bottom when new frames arrive (default: true) */
   autoScroll?: boolean;
 }
@@ -86,6 +91,7 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
   sourceByteCount = 2,
   renderBytes,
   showAscii = false,
+  showBus = false,
   autoScroll = true,
 }, ref) => {
   // Internal ref for scrolling (use forwarded ref if provided, otherwise internal)
@@ -149,6 +155,9 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
             )}
             <th className={`text-left px-2 py-1.5 border-b ${borderDarkView}`}>Time</th>
             <th className={`text-right px-2 py-1.5 border-b ${borderDarkView}`}>ID</th>
+            {showBus && (
+              <th className={`text-center px-2 py-1.5 w-10 border-b ${borderDarkView} ${textDataCyan}`}>Bus</th>
+            )}
             {hasSourceAddress && (
               <th className={`text-right px-2 py-1.5 border-b ${borderDarkView} ${textDataPurple}`}>Source</th>
             )}
@@ -194,6 +203,11 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
                   {formatId(frame.frame_id, displayFrameIdFormat, frame.is_extended)}
                   {frame.incomplete && <span className={`ml-1 ${textDataOrange}`}>?</span>}
                 </td>
+                {showBus && (
+                  <td className={`px-2 py-0.5 text-center ${textDataCyan}`}>
+                    {frame.bus ?? 0}
+                  </td>
+                )}
                 {hasSourceAddress && (
                   <td className={`px-2 py-0.5 text-right ${textDataPurple}`}>
                     {frame.source_address !== undefined

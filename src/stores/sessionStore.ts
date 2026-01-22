@@ -25,6 +25,7 @@ import {
   registerSessionListener,
   unregisterSessionListener,
   reinitializeSessionIfSafe,
+  createMultiSourceSession,
   getStateType,
   parseStateString,
   type IOCapabilities,
@@ -35,6 +36,8 @@ import {
   type TransmitResult,
   type CreateIOSessionOptions,
   type FramingEncoding,
+  type MultiSourceInput,
+  type BusMapping,
 } from "../api/io";
 import type { FrameMessage } from "./discoveryStore";
 
@@ -45,6 +48,115 @@ const BUFFER_PROFILE_ID = "__imported_buffer__";
 interface FrameBatchPayload {
   frames: FrameMessage[];
   active_listeners: string[];
+}
+
+// ============================================================================
+// Adaptive Frame Throttling
+// ============================================================================
+// Balances latency vs. UI performance with two triggers:
+// 1. Batch size threshold - flush immediately when enough frames accumulate
+// 2. Time interval - flush after max interval even with few frames
+//
+// This gives low latency for low-frequency data (flushes quickly when idle)
+// while batching high-frequency data to prevent UI overload.
+
+/** Minimum interval between flushes (ms) - prevents overwhelming UI */
+const MIN_FLUSH_INTERVAL_MS = 16; // ~60fps max update rate
+
+/** Maximum interval before forcing a flush (ms) - caps latency for sparse data */
+const MAX_FLUSH_INTERVAL_MS = 50; // 20Hz minimum update rate
+
+/** Batch size threshold - flush immediately when this many frames accumulate */
+const BATCH_SIZE_THRESHOLD = 50;
+
+/** Pending frames per session, keyed by session ID */
+const pendingFramesMap = new Map<string, {
+  /** Frames accumulated since last flush */
+  frames: FrameMessage[];
+  /** Which listeners should receive frames (empty = all) */
+  activeListeners: string[];
+  /** Timestamp of last flush for this session */
+  lastFlushTime: number;
+}>();
+
+/** Timeout ID for the scheduled flush (null if none scheduled) */
+let flushTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+/** Getter for event listeners - set after store is created */
+let getEventListeners: (() => Record<string, SessionEventListeners>) | null = null;
+
+/** Flush all pending frames to their callbacks */
+function flushPendingFrames() {
+  flushTimeoutId = null;
+  const now = performance.now();
+
+  if (!getEventListeners) return;
+  const eventListenersMap = getEventListeners();
+
+  for (const [sessionId, pending] of pendingFramesMap.entries()) {
+    if (pending.frames.length === 0) continue;
+
+    const eventListeners = eventListenersMap[sessionId];
+    if (!eventListeners) continue;
+
+    const frames = pending.frames;
+    const listeners = pending.activeListeners;
+
+    // Clear pending before dispatching (in case callbacks add more)
+    pending.frames = [];
+    pending.activeListeners = [];
+    pending.lastFlushTime = now;
+
+    // Dispatch to callbacks
+    for (const [listenerId, callbacks] of eventListeners.callbacks.entries()) {
+      if (listeners.length === 0 || listeners.includes(listenerId)) {
+        if (callbacks.onFrames) {
+          callbacks.onFrames(frames);
+        }
+      }
+    }
+  }
+}
+
+/** Schedule a flush with adaptive timing */
+function scheduleFlush(immediate: boolean) {
+  if (immediate) {
+    // Flush immediately (but still async to batch same-tick arrivals)
+    if (flushTimeoutId !== null) {
+      clearTimeout(flushTimeoutId);
+    }
+    flushTimeoutId = setTimeout(flushPendingFrames, 0);
+  } else if (flushTimeoutId === null) {
+    // Schedule for max interval if not already scheduled
+    flushTimeoutId = setTimeout(flushPendingFrames, MAX_FLUSH_INTERVAL_MS);
+  }
+  // If already scheduled and not immediate, let existing timer run
+}
+
+/** Accumulate frames for throttled delivery */
+function accumulateFrames(sessionId: string, frames: FrameMessage[], activeListeners: string[]) {
+  const now = performance.now();
+  let pending = pendingFramesMap.get(sessionId);
+  if (!pending) {
+    pending = { frames: [], activeListeners: [], lastFlushTime: 0 };
+    pendingFramesMap.set(sessionId, pending);
+  }
+
+  // Append frames
+  pending.frames.push(...frames);
+
+  // Merge active listeners (use the most recent non-empty list)
+  if (activeListeners.length > 0) {
+    pending.activeListeners = activeListeners;
+  }
+
+  // Determine if we should flush immediately
+  const timeSinceLastFlush = now - pending.lastFlushTime;
+  const shouldFlushNow =
+    pending.frames.length >= BATCH_SIZE_THRESHOLD &&
+    timeSinceLastFlush >= MIN_FLUSH_INTERVAL_MS;
+
+  scheduleFlush(shouldFlushNow);
 }
 
 // ============================================================================
@@ -123,6 +235,8 @@ export interface CreateSessionOptions {
   emitRawBytes?: boolean;
   /** Minimum frame length to accept */
   minFrameLength?: number;
+  /** Bus number override for single-bus devices (0-7) */
+  busOverride?: number;
 }
 
 /** Callbacks for a session - stored per listener in the frontend */
@@ -159,6 +273,14 @@ export interface SessionStore {
   activeSessionId: string | null;
   /** Event listeners per session (frontend-only, for routing events to callbacks) */
   _eventListeners: Record<string, SessionEventListeners>;
+
+  // ---- Multi-Bus State ----
+  /** Whether multi-bus mode is currently active */
+  multiBusMode: boolean;
+  /** Profile IDs involved in the current multi-bus session */
+  multiBusProfiles: string[];
+  /** Source profile ID - preserved when switching to buffer mode */
+  sourceProfileId: string | null;
 
   // ---- Actions: Session Lifecycle ----
   /** Open a session - creates if not exists, joins if exists */
@@ -220,6 +342,16 @@ export interface SessionStore {
   /** Clear callbacks for a specific listener */
   clearCallbacks: (sessionId: string, listenerId: string) => void;
 
+  // ---- Actions: Multi-Bus State ----
+  /** Enable or disable multi-bus mode */
+  setMultiBusMode: (enabled: boolean) => void;
+  /** Set profiles involved in multi-bus session */
+  setMultiBusProfiles: (profiles: string[]) => void;
+  /** Set source profile ID (preserved when switching to buffer) */
+  setSourceProfileId: (profileId: string | null) => void;
+  /** Reset multi-bus state (disable mode, clear profiles) */
+  resetMultiBusState: () => void;
+
   // ---- Selectors ----
   /** Get session by ID */
   getSession: (sessionId: string) => Session | undefined;
@@ -261,22 +393,16 @@ async function setupSessionEventListeners(
 ): Promise<UnlistenFn[]> {
   const unlistenFunctions: UnlistenFn[] = [];
 
-  // Frame messages - now includes active_listeners for filtering
+  // Frame messages - throttled to 10Hz for UI performance
+  // Frames are accumulated and flushed periodically instead of immediately dispatched
   const unlistenFrames = await listen<FrameBatchPayload>(
     `frame-message:${sessionId}`,
     (event) => {
       const { frames, active_listeners } = event.payload;
-
-      // If active_listeners is missing or empty, deliver to all (fallback behavior)
-      // Otherwise, only invoke callbacks for listeners in the active list
       const listeners = active_listeners ?? [];
-      for (const [listenerId, callbacks] of eventListeners.callbacks.entries()) {
-        if (listeners.length === 0 || listeners.includes(listenerId)) {
-          if (callbacks.onFrames) {
-            callbacks.onFrames(frames);
-          }
-        }
-      }
+
+      // Accumulate frames for throttled delivery
+      accumulateFrames(sessionId, frames, listeners);
     }
   );
   unlistenFunctions.push(unlistenFrames);
@@ -394,6 +520,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   sessions: {},
   activeSessionId: null,
   _eventListeners: {},
+  multiBusMode: false,
+  multiBusProfiles: [],
+  sourceProfileId: null,
 
   // ---- Session Lifecycle ----
   openSession: async (profileId, profileName, listenerId, options = {}) => {
@@ -490,6 +619,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         maxFrameLength: options.maxFrameLength,
         emitRawBytes: options.emitRawBytes,
         minFrameLength: options.minFrameLength,
+        busOverride: options.busOverride,
       };
 
       try {
@@ -747,6 +877,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
     // Note: Don't call leaveReaderSession - unregisterSessionListener already handles it
 
+    // Clear any pending frames for this session
+    pendingFramesMap.delete(sessionId);
+
     // Remove from store
     set((s) => {
       const { [sessionId]: _, ...remainingSessions } = s.sessions;
@@ -961,6 +1094,19 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
   },
 
+  // ---- Multi-Bus State ----
+  setMultiBusMode: (enabled) => set({ multiBusMode: enabled }),
+
+  setMultiBusProfiles: (profiles) => set({ multiBusProfiles: profiles }),
+
+  setSourceProfileId: (profileId) => set({ sourceProfileId: profileId }),
+
+  resetMultiBusState: () => set({
+    multiBusMode: false,
+    multiBusProfiles: [],
+    sourceProfileId: null,
+  }),
+
   // ---- Selectors ----
   getSession: (sessionId) => get().sessions[sessionId],
 
@@ -991,6 +1137,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         (s.lifecycleState === "disconnected" && s.hasQueuedMessages))
     ),
 }));
+
+// Initialize the event listeners getter for frame throttling
+getEventListeners = () => useSessionStore.getState()._eventListeners;
 
 // ============================================================================
 // Convenience Hooks
@@ -1040,4 +1189,141 @@ export function useTransmitDropdownSessions(): Session[] {
       )
     )
   );
+}
+
+/** Multi-bus state returned by useMultiBusState hook */
+export interface MultiBusState {
+  /** Whether multi-bus mode is active */
+  multiBusMode: boolean;
+  /** Profile IDs in the multi-bus session */
+  multiBusProfiles: string[];
+  /** Source profile ID (preserved when switching to buffer) */
+  sourceProfileId: string | null;
+  /** Enable/disable multi-bus mode */
+  setMultiBusMode: (enabled: boolean) => void;
+  /** Set profiles in multi-bus session */
+  setMultiBusProfiles: (profiles: string[]) => void;
+  /** Set source profile ID */
+  setSourceProfileId: (profileId: string | null) => void;
+  /** Reset all multi-bus state */
+  resetMultiBusState: () => void;
+}
+
+/** Get multi-bus state and setters */
+export function useMultiBusState(): MultiBusState {
+  return useSessionStore(
+    useShallow((s) => ({
+      multiBusMode: s.multiBusMode,
+      multiBusProfiles: s.multiBusProfiles,
+      sourceProfileId: s.sourceProfileId,
+      setMultiBusMode: s.setMultiBusMode,
+      setMultiBusProfiles: s.setMultiBusProfiles,
+      setSourceProfileId: s.setSourceProfileId,
+      resetMultiBusState: s.resetMultiBusState,
+    }))
+  );
+}
+
+// ============================================================================
+// Multi-Source Session Helpers
+// ============================================================================
+
+/**
+ * Options for creating a multi-source session.
+ */
+export interface CreateMultiSourceOptions {
+  /** Unique session ID for the merged session (e.g., "discovery-multi") */
+  sessionId: string;
+  /** Listener ID for this app (e.g., "discovery", "decoder") */
+  listenerId: string;
+  /** Profile IDs to combine */
+  profileIds: string[];
+  /** Bus mappings per profile (keyed by profile ID) */
+  busMappings?: Map<string, BusMapping[]>;
+  /** Map of profile ID to display name */
+  profileNames?: Map<string, string>;
+}
+
+/**
+ * Result of creating or joining a multi-source session.
+ */
+export interface MultiSourceSessionResult {
+  /** The session ID */
+  sessionId: string;
+  /** Source profile IDs */
+  sourceProfileIds: string[];
+  /** The session capabilities */
+  capabilities: IOCapabilities;
+}
+
+/**
+ * Create a new multi-source session that merges frames from multiple devices.
+ * This creates a Rust-side merged session that other apps can join.
+ *
+ * @param options Configuration for the multi-source session
+ * @returns The session result with capabilities
+ */
+export async function createAndStartMultiSourceSession(
+  options: CreateMultiSourceOptions
+): Promise<MultiSourceSessionResult> {
+  const { sessionId, listenerId, profileIds, busMappings, profileNames } = options;
+
+  // Build source configs with bus mappings
+  const sources: MultiSourceInput[] = profileIds.map((profileId) => ({
+    profileId,
+    displayName: profileNames?.get(profileId),
+    busMappings: busMappings?.get(profileId) || [],
+  }));
+
+  // Create the multi-source session in Rust
+  const capabilities = await createMultiSourceSession({
+    sessionId,
+    sources,
+  });
+
+  // Register this listener with the session
+  await registerSessionListener(sessionId, listenerId);
+
+  return {
+    sessionId,
+    sourceProfileIds: profileIds,
+    capabilities,
+  };
+}
+
+/**
+ * Options for joining an existing multi-source session.
+ */
+export interface JoinMultiSourceOptions {
+  /** Session ID to join */
+  sessionId: string;
+  /** Listener ID for this app */
+  listenerId: string;
+  /** Source profile IDs (for display purposes) */
+  sourceProfileIds?: string[];
+}
+
+/**
+ * Join an existing multi-source session (created by another app).
+ * This connects to an already-running merged session.
+ *
+ * @param options Configuration for joining the session
+ * @returns The session result with capabilities
+ */
+export async function joinMultiSourceSession(
+  options: JoinMultiSourceOptions
+): Promise<MultiSourceSessionResult> {
+  const { sessionId, listenerId, sourceProfileIds = [] } = options;
+
+  // Join the existing session
+  const joinResult = await joinReaderSession(sessionId);
+
+  // Register this listener with the session
+  await registerSessionListener(sessionId, listenerId);
+
+  return {
+    sessionId,
+    sourceProfileIds,
+    capabilities: joinResult.capabilities,
+  };
 }

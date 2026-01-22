@@ -8,15 +8,17 @@ use crate::{
     credentials,
     io::{
         create_session, destroy_session, get_session_capabilities, get_session_joiner_count, get_session_state,
-        get_session_listeners, join_session, leave_session, pause_session,
+        get_session_listeners, join_session, leave_session, list_sessions, pause_session,
         register_listener, reinitialize_session_if_safe, resume_session,
         seek_session, set_listener_active, start_session, stop_session, transmit_frame, unregister_listener,
-        update_session_speed, update_session_time_range, IOCapabilities, IODevice, IOState,
+        update_session_speed, update_session_time_range, ActiveSessionInfo, IOCapabilities, IODevice, IOState,
         JoinSessionResult, ListenerInfo, RegisterListenerResult, ReinitializeResult, BufferReader,
+        BusMapping,
         CsvReader, CsvReaderOptions,
-        GvretReader,
+        GvretReader, GvretDeviceInfo, probe_gvret_tcp, probe_gvret_usb,
         GvretUsbConfig, GvretUsbReader,
         MqttConfig, MqttReader,
+        MultiSourceReader, SourceConfig,
         Parity, PostgresConfig, PostgresReader, PostgresReaderOptions, PostgresSourceType,
         SerialConfig, SerialFramingConfig, SerialReader,
         SlcanConfig, SlcanReader,
@@ -34,21 +36,75 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-/// Map of session_id -> profile_id for tracking which profile each reader session uses.
+/// Map of session_id -> profile_ids for tracking which profiles each reader session uses.
+/// Multi-source sessions can use multiple profiles, so we store a Vec.
 /// Used to unregister profile usage when a session is destroyed.
-static SESSION_PROFILES: Lazy<Mutex<HashMap<String, String>>> =
+static SESSION_PROFILES: Lazy<Mutex<HashMap<String, Vec<String>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-/// Track that a session is using a specific profile
-fn register_session_profile(session_id: &str, profile_id: &str) {
-    if let Ok(mut map) = SESSION_PROFILES.lock() {
-        map.insert(session_id.to_string(), profile_id.to_string());
+/// Cache of successful probe results by profile_id.
+/// When a device is probed successfully, the result is cached so subsequent probes
+/// (e.g., when the device is already running) return instantly without reconnecting.
+static PROBE_CACHE: Lazy<Mutex<HashMap<String, DeviceProbeResult>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Cache a successful probe result for a profile
+fn cache_probe_result(profile_id: &str, result: &DeviceProbeResult) {
+    if result.success {
+        if let Ok(mut cache) = PROBE_CACHE.lock() {
+            cache.insert(profile_id.to_string(), result.clone());
+        }
     }
 }
 
-/// Get and remove the profile_id for a session (called during destroy)
-fn take_session_profile(session_id: &str) -> Option<String> {
-    SESSION_PROFILES.lock().ok()?.remove(session_id)
+/// Get a cached probe result for a profile
+fn get_cached_probe(profile_id: &str) -> Option<DeviceProbeResult> {
+    PROBE_CACHE.lock().ok()?.get(profile_id).cloned()
+}
+
+/// Clear the cached probe result for a profile (called when device errors or disconnects)
+#[allow(dead_code)]
+pub fn clear_probe_cache(profile_id: &str) {
+    if let Ok(mut cache) = PROBE_CACHE.lock() {
+        cache.remove(profile_id);
+    }
+}
+
+/// Track that a session is using a specific profile.
+/// For multi-source sessions, call this multiple times or use register_session_profiles.
+fn register_session_profile(session_id: &str, profile_id: &str) {
+    if let Ok(mut map) = SESSION_PROFILES.lock() {
+        let profiles = map.entry(session_id.to_string()).or_insert_with(Vec::new);
+        if !profiles.contains(&profile_id.to_string()) {
+            profiles.push(profile_id.to_string());
+        }
+    }
+}
+
+/// Track that a session is using multiple profiles (for multi-source sessions).
+fn register_session_profiles(session_id: &str, profile_ids: &[String]) {
+    if let Ok(mut map) = SESSION_PROFILES.lock() {
+        map.insert(session_id.to_string(), profile_ids.to_vec());
+    }
+}
+
+/// Get and remove all profile_ids for a session (called during destroy).
+/// Returns all profiles that were registered for this session.
+fn take_session_profiles(session_id: &str) -> Vec<String> {
+    SESSION_PROFILES.lock().ok()
+        .and_then(|mut map| map.remove(session_id))
+        .unwrap_or_default()
+}
+
+/// Clean up profile tracking for a destroyed session.
+/// This should be called when a session is destroyed via unregister_listener
+/// (auto-destroy when last listener leaves), since that code path doesn't
+/// go through destroy_reader_session which normally handles this.
+pub fn cleanup_session_profiles(session_id: &str) {
+    let profile_ids = take_session_profiles(session_id);
+    for profile_id in profile_ids {
+        profile_tracker::unregister_usage_by_session(&profile_id, session_id);
+    }
 }
 
 /// Get a secure credential for a profile, checking keyring if marked as stored there.
@@ -124,6 +180,8 @@ pub async fn create_reader_session(
     source_address_big_endian: Option<bool>,
     min_frame_length: Option<usize>,
     emit_raw_bytes: Option<bool>,
+    // Bus override for single-bus devices (overrides profile config)
+    bus_override: Option<u8>,
 ) -> Result<IOCapabilities, String> {
     let settings = settings::load_settings(app.clone())
         .await
@@ -157,6 +215,11 @@ pub async fn create_reader_session(
                 .get("timeout")
                 .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
                 .unwrap_or(5.0);
+            let bus_override = profile
+                .connection
+                .get("bus_override")
+                .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .map(|v| v as u8);
 
             Box::new(GvretReader::new(
                 app.clone(),
@@ -165,6 +228,7 @@ pub async fn create_reader_session(
                 port,
                 timeout_sec,
                 limit,
+                bus_override,
             ))
         }
         "gvret_usb" | "gvret-usb" => {
@@ -181,11 +245,18 @@ pub async fn create_reader_session(
                 .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
                 .unwrap_or(115200) as u32;
 
+            let bus_override = profile
+                .connection
+                .get("bus_override")
+                .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .map(|v| v as u8);
+
             let config = GvretUsbConfig {
                 port,
                 baud_rate,
                 limit,
                 display_name: Some(profile.name.clone()),
+                bus_override,
             };
 
             Box::new(GvretUsbReader::new(app.clone(), session_id.clone(), config))
@@ -438,6 +509,16 @@ pub async fn create_reader_session(
                 .unwrap_or("none")
                 .to_string();
 
+            // Bus number override for multi-bus capture
+            // Command parameter takes precedence over profile config
+            let effective_bus_override = bus_override.or_else(|| {
+                profile
+                    .connection
+                    .get("bus_override")
+                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                    .map(|v| v as u8)
+            });
+
             let config = SlcanConfig {
                 port,
                 baud_rate,
@@ -448,6 +529,7 @@ pub async fn create_reader_session(
                 data_bits,
                 stop_bits,
                 parity,
+                bus_override: effective_bus_override,
             };
 
             Box::new(SlcanReader::new(app.clone(), session_id.clone(), config))
@@ -460,10 +542,21 @@ pub async fn create_reader_session(
                 .unwrap_or("can0")
                 .to_string();
 
+            // Bus number override for multi-bus capture
+            // Command parameter takes precedence over profile config
+            let effective_bus_override = bus_override.or_else(|| {
+                profile
+                    .connection
+                    .get("bus_override")
+                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                    .map(|v| v as u8)
+            });
+
             let config = SocketCanConfig {
                 interface,
                 limit,
                 display_name: Some(profile.name.clone()),
+                bus_override: effective_bus_override,
             };
 
             Box::new(SocketIODevice::new(app.clone(), session_id.clone(), config))
@@ -487,10 +580,21 @@ pub async fn create_reader_session(
                     })?
                     .to_string();
 
+                // Bus number override for multi-bus capture
+                // Command parameter takes precedence over profile config
+                let effective_bus_override = bus_override.or_else(|| {
+                    profile
+                        .connection
+                        .get("bus_override")
+                        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                        .map(|v| v as u8)
+                });
+
                 let config = SocketCanConfig {
                     interface,
                     limit,
                     display_name: Some(profile.name.clone()),
+                    bus_override: effective_bus_override,
                 };
 
                 Box::new(SocketIODevice::new(app.clone(), session_id.clone(), config))
@@ -528,6 +632,16 @@ pub async fn create_reader_session(
                     .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
                     .unwrap_or(0) as u8;
 
+                // Bus number override for multi-bus capture
+                // Command parameter takes precedence over profile config
+                let effective_bus_override = bus_override.or_else(|| {
+                    profile
+                        .connection
+                        .get("bus_override")
+                        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                        .map(|v| v as u8)
+                });
+
                 let config = GsUsbConfig {
                     bus,
                     address,
@@ -536,6 +650,7 @@ pub async fn create_reader_session(
                     channel,
                     limit,
                     display_name: Some(profile.name.clone()),
+                    bus_override: effective_bus_override,
                 };
 
                 Box::new(GsUsbReader::new(app.clone(), session_id.clone(), config))
@@ -649,6 +764,12 @@ pub async fn get_reader_session_state(session_id: String) -> Result<Option<IOSta
     Ok(get_session_state(&session_id).await)
 }
 
+/// List all active sessions (for discovering shareable sessions like multi-source)
+#[tauri::command(rename_all = "snake_case")]
+pub async fn list_active_sessions() -> Vec<ActiveSessionInfo> {
+    list_sessions().await
+}
+
 /// Get the capabilities of a reader session
 #[tauri::command(rename_all = "snake_case")]
 pub async fn get_reader_session_capabilities(
@@ -735,9 +856,10 @@ pub async fn seek_reader_session(session_id: String, timestamp_us: i64) -> Resul
 /// Destroy a reader session
 #[tauri::command(rename_all = "snake_case")]
 pub async fn destroy_reader_session(session_id: String) -> Result<(), String> {
-    // Unregister profile usage if this session was tracking a profile
-    if let Some(profile_id) = take_session_profile(&session_id) {
-        profile_tracker::unregister_usage(&profile_id);
+    // Unregister profile usage for all profiles this session was using
+    let profile_ids = take_session_profiles(&session_id);
+    for profile_id in profile_ids {
+        profile_tracker::unregister_usage_by_session(&profile_id, &session_id);
     }
 
     destroy_session(&session_id).await
@@ -863,4 +985,524 @@ pub async fn set_session_listener_active(
     is_active: bool,
 ) -> Result<(), String> {
     set_listener_active(&session_id, &listener_id, is_active).await
+}
+
+/// Probe a GVRET device to discover its capabilities (number of buses, etc.)
+///
+/// This loads the profile from settings, connects to the device, queries it,
+/// and returns device information. The connection is closed after probing.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn probe_gvret_device(
+    app: tauri::AppHandle,
+    profile_id: String,
+) -> Result<GvretDeviceInfo, String> {
+    let settings = settings::load_settings(app.clone())
+        .await
+        .map_err(|e| format!("Failed to load settings: {}", e))?;
+
+    let profile = settings
+        .io_profiles
+        .iter()
+        .find(|p| p.id == profile_id)
+        .ok_or_else(|| format!("Profile '{}' not found", profile_id))?;
+
+    match profile.kind.as_str() {
+        "gvret_tcp" | "gvret-tcp" => {
+            let host = profile
+                .connection
+                .get("host")
+                .and_then(|v| v.as_str())
+                .unwrap_or("127.0.0.1");
+            let port = profile
+                .connection
+                .get("port")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(23) as u16;
+            let timeout_sec = profile
+                .connection
+                .get("timeout")
+                .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(5.0);
+
+            probe_gvret_tcp(host, port, timeout_sec).await
+        }
+        "gvret_usb" | "gvret-usb" => {
+            let port = profile
+                .connection
+                .get("port")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Serial port is required for GVRET USB".to_string())?;
+            let baud_rate = profile
+                .connection
+                .get("baud_rate")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(115200) as u32;
+
+            // Run blocking serial probe in a dedicated thread
+            let port_owned = port.to_string();
+            tokio::task::spawn_blocking(move || probe_gvret_usb(&port_owned, baud_rate))
+                .await
+                .map_err(|e| format!("Probe task failed: {}", e))?
+        }
+        _ => Err(format!(
+            "Profile '{}' is not a GVRET device (kind: {})",
+            profile_id, profile.kind
+        )),
+    }
+}
+
+// ============================================================================
+// Unified Device Probe API
+// ============================================================================
+
+/// Result of probing any real-time device.
+/// Provides a unified structure for all device types.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct DeviceProbeResult {
+    /// Whether the probe was successful (device is online and responding)
+    pub success: bool,
+    /// Device type (e.g., "gvret", "slcan", "gs_usb", "socketcan")
+    pub device_type: String,
+    /// Whether this is a multi-bus device (GVRET can have multiple CAN buses)
+    pub is_multi_bus: bool,
+    /// Number of buses available (1 for single-bus devices, 1-5 for GVRET)
+    pub bus_count: u8,
+    /// Primary info line (firmware version, device name, etc.)
+    pub primary_info: Option<String>,
+    /// Secondary info line (hardware version, channel count, etc.)
+    pub secondary_info: Option<String>,
+    /// Error message if probe failed
+    pub error: Option<String>,
+}
+
+/// Probe any real-time device to check if it's online and healthy.
+///
+/// This loads the profile from settings, connects to the device, queries it,
+/// and returns device information. The connection is closed after probing.
+///
+/// If a successful probe result is cached for this profile, returns the cached
+/// result immediately without reconnecting. This is useful when the device is
+/// already running in an active session.
+///
+/// Supported device types:
+/// - gvret_tcp, gvret_usb: Multi-bus GVRET devices
+/// - slcan: Single-bus slcan/CANable devices
+/// - gs_usb: Single-bus gs_usb/candleLight devices (Windows/macOS)
+/// - socketcan: Single-bus SocketCAN interfaces (Linux)
+/// - serial: Raw serial ports (always "online" if port exists)
+#[tauri::command(rename_all = "snake_case")]
+pub async fn probe_device(
+    app: tauri::AppHandle,
+    profile_id: String,
+) -> Result<DeviceProbeResult, String> {
+    use crate::io::slcan::probe_slcan_device;
+
+    // Check cache first - if we have a successful probe result, return it immediately
+    if let Some(cached) = get_cached_probe(&profile_id) {
+        eprintln!("[probe_device] Returning cached probe result for profile '{}'", profile_id);
+        return Ok(cached);
+    }
+
+    let settings = settings::load_settings(app.clone())
+        .await
+        .map_err(|e| format!("Failed to load settings: {}", e))?;
+
+    let profile = settings
+        .io_profiles
+        .iter()
+        .find(|p| p.id == profile_id)
+        .ok_or_else(|| format!("Profile '{}' not found", profile_id))?;
+
+    let result = match profile.kind.as_str() {
+        // GVRET devices - multi-bus
+        "gvret_tcp" | "gvret-tcp" => {
+            let host = profile.connection.get("host")
+                .and_then(|v| v.as_str())
+                .unwrap_or("127.0.0.1");
+            let port = profile.connection.get("port")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(23) as u16;
+            let timeout_sec = profile.connection.get("timeout")
+                .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(5.0);
+
+            match probe_gvret_tcp(host, port, timeout_sec).await {
+                Ok(info) => Ok(DeviceProbeResult {
+                    success: true,
+                    device_type: "gvret".to_string(),
+                    is_multi_bus: true,
+                    bus_count: info.bus_count,
+                    primary_info: Some(format!("{} buses available", info.bus_count)),
+                    secondary_info: Some(format!("{}:{}", host, port)),
+                    error: None,
+                }),
+                Err(e) => Ok(DeviceProbeResult {
+                    success: false,
+                    device_type: "gvret".to_string(),
+                    is_multi_bus: true,
+                    bus_count: 0,
+                    primary_info: None,
+                    secondary_info: None,
+                    error: Some(e),
+                }),
+            }
+        }
+
+        "gvret_usb" | "gvret-usb" => {
+            let port = profile.connection.get("port")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Serial port is required for GVRET USB".to_string())?;
+            let baud_rate = profile.connection.get("baud_rate")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(115200) as u32;
+
+            let port_owned = port.to_string();
+            match tokio::task::spawn_blocking(move || probe_gvret_usb(&port_owned, baud_rate)).await {
+                Ok(Ok(info)) => Ok(DeviceProbeResult {
+                    success: true,
+                    device_type: "gvret".to_string(),
+                    is_multi_bus: true,
+                    bus_count: info.bus_count,
+                    primary_info: Some(format!("{} buses available", info.bus_count)),
+                    secondary_info: Some(port.to_string()),
+                    error: None,
+                }),
+                Ok(Err(e)) => Ok(DeviceProbeResult {
+                    success: false,
+                    device_type: "gvret".to_string(),
+                    is_multi_bus: true,
+                    bus_count: 0,
+                    primary_info: None,
+                    secondary_info: None,
+                    error: Some(e),
+                }),
+                Err(e) => Ok(DeviceProbeResult {
+                    success: false,
+                    device_type: "gvret".to_string(),
+                    is_multi_bus: true,
+                    bus_count: 0,
+                    primary_info: None,
+                    secondary_info: None,
+                    error: Some(format!("Probe task failed: {}", e)),
+                }),
+            }
+        }
+
+        // slcan devices - single-bus
+        "slcan" => {
+            let port = profile.connection.get("port")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Serial port is required for slcan".to_string())?
+                .to_string();
+            let baud_rate = profile.connection.get("baud_rate")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(115200) as u32;
+            let data_bits = profile.connection.get("data_bits")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .map(|v| v as u8);
+            let stop_bits = profile.connection.get("stop_bits")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .map(|v| v as u8);
+            let parity = profile.connection.get("parity")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            let result = tokio::task::spawn_blocking(move || {
+                probe_slcan_device(port, baud_rate, data_bits, stop_bits, parity)
+            }).await.map_err(|e| format!("Probe task failed: {}", e))?;
+
+            Ok(DeviceProbeResult {
+                success: result.success,
+                device_type: "slcan".to_string(),
+                is_multi_bus: false,
+                bus_count: if result.success { 1 } else { 0 },
+                primary_info: result.version,
+                secondary_info: result.hardware_version,
+                error: result.error,
+            })
+        }
+
+        // gs_usb devices - single-bus (Windows/macOS via nusb)
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        "gs_usb" => {
+            use crate::io::gs_usb::probe_gs_usb_device;
+
+            let bus = profile.connection.get("bus")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(0) as u8;
+            let address = profile.connection.get("address")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(0) as u8;
+
+            match probe_gs_usb_device(bus, address) {
+                Ok(info) => Ok(DeviceProbeResult {
+                    success: true,
+                    device_type: "gs_usb".to_string(),
+                    is_multi_bus: false,
+                    bus_count: info.channel_count.unwrap_or(1) as u8,
+                    primary_info: info.channel_count.map(|c| format!("{} channel(s)", c)),
+                    secondary_info: if info.supports_fd.unwrap_or(false) {
+                        Some("CAN FD supported".to_string())
+                    } else {
+                        None
+                    },
+                    error: None,
+                }),
+                Err(e) => Ok(DeviceProbeResult {
+                    success: false,
+                    device_type: "gs_usb".to_string(),
+                    is_multi_bus: false,
+                    bus_count: 0,
+                    primary_info: None,
+                    secondary_info: None,
+                    error: Some(e),
+                }),
+            }
+        }
+
+        // SocketCAN - Linux only, check if interface exists
+        #[cfg(target_os = "linux")]
+        "socketcan" => {
+            let interface = profile.connection.get("interface")
+                .and_then(|v| v.as_str())
+                .unwrap_or("can0");
+
+            // Check if the interface exists by reading from /sys/class/net
+            let path = format!("/sys/class/net/{}", interface);
+            if std::path::Path::new(&path).exists() {
+                Ok(DeviceProbeResult {
+                    success: true,
+                    device_type: "socketcan".to_string(),
+                    is_multi_bus: false,
+                    bus_count: 1,
+                    primary_info: Some(format!("Interface: {}", interface)),
+                    secondary_info: None,
+                    error: None,
+                })
+            } else {
+                Ok(DeviceProbeResult {
+                    success: false,
+                    device_type: "socketcan".to_string(),
+                    is_multi_bus: false,
+                    bus_count: 0,
+                    primary_info: None,
+                    secondary_info: None,
+                    error: Some(format!("Interface '{}' not found", interface)),
+                })
+            }
+        }
+
+        // Serial port - check if port exists
+        "serial" => {
+            let port = profile.connection.get("port")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Serial port is required".to_string())?;
+
+            // Try to check if port exists
+            let available_ports = serialport::available_ports().unwrap_or_default();
+            let port_exists = available_ports.iter().any(|p| p.port_name == port);
+
+            if port_exists {
+                Ok(DeviceProbeResult {
+                    success: true,
+                    device_type: "serial".to_string(),
+                    is_multi_bus: false,
+                    bus_count: 1,
+                    primary_info: Some(port.to_string()),
+                    secondary_info: None,
+                    error: None,
+                })
+            } else {
+                Ok(DeviceProbeResult {
+                    success: false,
+                    device_type: "serial".to_string(),
+                    is_multi_bus: false,
+                    bus_count: 0,
+                    primary_info: None,
+                    secondary_info: None,
+                    error: Some(format!("Port '{}' not found", port)),
+                })
+            }
+        }
+
+        // Recorded sources or unsupported types
+        _ => Err(format!(
+            "Profile '{}' is not a real-time device (kind: {})",
+            profile_id, profile.kind
+        )),
+    };
+
+    // Cache successful probe results for future use
+    if let Ok(ref probe_result) = result {
+        cache_probe_result(&profile_id, probe_result);
+    }
+
+    result
+}
+
+// ============================================================================
+// Multi-Source Session Commands
+// ============================================================================
+
+/// Source configuration for multi-source session creation (TypeScript-friendly version)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MultiSourceInput {
+    /// Profile ID for this source
+    pub profile_id: String,
+    /// Display name for this source (optional, defaults to profile name)
+    pub display_name: Option<String>,
+    /// Bus mappings for this source
+    pub bus_mappings: Vec<BusMapping>,
+}
+
+/// Create a multi-source reader session that combines frames from multiple devices.
+///
+/// This is used for multi-bus capture where frames from diverse sources are merged
+/// into a single stream. Each source can have its own bus mappings to:
+/// - Filter out disabled buses
+/// - Remap device bus numbers to different output bus numbers
+///
+/// The merged frames are sorted by timestamp and emitted as a single stream.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn create_multi_source_session(
+    app: tauri::AppHandle,
+    session_id: String,
+    sources: Vec<MultiSourceInput>,
+) -> Result<IOCapabilities, String> {
+    if sources.is_empty() {
+        return Err("At least one source is required".to_string());
+    }
+
+    let settings = settings::load_settings(app.clone())
+        .await
+        .map_err(|e| format!("Failed to load settings: {}", e))?;
+
+    // Convert MultiSourceInput to SourceConfig, resolving profile names and kinds
+    // Auto-assign unique output bus numbers based on source index to distinguish frames from different devices
+    let mut source_configs: Vec<SourceConfig> = Vec::with_capacity(sources.len());
+    for (source_idx, input) in sources.into_iter().enumerate() {
+        // Look up the profile to get its kind
+        let profile = settings
+            .io_profiles
+            .iter()
+            .find(|p| p.id == input.profile_id)
+            .ok_or_else(|| format!("Profile '{}' not found", input.profile_id))?;
+
+        let display_name = input.display_name.unwrap_or_else(|| profile.name.clone());
+        let profile_kind = profile.kind.clone();
+
+        // Use provided bus mappings, or auto-assign if none provided
+        // The frontend now handles sequential assignment, so we trust mappings as-is
+        let bus_mappings = if input.bus_mappings.is_empty() {
+            // No mappings provided - create default for device bus 0 with source index as output
+            let output_bus = source_idx as u8;
+            eprintln!(
+                "[create_multi_source_session] Source {} '{}' has no bus mappings, auto-assigning output bus {}",
+                source_idx, display_name, output_bus
+            );
+            vec![BusMapping {
+                device_bus: 0,
+                enabled: true,
+                output_bus,
+            }]
+        } else {
+            // Mappings provided by frontend - use as-is (frontend handles sequential assignment)
+            input.bus_mappings
+        };
+
+        source_configs.push(SourceConfig {
+            profile_id: input.profile_id,
+            profile_kind,
+            display_name,
+            bus_mappings,
+        });
+    }
+
+    // Validate all profiles are supported types
+    for config in &source_configs {
+        // Check for supported multi-source types
+        match config.profile_kind.as_str() {
+            "gvret_tcp" | "gvret-tcp" | "gvret_usb" | "gvret-usb" => {
+                // Supported
+            }
+            "slcan" => {
+                // Supported
+            }
+            "gs_usb" => {
+                // Supported (nusb driver on Windows/macOS)
+                #[cfg(target_os = "linux")]
+                {
+                    return Err(format!(
+                        "Profile '{}' uses gs_usb which on Linux should use SocketCAN interface. \
+                        Configure a socketcan profile instead.",
+                        config.profile_id
+                    ));
+                }
+            }
+            "socketcan" => {
+                // Supported on Linux
+                #[cfg(not(target_os = "linux"))]
+                {
+                    return Err(format!(
+                        "Profile '{}' uses socketcan which is only available on Linux.",
+                        config.profile_id
+                    ));
+                }
+            }
+            kind => {
+                return Err(format!(
+                    "Profile '{}' has unsupported type '{}' for multi-source mode. \
+                    Currently supported: gvret_tcp, gvret_usb, slcan, gs_usb, socketcan",
+                    config.profile_id, kind
+                ));
+            }
+        }
+
+        // Check if profile is already in use
+        profile_tracker::can_use_profile(&config.profile_id, &config.profile_kind)?;
+    }
+
+    // Track all profiles for this session
+    let profile_ids: Vec<String> = source_configs.iter().map(|c| c.profile_id.clone()).collect();
+
+    // Always destroy any existing session with this ID first.
+    // This ensures we use the fresh bus mappings provided by the frontend.
+    // Without this, a stopped session would be reused with stale mappings.
+    if get_session_state(&session_id).await.is_some() {
+        let _ = destroy_session(&session_id).await;
+    }
+
+    // Create the multi-source reader
+    let reader = MultiSourceReader::new(app.clone(), session_id.clone(), source_configs);
+
+    let result = create_session(app, session_id.clone(), Box::new(reader), None).await;
+
+    // Register profile usage for all source profiles
+    for profile_id in &profile_ids {
+        profile_tracker::register_usage(profile_id, &session_id);
+    }
+    // Store all profiles for this session (needed for cleanup on destroy)
+    register_session_profiles(&session_id, &profile_ids);
+
+    // Auto-start the session if it's new OR if it exists but is stopped
+    let should_start = if result.is_new {
+        true
+    } else {
+        // Check if existing session is stopped
+        matches!(
+            get_session_state(&session_id).await,
+            Some(state) if matches!(state, IOState::Stopped)
+        )
+    };
+
+    if should_start {
+        if let Err(e) = start_session(&session_id).await {
+            eprintln!(
+                "[create_multi_source_session] Failed to auto-start session '{}': {}",
+                session_id, e
+            );
+        }
+    }
+
+    Ok(result.capabilities)
 }

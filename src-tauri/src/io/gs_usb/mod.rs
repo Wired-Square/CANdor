@@ -223,6 +223,11 @@ pub struct GsUsbConfig {
     pub limit: Option<i64>,
     /// Display name
     pub display_name: Option<String>,
+    /// Bus number override - assigns a specific bus number to all frames from this device.
+    /// Used for multi-bus capture where multiple single-bus devices are combined.
+    /// If None, defaults to the channel number.
+    #[serde(default)]
+    pub bus_override: Option<u8>,
 }
 
 impl Default for GsUsbConfig {
@@ -235,6 +240,7 @@ impl Default for GsUsbConfig {
             channel: 0,
             limit: None,
             display_name: None,
+            bus_override: None,
         }
     }
 }

@@ -120,6 +120,8 @@ export interface CreateIOSessionOptions {
   minFrameLength?: number;
   /** Also emit raw bytes (serial-raw-bytes) in addition to frames when framing is enabled */
   emitRawBytes?: boolean;
+  /** Bus number override for single-bus devices (0-7) */
+  busOverride?: number;
 }
 
 /**
@@ -160,6 +162,8 @@ export async function createIOSession(
     // Other options
     min_frame_length: options.minFrameLength,
     emit_raw_bytes: options.emitRawBytes,
+    // Bus override for single-bus devices
+    bus_override: options.busOverride,
   });
 }
 
@@ -563,4 +567,229 @@ export async function setSessionListenerActive(
     listener_id: listenerId,
     is_active: isActive,
   });
+}
+
+// ============================================================================
+// GVRET Device Probing
+// ============================================================================
+
+/**
+ * Information about a GVRET device, obtained by probing.
+ */
+export interface GvretDeviceInfo {
+  /** Number of CAN buses available on this device (1-5) */
+  bus_count: number;
+}
+
+/**
+ * Configuration for mapping device buses to output buses.
+ * Used to remap or disable specific buses when capturing.
+ */
+export interface BusMapping {
+  /** Bus number as reported by the device (0-4) */
+  deviceBus: number;
+  /** Whether to capture frames from this bus */
+  enabled: boolean;
+  /** Bus number to use in emitted frames (0-255) */
+  outputBus: number;
+}
+
+/**
+ * Probe a GVRET device to discover its capabilities.
+ * This connects to the device, queries it, and returns device information.
+ * The connection is closed after probing.
+ * @param profileId The ID of the GVRET profile to probe
+ * @returns Device information including bus count
+ */
+export async function probeGvretDevice(profileId: string): Promise<GvretDeviceInfo> {
+  return invoke("probe_gvret_device", { profile_id: profileId });
+}
+
+/**
+ * Result of probing any real-time device.
+ * Provides a unified structure for all device types.
+ */
+export interface DeviceProbeResult {
+  /** Whether the probe was successful (device is online and responding) */
+  success: boolean;
+  /** Device type (e.g., "gvret", "slcan", "gs_usb", "socketcan") */
+  deviceType: string;
+  /** Whether this is a multi-bus device (GVRET can have multiple CAN buses) */
+  isMultiBus: boolean;
+  /** Number of buses available (1 for single-bus devices, 1-5 for GVRET) */
+  busCount: number;
+  /** Primary info line (firmware version, device name, etc.) */
+  primaryInfo: string | null;
+  /** Secondary info line (hardware version, channel count, etc.) */
+  secondaryInfo: string | null;
+  /** Error message if probe failed */
+  error: string | null;
+}
+
+/**
+ * Probe any real-time device to check if it's online and healthy.
+ *
+ * This loads the profile from settings, connects to the device, queries it,
+ * and returns device information. The connection is closed after probing.
+ *
+ * Supported device types:
+ * - gvret_tcp, gvret_usb: Multi-bus GVRET devices
+ * - slcan: Single-bus slcan/CANable devices
+ * - gs_usb: Single-bus gs_usb/candleLight devices (Windows/macOS)
+ * - socketcan: Single-bus SocketCAN interfaces (Linux)
+ * - serial: Raw serial ports
+ *
+ * @param profileId The ID of the IO profile to probe
+ * @returns Unified device probe result
+ */
+export async function probeDevice(profileId: string): Promise<DeviceProbeResult> {
+  const raw = await invoke<{
+    success: boolean;
+    device_type: string;
+    is_multi_bus: boolean;
+    bus_count: number;
+    primary_info: string | null;
+    secondary_info: string | null;
+    error: string | null;
+  }>("probe_device", { profile_id: profileId });
+
+  return {
+    success: raw.success,
+    deviceType: raw.device_type,
+    isMultiBus: raw.is_multi_bus,
+    busCount: raw.bus_count,
+    primaryInfo: raw.primary_info,
+    secondaryInfo: raw.secondary_info,
+    error: raw.error,
+  };
+}
+
+/**
+ * Create default bus mappings for a GVRET device.
+ * All buses are enabled and map to sequential output numbers starting from offset.
+ * @param busCount Number of buses on the device
+ * @param outputBusOffset Starting output bus number (default 0)
+ * @returns Array of default bus mappings
+ */
+export function createDefaultBusMappings(busCount: number, outputBusOffset: number = 0): BusMapping[] {
+  return Array.from({ length: busCount }, (_, i) => ({
+    deviceBus: i,
+    enabled: true,
+    outputBus: outputBusOffset + i,
+  }));
+}
+
+// ============================================================================
+// Multi-Source Session API
+// ============================================================================
+
+/**
+ * Configuration for a single source in a multi-source session.
+ * Used when combining frames from multiple devices.
+ */
+export interface MultiSourceInput {
+  /** Profile ID for this source */
+  profileId: string;
+  /** Display name for this source (optional, defaults to profile name) */
+  displayName?: string;
+  /** Bus mappings for this source (device bus -> output bus) */
+  busMappings: BusMapping[];
+}
+
+/**
+ * Options for creating a multi-source IO session.
+ */
+export interface CreateMultiSourceSessionOptions {
+  /** Unique session ID for the combined session */
+  sessionId: string;
+  /** Array of source configurations */
+  sources: MultiSourceInput[];
+}
+
+/**
+ * Create a multi-source reader session that combines frames from multiple devices.
+ *
+ * This is used for multi-bus capture where frames from diverse sources (e.g., multiple
+ * GVRET devices) are merged into a single stream. Each source can have its own bus
+ * mappings to:
+ * - Filter out disabled buses
+ * - Remap device bus numbers to different output bus numbers
+ *
+ * The merged frames are sorted by timestamp and emitted as a single stream.
+ *
+ * @param options Session creation options including sources and their bus mappings
+ * @returns The combined capabilities of all sources
+ */
+export async function createMultiSourceSession(
+  options: CreateMultiSourceSessionOptions
+): Promise<IOCapabilities> {
+  // Convert TypeScript camelCase to Rust snake_case for the sources
+  const rustSources = options.sources.map((source) => ({
+    profile_id: source.profileId,
+    display_name: source.displayName,
+    bus_mappings: source.busMappings.map((m) => ({
+      device_bus: m.deviceBus,
+      enabled: m.enabled,
+      output_bus: m.outputBus,
+    })),
+  }));
+
+  return invoke("create_multi_source_session", {
+    session_id: options.sessionId,
+    sources: rustSources,
+  });
+}
+
+/**
+ * Info about an active session (from backend)
+ */
+export interface ActiveSessionInfo {
+  /** Session ID */
+  sessionId: string;
+  /** Device type (e.g., "gvret_tcp", "multi_source") */
+  deviceType: string;
+  /** Current state */
+  state: IOStateType;
+  /** Session capabilities */
+  capabilities: IOCapabilities;
+  /** Number of listeners */
+  listenerCount: number;
+  /** For multi-source sessions: the source configurations */
+  multiSourceConfigs: MultiSourceInput[] | null;
+}
+
+/**
+ * List all active sessions.
+ * Useful for discovering shareable sessions like multi-source.
+ */
+export async function listActiveSessions(): Promise<ActiveSessionInfo[]> {
+  const raw: Array<{
+    session_id: string;
+    device_type: string;
+    state: IOState; // Rust sends { type: "Running" } etc, not simple string
+    capabilities: IOCapabilities;
+    listener_count: number;
+    multi_source_configs: Array<{
+      profile_id: string;
+      display_name: string;
+      bus_mappings: Array<{ device_bus: number; enabled: boolean; output_bus: number }>;
+    }> | null;
+  }> = await invoke("list_active_sessions");
+
+  return raw.map((s) => ({
+    sessionId: s.session_id,
+    deviceType: s.device_type,
+    state: getStateType(s.state), // Convert IOState to IOStateType
+    capabilities: s.capabilities,
+    listenerCount: s.listener_count,
+    multiSourceConfigs: s.multi_source_configs?.map((c) => ({
+      profileId: c.profile_id,
+      displayName: c.display_name,
+      busMappings: c.bus_mappings.map((m) => ({
+        deviceBus: m.device_bus,
+        enabled: m.enabled,
+        outputBus: m.output_bus,
+      })),
+    })) ?? null,
+  }));
 }

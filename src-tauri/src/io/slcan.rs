@@ -71,6 +71,11 @@ pub struct SlcanConfig {
     /// Parity ("none", "odd", "even") - defaults to "none"
     #[serde(default = "default_parity")]
     pub parity: String,
+    /// Bus number override - assigns a specific bus number to all frames from this device.
+    /// Used for multi-bus capture where multiple single-bus devices are combined.
+    /// If None, defaults to bus 0.
+    #[serde(default)]
+    pub bus_override: Option<u8>,
 }
 
 fn default_data_bits() -> u8 { 8 }
@@ -82,7 +87,7 @@ fn default_parity() -> String { "none".to_string() }
 // ============================================================================
 
 /// Find the slcan bitrate command for a given bitrate
-fn find_bitrate_command(bitrate: u32) -> Result<&'static str, String> {
+pub fn find_bitrate_command(bitrate: u32) -> Result<&'static str, String> {
     SLCAN_BITRATES
         .iter()
         .find(|(rate, _)| *rate == bitrate)
@@ -583,7 +588,11 @@ fn run_slcan_stream_blocking(
                     if byte == b'\r' || byte == b'\n' {
                         // End of line - try to parse frame
                         if !line_buf.is_empty() {
-                            if let Some(frame) = parse_slcan_frame(&line_buf) {
+                            if let Some(mut frame) = parse_slcan_frame(&line_buf) {
+                                // Apply bus override if configured
+                                if let Some(bus) = config.bus_override {
+                                    frame.bus = bus;
+                                }
                                 pending_frames.push(frame);
                                 total_frames += 1;
                             }

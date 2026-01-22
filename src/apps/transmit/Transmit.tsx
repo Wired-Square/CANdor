@@ -1,16 +1,20 @@
 // ui/src/apps/transmit/Transmit.tsx
 //
 // Main Transmit app component with tabbed interface for CAN/Serial transmission.
-// Uses sessionStore for multi-session support with IO picker dialog.
+// Uses useIOSession for session management, like Discovery and Decoder.
 
-import { useEffect, useCallback, useState } from "react";
+import { useEffect, useCallback, useState, useMemo } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { Send, AlertCircle, PlugZap, Unplug } from "lucide-react";
 import { useTransmitStore, type TransmitTab } from "../../stores/transmitStore";
 import {
+  createAndStartMultiSourceSession,
+  useMultiBusState,
   useSessionStore,
-  useTransmitDropdownSessions,
 } from "../../stores/sessionStore";
-import { useSettings } from "../../hooks/useSettings";
+import { useIOSession } from "../../hooks/useIOSession";
+import { useSettings, type IOProfile } from "../../hooks/useSettings";
+import type { TransmitHistoryEvent, SerialTransmitHistoryEvent, RepeatStoppedEvent } from "../../api/transmit";
 import {
   bgDarkView,
   bgDarkToolbar,
@@ -27,28 +31,74 @@ import IoReaderPickerDialog, {
   type IngestOptions,
 } from "../../dialogs/IoReaderPickerDialog";
 
+// Multi-source session ID for Transmit
+const MULTI_SESSION_ID = "transmit-multi";
+
 export default function Transmit() {
   // Settings for IO profiles
   const { settings } = useSettings();
   const ioProfiles = settings?.io_profiles ?? [];
 
-  // Filter to only transmit-capable profiles
-  const transmitProfiles = ioProfiles.filter((p) => {
+  // Helper to check if a profile can transmit and why not
+  const getTransmitStatus = useCallback((p: IOProfile): { canTransmit: boolean; reason?: string } => {
     // slcan in normal mode can transmit
-    if (p.kind === "slcan" && !p.connection?.silent_mode) return true;
+    if (p.kind === "slcan") {
+      if (p.connection?.silent_mode) {
+        return { canTransmit: false, reason: "Silent mode enabled" };
+      }
+      return { canTransmit: true };
+    }
     // gvret_tcp and gvret_usb can transmit
-    if (p.kind === "gvret_tcp" || p.kind === "gvret_usb") return true;
+    if (p.kind === "gvret_tcp" || p.kind === "gvret_usb") {
+      return { canTransmit: true };
+    }
+    // gs_usb can transmit if not in listen-only mode
+    if (p.kind === "gs_usb") {
+      if (p.connection?.listen_only !== false) {
+        return { canTransmit: false, reason: "Listen-only mode" };
+      }
+      return { canTransmit: true };
+    }
+    // socketcan can transmit (if not in listen-only mode, but that's configured at system level)
+    if (p.kind === "socketcan") {
+      return { canTransmit: true };
+    }
     // serial ports can transmit serial data
-    if (p.kind === "serial") return true;
-    return false;
-  });
+    if (p.kind === "serial") {
+      return { canTransmit: true };
+    }
+    return { canTransmit: false, reason: "Not a transmit interface" };
+  }, []);
+
+  // Get all CAN/serial profiles that could potentially be used for transmit
+  // Include non-transmittable ones so we can show them as disabled
+  const transmitProfiles = useMemo(
+    () =>
+      ioProfiles.filter((p) => {
+        // Include all CAN-capable real-time interfaces
+        if (p.kind === "slcan") return true;
+        if (p.kind === "gvret_tcp" || p.kind === "gvret_usb") return true;
+        if (p.kind === "gs_usb") return true;
+        if (p.kind === "socketcan") return true;
+        // Include serial ports
+        if (p.kind === "serial") return true;
+        return false;
+      }),
+    [ioProfiles]
+  );
+
+  // Map of profile ID to transmit status (for passing to dialog)
+  const transmitStatusMap = useMemo(
+    () => new Map(transmitProfiles.map((p) => [p.id, getTransmitStatus(p)])),
+    [transmitProfiles, getTransmitStatus]
+  );
 
   // Store selectors
   const profiles = useTransmitStore((s) => s.profiles);
   const activeTab = useTransmitStore((s) => s.activeTab);
   const queue = useTransmitStore((s) => s.queue);
   const history = useTransmitStore((s) => s.history);
-  const error = useTransmitStore((s) => s.error);
+  const transmitError = useTransmitStore((s) => s.error);
   const isLoading = useTransmitStore((s) => s.isLoading);
 
   // Store actions
@@ -56,19 +106,70 @@ export default function Transmit() {
   const setActiveTab = useTransmitStore((s) => s.setActiveTab);
   const cleanup = useTransmitStore((s) => s.cleanup);
   const clearError = useTransmitStore((s) => s.clearError);
+  const stopAllRepeats = useTransmitStore((s) => s.stopAllRepeats);
+  const stopAllGroupRepeats = useTransmitStore((s) => s.stopAllGroupRepeats);
 
-  // Session store
-  const dropdownSessions = useTransmitDropdownSessions();
-  const activeSessionId = useSessionStore((s) => s.activeSessionId);
-  const openSession = useSessionStore((s) => s.openSession);
-  const setActiveSession = useSessionStore((s) => s.setActiveSession);
-  const startSession = useSessionStore((s) => s.startSession);
+  // Multi-bus mode state from session store (centralized)
+  const {
+    multiBusMode,
+    multiBusProfiles,
+    setMultiBusMode,
+    setMultiBusProfiles,
+  } = useMultiBusState();
+
+  // Single-profile state (when not in multi-bus mode)
+  const [ioProfile, setIoProfile] = useState<string | null>(null);
 
   // Dialog state
   const [showIoPickerDialog, setShowIoPickerDialog] = useState(false);
-  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(
-    null
-  );
+
+  // Track if we've detached from a session (but profile still selected)
+  const [isDetached, setIsDetached] = useState(false);
+
+  // Determine effective session ID
+  const effectiveSessionId = multiBusMode ? MULTI_SESSION_ID : (ioProfile || undefined);
+
+  // Get profile name for display
+  const ioProfileName = useMemo(() => {
+    if (multiBusMode) {
+      return `Multi-Bus (${multiBusProfiles.length} sources)`;
+    }
+    if (!ioProfile) return undefined;
+    const profile = transmitProfiles.find((p) => p.id === ioProfile);
+    return profile?.name;
+  }, [ioProfile, multiBusMode, multiBusProfiles.length, transmitProfiles]);
+
+  // Error handler for session errors
+  const handleError = useCallback((error: string) => {
+    console.error("[Transmit] Session error:", error);
+  }, []);
+
+  // Use the useIOSession hook like Discovery does
+  const session = useIOSession({
+    appName: "transmit",
+    sessionId: effectiveSessionId,
+    profileName: ioProfileName,
+    onError: handleError,
+  });
+
+  // Destructure session state and actions
+  const {
+    capabilities,
+    state: readerState,
+    isReady: sessionReady,
+    joinerCount,
+    start,
+    stop,
+    leave,
+    rejoin,
+    reinitialize,
+  } = session;
+
+  // Derive state from reader state
+  const isStreaming = readerState === "running";
+  const isPaused = readerState === "paused";
+  const isStopped = readerState === "stopped";
+  const isConnected = sessionReady && (isStreaming || isPaused || isStopped);
 
   // Load profiles on mount
   useEffect(() => {
@@ -82,9 +183,73 @@ export default function Transmit() {
     };
   }, [cleanup]);
 
-  // Get active session for connection status display
-  const activeSession = dropdownSessions.find((s) => s.id === activeSessionId);
-  const isConnected = activeSession?.lifecycleState === "connected";
+  // Listen for transmit history events from repeat transmissions
+  const addHistoryItem = useTransmitStore((s) => s.addHistoryItem);
+  const markRepeatStopped = useTransmitStore((s) => s.markRepeatStopped);
+  useEffect(() => {
+    // CAN transmit history events
+    const unlistenCan = listen<TransmitHistoryEvent>("transmit-history", (event) => {
+      const data = event.payload;
+      // Map session_id to profile name (use queue_id as fallback identifier)
+      const profileName = ioProfileName ?? data.session_id;
+      addHistoryItem({
+        timestamp_us: data.timestamp_us,
+        profileId: data.session_id,
+        profileName,
+        type: "can",
+        frame: data.frame,
+        success: data.success,
+        error: data.error,
+      });
+    });
+
+    // Serial transmit history events
+    const unlistenSerial = listen<SerialTransmitHistoryEvent>("serial-transmit-history", (event) => {
+      const data = event.payload;
+      const profileName = ioProfileName ?? data.session_id;
+      addHistoryItem({
+        timestamp_us: data.timestamp_us,
+        profileId: data.session_id,
+        profileName,
+        type: "serial",
+        bytes: data.bytes,
+        success: data.success,
+        error: data.error,
+      });
+    });
+
+    // Repeat stopped events (due to permanent error)
+    const unlistenStopped = listen<RepeatStoppedEvent>("repeat-stopped", (event) => {
+      const data = event.payload;
+      console.warn(`[Transmit] Repeat stopped for ${data.queue_id}: ${data.reason}`);
+      markRepeatStopped(data.queue_id);
+    });
+
+    return () => {
+      unlistenCan.then((fn) => fn());
+      unlistenSerial.then((fn) => fn());
+      unlistenStopped.then((fn) => fn());
+    };
+  }, [addHistoryItem, markRepeatStopped, ioProfileName]);
+
+  // Set active session for child components (CanTransmitView, etc.)
+  // This allows useActiveSession() to return the correct session
+  useEffect(() => {
+    const store = useSessionStore.getState();
+    if (isConnected && effectiveSessionId) {
+      store.setActiveSession(effectiveSessionId);
+    } else if (!isConnected && store.activeSessionId === effectiveSessionId) {
+      // Clear only if we were the active session
+      store.setActiveSession(null);
+    }
+    // Clear active session on unmount if we were the active session
+    return () => {
+      const currentStore = useSessionStore.getState();
+      if (currentStore.activeSessionId === effectiveSessionId) {
+        currentStore.setActiveSession(null);
+      }
+    };
+  }, [isConnected, effectiveSessionId]);
 
   // Count active repeats in queue
   const activeRepeats = queue.filter((q) => q.isRepeating).length;
@@ -102,12 +267,7 @@ export default function Transmit() {
     setShowIoPickerDialog(true);
   }, []);
 
-  // Handle profile selection in IO picker
-  const handleProfileSelect = useCallback((id: string | null) => {
-    setSelectedProfileId(id);
-  }, []);
-
-  // Handle starting a session from IO picker (Watch mode - creates session and starts)
+  // Handle starting a session from IO picker (Watch mode)
   const handleStartSession = useCallback(
     async (
       profileId: string,
@@ -115,33 +275,144 @@ export default function Transmit() {
       _options: IngestOptions
     ) => {
       try {
-        // Find profile name
-        const profile = transmitProfiles.find((p) => p.id === profileId);
-        const profileName = profile?.name ?? profileId;
-
-        // Open session via sessionStore (will join existing if profile is in use)
-        // Session ID = Profile ID (simplified model - all apps share sessions)
-        const session = await openSession(profileId, profileName, "transmit", {
-          joinExisting: true, // Join if profile is in use by Discovery/Decoder
-        });
-
-        // Start the session if not already running
-        if (session.ioState !== "running") {
-          await startSession(session.id);
+        // Exit multi-bus mode if switching to single profile
+        if (multiBusMode) {
+          setMultiBusMode(false);
+          setMultiBusProfiles([]);
         }
 
-        // Set as active session
-        setActiveSession(session.id);
+        // Set the profile - this triggers useIOSession to create/join the session
+        setIoProfile(profileId);
+
+        // Clear detached state
+        setIsDetached(false);
+
+        // Reinitialize to ensure session is started
+        await reinitialize(profileId);
+
+        // Start the session if not already running
+        if (!isStreaming) {
+          await start();
+        }
 
         if (closeDialog) {
           setShowIoPickerDialog(false);
         }
       } catch (e) {
         console.error("Failed to create session:", e);
-        // Error will be shown via transmit store error state
       }
     },
-    [openSession, startSession, setActiveSession, transmitProfiles]
+    [multiBusMode, setMultiBusMode, setMultiBusProfiles, reinitialize, isStreaming, start]
+  );
+
+  // Handle stop - also stop all queue repeats and leave session
+  // For single-handle devices (serial, slcan), we need to leave the session
+  // to release the device so it can be reconnected later.
+  const handleStop = useCallback(async () => {
+    // Stop all active repeats before stopping the session
+    await stopAllRepeats();
+    await stopAllGroupRepeats();
+    await stop();
+    // Leave the session to release single-handle devices (serial, slcan)
+    // This triggers session destruction and profile tracking cleanup
+    await leave();
+  }, [stop, leave, stopAllRepeats, stopAllGroupRepeats]);
+
+  // Handle resume
+  const handleResume = useCallback(async () => {
+    await start();
+  }, [start]);
+
+  // Handle detach (leave session without stopping it)
+  const handleDetach = useCallback(async () => {
+    setIsDetached(true);
+    await leave();
+  }, [leave]);
+
+  // Handle rejoin after detaching
+  const handleRejoin = useCallback(async () => {
+    setIsDetached(false);
+    await rejoin(ioProfile || undefined);
+  }, [rejoin, ioProfile]);
+
+  // Handle joining an existing session from the IO picker dialog
+  const handleJoinSession = useCallback(
+    async (sessionId: string, sourceProfileIds?: string[]) => {
+      try {
+        // Check if this is a multi-source session
+        if (sourceProfileIds && sourceProfileIds.length > 0) {
+          // Multi-source session - join it
+          setMultiBusMode(false); // We're joining, not creating
+          setMultiBusProfiles(sourceProfileIds);
+          setIoProfile(sessionId);
+        } else {
+          // Single profile session
+          if (multiBusMode) {
+            setMultiBusMode(false);
+            setMultiBusProfiles([]);
+          }
+          setIoProfile(sessionId);
+        }
+
+        // Clear detached state
+        setIsDetached(false);
+
+        // Rejoin the session
+        await rejoin(sessionId);
+
+        // Close the dialog
+        setShowIoPickerDialog(false);
+      } catch (e) {
+        console.error("Failed to join session:", e);
+      }
+    },
+    [multiBusMode, setMultiBusMode, setMultiBusProfiles, rejoin]
+  );
+
+  // Build a map of profile ID to name for multi-source sessions
+  const profileNamesMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const profile of transmitProfiles) {
+      map.set(profile.id, profile.name);
+    }
+    return map;
+  }, [transmitProfiles]);
+
+  // Handle starting a multi-source session from IO picker (multi-bus mode)
+  const handleStartMultiIngest = useCallback(
+    async (
+      profileIds: string[],
+      closeDialog: boolean,
+      options: IngestOptions
+    ) => {
+      const { busMappings } = options;
+
+      try {
+        // Use centralized helper to create multi-source session
+        await createAndStartMultiSourceSession({
+          sessionId: MULTI_SESSION_ID,
+          listenerId: "transmit",
+          profileIds,
+          busMappings,
+          profileNames: profileNamesMap,
+        });
+
+        // Enable multi-bus mode and use the combined session
+        setMultiBusMode(true);
+        setMultiBusProfiles(profileIds);
+        setIoProfile(MULTI_SESSION_ID);
+
+        // Clear detached state
+        setIsDetached(false);
+
+        if (closeDialog) {
+          setShowIoPickerDialog(false);
+        }
+      } catch (e) {
+        console.error("Failed to create multi-source session:", e);
+      }
+    },
+    [profileNamesMap, setMultiBusMode, setMultiBusProfiles]
   );
 
   // Render active tab content
@@ -160,18 +431,39 @@ export default function Transmit() {
     }
   };
 
+  // Current profile ID for display
+  const currentProfileId = ioProfile;
+
   return (
     <div className={`flex flex-col h-full ${bgDarkView}`}>
       {/* Top Bar */}
-      <TransmitTopBar onOpenIoPicker={handleOpenIoPicker} />
+      <TransmitTopBar
+        ioProfiles={transmitProfiles}
+        ioProfile={currentProfileId}
+        defaultReadProfileId={settings?.default_read_profile}
+        multiBusMode={multiBusMode}
+        multiBusProfiles={multiBusProfiles}
+        isStreaming={isStreaming}
+        isStopped={isStopped}
+        isDetached={isDetached}
+        joinerCount={joinerCount}
+        capabilities={capabilities}
+        onOpenIoPicker={handleOpenIoPicker}
+        onStop={handleStop}
+        onResume={handleResume}
+        onDetach={handleDetach}
+        onRejoin={handleRejoin}
+        isLoading={isLoading}
+        error={transmitError}
+      />
 
       {/* Error Banner */}
-      {error && (
+      {transmitError && (
         <div
           className={`flex items-center gap-2 px-4 py-2 bg-red-900/50 border-b ${borderDarkView}`}
         >
           <AlertCircle size={16} className="text-red-400 shrink-0" />
-          <span className="text-red-300 text-sm flex-1">{error}</span>
+          <span className="text-red-300 text-sm flex-1">{transmitError}</span>
           <button
             onClick={clearError}
             className="text-red-400 hover:text-red-300 text-xs"
@@ -254,12 +546,17 @@ export default function Transmit() {
 
             {/* Connection status indicator */}
             <div className="flex-1" />
-            {dropdownSessions.length > 0 && (
+            {currentProfileId && (
               <div className="flex items-center gap-2 py-2">
                 {isConnected ? (
                   <>
                     <PlugZap size={14} className="text-green-400" />
                     <span className="text-green-400 text-xs">Connected</span>
+                  </>
+                ) : isDetached ? (
+                  <>
+                    <Unplug size={14} className="text-amber-400" />
+                    <span className="text-amber-400 text-xs">Detached</span>
                   </>
                 ) : (
                   <>
@@ -283,11 +580,15 @@ export default function Transmit() {
         isOpen={showIoPickerDialog}
         onClose={() => setShowIoPickerDialog(false)}
         ioProfiles={transmitProfiles}
-        selectedId={selectedProfileId}
+        selectedId={currentProfileId ?? null}
         defaultId={null}
-        onSelect={handleProfileSelect}
+        onSelect={() => {}} // Selection happens through onStartIngest/onJoinSession
         onStartIngest={handleStartSession}
+        onStartMultiIngest={handleStartMultiIngest}
+        onJoinSession={handleJoinSession}
         hideBuffers={true}
+        allowMultiSelect={true}
+        disabledProfiles={transmitStatusMap}
       />
     </div>
   );

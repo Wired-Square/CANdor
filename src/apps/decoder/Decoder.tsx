@@ -6,19 +6,17 @@ import { useSettings, getDisplayFrameIdFormat } from "../../hooks/useSettings";
 import { useDecoderStore } from "../../stores/decoderStore";
 import { useIOSession } from '../../hooks/useIOSession';
 import { listCatalogs, type CatalogMetadata } from "../../api/catalog";
+import { useIngestSession, type StreamEndedPayload } from '../../hooks/useIngestSession';
 import {
-  type StreamEndedPayload,
-  createIOSession,
-  startReaderSession,
-  stopReaderSession,
-  destroyReaderSession,
-  updateReaderSpeed,
-} from '../../api/io';
+  createAndStartMultiSourceSession,
+  joinMultiSourceSession,
+  useMultiBusState,
+} from '../../stores/sessionStore';
 import { clearBuffer } from "../../api/buffer";
 import DecoderTopBar from "./views/DecoderTopBar";
 import DecoderFramesView from "./views/DecoderFramesView";
 import FramePickerDialog from "../../dialogs/FramePickerDialog";
-import IoReaderPickerDialog, { BUFFER_PROFILE_ID, INGEST_SESSION_ID, type IngestOptions } from "../../dialogs/IoReaderPickerDialog";
+import IoReaderPickerDialog, { BUFFER_PROFILE_ID, type IngestOptions } from "../../dialogs/IoReaderPickerDialog";
 import { getBufferMetadata, type BufferMetadata } from "../../api/buffer";
 import SpeedPickerDialog from "../../dialogs/SpeedPickerDialog";
 import CatalogPickerDialog from "./dialogs/CatalogPickerDialog";
@@ -63,13 +61,29 @@ export default function Decoder() {
   // Track when stream has completed to ignore stale time updates
   const streamCompletedRef = useRef(false);
 
-  // Ingest mode state - uses separate session, no real-time display (for dialog-based ingest)
-  const [isIngesting, setIsIngesting] = useState(false);
-  const [ingestProfileId, setIngestProfileId] = useState<string | null>(null);
+  // Ingest speed setting (for dialog display)
   const [ingestSpeed, setIngestSpeed] = useState(0); // 0 = no limit
-  const [ingestFrameCount, setIngestFrameCount] = useState(0);
-  const [ingestError, setIngestError] = useState<string | null>(null);
-  const ingestUnlistenRefs = useRef<Array<() => void>>([]);
+
+  // Ref to hold the ingest complete handler (set after useIOSession provides reinitialize)
+  const ingestCompleteRef = useRef<((payload: import("../../hooks/useIngestSession").StreamEndedPayload) => Promise<void>) | undefined>(undefined);
+
+  // Ingest session hook - handles event listeners, session lifecycle, error handling
+  // Uses ref-based callback to avoid dependency on reinitialize (defined later)
+  const {
+    isIngesting,
+    ingestProfileId,
+    ingestFrameCount,
+    ingestError,
+    startIngest,
+    stopIngest,
+  } = useIngestSession({
+    onComplete: async (payload) => {
+      if (ingestCompleteRef.current) {
+        await ingestCompleteRef.current(payload);
+      }
+    },
+    onBeforeStart: clearBuffer,
+  });
 
   // Zustand store selectors
   const catalogPath = useDecoderStore((state) => state.catalogPath);
@@ -98,6 +112,14 @@ export default function Decoder() {
   const showAsciiGutter = useDecoderStore((state) => state.showAsciiGutter);
   const frameIdFilter = useDecoderStore((state) => state.frameIdFilter);
   const frameIdFilterSet = useDecoderStore((state) => state.frameIdFilterSet);
+
+  // Multi-bus mode state from session store (centralized)
+  const {
+    multiBusMode,
+    multiBusProfiles: ioProfiles,
+    setMultiBusMode,
+    setMultiBusProfiles: setIoProfiles,
+  } = useMultiBusState();
 
   // Zustand store actions
   const initFromSettings = useDecoderStore((state) => state.initFromSettings);
@@ -133,8 +155,10 @@ export default function Decoder() {
   const displayTimeFormat = settings?.display_time_format ?? "human";
   const decoderDir = settings?.decoder_dir ?? "";
 
-  // Throttling: accumulate frames and flush to store at limited rate
+  // Batching: accumulate frames and flush to store at limited rate
   // We store all frames (not just latest per ID) to ensure mux cases aren't lost
+  // Note: sessionStore also throttles frame delivery at 10Hz, this provides additional
+  // batching for expensive decode/store operations within each callback
   const pendingFramesRef = useRef<Array<{ frameId: number; bytes: number[]; sourceAddress?: number }>>([]);
   const pendingUnmatchedRef = useRef<Array<{ frameId: number; bytes: number[]; timestamp: number; sourceAddress?: number }>>([]);
   const pendingFilteredRef = useRef<Array<{ frameId: number; bytes: number[]; timestamp: number; sourceAddress?: number; reason: 'too_short' | 'id_filter' }>>([]);
@@ -358,7 +382,28 @@ export default function Decoder() {
     return profile?.name;
   }, [ioProfile, settings?.io_profiles]);
 
-  // Use the reader session hook
+  // Get profile names map for multi-bus mode
+  const profileNamesMap = useMemo(() => {
+    if (!settings?.io_profiles) return new Map<string, string>();
+    return new Map(settings.io_profiles.map((p) => [p.id, p.name]));
+  }, [settings?.io_profiles]);
+
+  // Use the single-profile reader session hook (when not in multi-bus mode)
+  const singleSession = useIOSession({
+    appName: "decoder",
+    sessionId: !multiBusMode ? (ioProfile || undefined) : undefined, // Only active when not in multi-bus mode
+    profileName: ioProfileName, // Pass friendly name for session dropdown display
+    requireFrames: true, // Only join sessions that produce frames (not raw bytes)
+    onFrames: handleFrames,
+    onError: handleError,
+    onTimeUpdate: handleTimeUpdate,
+    onStreamEnded: handleStreamEnded,
+    onStreamComplete: handleStreamComplete,
+  });
+
+  // Extract session state and controls
+  // Both single-source and multi-source sessions are now accessed via useIOSession
+  // (multi-source sessions use a merged session ID like "decoder-multi")
   const {
     capabilities,
     state: readerState,
@@ -373,20 +418,31 @@ export default function Decoder() {
     setSpeed,
     setTimeRange,
     seek,
-    reinitialize,
     switchToBufferReplay,
     rejoin,
-  } = useIOSession({
-    appName: "decoder",
-    sessionId: ioProfile || undefined, // Session ID = Profile ID (shares session with Discovery)
-    profileName: ioProfileName, // Pass friendly name for session dropdown display
-    requireFrames: true, // Only join sessions that produce frames (not raw bytes)
-    onFrames: handleFrames,
-    onError: handleError,
-    onTimeUpdate: handleTimeUpdate,
-    onStreamEnded: handleStreamEnded,
-    onStreamComplete: handleStreamComplete,
-  });
+    reinitialize,
+  } = singleSession;
+
+  // Set up the ingest complete handler now that reinitialize is available
+  ingestCompleteRef.current = async (payload: StreamEndedPayload) => {
+    if (payload.buffer_available && payload.count > 0) {
+      // Get the updated buffer metadata
+      const meta = await getBufferMetadata();
+      if (meta) {
+        setBufferMetadata(meta);
+
+        // Notify other windows about the buffer change
+        await emit(WINDOW_EVENTS.BUFFER_CHANGED, {
+          metadata: meta,
+          action: "ingested",
+        });
+
+        // Close the dialog and transition to buffer replay mode
+        setShowIoReaderPickerDialog(false);
+        setPendingBufferTransition(true);
+      }
+    }
+  };
 
   // Derive decoding state from reader state
   // Include "starting" to prevent race conditions where isWatching gets cleared
@@ -431,119 +487,6 @@ export default function Decoder() {
     }
   }, [isDecoding, isWatching]);
 
-  // Ingest mode handlers - uses a separate session (INGEST_SESSION_ID) with no real-time display
-  const handleIngestComplete = useCallback(async (payload: StreamEndedPayload) => {
-    setIsIngesting(false);
-    setIngestProfileId(null);
-
-    // Cleanup listeners
-    ingestUnlistenRefs.current.forEach((unlisten) => unlisten());
-    ingestUnlistenRefs.current = [];
-
-    // Destroy the ingest session
-    try {
-      await destroyReaderSession(INGEST_SESSION_ID);
-    } catch (e) {
-      console.error("Failed to destroy ingest session:", e);
-    }
-
-    if (payload.buffer_available && payload.count > 0) {
-      // Get the updated buffer metadata
-      const meta = await getBufferMetadata();
-      if (meta) {
-        setBufferMetadata(meta);
-
-        // Notify other windows about the buffer change
-        await emit(WINDOW_EVENTS.BUFFER_CHANGED, {
-          metadata: meta,
-          action: "ingested",
-        });
-
-        // Close the dialog and transition to buffer replay mode
-        setShowIoReaderPickerDialog(false);
-        setPendingBufferTransition(true);
-      }
-    }
-  }, []);
-
-  const handleStartIngest = useCallback(async (profileId: string, options?: IngestOptions) => {
-    setIngestError(null);
-    setIngestFrameCount(0);
-
-    try {
-      // Clear existing buffer first
-      await clearBuffer();
-
-      // Set up event listeners for the ingest session
-      const unlistenStreamEnded = await listen<StreamEndedPayload>(
-        `stream-ended:${INGEST_SESSION_ID}`,
-        (event) => handleIngestComplete(event.payload)
-      );
-      const unlistenError = await listen<string>(
-        `can-bytes-error:${INGEST_SESSION_ID}`,
-        (event) => {
-          setIngestError(event.payload);
-        }
-      );
-      const unlistenFrames = await listen<unknown[]>(
-        `frame-message:${INGEST_SESSION_ID}`,
-        (event) => {
-          setIngestFrameCount((prev) => prev + event.payload.length);
-        }
-      );
-
-      ingestUnlistenRefs.current = [unlistenStreamEnded, unlistenError, unlistenFrames];
-
-      // Create and start the reader session
-      // Include serial config from catalog for frame ID/source address extraction
-      await createIOSession({
-        sessionId: INGEST_SESSION_ID,
-        profileId,
-        speed: options?.speed ?? ingestSpeed,
-        startTime: options?.startTime,
-        endTime: options?.endTime,
-        limit: options?.maxFrames,
-        frameIdStartByte: serialConfig?.frame_id_start_byte,
-        frameIdBytes: serialConfig?.frame_id_bytes,
-        sourceAddressStartByte: serialConfig?.source_address_start_byte,
-        sourceAddressBytes: serialConfig?.source_address_bytes,
-        sourceAddressBigEndian: serialConfig?.source_address_byte_order === 'big',
-        minFrameLength: serialConfig?.min_frame_length,
-      });
-
-      // Apply speed setting
-      const effectiveSpeed = options?.speed ?? ingestSpeed;
-      if (effectiveSpeed > 0) {
-        await updateReaderSpeed(INGEST_SESSION_ID, effectiveSpeed);
-      }
-
-      await startReaderSession(INGEST_SESSION_ID);
-
-      setIsIngesting(true);
-      setIngestProfileId(profileId);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setIngestError(msg);
-      // Cleanup on error
-      ingestUnlistenRefs.current.forEach((unlisten) => unlisten());
-      ingestUnlistenRefs.current = [];
-    }
-  }, [handleIngestComplete, ingestSpeed, serialConfig]);
-
-  const handleStopIngest = useCallback(async () => {
-    try {
-      await stopReaderSession(INGEST_SESSION_ID);
-      // The stream-ended event will handle the rest
-    } catch (e) {
-      console.error("Failed to stop ingest:", e);
-      // Force cleanup
-      setIsIngesting(false);
-      setIngestProfileId(null);
-      ingestUnlistenRefs.current.forEach((unlisten) => unlisten());
-      ingestUnlistenRefs.current = [];
-    }
-  }, []);
-
   // Handle starting ingest from the dialog - routes to Watch or Ingest mode based on closeDialog flag
   const handleDialogStartIngest = useCallback(async (profileId: string, closeDialog: boolean, options: IngestOptions) => {
     const { speed, startTime, endTime, maxFrames } = options;
@@ -573,6 +516,7 @@ export default function Decoder() {
 
       setIoProfile(profileId);
       setPlaybackSpeed(speed as PlaybackSpeed);
+      setIsDetached(false); // Reset detached state when starting a new session
 
       // Now start watching
       // Note: reinitialize() already auto-starts the session via the backend,
@@ -586,18 +530,86 @@ export default function Decoder() {
       // Ingest mode - uses separate session, no real-time display
       // Update the ingest speed state before starting
       setIngestSpeed(speed);
-      await handleStartIngest(profileId, options);
+      await startIngest({
+        profileId,
+        speed: speed ?? ingestSpeed,
+        startTime,
+        endTime,
+        maxFrames,
+        frameIdStartByte: serialConfig?.frame_id_start_byte,
+        frameIdBytes: serialConfig?.frame_id_bytes,
+        sourceAddressStartByte: serialConfig?.source_address_start_byte,
+        sourceAddressBytes: serialConfig?.source_address_bytes,
+        sourceAddressBigEndian: serialConfig?.source_address_byte_order === 'big',
+        minFrameLength: serialConfig?.min_frame_length,
+      });
     }
-  }, [setIoProfile, reinitialize, handleStartIngest, setPlaybackSpeed, serialConfig]);
+  }, [setIoProfile, reinitialize, startIngest, setPlaybackSpeed, serialConfig, ingestSpeed]);
+
+  // Handle Watch for multiple profiles (multi-bus mode)
+  // Creates a proper Rust-side merged session that other apps can join
+  const handleDialogStartMultiIngest = useCallback(async (
+    profileIds: string[],
+    closeDialog: boolean,
+    options: IngestOptions
+  ) => {
+    const { speed, busMappings } = options;
+
+    if (closeDialog) {
+      // Watch mode for multiple buses
+      setWatchFrameCount(0);
+
+      const multiSessionId = "decoder-multi";
+
+      try {
+        // Use centralized helper to create multi-source session
+        await createAndStartMultiSourceSession({
+          sessionId: multiSessionId,
+          listenerId: "decoder",
+          profileIds,
+          busMappings,
+          profileNames: profileNamesMap,
+        });
+
+        // Store source profile IDs for UI display
+        setIoProfiles(profileIds);
+        setMultiBusMode(false); // Use useIOSession to connect to the merged session
+
+        // Set the multi-source session as the active profile
+        // This causes singleSession (useIOSession) to connect to the merged session
+        setIoProfile(multiSessionId);
+
+        setPlaybackSpeed(speed as PlaybackSpeed);
+        setIsDetached(false); // Reset detached state when starting a new session
+
+        setIsWatching(true);
+        streamCompletedRef.current = false;
+        setShowIoReaderPickerDialog(false);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`Failed to start multi-bus session '${multiSessionId}':`, msg);
+      }
+    }
+    // Ingest mode not supported for multi-bus
+  }, [setIoProfile, setIoProfiles, setMultiBusMode, setPlaybackSpeed, profileNamesMap]);
+
+  // Handle selecting multiple profiles in multi-bus mode
+  // Note: We don't set multiBusMode=true here. Instead, multiBusMode stays false
+  // and we create a Rust-side merged session in handleDialogStartMultiIngest.
+  const handleSelectMultiple = useCallback((profileIds: string[]) => {
+    setIoProfiles(profileIds);
+    // Don't set multiBusMode here - let handleDialogStartMultiIngest handle it
+    setIoProfile(null); // Clear single profile selection
+  }, [setIoProfiles, setIoProfile]);
 
   // Handle stopping from the dialog - routes to Watch or Ingest stop
   const handleDialogStopIngest = useCallback(async () => {
     if (isWatching) {
       await handleStopWatch();
     } else if (isIngesting) {
-      await handleStopIngest();
+      await stopIngest();
     }
-  }, [isWatching, isIngesting, handleStopWatch, handleStopIngest]);
+  }, [isWatching, isIngesting, handleStopWatch, stopIngest]);
 
   // Effect to handle auto-transition to buffer replay after stream ends
   useEffect(() => {
@@ -624,7 +636,6 @@ export default function Decoder() {
       flushPendingFrames();
     }
   }, [isDecoding, flushPendingFrames]);
-
 
   // For realtime sources, update clock every second while decoding
   const [realtimeClock, setRealtimeClock] = useState<number | null>(null);
@@ -932,10 +943,12 @@ export default function Decoder() {
         onIoProfileChange={handleIoProfileChange}
         defaultReadProfileId={settings?.default_read_profile}
         bufferMetadata={bufferMetadata}
+        multiBusMode={multiBusMode}
+        multiBusProfiles={ioProfiles}
         speed={playbackSpeed}
         supportsSpeed={capabilities?.supports_speed_control ?? false}
         isStreaming={isDecoding || isIngesting}
-        onStopStream={isDecoding ? handleStopWatch : handleStopIngest}
+        onStopStream={isDecoding ? handleStopWatch : stopIngest}
         isStopped={isStopped}
         onResume={start}
         joinerCount={joinerCount}
@@ -1040,8 +1053,10 @@ export default function Decoder() {
         onClose={() => setShowIoReaderPickerDialog(false)}
         ioProfiles={settings?.io_profiles || []}
         selectedId={ioProfile}
+        selectedIds={multiBusMode ? ioProfiles : []}
         defaultId={settings?.default_read_profile}
         onSelect={handleIoProfileChange}
+        onSelectMultiple={handleSelectMultiple}
         onImport={(meta) => setBufferMetadata(meta)}
         bufferMetadata={bufferMetadata}
         defaultDir={settings?.dump_dir}
@@ -1051,13 +1066,32 @@ export default function Decoder() {
         ingestSpeed={ingestSpeed}
         onIngestSpeedChange={(speed) => setIngestSpeed(speed)}
         onStartIngest={handleDialogStartIngest}
+        onStartMultiIngest={handleDialogStartMultiIngest}
         onStopIngest={handleDialogStopIngest}
         ingestError={ingestError}
-        onJoinSession={(profileId) => {
+        onJoinSession={async (profileId, sourceProfileIds) => {
+          // Use centralized helper to join multi-source session
+          await joinMultiSourceSession({
+            sessionId: profileId,
+            listenerId: "decoder",
+            sourceProfileIds,
+          });
+
+          // Update UI state
           setIoProfile(profileId);
-          rejoin();
+          setIoProfiles(sourceProfileIds || []);
+          // Always use single-session mode when joining (even for multi-source sessions)
+          setMultiBusMode(false);
+          setIsDetached(false);
+          // Pass profileId explicitly since React state hasn't updated yet
+          // (effectiveSessionId would still have the old value)
+          const sessionName = sourceProfileIds && sourceProfileIds.length > 1
+            ? `Multi-Bus (${sourceProfileIds.length} sources)`
+            : profileId;
+          rejoin(profileId, sessionName);
           setShowIoReaderPickerDialog(false);
         }}
+        allowMultiSelect={true}
       />
 
       <SpeedPickerDialog

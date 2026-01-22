@@ -268,6 +268,10 @@ pub fn run() {
             sessions::get_session_listener_list,
             sessions::reinitialize_session_if_safe_cmd,
             sessions::set_session_listener_active,
+            sessions::probe_gvret_device,
+            sessions::probe_device,
+            sessions::create_multi_source_session,
+            sessions::list_active_sessions,
             io::get_active_listeners,
             // Buffer / CSV Import API
             buffers::import_csv_to_buffer,
@@ -316,10 +320,13 @@ pub fn run() {
             transmit::get_profile_usage,
             // IO session-based transmit
             transmit::io_transmit_can_frame,
+            transmit::io_transmit_serial,
             transmit::get_io_session_capabilities,
             transmit::io_start_repeat_transmit,
             transmit::io_stop_repeat_transmit,
             transmit::io_stop_all_repeats,
+            // IO session serial repeat
+            transmit::io_start_serial_repeat_transmit,
             // IO session group repeat (multiple frames in one loop)
             transmit::io_start_repeat_group,
             transmit::io_stop_repeat_group,

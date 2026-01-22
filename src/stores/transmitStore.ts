@@ -13,6 +13,7 @@ import {
   // IO session-based transmit
   ioTransmitCanFrame,
   ioStartRepeatTransmit,
+  ioStartSerialRepeatTransmit,
   ioStopRepeatTransmit,
   ioStopAllRepeats,
   // IO session group repeat
@@ -36,13 +37,13 @@ export type TransmitTab = "can" | "serial" | "queue" | "history";
 export { CAN_FD_DLC_VALUES };
 export type CanFdDlc = (typeof CAN_FD_DLC_VALUES)[number];
 
-/** GVRET bus types */
+/** GVRET bus types - generic names since bus meanings vary by device */
 export const GVRET_BUSES = [
-  { value: 0, label: "CAN0" },
-  { value: 1, label: "CAN1" },
-  { value: 2, label: "SWCAN" },
-  { value: 3, label: "LIN1" },
-  { value: 4, label: "LIN2" },
+  { value: 0, label: "Bus 0" },
+  { value: 1, label: "Bus 1" },
+  { value: 2, label: "Bus 2" },
+  { value: 3, label: "Bus 3" },
+  { value: 4, label: "Bus 4" },
 ] as const;
 
 /** Queue item for repeat transmit */
@@ -203,6 +204,8 @@ export interface TransmitState {
   startRepeat: (queueId: string) => Promise<void>;
   /** Stop repeat for queue item */
   stopRepeat: (queueId: string) => Promise<void>;
+  /** Mark repeat as stopped (called by backend event, no API call needed) */
+  markRepeatStopped: (queueId: string) => void;
   /** Stop all repeats */
   stopAllRepeats: () => Promise<void>;
   /** Update queue item repeat interval */
@@ -267,7 +270,7 @@ export const useTransmitStore = create<TransmitState>((set, get) => ({
   error: null,
   canEditor: { ...DEFAULT_CAN_EDITOR },
   serialEditor: { ...DEFAULT_SERIAL_EDITOR },
-  queueRepeatIntervalMs: 100,
+  queueRepeatIntervalMs: 1000,
 
   // ---- Actions ----
   loadProfiles: async () => {
@@ -466,15 +469,40 @@ export const useTransmitStore = create<TransmitState>((set, get) => ({
       return;
     }
 
-    const bytes = get().parseSerialBytes();
-    if (bytes.length === 0) return;
+    const rawBytes = get().parseSerialBytes();
+    if (rawBytes.length === 0) return;
+
+    // Apply framing to bytes (same as single-shot in SerialTransmitView)
+    let bytesToStore = [...rawBytes];
+    if (serialEditor.framingMode === "slip") {
+      // SLIP framing: END(0xC0), escape special chars, END(0xC0)
+      const SLIP_END = 0xc0;
+      const SLIP_ESC = 0xdb;
+      const SLIP_ESC_END = 0xdc;
+      const SLIP_ESC_ESC = 0xdd;
+      const framed: number[] = [SLIP_END];
+      for (const b of rawBytes) {
+        if (b === SLIP_END) {
+          framed.push(SLIP_ESC, SLIP_ESC_END);
+        } else if (b === SLIP_ESC) {
+          framed.push(SLIP_ESC, SLIP_ESC_ESC);
+        } else {
+          framed.push(b);
+        }
+      }
+      framed.push(SLIP_END);
+      bytesToStore = framed;
+    } else if (serialEditor.framingMode === "delimiter") {
+      // Append delimiter
+      bytesToStore = [...rawBytes, ...serialEditor.delimiter];
+    }
 
     const item: TransmitQueueItem = {
       id: `queue-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       profileId: session.profileId,
       profileName: session.profileName,
       type: "serial",
-      serialBytes: bytes,
+      serialBytes: bytesToStore,
       framingMode:
         serialEditor.framingMode === "raw" ? undefined : serialEditor.framingMode,
       repeatIntervalMs: queueRepeatIntervalMs,
@@ -524,23 +552,43 @@ export const useTransmitStore = create<TransmitState>((set, get) => ({
       return;
     }
 
-    if (!session.capabilities?.can_transmit) {
-      set({ error: `Session '${item.profileName}' does not support transmit` });
-      return;
-    }
-
-    if (item.type !== "can" || !item.canFrame) {
-      set({ error: "Only CAN frames support repeat mode currently" });
-      return;
+    // Check capabilities based on item type
+    if (item.type === "can") {
+      if (!session.capabilities?.can_transmit) {
+        set({ error: `Session '${item.profileName}' does not support CAN transmit` });
+        return;
+      }
+      if (!item.canFrame) {
+        set({ error: "CAN frame is missing" });
+        return;
+      }
+    } else if (item.type === "serial") {
+      if (!session.capabilities?.can_transmit_serial) {
+        set({ error: `Session '${item.profileName}' does not support serial transmit` });
+        return;
+      }
+      if (!item.serialBytes || item.serialBytes.length === 0) {
+        set({ error: "Serial bytes are missing" });
+        return;
+      }
     }
 
     try {
-      await ioStartRepeatTransmit(
-        session.id,
-        queueId,
-        item.canFrame,
-        item.repeatIntervalMs
-      );
+      if (item.type === "can" && item.canFrame) {
+        await ioStartRepeatTransmit(
+          session.id,
+          queueId,
+          item.canFrame,
+          item.repeatIntervalMs
+        );
+      } else if (item.type === "serial" && item.serialBytes) {
+        await ioStartSerialRepeatTransmit(
+          session.id,
+          queueId,
+          item.serialBytes,
+          item.repeatIntervalMs
+        );
+      }
 
       // Update queue item
       set({
@@ -569,6 +617,30 @@ export const useTransmitStore = create<TransmitState>((set, get) => ({
       });
     } catch (e) {
       set({ error: String(e) });
+    }
+  },
+
+  // Called by backend event when repeat stops due to permanent error
+  // No API call needed since backend already stopped
+  markRepeatStopped: (queueId) => {
+    const state = get();
+    // Check if it's a group - if so, remove from activeGroups too
+    const item = state.queue.find((q) => q.id === queueId);
+    if (item?.groupName) {
+      const newActiveGroups = new Set(state.activeGroups);
+      newActiveGroups.delete(item.groupName);
+      set({
+        activeGroups: newActiveGroups,
+        queue: state.queue.map((q) =>
+          q.groupName === item.groupName ? { ...q, isRepeating: false } : q
+        ),
+      });
+    } else {
+      set({
+        queue: state.queue.map((q) =>
+          q.id === queueId ? { ...q, isRepeating: false } : q
+        ),
+      });
     }
   },
 

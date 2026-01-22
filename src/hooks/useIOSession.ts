@@ -135,12 +135,14 @@ export interface UseIOSessionResult {
       // Other options
       minFrameLength?: number;
       emitRawBytes?: boolean;
+      // Bus override for single-bus devices (0-7)
+      busOverride?: number;
     }
   ) => Promise<void>;
   /** Switch to buffer replay mode (after stream ends with buffer data) */
   switchToBufferReplay: (speed?: number) => Promise<void>;
   /** Rejoin an existing session after leaving (for shared sessions) */
-  rejoin: (profileId?: string) => Promise<void>;
+  rejoin: (profileId?: string, profileName?: string) => Promise<void>;
   /** Transmit a CAN frame (only if capabilities.can_transmit is true) */
   transmitFrame: (frame: CanTransmitFrame) => Promise<TransmitResult>;
 }
@@ -201,6 +203,8 @@ export function useIOSession(
   const setupCompleteRef = useRef(false);
   // Track whether component is mounted (to prevent cleanup after remount)
   const isMountedRef = useRef(true);
+  // Track the currently active session ID (for cleanup to check if session changed)
+  const currentSessionIdRef = useRef<string | null>(null);
   // Listener ID is the app name for clarity in debugging
   const listenerIdRef = useRef<string>(appName);
 
@@ -277,8 +281,9 @@ export function useIOSession(
         });
         console.log(`[useIOSession:${appName}] registerCallbacks completed`);
 
-        // Mark setup as complete - cleanup should now work
+        // Mark setup as complete and track current session
         setupCompleteRef.current = true;
+        currentSessionIdRef.current = effectiveSessionId;
         console.log(`[useIOSession:${appName}] setup() complete, setupComplete=true`);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -315,15 +320,26 @@ export function useIOSession(
         const sessionId = effectiveSessionId;
 
         // Delay cleanup to handle StrictMode remount
-        // If component remounts within 100ms, isMountedRef will be true again
+        // StrictMode unmounts and immediately remounts with the SAME session ID.
+        // When switching sessions normally, we get cleanup for old ID then setup for new ID.
+        // We need to distinguish these cases to avoid skipping cleanup when switching sessions.
         setTimeout(() => {
-          // Skip cleanup if component remounted (StrictMode)
-          if (isMountedRef.current) {
-            console.log(`[useIOSession:${appName}] skipping cleanup - component remounted`);
+          // Only skip cleanup if:
+          // 1. Component is still mounted AND
+          // 2. The CURRENT active session is the SAME as the one we're trying to clean up
+          //    (this means StrictMode remounted with the same session - don't clean up)
+          //
+          // If the current session is DIFFERENT (session switching), we must clean up the old one
+          // even though the component is mounted (with the new session)
+          //
+          // Use currentSessionIdRef to check what session the component is CURRENTLY using,
+          // not what session was used when this cleanup was created.
+          if (isMountedRef.current && currentSessionIdRef.current === sessionId) {
+            console.log(`[useIOSession:${appName}] skipping cleanup - component remounted with same session`);
             return;
           }
 
-          console.log(`[useIOSession:${appName}] proceeding with cleanup...`);
+          console.log(`[useIOSession:${appName}] proceeding with cleanup for session '${sessionId}'...`);
 
           // Clear frontend callbacks
           clearCallbacks(sessionId, listenerId);
@@ -469,6 +485,7 @@ export function useIOSession(
         sourceAddressBigEndian?: boolean;
         minFrameLength?: number;
         emitRawBytes?: boolean;
+        busOverride?: number;
       }
     ) => {
       // For reinitialize, use new profile ID if provided, else current
@@ -478,9 +495,19 @@ export function useIOSession(
       // Use the stored profile name for display (falls back to profile ID)
       const targetProfileName = effectiveProfileName;
 
-      console.log(`[useIOSession:${appName}] reinitialize() - targetProfileId=${targetProfileId}, profileName=${targetProfileName}`);
+      console.log(`[useIOSession:${appName}] reinitialize() - targetProfileId=${targetProfileId}, currentSession=${currentSessionIdRef.current}, profileName=${targetProfileName}`);
 
       try {
+        // If switching to a different session, leave the old one first
+        const oldSessionId = currentSessionIdRef.current;
+        if (oldSessionId && oldSessionId !== targetProfileId) {
+          console.log(`[useIOSession:${appName}] reinitialize() - switching sessions, leaving old session '${oldSessionId}'`);
+          // Clear callbacks for old session
+          clearCallbacks(oldSessionId, listenerIdRef.current);
+          // Leave old session (Rust will destroy if we were the last listener)
+          await leaveSession(oldSessionId, listenerIdRef.current);
+        }
+
         // Reinitialize uses Rust's atomic check - if other listeners exist, it won't destroy
         // The backend auto-starts the session after creation
         await reinitializeSession(
@@ -500,8 +527,12 @@ export function useIOSession(
             maxFrameLength: opts?.maxFrameLength,
             minFrameLength: opts?.minFrameLength,
             emitRawBytes: opts?.emitRawBytes,
+            busOverride: opts?.busOverride,
           }
         );
+
+        // Update current session ref
+        currentSessionIdRef.current = targetProfileId;
 
         // Re-register callbacks after reinitialize
         registerCallbacks(targetProfileId, listenerIdRef.current, {
@@ -516,7 +547,7 @@ export function useIOSession(
         callbacksRef.current.onError?.(msg);
       }
     },
-    [appName, effectiveSessionId, effectiveProfileName, reinitializeSession, registerCallbacks]
+    [appName, effectiveSessionId, effectiveProfileName, reinitializeSession, registerCallbacks, clearCallbacks, leaveSession]
   );
 
   const switchToBufferReplay = useCallback(

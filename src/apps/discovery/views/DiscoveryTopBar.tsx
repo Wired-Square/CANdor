@@ -1,11 +1,11 @@
 // ui/src/apps/discovery/views/DiscoveryTopBar.tsx
 
-import { Search, ChevronRight, ListFilter, Star, FileText, Save, Trash2, Info, Wrench, Square, Download, Type, Unplug, Plug, Play } from "lucide-react";
+import { Search, ChevronRight, ListFilter, Save, Trash2, Info, Wrench, Download, Type } from "lucide-react";
 import type { IOProfile } from "../../../types/common";
 import type { BufferMetadata } from "../../../api/buffer";
-import { BUFFER_PROFILE_ID } from "../../../dialogs/IoReaderPickerDialog";
 import FlexSeparator from "../../../components/FlexSeparator";
-import { buttonBase, iconButtonBase, dangerButtonBase, warningButtonBase, successButtonBase, successIconButton } from "../../../styles/buttonStyles";
+import { ReaderButton, SessionActionButtons } from "../../../components/SessionControls";
+import { buttonBase, iconButtonBase } from "../../../styles/buttonStyles";
 
 type Props = {
   // IO profile selection
@@ -15,6 +15,10 @@ type Props = {
   defaultReadProfileId?: string | null;
   bufferMetadata?: BufferMetadata | null;
   isStreaming: boolean;
+  /** Whether multi-bus mode is active */
+  multiBusMode?: boolean;
+  /** Profile IDs when in multi-bus mode */
+  multiBusProfiles?: string[];
 
   // Stop control (Watch is initiated via data source dialog)
   onStopWatch?: () => void;
@@ -65,6 +69,8 @@ export default function DiscoveryTopBar({
   defaultReadProfileId,
   bufferMetadata,
   isStreaming,
+  multiBusMode = false,
+  multiBusProfiles = [],
   onStopWatch,
   isStopped = false,
   onResume,
@@ -88,24 +94,6 @@ export default function DiscoveryTopBar({
   onInfo,
   onOpenToolbox,
 }: Props) {
-  // All profiles are read profiles now (mode field removed)
-  const readProfiles = ioProfiles;
-
-  // Get display names - handle buffer profile specially
-  const isBufferProfile = ioProfile === BUFFER_PROFILE_ID;
-  const selectedProfile = readProfiles.find((p) => p.id === ioProfile);
-
-  // For buffer profile, use the buffer's display name directly
-  // Buffer names are now set descriptively by readers (e.g., "GVRET host:port", "PostgreSQL db")
-  const getBufferDisplayName = () => {
-    return bufferMetadata?.name || "Buffer";
-  };
-
-  const ioReaderName = isBufferProfile
-    ? `Buffer: ${getBufferDisplayName()}`
-    : (selectedProfile?.name || "No reader");
-  const isDefaultReader = !isBufferProfile && selectedProfile?.id === defaultReadProfileId;
-
   // In serial mode, tools are available with raw bytes even without framed data
   const hasFrames = isSerialMode ? (frameCount > 0 || serialBytesCount > 0) : frameCount > 0;
 
@@ -117,65 +105,29 @@ export default function DiscoveryTopBar({
 
         <FlexSeparator />
 
-        {/* IO Reader Selection - shows star/file icon + name */}
-        <button
+        {/* IO Reader Selection */}
+        <ReaderButton
+          ioProfile={ioProfile}
+          ioProfiles={ioProfiles}
+          multiBusMode={multiBusMode}
+          multiBusProfiles={multiBusProfiles}
+          bufferMetadata={bufferMetadata}
+          defaultReadProfileId={defaultReadProfileId}
           onClick={onOpenIoReaderPicker}
           disabled={isStreaming}
-          className={buttonBase}
-          title="Select IO Reader"
-        >
-          {isBufferProfile ? (
-            <FileText className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
-          ) : isDefaultReader ? (
-            <Star className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" fill="currentColor" />
-          ) : null}
-          <span className="max-w-40 truncate">{ioReaderName}</span>
-        </button>
+        />
 
-        {/* Stop button - only shown when actively streaming */}
-        {isStreaming && (
-          <button
-            onClick={onStopWatch}
-            className={dangerButtonBase}
-            title="Stop IO Stream"
-          >
-            <Square className="w-3.5 h-3.5" />
-          </button>
-        )}
-
-        {/* Resume button - shown when session is stopped but profile is selected */}
-        {isStopped && !isDetached && onResume && (
-          <button
-            onClick={onResume}
-            className={successIconButton}
-            title="Resume IO Stream"
-          >
-            <Play className="w-3.5 h-3.5" />
-          </button>
-        )}
-
-        {/* Detach button - only shown when streaming and multiple apps are connected */}
-        {isStreaming && joinerCount > 1 && onDetach && (
-          <button
-            onClick={onDetach}
-            className={warningButtonBase}
-            title="Detach IO Stream"
-          >
-            <Unplug className="w-3.5 h-3.5" />
-          </button>
-        )}
-
-        {/* Rejoin button - shown when detached from a session */}
-        {isDetached && onRejoin && (
-          <button
-            onClick={onRejoin}
-            className={successButtonBase}
-            title="Rejoin Session"
-          >
-            <Plug className="w-3.5 h-3.5" />
-            <span>Rejoin</span>
-          </button>
-        )}
+        {/* Session control buttons */}
+        <SessionActionButtons
+          isStreaming={isStreaming}
+          isStopped={isStopped}
+          isDetached={isDetached}
+          joinerCount={joinerCount}
+          onStop={onStopWatch}
+          onResume={onResume}
+          onDetach={onDetach}
+          onRejoin={onRejoin}
+        />
 
         {/* Right arrow icon */}
         <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
