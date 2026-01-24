@@ -16,6 +16,11 @@ import {
   useSessionStore,
   useSession,
 } from "../stores/sessionStore";
+
+// Module-level map to track sessions being reinitialized.
+// This persists across re-renders and prevents the effect from
+// trying to openSession while reinitialize() is in progress.
+const reinitializingSessions = new Map<string, boolean>();
 import {
   setSessionListenerActive,
   type IOCapabilities,
@@ -239,13 +244,21 @@ export function useIOSession(
     isMountedRef.current = true;
 
     // No session ID means no profile selected - nothing to do
+    // BUT we need to update currentSessionIdRef so that cleanup for the OLD session
+    // will properly run (it checks if currentSession === cleanupSession to detect StrictMode)
     if (!effectiveSessionId) {
-      console.log(`[useIOSession:${appName}] no effectiveSessionId, skipping`);
+      console.log(`[useIOSession:${appName}] no effectiveSessionId, updating currentSessionIdRef to null and skipping`);
+      currentSessionIdRef.current = null;
       return;
     }
 
     if (initializingRef.current) {
       console.log(`[useIOSession:${appName}] already initializing, skipping`);
+      return;
+    }
+
+    if (reinitializingSessions.get(effectiveSessionId)) {
+      console.log(`[useIOSession:${appName}] reinitializing in progress for session '${effectiveSessionId}', skipping effect setup`);
       return;
     }
 
@@ -291,8 +304,9 @@ export function useIOSession(
 
         // Mark setup as complete and track current session
         setupCompleteRef.current = true;
+        console.log(`[useIOSession:${appName}] setup() - updating currentSessionIdRef from '${currentSessionIdRef.current}' to '${effectiveSessionId}'`);
         currentSessionIdRef.current = effectiveSessionId;
-        console.log(`[useIOSession:${appName}] setup() complete, setupComplete=true`);
+        console.log(`[useIOSession:${appName}] setup() complete, setupComplete=true, currentSessionIdRef='${currentSessionIdRef.current}'`);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error(`[useIOSession:${appName}] setup() failed:`, msg);
@@ -312,6 +326,8 @@ export function useIOSession(
 
     return () => {
       console.log(`[useIOSession:${appName}] ========== CLEANUP ==========`);
+      console.log(`[useIOSession:${appName}]   effectiveSessionId: ${effectiveSessionId}`);
+      console.log(`[useIOSession:${appName}]   currentSessionIdRef: ${currentSessionIdRef.current}`);
       console.log(`[useIOSession:${appName}]   setupCompleteRef.current: ${setupCompleteRef.current}`);
       console.log(`[useIOSession:${appName}]   isMountedRef.current: ${isMountedRef.current}`);
 
@@ -342,6 +358,7 @@ export function useIOSession(
           //
           // Use currentSessionIdRef to check what session the component is CURRENTLY using,
           // not what session was used when this cleanup was created.
+          console.log(`[useIOSession:${appName}] cleanup timeout - isMounted=${isMountedRef.current}, currentSession=${currentSessionIdRef.current}, cleanupSession=${sessionId}`);
           if (isMountedRef.current && currentSessionIdRef.current === sessionId) {
             console.log(`[useIOSession:${appName}] skipping cleanup - component remounted with same session`);
             return;
@@ -389,29 +406,44 @@ export function useIOSession(
   }, [appName, effectiveSessionId, startSession]);
 
   const stop = useCallback(async () => {
-    if (!effectiveSessionId) return;
+    console.log(`[useIOSession:${appName}] stop() called, effectiveSessionId=${effectiveSessionId}, currentSessionIdRef=${currentSessionIdRef.current}`);
+    if (!effectiveSessionId) {
+      console.log(`[useIOSession:${appName}] stop() - no effectiveSessionId, returning`);
+      return;
+    }
     try {
+      console.log(`[useIOSession:${appName}] stop() - calling stopSession...`);
       await stopSession(effectiveSessionId);
+      console.log(`[useIOSession:${appName}] stop() - stopSession complete`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      console.log(`[useIOSession:${appName}] stop() - ERROR: ${msg}`);
       if (!msg.includes("not found")) {
         callbacksRef.current.onError?.(msg);
       }
     }
-  }, [effectiveSessionId, stopSession]);
+  }, [appName, effectiveSessionId, stopSession]);
 
   const leave = useCallback(async () => {
-    if (!effectiveSessionId) return;
+    console.log(`[useIOSession:${appName}] leave() called, effectiveSessionId=${effectiveSessionId}, currentSessionIdRef=${currentSessionIdRef.current}`);
+    if (!effectiveSessionId) {
+      console.log(`[useIOSession:${appName}] leave() - no effectiveSessionId, returning`);
+      return;
+    }
     // First, mark listener as inactive in Rust so it stops receiving frames immediately
     // This is done before clearing callbacks to prevent race conditions
     try {
+      console.log(`[useIOSession:${appName}] leave() - marking listener inactive...`);
       await setSessionListenerActive(effectiveSessionId, listenerIdRef.current, false);
     } catch {
       // Ignore - session may not exist
     }
+    console.log(`[useIOSession:${appName}] leave() - clearing callbacks...`);
     clearCallbacks(effectiveSessionId, listenerIdRef.current);
+    console.log(`[useIOSession:${appName}] leave() - calling leaveSession...`);
     await leaveSession(effectiveSessionId, listenerIdRef.current);
-  }, [effectiveSessionId, leaveSession, clearCallbacks]);
+    console.log(`[useIOSession:${appName}] leave() - complete`);
+  }, [appName, effectiveSessionId, leaveSession, clearCallbacks]);
 
   const pause = useCallback(async () => {
     if (!effectiveSessionId) return;
@@ -506,6 +538,10 @@ export function useIOSession(
       const targetProfileId = newProfileId || effectiveSessionId;
       if (!targetProfileId) return;
 
+      // Mark as reinitializing in module-level map to prevent effect from running concurrently
+      // This persists across re-renders, unlike a ref
+      reinitializingSessions.set(targetProfileId, true);
+
       // Use the stored profile name for display (falls back to profile ID)
       const targetProfileName = effectiveProfileName;
 
@@ -546,7 +582,9 @@ export function useIOSession(
         );
 
         // Update current session ref
+        console.log(`[useIOSession:${appName}] reinitialize() - updating currentSessionIdRef from '${currentSessionIdRef.current}' to '${targetProfileId}'`);
         currentSessionIdRef.current = targetProfileId;
+        console.log(`[useIOSession:${appName}] reinitialize() - currentSessionIdRef is now '${currentSessionIdRef.current}'`);
 
         // Re-register callbacks after reinitialize
         registerCallbacks(targetProfileId, listenerIdRef.current, {
@@ -557,9 +595,14 @@ export function useIOSession(
           onStreamComplete: () => callbacksRef.current.onStreamComplete?.(),
           onSpeedChange: (speed) => callbacksRef.current.onSpeedChange?.(speed),
         });
+
+        // Mark setup as complete for the new session
+        setupCompleteRef.current = true;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         callbacksRef.current.onError?.(msg);
+      } finally {
+        reinitializingSessions.delete(targetProfileId);
       }
     },
     [appName, effectiveSessionId, effectiveProfileName, reinitializeSession, registerCallbacks, clearCallbacks, leaveSession]

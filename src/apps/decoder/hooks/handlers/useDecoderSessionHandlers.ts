@@ -3,12 +3,10 @@
 // Session-related handlers for Decoder: start ingest, stop watch, detach, rejoin, multi-bus, IO profile change.
 
 import { useCallback } from "react";
-import {
-  createAndStartMultiSourceSession,
-  joinMultiSourceSession,
-} from "../../../../stores/sessionStore";
 import type { PlaybackSpeed } from "../../../../components/TimeController";
 import type { IngestOptions } from "../../../../dialogs/IoReaderPickerDialog";
+import type { IngestOptions as ManagerIngestOptions } from "../../../../hooks/useIOSessionManager";
+import { BUFFER_PROFILE_ID } from "../../../../hooks/useIOSessionManager";
 import type { SerialFrameConfig } from "../../../../utils/frameExport";
 
 export interface UseDecoderSessionHandlersParams {
@@ -34,16 +32,15 @@ export interface UseDecoderSessionHandlersParams {
   ) => Promise<void>;
   stop: () => Promise<void>;
   leave: () => Promise<void>;
-  rejoin: (sessionId?: string, sessionName?: string) => Promise<void>;
 
   // Store actions
   setIoProfile: (profileId: string | null) => void;
   setPlaybackSpeed: (speed: PlaybackSpeed) => void;
+  clearFrames: () => void;
 
   // Multi-bus state
   setMultiBusMode: (mode: boolean) => void;
   setMultiBusProfiles: (profiles: string[]) => void;
-  profileNamesMap: Map<string, string>;
 
   // Ingest session
   startIngest: (params: {
@@ -68,11 +65,16 @@ export interface UseDecoderSessionHandlersParams {
   // Watch state
   isWatching: boolean;
   setIsWatching: (watching: boolean) => void;
-  setWatchFrameCount: (count: number | ((prev: number) => number)) => void;
+  resetWatchFrameCount: () => void;
   streamCompletedRef: React.MutableRefObject<boolean>;
 
-  // Detached state
-  setIsDetached: (detached: boolean) => void;
+  // Detach/rejoin handlers (from manager)
+  handleDetach: () => Promise<void>;
+  handleRejoin: () => Promise<void>;
+
+  // Multi-bus handlers (from manager)
+  startMultiBusSession: (profileIds: string[], options: ManagerIngestOptions) => Promise<void>;
+  joinExistingSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
 
   // Ingest speed
   ingestSpeed: number;
@@ -92,21 +94,23 @@ export function useDecoderSessionHandlers({
   reinitialize,
   stop,
   leave,
-  rejoin,
   setIoProfile,
   setPlaybackSpeed,
+  clearFrames,
   setMultiBusMode,
   setMultiBusProfiles,
-  profileNamesMap,
   startIngest,
   stopIngest,
   isIngesting,
   serialConfig,
   isWatching,
   setIsWatching,
-  setWatchFrameCount,
+  resetWatchFrameCount,
   streamCompletedRef,
-  setIsDetached,
+  handleDetach,
+  handleRejoin,
+  startMultiBusSession,
+  joinExistingSession,
   ingestSpeed,
   setIngestSpeed,
   closeIoReaderPicker,
@@ -114,57 +118,38 @@ export function useDecoderSessionHandlers({
   ioProfiles,
 }: UseDecoderSessionHandlersParams) {
   // Handle Watch for multiple profiles (multi-bus mode)
-  // Creates a proper Rust-side merged session that other apps can join
+  // Uses manager's startMultiBusSession which creates a proper Rust-side merged session
   const handleDialogStartMultiIngest = useCallback(
     async (profileIds: string[], closeDialog: boolean, options: IngestOptions) => {
-      const { speed, busMappings } = options;
+      const { speed } = options;
 
       if (closeDialog) {
         // Watch mode for multiple buses
-        setWatchFrameCount(0);
-
-        const multiSessionId = "decoder-multi";
+        // Clear frames from previous session before starting new one
+        clearFrames();
+        resetWatchFrameCount();
 
         try {
-          // Use centralized helper to create multi-source session
-          await createAndStartMultiSourceSession({
-            sessionId: multiSessionId,
-            listenerId: "decoder",
-            profileIds,
-            busMappings,
-            profileNames: profileNamesMap,
-          });
-
-          // Store source profile IDs for UI display
-          setMultiBusProfiles(profileIds);
-          setMultiBusMode(false); // Use useIOSession to connect to the merged session
-
-          // Set the multi-source session as the active profile
-          // This causes singleSession (useIOSession) to connect to the merged session
-          setIoProfile(multiSessionId);
+          // Use manager's startMultiBusSession - handles all session creation
+          await startMultiBusSession(profileIds, options);
 
           setPlaybackSpeed(speed as PlaybackSpeed);
-          setIsDetached(false); // Reset detached state when starting a new session
-
           setIsWatching(true);
           streamCompletedRef.current = false;
           closeIoReaderPicker();
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          console.error(`Failed to start multi-bus session '${multiSessionId}':`, msg);
+          console.error(`Failed to start multi-bus session:`, msg);
         }
       }
       // Ingest mode not supported for multi-bus
     },
     [
-      setIoProfile,
-      setMultiBusProfiles,
-      setMultiBusMode,
+      clearFrames,
+      resetWatchFrameCount,
+      startMultiBusSession,
       setPlaybackSpeed,
-      profileNamesMap,
-      setWatchFrameCount,
       setIsWatching,
-      setIsDetached,
       streamCompletedRef,
       closeIoReaderPicker,
     ]
@@ -176,6 +161,9 @@ export function useDecoderSessionHandlers({
       const { speed, startTime, endTime, maxFrames } = options;
       if (closeDialog) {
         // Watch mode - uses decoder session for real-time display
+        // Clear frames from previous session before starting new one
+        clearFrames();
+
         // reinitialize() uses Rust's atomic check - if other listeners exist,
         // it won't destroy and will return the existing session instead
         await reinitialize(profileId, {
@@ -205,14 +193,13 @@ export function useDecoderSessionHandlers({
 
         setIoProfile(profileId);
         setPlaybackSpeed(speed as PlaybackSpeed);
-        setIsDetached(false); // Reset detached state when starting a new session
 
         // Now start watching
         // Note: reinitialize() already auto-starts the session via the backend,
         // so we don't need to call start() here. Calling start() with the old
         // effectiveSessionId (before React re-render) would restart the wrong session.
         setIsWatching(true);
-        setWatchFrameCount(0);
+        resetWatchFrameCount();
         streamCompletedRef.current = false; // Reset flag when starting playback
         closeIoReaderPicker();
       } else {
@@ -235,18 +222,18 @@ export function useDecoderSessionHandlers({
       }
     },
     [
-      setIoProfile,
+      clearFrames,
       reinitialize,
-      startIngest,
+      setIoProfile,
       setPlaybackSpeed,
-      serialConfig,
-      ingestSpeed,
-      setIngestSpeed,
       setIsWatching,
-      setWatchFrameCount,
-      setIsDetached,
+      resetWatchFrameCount,
       streamCompletedRef,
       closeIoReaderPicker,
+      setIngestSpeed,
+      startIngest,
+      serialConfig,
+      ingestSpeed,
     ]
   );
 
@@ -280,31 +267,19 @@ export function useDecoderSessionHandlers({
     // The stream-ended event will handle buffer transition
   }, [stop, setIsWatching]);
 
-  // Detach from shared session without stopping it
-  // Keep the profile selected so user can rejoin
-  const handleDetach = useCallback(async () => {
-    await leave();
-    setIsDetached(true);
-    setIsWatching(false);
-  }, [leave, setIsDetached, setIsWatching]);
-
-  // Rejoin a session after detaching
-  const handleRejoin = useCallback(async () => {
-    await rejoin();
-    setIsDetached(false);
-    setIsWatching(true);
-  }, [rejoin, setIsDetached, setIsWatching]);
+  // Note: handleDetach and handleRejoin are provided by useIOSessionManager
+  // They are passed through from the parent component
 
   // Handle IO profile change - only reinitializes for buffer mode
   // For regular profiles, reinitialize is called from handleDialogStartIngest when user clicks Watch
   const handleIoProfileChange = useCallback(
     async (profileId: string | null) => {
       setIoProfile(profileId);
-      setIsDetached(false); // Reset detached state when changing profile
 
       // Handle buffer selection - needs special buffer reader
-      if (profileId === "buffer") {
-        await reinitialize(undefined, { useBuffer: true, speed: playbackSpeed });
+      if (profileId === BUFFER_PROFILE_ID) {
+        // Explicitly pass BUFFER_PROFILE_ID to avoid stale closure capturing old profile ID
+        await reinitialize(BUFFER_PROFILE_ID, { useBuffer: true, speed: playbackSpeed });
       } else if (profileId && ioProfiles) {
         // Set default speed from the selected profile if it has one
         const profile = ioProfiles.find((p) => p.id === profileId);
@@ -316,42 +291,17 @@ export function useDecoderSessionHandlers({
         // and reinitialize is called from handleDialogStartIngest when Watch is clicked
       }
     },
-    [setIoProfile, setIsDetached, reinitialize, playbackSpeed, ioProfiles, setPlaybackSpeed]
+    [setIoProfile, reinitialize, playbackSpeed, ioProfiles, setPlaybackSpeed]
   );
 
   // Handle joining an existing session from IO picker dialog
   const handleJoinSession = useCallback(
     async (profileId: string, sourceProfileIds?: string[]) => {
-      // Use centralized helper to join multi-source session
-      await joinMultiSourceSession({
-        sessionId: profileId,
-        listenerId: "decoder",
-        sourceProfileIds,
-      });
-
-      // Update UI state
-      setIoProfile(profileId);
-      setMultiBusProfiles(sourceProfileIds || []);
-      // Always use single-session mode when joining (even for multi-source sessions)
-      setMultiBusMode(false);
-      setIsDetached(false);
-      // Pass profileId explicitly since React state hasn't updated yet
-      // (effectiveSessionId would still have the old value)
-      const sessionName =
-        sourceProfileIds && sourceProfileIds.length > 1
-          ? `Multi-Bus (${sourceProfileIds.length} sources)`
-          : profileId;
-      rejoin(profileId, sessionName);
+      // Use manager's joinExistingSession - handles all session joining
+      await joinExistingSession(profileId, sourceProfileIds);
       closeIoReaderPicker();
     },
-    [
-      setIoProfile,
-      setMultiBusProfiles,
-      setMultiBusMode,
-      setIsDetached,
-      rejoin,
-      closeIoReaderPicker,
-    ]
+    [joinExistingSession, closeIoReaderPicker]
   );
 
   // Handle skipping IO picker (continue without reader)

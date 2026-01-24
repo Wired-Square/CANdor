@@ -54,7 +54,6 @@ export interface UseDecoderHandlersParams {
   pause: () => Promise<void>;
   resume: () => Promise<void>;
   leave: () => Promise<void>;
-  rejoin: (sessionId?: string, sessionName?: string) => Promise<void>;
   setSpeed: (speed: number) => Promise<void>;
   setTimeRange: (start?: string, end?: string) => Promise<void>;
   seek: (timeUs: number) => Promise<void>;
@@ -66,6 +65,7 @@ export interface UseDecoderHandlersParams {
   // Store actions (decoder)
   setIoProfile: (profileId: string | null) => void;
   setPlaybackSpeed: (speed: PlaybackSpeed) => void;
+  clearFrames: () => void;
   setStartTime: (time: string) => void;
   setEndTime: (time: string) => void;
   updateCurrentTime: (time: number) => void;
@@ -90,7 +90,6 @@ export interface UseDecoderHandlersParams {
   // Multi-bus state
   setMultiBusMode: (mode: boolean) => void;
   setMultiBusProfiles: (profiles: string[]) => void;
-  profileNamesMap: Map<string, string>;
 
   // Ingest session
   startIngest: (params: {
@@ -112,11 +111,16 @@ export interface UseDecoderHandlersParams {
   // Watch state
   isWatching: boolean;
   setIsWatching: (watching: boolean) => void;
-  setWatchFrameCount: (count: number | ((prev: number) => number)) => void;
+  resetWatchFrameCount: () => void;
   streamCompletedRef: React.MutableRefObject<boolean>;
 
-  // Detached state
-  setIsDetached: (detached: boolean) => void;
+  // Detach/rejoin handlers (from manager)
+  handleDetach: () => Promise<void>;
+  handleRejoin: () => Promise<void>;
+
+  // Multi-bus handlers (from manager)
+  startMultiBusSession: (profileIds: string[], options: import("../../../hooks/useIOSessionManager").IngestOptions) => Promise<void>;
+  joinExistingSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
 
   // Ingest speed
   ingestSpeed: number;
@@ -148,21 +152,23 @@ export function useDecoderHandlers(params: UseDecoderHandlersParams): DecoderHan
     reinitialize: params.reinitialize,
     stop: params.stop,
     leave: params.leave,
-    rejoin: params.rejoin,
     setIoProfile: params.setIoProfile,
     setPlaybackSpeed: params.setPlaybackSpeed,
+    clearFrames: params.clearFrames,
     setMultiBusMode: params.setMultiBusMode,
     setMultiBusProfiles: params.setMultiBusProfiles,
-    profileNamesMap: params.profileNamesMap,
     startIngest: params.startIngest,
     stopIngest: params.stopIngest,
     isIngesting: params.isIngesting,
     serialConfig: params.serialConfig,
     isWatching: params.isWatching,
     setIsWatching: params.setIsWatching,
-    setWatchFrameCount: params.setWatchFrameCount,
+    resetWatchFrameCount: params.resetWatchFrameCount,
     streamCompletedRef: params.streamCompletedRef,
-    setIsDetached: params.setIsDetached,
+    handleDetach: params.handleDetach,
+    handleRejoin: params.handleRejoin,
+    startMultiBusSession: params.startMultiBusSession,
+    joinExistingSession: params.joinExistingSession,
     ingestSpeed: params.ingestSpeed,
     setIngestSpeed: params.setIngestSpeed,
     closeIoReaderPicker: params.closeIoReaderPicker,

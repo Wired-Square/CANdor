@@ -9,13 +9,9 @@ import type { BufferMetadata } from "../../../../api/buffer";
 
 export interface UseDiscoverySessionHandlersParams {
   // Session manager state
-  multiBusMode: boolean;
   isStreaming: boolean;
   isPaused: boolean;
   sessionReady: boolean;
-  ioProfile: string | null;
-  sourceProfileId: string | null;
-  bufferModeEnabled: boolean;
 
   // Session manager actions
   setMultiBusMode: (mode: boolean) => void;
@@ -27,8 +23,6 @@ export interface UseDiscoverySessionHandlersParams {
   stop: () => Promise<void>;
   pause: () => Promise<void>;
   resume: () => Promise<void>;
-  leave: () => Promise<void>;
-  rejoin: (sessionId?: string, sessionName?: string) => Promise<void>;
   reinitialize: (profileId?: string, options?: any) => Promise<void>;
 
   // Store actions
@@ -46,19 +40,23 @@ export interface UseDiscoverySessionHandlersParams {
   addSerialBytes: (entries: { byte: number; timestampUs: number }[]) => void;
   setSerialConfig: (config: any) => void;
   setFramingConfig: (config: any) => void;
-  setWatchFrameCount: (count: number | ((prev: number) => number)) => void;
+  resetWatchFrameCount: () => void;
   showError: (title: string, message: string, details?: string) => void;
 
-  // Helpers
-  profileNamesMap: Map<string, string>;
-  createAndStartMultiSourceSession: (options: any) => Promise<any>;
-  joinMultiSourceSession: (options: any) => Promise<any>;
+  // Detach/rejoin handlers (from manager)
+  handleDetach: () => Promise<void>;
+  handleRejoin: () => Promise<void>;
+
+  // Multi-bus handlers (from manager)
+  startMultiBusSession: (profileIds: string[], options: any) => Promise<void>;
+  joinExistingSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
+
+  // API functions
   getBufferMetadata: () => Promise<BufferMetadata | null>;
   getBufferFrameInfo: () => Promise<any[]>;
   getBufferBytesById: (id: string) => Promise<any[]>;
   setActiveBuffer: (id: string) => Promise<void>;
   setBufferMetadata: (meta: BufferMetadata | null) => void;
-  setIsDetached: (detached: boolean) => void;
 
   // Dialog controls
   closeIoReaderPicker: () => void;
@@ -68,13 +66,9 @@ export interface UseDiscoverySessionHandlersParams {
 }
 
 export function useDiscoverySessionHandlers({
-  multiBusMode: _multiBusMode,
   isStreaming,
   isPaused,
   sessionReady,
-  ioProfile,
-  sourceProfileId,
-  bufferModeEnabled,
   setMultiBusMode,
   setMultiBusProfiles,
   setIoProfile,
@@ -84,8 +78,6 @@ export function useDiscoverySessionHandlers({
   stop,
   pause,
   resume,
-  leave,
-  rejoin,
   reinitialize,
   setPlaybackSpeed,
   clearBuffer,
@@ -101,24 +93,24 @@ export function useDiscoverySessionHandlers({
   addSerialBytes,
   setSerialConfig,
   setFramingConfig,
-  setWatchFrameCount,
+  resetWatchFrameCount,
   showError,
-  profileNamesMap,
-  createAndStartMultiSourceSession,
-  joinMultiSourceSession,
+  handleDetach,
+  handleRejoin,
+  startMultiBusSession,
+  joinExistingSession,
   getBufferMetadata,
   getBufferFrameInfo,
   getBufferBytesById,
   setActiveBuffer,
   setBufferMetadata,
-  setIsDetached,
   closeIoReaderPicker,
   BUFFER_PROFILE_ID,
 }: UseDiscoverySessionHandlersParams) {
   // Handle IO profile change
   const handleIoProfileChange = useCallback(async (profileId: string | null) => {
+    console.log(`[DiscoverySessionHandlers] handleIoProfileChange called - profileId=${profileId}`);
     setIoProfile(profileId);
-    setIsDetached(false);
 
     // Clear analysis results when switching readers
     clearAnalysisResults();
@@ -133,11 +125,14 @@ export function useDiscoverySessionHandlers({
 
     // Check if switching to the buffer reader
     if (profileId === BUFFER_PROFILE_ID) {
+      console.log(`[DiscoverySessionHandlers] Switching to buffer mode`);
       const meta = await getBufferMetadata();
       setBufferMetadata(meta);
 
       if (meta && meta.count > 0) {
+        console.log(`[DiscoverySessionHandlers] Buffer has ${meta.count} items, type=${meta.buffer_type}`);
         if (meta.buffer_type === "bytes") {
+          console.log(`[DiscoverySessionHandlers] Bytes mode - loading bytes`);
           await setActiveBuffer(meta.id);
           try {
             const bytes = await getBufferBytesById(meta.id);
@@ -150,8 +145,19 @@ export function useDiscoverySessionHandlers({
           } catch (e) {
             console.error("Failed to load bytes from buffer:", e);
           }
+          console.log(`[DiscoverySessionHandlers] Bytes mode - calling reinitialize(${BUFFER_PROFILE_ID})`);
+          // Explicitly pass BUFFER_PROFILE_ID to leave the old session and switch properly
+          await reinitialize(BUFFER_PROFILE_ID, { useBuffer: true });
+          console.log(`[DiscoverySessionHandlers] Bytes mode - reinitialize complete`);
+          // Stop the session immediately - bytes are already loaded into the store, no streaming needed
+          console.log(`[DiscoverySessionHandlers] Bytes mode - stopping session (data already loaded)`);
+          await stop();
+          console.log(`[DiscoverySessionHandlers] Bytes mode - session stopped`);
         } else {
-          await reinitialize(undefined, { useBuffer: true });
+          console.log(`[DiscoverySessionHandlers] Frames mode - calling reinitialize(${BUFFER_PROFILE_ID})`);
+          // Explicitly pass BUFFER_PROFILE_ID to avoid stale closure capturing old profile ID
+          await reinitialize(BUFFER_PROFILE_ID, { useBuffer: true });
+          console.log(`[DiscoverySessionHandlers] Frames mode - reinitialize complete`);
 
           const BUFFER_MODE_THRESHOLD = 100000;
 
@@ -177,7 +183,6 @@ export function useDiscoverySessionHandlers({
     }
   }, [
     setIoProfile,
-    setIsDetached,
     clearAnalysisResults,
     clearBuffer,
     clearFramePicker,
@@ -192,6 +197,7 @@ export function useDiscoverySessionHandlers({
     getBufferBytesById,
     addSerialBytes,
     reinitialize,
+    stop,
     enableBufferMode,
     getBufferFrameInfo,
     setFrameInfoFromBuffer,
@@ -203,6 +209,7 @@ export function useDiscoverySessionHandlers({
     closeDialog: boolean,
     options: IngestOptions
   ) => {
+    console.log(`[DiscoverySessionHandlers] handleDialogStartIngest called - profileId=${profileId}, closeDialog=${closeDialog}`);
     const {
       speed,
       startTime: optStartTime,
@@ -238,8 +245,17 @@ export function useDiscoverySessionHandlers({
 
     if (closeDialog) {
       // Watch mode
-      setWatchFrameCount(0);
+      console.log(`[DiscoverySessionHandlers] Watch mode - calling reinitialize(${profileId})`);
+
+      // Clear ALL data from previous session before starting new one
+      clearBuffer();
+      clearFramePicker();
+      clearAnalysisResults();
+      disableBufferMode();
+      resetWatchFrameCount();
       clearSerialBytes();
+      resetFraming();
+      setBackendByteCount(0);
       setBackendFrameCount(0);
       setSourceProfileId(profileId);
 
@@ -277,6 +293,7 @@ export function useDiscoverySessionHandlers({
         emitRawBytes,
         busOverride,
       });
+      console.log(`[DiscoverySessionHandlers] Watch mode - reinitialize complete`);
 
       setIoProfile(profileId);
       setPlaybackSpeed(speed as PlaybackSpeed);
@@ -284,14 +301,21 @@ export function useDiscoverySessionHandlers({
       setMultiBusProfiles([]);
 
       closeIoReaderPicker();
+      console.log(`[DiscoverySessionHandlers] Watch mode - complete`);
     }
-    // Ingest mode is handled by useIngestSession hook via startIngest
+    // Ingest mode is handled by useIOSessionManager via startIngest
   }, [
-    setSerialConfig,
-    setWatchFrameCount,
+    clearBuffer,
+    clearFramePicker,
+    clearAnalysisResults,
+    disableBufferMode,
+    resetWatchFrameCount,
     clearSerialBytes,
+    resetFraming,
+    setBackendByteCount,
     setBackendFrameCount,
     setSourceProfileId,
+    setSerialConfig,
     setFramingConfig,
     reinitialize,
     setIoProfile,
@@ -302,35 +326,32 @@ export function useDiscoverySessionHandlers({
   ]);
 
   // Handle Watch/Ingest for multiple profiles (multi-bus mode)
+  // Uses manager's startMultiBusSession which creates a proper Rust-side merged session
   const handleDialogStartMultiIngest = useCallback(async (
     profileIds: string[],
     closeDialog: boolean,
     options: IngestOptions
   ) => {
-    const { speed, busMappings } = options;
+    const { speed } = options;
 
     if (closeDialog) {
-      setWatchFrameCount(0);
+      // Clear ALL data from previous session before starting new one
+      clearBuffer();
+      clearFramePicker();
+      clearAnalysisResults();
+      disableBufferMode();
+      resetWatchFrameCount();
       clearSerialBytes();
+      resetFraming();
+      setBackendByteCount(0);
       setBackendFrameCount(0);
 
-      const multiSessionId = "discovery-multi";
-
       try {
-        await createAndStartMultiSourceSession({
-          sessionId: multiSessionId,
-          listenerId: "discovery",
-          profileIds,
-          busMappings,
-          profileNames: profileNamesMap,
-        });
+        // Use manager's startMultiBusSession - handles all session creation
+        await startMultiBusSession(profileIds, options);
 
-        setMultiBusMode(true);
-        setMultiBusProfiles(profileIds);
         setShowBusColumn(true);
-        setIoProfile(multiSessionId);
         setPlaybackSpeed(speed as PlaybackSpeed);
-
         closeIoReaderPicker();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -338,15 +359,17 @@ export function useDiscoverySessionHandlers({
       }
     }
   }, [
-    setWatchFrameCount,
+    clearBuffer,
+    clearFramePicker,
+    clearAnalysisResults,
+    disableBufferMode,
+    resetWatchFrameCount,
     clearSerialBytes,
+    resetFraming,
+    setBackendByteCount,
     setBackendFrameCount,
-    createAndStartMultiSourceSession,
-    profileNamesMap,
-    setMultiBusMode,
-    setMultiBusProfiles,
+    startMultiBusSession,
     setShowBusColumn,
-    setIoProfile,
     setPlaybackSpeed,
     closeIoReaderPicker,
     showError,
@@ -360,45 +383,32 @@ export function useDiscoverySessionHandlers({
 
   // Handle play/resume button click
   const handlePlay = useCallback(async () => {
+    console.log(`[DiscoverySessionHandlers] handlePlay - isPaused=${isPaused}, isStreaming=${isStreaming}, sessionReady=${sessionReady}`);
     if (isPaused) {
+      console.log(`[DiscoverySessionHandlers] handlePlay - resuming...`);
       await resume();
+      console.log(`[DiscoverySessionHandlers] handlePlay - resume complete`);
     } else if (isStreaming) {
-      console.log("[Discovery] Ignoring play request - already streaming");
+      console.log("[DiscoverySessionHandlers] Ignoring play request - already streaming");
     } else if (!sessionReady) {
-      console.log("[Discovery] Ignoring play request - session not ready");
+      console.log("[DiscoverySessionHandlers] Ignoring play request - session not ready");
     } else {
-      setWatchFrameCount(0);
+      console.log(`[DiscoverySessionHandlers] handlePlay - starting...`);
+      resetWatchFrameCount();
       await start();
+      console.log(`[DiscoverySessionHandlers] handlePlay - start complete`);
     }
-  }, [isPaused, isStreaming, sessionReady, resume, start, setWatchFrameCount]);
+  }, [isPaused, isStreaming, sessionReady, resume, start, resetWatchFrameCount]);
 
   // Handle stop button click
   const handleStop = useCallback(async () => {
+    console.log(`[DiscoverySessionHandlers] handleStop - calling stop...`);
     await stop();
+    console.log(`[DiscoverySessionHandlers] handleStop - stop complete`);
   }, [stop]);
 
-  // Detach from shared session without stopping it
-  const handleDetach = useCallback(async () => {
-    await leave();
-    setIsDetached(true);
-  }, [leave, setIsDetached]);
-
-  // Rejoin a session after detaching
-  const handleRejoin = useCallback(async () => {
-    const profileToRejoin = (ioProfile === BUFFER_PROFILE_ID && sourceProfileId)
-      ? sourceProfileId
-      : ioProfile;
-
-    if (bufferModeEnabled) {
-      disableBufferMode();
-    }
-    if (ioProfile === BUFFER_PROFILE_ID && sourceProfileId) {
-      setIoProfile(sourceProfileId);
-    }
-
-    await rejoin(profileToRejoin || undefined);
-    setIsDetached(false);
-  }, [ioProfile, sourceProfileId, bufferModeEnabled, BUFFER_PROFILE_ID, disableBufferMode, setIoProfile, rejoin, setIsDetached]);
+  // Note: handleDetach and handleRejoin are provided by useIOSessionManager
+  // They are passed through from the parent component
 
   // Handle pause button click
   const handlePause = useCallback(async () => {
@@ -410,36 +420,15 @@ export function useDiscoverySessionHandlers({
     profileId: string,
     sourceProfileIds?: string[]
   ) => {
-    await joinMultiSourceSession({
-      sessionId: profileId,
-      listenerId: "discovery",
-      sourceProfileIds,
-    });
-
-    setIoProfile(profileId);
-    setMultiBusProfiles(sourceProfileIds || []);
-    setMultiBusMode(false);
-    setIsDetached(false);
+    // Use manager's joinExistingSession - handles all session joining
+    await joinExistingSession(profileId, sourceProfileIds);
 
     if (sourceProfileIds && sourceProfileIds.length > 1) {
       setShowBusColumn(true);
     }
 
-    const sessionName = sourceProfileIds && sourceProfileIds.length > 1
-      ? `Multi-Bus (${sourceProfileIds.length} sources)`
-      : profileId;
-    rejoin(profileId, sessionName);
     closeIoReaderPicker();
-  }, [
-    joinMultiSourceSession,
-    setIoProfile,
-    setMultiBusProfiles,
-    setMultiBusMode,
-    setIsDetached,
-    setShowBusColumn,
-    rejoin,
-    closeIoReaderPicker,
-  ]);
+  }, [joinExistingSession, setShowBusColumn, closeIoReaderPicker]);
 
   return {
     handleIoProfileChange,

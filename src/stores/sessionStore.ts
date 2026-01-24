@@ -135,6 +135,11 @@ function scheduleFlush(immediate: boolean) {
 
 /** Accumulate frames for throttled delivery */
 function accumulateFrames(sessionId: string, frames: FrameMessage[], activeListeners: string[]) {
+  // Guard against null/undefined frames (can happen during session transitions)
+  if (!frames || !Array.isArray(frames)) {
+    return;
+  }
+
   const now = performance.now();
   let pending = pendingFramesMap.get(sessionId);
   if (!pending) {
@@ -541,11 +546,15 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   // ---- Session Lifecycle ----
   openSession: async (profileId, profileName, listenerId, options = {}) => {
+    console.log(`[sessionStore:openSession] Called with profileId=${profileId}, profileName=${profileName}, listenerId=${listenerId}`);
+    console.log(`[sessionStore:openSession] Options: ${JSON.stringify(options)}`);
+
     // SIMPLIFIED MODEL: Session ID = Profile ID
     const sessionId = profileId;
 
     // Step 1: Check if we already have this session in our store
     const existingSession = get().sessions[sessionId];
+    console.log(`[sessionStore:openSession] existingSession lifecycle=${existingSession?.lifecycleState}`);
     if (existingSession?.lifecycleState === "connected") {
       // Register this listener with Rust backend
       try {
@@ -578,6 +587,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const existingCaps = await getIOSessionCapabilities(sessionId);
     const existingState = await getIOSessionState(sessionId);
     const backendExists = existingCaps && existingState?.type !== "Error";
+    console.log(`[sessionStore:openSession] backendExists=${backendExists}, existingState.type=${existingState?.type}`);
 
     // Step 3: Destroy error session if exists
     if (existingCaps && existingState?.type === "Error") {
@@ -598,6 +608,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
     if (backendExists) {
       // Join existing backend session
+      console.log(`[sessionStore:openSession] Backend exists, joining session ${sessionId}`);
       const joinResult = await joinReaderSession(sessionId);
       capabilities = joinResult.capabilities;
       ioState = getStateType(joinResult.state);
@@ -616,8 +627,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       }
     } else {
       // Create new backend session
+      console.log(`[sessionStore:openSession] Backend does not exist, creating new session`);
       // Auto-detect buffer mode from profile ID
       const isBufferMode = profileId === BUFFER_PROFILE_ID || options.useBuffer;
+      console.log(`[sessionStore:openSession] isBufferMode=${isBufferMode}`);
 
       const createOptions: CreateIOSessionOptions = {
         sessionId,
@@ -638,7 +651,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       };
 
       try {
+        console.log(`[sessionStore:openSession] Calling createIOSession with options:`, JSON.stringify(createOptions));
         capabilities = await createIOSession(createOptions);
+        console.log(`[sessionStore:openSession] createIOSession succeeded`);
 
         // Backend auto-starts the session, so query the actual state
         const currentState = await getIOSessionState(sessionId);
@@ -827,23 +842,30 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       };
     });
 
+    console.log(`[sessionStore:openSession] Complete - returning session for ${sessionId}`);
     return get().sessions[sessionId];
   },
 
   leaveSession: async (sessionId, listenerId) => {
+    console.log(`[sessionStore:leaveSession] Called with sessionId=${sessionId}, listenerId=${listenerId}`);
     const eventListeners = get()._eventListeners[sessionId];
+    console.log(`[sessionStore:leaveSession] eventListeners exists=${!!eventListeners}`);
 
     try {
       // Unregister listener from Rust backend
+      console.log(`[sessionStore:leaveSession] Calling unregisterSessionListener...`);
       const remaining = await unregisterSessionListener(sessionId, listenerId);
+      console.log(`[sessionStore:leaveSession] unregisterSessionListener returned remaining=${remaining}`);
 
       // Remove callbacks and registered listener for heartbeats
       if (eventListeners) {
         eventListeners.callbacks.delete(listenerId);
         eventListeners.registeredListeners.delete(listenerId);
+        console.log(`[sessionStore:leaveSession] callbacks.size=${eventListeners.callbacks.size}`);
 
         // If no more local callbacks, clean up event listeners
         if (eventListeners.callbacks.size === 0) {
+          console.log(`[sessionStore:leaveSession] No more callbacks, cleaning up event listeners`);
           cleanupEventListeners(eventListeners);
 
           // NOTE: Don't call leaveReaderSession here - unregisterSessionListener already
@@ -860,8 +882,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
               activeSessionId: s.activeSessionId === sessionId ? null : s.activeSessionId,
             };
           });
+          console.log(`[sessionStore:leaveSession] Session removed from store`);
         } else {
           // Update listener count
+          console.log(`[sessionStore:leaveSession] Other callbacks remain, updating listener count`);
           set((s) => ({
             sessions: {
               ...s.sessions,
@@ -873,7 +897,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           }));
         }
       }
-    } catch {
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.log(`[sessionStore:leaveSession] Error: ${msg}`);
       // Ignore - session may already be gone
     }
   },
@@ -922,12 +948,17 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   reinitializeSession: async (sessionId, listenerId, profileId, profileName, options) => {
+    console.log(`[sessionStore:reinitializeSession] Called with sessionId=${sessionId}, listenerId=${listenerId}, profileId=${profileId}, profileName=${profileName}`);
+    console.log(`[sessionStore:reinitializeSession] Options: ${JSON.stringify(options)}`);
+
     // Use Rust's atomic reinitialize check
     const result = await reinitializeSessionIfSafe(sessionId, listenerId);
+    console.log(`[sessionStore:reinitializeSession] reinitializeSessionIfSafe result: ${JSON.stringify(result)}`);
 
     if (!result.success) {
       // Can't fully reinitialize (other listeners exist), but we can update the time range
       const existing = get().sessions[sessionId];
+      console.log(`[sessionStore:reinitializeSession] Can't reinitialize, existing session=${!!existing}`);
       if (existing) {
         // Apply time range update even when we can't reinitialize
         if (options?.startTime !== undefined || options?.endTime !== undefined) {
@@ -937,27 +968,42 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         return existing;
       }
       // If no session exists, create one
+      console.log(`[sessionStore:reinitializeSession] No existing session, calling openSession`);
       return get().openSession(profileId, profileName, listenerId, options);
     }
 
-    // Clean up local event listeners
+    // Clean up local event listeners but keep session in store
+    // This prevents React re-renders from causing the useIOSession effect
+    // to try to openSession during the gap between remove and create
     const eventListeners = get()._eventListeners[sessionId];
     if (eventListeners) {
       cleanupEventListeners(eventListeners);
     }
 
-    // Remove from store
+    // Mark session as reinitializing with lifecycleState="disconnected" to prevent
+    // the useIOSession effect from trying to openSession during the gap.
+    // openSession checks lifecycleState !== "connected" before short-circuiting.
     set((s) => {
-      const { [sessionId]: _, ...remainingSessions } = s.sessions;
-      const { [sessionId]: __, ...remainingListeners } = s._eventListeners;
+      const { [sessionId]: _, ..._remainingListeners } = s._eventListeners;
       return {
-        sessions: remainingSessions,
-        _eventListeners: remainingListeners,
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...s.sessions[sessionId],
+            lifecycleState: "disconnected" as const,
+            ioState: "starting" as const,
+          },
+        },
+        // Clear event listeners for this session
+        _eventListeners: _remainingListeners,
       };
     });
 
-    // Create new session
-    return get().openSession(profileId, profileName, listenerId, options);
+    // Create new session - this will update the existing entry in the store
+    console.log(`[sessionStore:reinitializeSession] Success, calling openSession for profileId=${profileId}`);
+    const result2 = await get().openSession(profileId, profileName, listenerId, options);
+    console.log(`[sessionStore:reinitializeSession] openSession complete, result.id=${result2?.id}`);
+    return result2;
   },
 
   // ---- Session Control ----

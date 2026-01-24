@@ -4,15 +4,14 @@ import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { listen, emit } from "@tauri-apps/api/event";
 import { useSettings, getDisplayFrameIdFormat } from "../../hooks/useSettings";
 import { useDecoderStore } from "../../stores/decoderStore";
-import { useIOSession } from '../../hooks/useIOSession';
+import { useIOSessionManager, BUFFER_PROFILE_ID } from '../../hooks/useIOSessionManager';
 import { listCatalogs, type CatalogMetadata } from "../../api/catalog";
-import { useIngestSession, type StreamEndedPayload } from '../../hooks/useIngestSession';
-import { useMultiBusState } from '../../stores/sessionStore';
 import { clearBuffer } from "../../api/buffer";
+import type { StreamEndedPayload } from '../../api/io';
 import DecoderTopBar from "./views/DecoderTopBar";
 import DecoderFramesView from "./views/DecoderFramesView";
 import FramePickerDialog from "../../dialogs/FramePickerDialog";
-import IoReaderPickerDialog, { BUFFER_PROFILE_ID } from "../../dialogs/IoReaderPickerDialog";
+import IoReaderPickerDialog from "../../dialogs/IoReaderPickerDialog";
 import { getBufferMetadata, type BufferMetadata } from "../../api/buffer";
 import SpeedPickerDialog from "../../dialogs/SpeedPickerDialog";
 import CatalogPickerDialog from "./dialogs/CatalogPickerDialog";
@@ -47,13 +46,6 @@ export default function Decoder() {
   ] as const);
   const [bufferMetadata, setBufferMetadata] = useState<BufferMetadata | null>(null);
 
-  // Watch mode state - uses decoder session for real-time display while buffering
-  const [isWatching, setIsWatching] = useState(false);
-  const [watchFrameCount, setWatchFrameCount] = useState(0);
-
-  // Track if we've detached from a session (but profile still selected)
-  const [isDetached, setIsDetached] = useState(false);
-
   // Active tab for per-tab clear functionality
   const [activeTab, setActiveTab] = useState<string>('signals');
 
@@ -62,27 +54,6 @@ export default function Decoder() {
 
   // Ingest speed setting (for dialog display)
   const [ingestSpeed, setIngestSpeed] = useState(0); // 0 = no limit
-
-  // Ref to hold the ingest complete handler (set after useIOSession provides reinitialize)
-  const ingestCompleteRef = useRef<((payload: import("../../hooks/useIngestSession").StreamEndedPayload) => Promise<void>) | undefined>(undefined);
-
-  // Ingest session hook - handles event listeners, session lifecycle, error handling
-  // Uses ref-based callback to avoid dependency on reinitialize (defined later)
-  const {
-    isIngesting,
-    ingestProfileId,
-    ingestFrameCount,
-    ingestError,
-    startIngest,
-    stopIngest,
-  } = useIngestSession({
-    onComplete: async (payload) => {
-      if (ingestCompleteRef.current) {
-        await ingestCompleteRef.current(payload);
-      }
-    },
-    onBeforeStart: clearBuffer,
-  });
 
   // Zustand store selectors
   const catalogPath = useDecoderStore((state) => state.catalogPath);
@@ -112,14 +83,6 @@ export default function Decoder() {
   const frameIdFilter = useDecoderStore((state) => state.frameIdFilter);
   const frameIdFilterSet = useDecoderStore((state) => state.frameIdFilterSet);
 
-  // Multi-bus mode state from session store (centralized)
-  const {
-    multiBusMode,
-    multiBusProfiles: ioProfiles,
-    setMultiBusMode,
-    setMultiBusProfiles: setIoProfiles,
-  } = useMultiBusState();
-
   // Zustand store actions
   const initFromSettings = useDecoderStore((state) => state.initFromSettings);
   const toggleFrameSelection = useDecoderStore((state) => state.toggleFrameSelection);
@@ -137,6 +100,7 @@ export default function Decoder() {
   const setPlaybackSpeed = useDecoderStore((state) => state.setPlaybackSpeed);
   const setSelectionSetDirty = useDecoderStore((state) => state.setSelectionSetDirty);
   const applySelectionSet = useDecoderStore((state) => state.applySelectionSet);
+  const clearFrames = useDecoderStore((state) => state.clearFrames);
   const clearDecoded = useDecoderStore((state) => state.clearDecoded);
   const clearUnmatchedFrames = useDecoderStore((state) => state.clearUnmatchedFrames);
   const clearFilteredFrames = useDecoderStore((state) => state.clearFilteredFrames);
@@ -243,20 +207,10 @@ export default function Decoder() {
     }
   }, []);
 
-  // Ref for watch state to avoid stale closures
-  const isWatchingRef = useRef(isWatching);
-  useEffect(() => {
-    isWatchingRef.current = isWatching;
-  }, [isWatching]);
-
   // Callbacks for reader session
+  // Note: Watch frame counting is handled by useIOSessionManager
   const handleFrames = useCallback((receivedFrames: FrameMessage[]) => {
     if (!receivedFrames || receivedFrames.length === 0) return;
-
-    // Update watch frame count if in watch mode
-    if (isWatchingRef.current) {
-      setWatchFrameCount((prev) => prev + receivedFrames.length);
-    }
 
     // Update current time from the last frame with a timestamp (most recent)
     for (let i = receivedFrames.length - 1; i >= 0; i--) {
@@ -379,57 +333,8 @@ export default function Decoder() {
     }
   }, [updateCurrentTime]);
 
-  // Get the profile name for display in session dropdown
-  const ioProfileName = useMemo(() => {
-    if (!ioProfile || !settings?.io_profiles) return undefined;
-    const profile = settings.io_profiles.find((p) => p.id === ioProfile);
-    return profile?.name;
-  }, [ioProfile, settings?.io_profiles]);
-
-  // Get profile names map for multi-bus mode
-  const profileNamesMap = useMemo(() => {
-    if (!settings?.io_profiles) return new Map<string, string>();
-    return new Map(settings.io_profiles.map((p) => [p.id, p.name]));
-  }, [settings?.io_profiles]);
-
-  // Use the single-profile reader session hook (when not in multi-bus mode)
-  const singleSession = useIOSession({
-    appName: "decoder",
-    sessionId: !multiBusMode ? (ioProfile || undefined) : undefined, // Only active when not in multi-bus mode
-    profileName: ioProfileName, // Pass friendly name for session dropdown display
-    requireFrames: true, // Only join sessions that produce frames (not raw bytes)
-    onFrames: handleFrames,
-    onError: handleError,
-    onTimeUpdate: handleTimeUpdate,
-    onStreamEnded: handleStreamEnded,
-    onStreamComplete: handleStreamComplete,
-    onSpeedChange: handleSessionSpeedChange,
-  });
-
-  // Extract session state and controls
-  // Both single-source and multi-source sessions are now accessed via useIOSession
-  // (multi-source sessions use a merged session ID like "decoder-multi")
-  const {
-    capabilities,
-    state: readerState,
-    isReady,
-    bufferAvailable,
-    joinerCount,
-    start,
-    stop,
-    leave,
-    pause,
-    resume,
-    setSpeed,
-    setTimeRange,
-    seek,
-    switchToBufferReplay,
-    rejoin,
-    reinitialize,
-  } = singleSession;
-
-  // Set up the ingest complete handler now that reinitialize is available
-  ingestCompleteRef.current = async (payload: StreamEndedPayload) => {
+  // Ingest complete handler - passed to useIOSessionManager
+  const handleIngestComplete = useCallback(async (payload: StreamEndedPayload) => {
     if (payload.buffer_available && payload.count > 0) {
       // Get the updated buffer metadata
       const meta = await getBufferMetadata();
@@ -447,19 +352,83 @@ export default function Decoder() {
         setPendingBufferTransition(true);
       }
     }
-  };
+  }, [dialogs.ioReaderPicker]);
 
-  // Derive decoding state from reader state
-  // Include "starting" to prevent race conditions where isWatching gets cleared
-  // When detached, we're no longer "decoding" from the UI perspective (IO picker should be available)
-  const isDecoding = !isDetached && (readerState === "running" || readerState === "paused" || readerState === "starting");
-  const isPaused = readerState === "paused";
-  // Session is "stopped" when it has a non-buffer profile selected but isn't streaming
-  const isStopped = !isDetached && readerState === "stopped" && ioProfile !== null && ioProfile !== BUFFER_PROFILE_ID;
-  // Only consider realtime if capabilities explicitly say so (default false when unknown)
-  const isRealtime = capabilities?.is_realtime === true;
-  // Check if we're in buffer mode
-  const isBufferMode = ioProfile === BUFFER_PROFILE_ID;
+  // Use the IO session manager hook - manages session lifecycle, ingest, multi-bus, and derived state
+  const manager = useIOSessionManager({
+    appName: "decoder",
+    ioProfiles: settings?.io_profiles ?? [],
+    store: { ioProfile, setIoProfile },
+    enableIngest: true,
+    onBeforeIngestStart: clearBuffer,
+    onIngestComplete: handleIngestComplete,
+    requireFrames: true,
+    onFrames: handleFrames,
+    onError: handleError,
+    onTimeUpdate: handleTimeUpdate,
+    onStreamEnded: handleStreamEnded,
+    onStreamComplete: handleStreamComplete,
+    onSpeedChange: handleSessionSpeedChange,
+  });
+
+  // Destructure everything from the manager
+  const {
+    // Multi-bus state
+    multiBusMode,
+    multiBusProfiles: ioProfiles,
+    setMultiBusMode,
+    setMultiBusProfiles: setIoProfiles,
+    // Session
+    session,
+    // Derived state
+    isStreaming,
+    isPaused,
+    isStopped,
+    isRealtime,
+    isBufferMode,
+    capabilities,
+    joinerCount,
+    // Detach/rejoin
+    isDetached,
+    handleDetach,
+    handleRejoin,
+    // Watch state
+    watchFrameCount,
+    resetWatchFrameCount,
+    isWatching,
+    setIsWatching,
+    // Ingest state
+    isIngesting,
+    ingestProfileId,
+    ingestFrameCount,
+    ingestError,
+    startIngest,
+    stopIngest,
+    // Multi-bus handlers
+    startMultiBusSession,
+    joinExistingSession,
+  } = manager;
+
+  // Session controls from the underlying session
+  const {
+    state: readerState,
+    isReady,
+    bufferAvailable,
+    start,
+    stop,
+    leave,
+    pause,
+    resume,
+    setSpeed,
+    setTimeRange,
+    seek,
+    switchToBufferReplay,
+    reinitialize,
+  } = session;
+
+  // Derive decoding state - include "starting" to prevent race conditions
+  // Use isStreaming from manager plus check for "starting" state
+  const isDecoding = isStreaming || readerState === "starting";
   // Has buffer data available for replay - only relevant when in buffer mode
   const hasBufferData = isBufferMode && (bufferAvailable || (bufferMetadata?.count ?? 0) > 0);
 
@@ -472,7 +441,6 @@ export default function Decoder() {
     pause,
     resume,
     leave,
-    rejoin,
     setSpeed,
     setTimeRange,
     seek,
@@ -484,6 +452,7 @@ export default function Decoder() {
     // Store actions (decoder)
     setIoProfile,
     setPlaybackSpeed,
+    clearFrames,
     setStartTime,
     setEndTime,
     updateCurrentTime,
@@ -508,7 +477,6 @@ export default function Decoder() {
     // Multi-bus state
     setMultiBusMode,
     setMultiBusProfiles: setIoProfiles,
-    profileNamesMap,
 
     // Ingest session
     startIngest,
@@ -518,11 +486,16 @@ export default function Decoder() {
     // Watch state
     isWatching,
     setIsWatching,
-    setWatchFrameCount,
+    resetWatchFrameCount,
     streamCompletedRef,
 
-    // Detached state
-    setIsDetached,
+    // Detach/rejoin handlers (from manager)
+    handleDetach,
+    handleRejoin,
+
+    // Multi-bus handlers (from manager)
+    startMultiBusSession,
+    joinExistingSession,
 
     // Ingest speed
     ingestSpeed,

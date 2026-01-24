@@ -73,9 +73,16 @@ export interface UseDiscoveryHandlersParams {
   setActiveBookmarkId: (id: string | null) => void;
   setBookmarkFrameId: (id: number) => void;
   setBookmarkFrameTime: (time: string) => void;
-  setWatchFrameCount: (count: number | ((prev: number) => number)) => void;
+  resetWatchFrameCount: () => void;
   setBufferMetadata: (meta: BufferMetadata | null) => void;
-  setIsDetached: (detached: boolean) => void;
+
+  // Detach/rejoin handlers (from manager)
+  handleDetach: () => Promise<void>;
+  handleRejoin: () => Promise<void>;
+
+  // Multi-bus handlers (from manager)
+  startMultiBusSession: (profileIds: string[], options: any) => Promise<void>;
+  joinExistingSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
 
   // Session actions
   setMultiBusMode: (mode: boolean) => void;
@@ -88,7 +95,6 @@ export interface UseDiscoveryHandlersParams {
   pause: () => Promise<void>;
   resume: () => Promise<void>;
   leave: () => Promise<void>;
-  rejoin: (sessionId?: string, sessionName?: string) => Promise<void>;
   reinitialize: (profileId?: string, options?: any) => Promise<void>;
   setSpeed: (speed: number) => Promise<void>;
   setTimeRange: (start: string, end: string) => Promise<void>;
@@ -130,11 +136,6 @@ export interface UseDiscoveryHandlersParams {
   pickFileToSave: (options: any) => Promise<string | null>;
   saveCatalog: (path: string, content: string) => Promise<void>;
 
-  // Helpers
-  profileNamesMap: Map<string, string>;
-  createAndStartMultiSourceSession: (options: any) => Promise<any>;
-  joinMultiSourceSession: (options: any) => Promise<any>;
-
   // Dialog controls
   openBookmarkDialog: () => void;
   closeSpeedChangeDialog: () => void;
@@ -158,13 +159,9 @@ export type DiscoveryHandlers = DiscoverySessionHandlers &
 export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): DiscoveryHandlers {
   // Session handlers
   const sessionHandlers = useDiscoverySessionHandlers({
-    multiBusMode: params.multiBusMode,
     isStreaming: params.isStreaming,
     isPaused: params.isPaused,
     sessionReady: params.sessionReady,
-    ioProfile: params.ioProfile,
-    sourceProfileId: params.sourceProfileId,
-    bufferModeEnabled: params.bufferModeEnabled,
     setMultiBusMode: params.setMultiBusMode,
     setMultiBusProfiles: params.setMultiBusProfiles,
     setIoProfile: params.setIoProfile,
@@ -174,8 +171,6 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     stop: params.stop,
     pause: params.pause,
     resume: params.resume,
-    leave: params.leave,
-    rejoin: params.rejoin,
     reinitialize: params.reinitialize,
     setPlaybackSpeed: params.setPlaybackSpeed,
     clearBuffer: params.clearBuffer,
@@ -191,17 +186,17 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     addSerialBytes: params.addSerialBytes,
     setSerialConfig: params.setSerialConfig,
     setFramingConfig: params.setFramingConfig,
-    setWatchFrameCount: params.setWatchFrameCount,
+    resetWatchFrameCount: params.resetWatchFrameCount,
     showError: params.showError,
-    profileNamesMap: params.profileNamesMap,
-    createAndStartMultiSourceSession: params.createAndStartMultiSourceSession,
-    joinMultiSourceSession: params.joinMultiSourceSession,
+    handleDetach: params.handleDetach,
+    handleRejoin: params.handleRejoin,
+    startMultiBusSession: params.startMultiBusSession,
+    joinExistingSession: params.joinExistingSession,
     getBufferMetadata: params.getBufferMetadata,
     getBufferFrameInfo: params.getBufferFrameInfo,
     getBufferBytesById: params.getBufferBytesById,
     setActiveBuffer: params.setActiveBuffer,
     setBufferMetadata: params.setBufferMetadata,
-    setIsDetached: params.setIsDetached,
     closeIoReaderPicker: params.closeIoReaderPicker,
     BUFFER_PROFILE_ID: params.BUFFER_PROFILE_ID,
   });

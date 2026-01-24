@@ -76,6 +76,8 @@ export interface UseIOSessionManagerOptions {
   onStreamEnded?: (payload: StreamEndedPayload) => void;
   /** Callback when buffer playback completes */
   onStreamComplete?: () => void;
+  /** Callback when playback speed changes (from any listener on this session) */
+  onSpeedChange?: (speed: number) => void;
 }
 
 /** Result of the IO session manager hook */
@@ -211,6 +213,7 @@ export function useIOSessionManager(
     onTimeUpdate,
     onStreamEnded,
     onStreamComplete,
+    onSpeedChange,
   } = options;
 
   // ---- Profile State ----
@@ -300,6 +303,7 @@ export function useIOSessionManager(
     onTimeUpdate,
     onStreamEnded,
     onStreamComplete,
+    onSpeedChange,
   };
 
   const session = useIOSession(sessionOptions);
