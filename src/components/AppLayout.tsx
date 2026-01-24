@@ -22,7 +22,7 @@ export default function AppLayout({
   sidebarWidth = "w-72",
 }: AppLayoutProps) {
   return (
-    <div className="h-screen flex flex-col bg-slate-50 dark:bg-slate-900 overflow-hidden">
+    <div className="h-full flex flex-col bg-slate-50 dark:bg-slate-900 overflow-hidden">
       {/* Static top bar */}
       {topBar}
 
@@ -33,13 +33,13 @@ export default function AppLayout({
           <aside
             className={`${sidebarWidth} bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 flex flex-col overflow-hidden`}
           >
-            <div className="flex-1 overflow-y-auto">{sidebar}</div>
+            <div className="flex-1 overflow-y-auto overscroll-none">{sidebar}</div>
           </aside>
         )}
 
         {/* Main content - scrolls independently */}
         <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
-          <div className="flex-1 overflow-y-auto">{children}</div>
+          <div className="flex-1 overflow-y-auto overscroll-none">{children}</div>
         </main>
       </div>
     </div>

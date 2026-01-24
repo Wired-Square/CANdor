@@ -7,14 +7,16 @@ import type { IOProfile } from "../../hooks/useSettings";
 /** Convert a datetime-local value to ISO-8601 string with explicit timezone offset */
 export function localToIsoWithOffset(datetimeLocal: string): string {
   if (!datetimeLocal) return "";
-  // datetime-local is in format "YYYY-MM-DDTHH:mm" (local time, no timezone)
+  // datetime-local is in format "YYYY-MM-DDTHH:mm" or "YYYY-MM-DDTHH:mm:ss" (local time, no timezone)
   // Add the local timezone offset to make it explicit
   const date = new Date(datetimeLocal);
   const offset = -date.getTimezoneOffset();
   const sign = offset >= 0 ? "+" : "-";
   const hours = String(Math.floor(Math.abs(offset) / 60)).padStart(2, "0");
   const minutes = String(Math.abs(offset) % 60).padStart(2, "0");
-  return `${datetimeLocal}:00${sign}${hours}:${minutes}`;
+  // Only add :00 for seconds if not already present (format without seconds is 16 chars: YYYY-MM-DDTHH:mm)
+  const timeWithSeconds = datetimeLocal.length <= 16 ? `${datetimeLocal}:00` : datetimeLocal;
+  return `${timeWithSeconds}${sign}${hours}:${minutes}`;
 }
 
 /** Get the local timezone abbreviation (e.g., "AEDT", "PST") */
@@ -31,10 +33,13 @@ export function formatBufferTimestamp(unixSeconds: number): string {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-// Ingest speed options (0 = no limit / wire speed)
-export const SPEED_OPTIONS = [
-  { value: 0, label: "No Limit" },
-  { value: 1, label: "1x" },
+import type { PlaybackSpeed } from "../../components/TimeController";
+
+// Watch speed options - no "unlimited" since watching implies paced playback
+export const SPEED_OPTIONS: { value: PlaybackSpeed; label: string }[] = [
+  { value: 0.25, label: "0.25x" },
+  { value: 0.5, label: "0.5x" },
+  { value: 1, label: "1x (realtime)" },
   { value: 2, label: "2x" },
   { value: 10, label: "10x" },
   { value: 30, label: "30x" },

@@ -40,6 +40,8 @@ pub struct AppSettings {
     pub signal_colour_high: String,
     #[serde(default = "default_binary_one_colour")]
     pub binary_one_colour: String,
+    #[serde(default = "default_display_timezone")]
+    pub display_timezone: String, // "local" | "utc"
 }
 
 fn default_display_frame_id_format() -> String {
@@ -65,6 +67,9 @@ fn default_signal_colour_high() -> String {
 }
 fn default_binary_one_colour() -> String {
     "#14b8a6".to_string() // teal-500
+}
+fn default_display_timezone() -> String {
+    "local".to_string()
 }
 
 impl Default for AppSettings {
@@ -93,6 +98,7 @@ impl Default for AppSettings {
             signal_colour_medium: default_signal_colour_medium(),
             signal_colour_high: default_signal_colour_high(),
             binary_one_colour: default_binary_one_colour(),
+            display_timezone: default_display_timezone(),
         }
     }
 }

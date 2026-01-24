@@ -66,6 +66,7 @@ export default function AddBookmarkDialog({
             <Input
               variant="simple"
               type="datetime-local"
+              step="1"
               value={startTime}
               onChange={(e) => setStartTime(e.target.value)}
             />
@@ -77,6 +78,7 @@ export default function AddBookmarkDialog({
             <Input
               variant="simple"
               type="datetime-local"
+              step="1"
               value={endTime}
               onChange={(e) => setEndTime(e.target.value)}
               min={startTime}

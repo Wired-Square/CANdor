@@ -7,6 +7,8 @@ type DisplayViewProps = {
   onChangeFormat: (format: "hex" | "decimal") => void;
   displayTimeFormat: "delta-last" | "delta-start" | "timestamp" | "human";
   onChangeTimeFormat: (fmt: "delta-last" | "delta-start" | "timestamp" | "human") => void;
+  timezone: "local" | "utc";
+  onChangeTimezone: (tz: "local" | "utc") => void;
   signalColours: {
     none: string;
     low: string;
@@ -31,6 +33,8 @@ export default function DisplayView({
   onChangeFormat,
   displayTimeFormat,
   onChangeTimeFormat,
+  timezone,
+  onChangeTimezone,
   signalColours,
   onChangeSignalColour,
   onResetSignalColour,
@@ -106,6 +110,32 @@ export default function DisplayView({
         </div>
         <p className="text-sm text-slate-500 dark:text-slate-400">
           Controls how timestamps are rendered in discovery and other views.
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        <label className="block text-sm font-medium text-slate-900 dark:text-white">
+          Default timezone
+        </label>
+        <div className="flex gap-3">
+          {[
+            { value: "local", label: "Local timezone" },
+            { value: "utc", label: "UTC" },
+          ].map((opt) => (
+            <label key={opt.value} className="flex items-center gap-2 text-sm text-slate-800 dark:text-slate-100">
+              <input
+                type="radio"
+                name="timezone"
+                value={opt.value}
+                checked={timezone === opt.value}
+                onChange={() => onChangeTimezone(opt.value as "local" | "utc")}
+              />
+              {opt.label}
+            </label>
+          ))}
+        </div>
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          Default timezone for clock displays. Click the timezone badge in views to temporarily override.
         </p>
       </div>
 

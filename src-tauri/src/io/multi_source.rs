@@ -102,6 +102,13 @@ pub struct MultiSourceReader {
 }
 
 impl MultiSourceReader {
+    /// Create a multi-source reader with exactly one source.
+    /// This is the preferred way to create sessions for real-time devices,
+    /// as it uses the same code path as multi-device sessions.
+    pub fn single_source(app: AppHandle, session_id: String, source: SourceConfig) -> Self {
+        Self::new(app, session_id, vec![source])
+    }
+
     /// Create a new multi-source reader
     pub fn new(app: AppHandle, session_id: String, sources: Vec<SourceConfig>) -> Self {
         let (tx, rx) = mpsc::channel(1024);

@@ -255,6 +255,7 @@ export default function BookmarkEditorDialog({
                   <Input
                     variant="simple"
                     type="datetime-local"
+                    step="1"
                     value={editForm.startTime}
                     onChange={(e) =>
                       setEditForm((prev) => ({ ...prev, startTime: e.target.value }))
@@ -267,6 +268,7 @@ export default function BookmarkEditorDialog({
                   <Input
                     variant="simple"
                     type="datetime-local"
+                    step="1"
                     value={editForm.endTime}
                     onChange={(e) =>
                       setEditForm((prev) => ({ ...prev, endTime: e.target.value }))

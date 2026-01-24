@@ -8,6 +8,12 @@
 // This is the USB/serial version of the GVRET protocol, which uses binary mode
 // for efficient frame transfer. The protocol is the same as GVRET TCP but over
 // a serial port connection.
+//
+// NOTE: The standalone GvretUsbReader is now legacy code. All real-time devices now use
+// MultiSourceReader which has its own gvret_usb source implementation. The GvretUsbReader
+// struct and related functions are kept for reference but not actively used.
+
+#![allow(dead_code)]
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

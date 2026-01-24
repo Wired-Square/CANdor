@@ -23,17 +23,16 @@ pub use buffer::BufferReader;
 pub use csv::{parse_csv_file, CsvReader, CsvReaderOptions};
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub use gs_usb::GsUsbConfig;
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-pub use gs_usb::nusb_driver::GsUsbReader;
 pub use gvret_common::{BusMapping, GvretDeviceInfo};
-pub use gvret_tcp::{GvretReader, probe_gvret_tcp};
-pub use gvret_usb::{GvretUsbConfig, GvretUsbReader, probe_gvret_usb};
+pub use gvret_tcp::probe_gvret_tcp;
+pub use gvret_usb::probe_gvret_usb;
 pub use multi_source::{MultiSourceReader, SourceConfig};
 pub use mqtt::{MqttConfig, MqttReader};
 pub use postgres::{PostgresConfig, PostgresReader, PostgresReaderOptions, PostgresSourceType};
 pub use serial::{Parity, SerialConfig, SerialFramingConfig, SerialReader};
-pub use slcan::{SlcanConfig, SlcanReader};
-pub use socketcan::{SocketCanConfig, SocketIODevice};
+// Note: SlcanConfig, SlcanReader, SocketCanConfig, SocketIODevice are used internally
+// by MultiSourceReader but not exported from mod.rs since all real-time devices now
+// go through MultiSourceReader
 
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
@@ -49,12 +48,24 @@ use tokio::sync::Mutex;
 // ============================================================================
 
 /// Raw CAN bytes payload for debugging/display
+/// NOTE: Only used by legacy standalone readers (GvretReader, GvretUsbReader)
+#[allow(dead_code)]
 #[derive(Clone, Serialize)]
 pub struct CanBytesPayload {
     pub hex: String,
     pub len: usize,
     pub timestamp_ms: u128,
     pub source: String,
+}
+
+/// Get current time in milliseconds since UNIX epoch
+/// NOTE: Only used by legacy standalone readers
+#[allow(dead_code)]
+pub fn now_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
 }
 
 /// Parsed frame message - the main data structure emitted by all readers
@@ -90,14 +101,6 @@ pub struct FrameBatchPayload {
     /// List of listener IDs that should receive these frames
     /// Empty list means all listeners should receive (fallback behavior)
     pub active_listeners: Vec<String>,
-}
-
-/// Get current time in milliseconds since UNIX epoch
-pub fn now_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0)
 }
 
 /// Get current time in microseconds since UNIX epoch

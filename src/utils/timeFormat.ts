@@ -99,17 +99,18 @@ export function localToUtc(localTime: string): string | undefined {
 /**
  * Convert epoch microseconds to datetime-local format for input fields.
  * @param microseconds - Unix timestamp in microseconds
- * @returns datetime-local format string (YYYY-MM-DDTHH:mm)
+ * @returns datetime-local format string with seconds (YYYY-MM-DDTHH:mm:ss)
  */
 export function microsToDatetimeLocal(microseconds: number): string {
   const date = new Date(microseconds / 1000); // Convert microseconds to milliseconds
-  // Format as YYYY-MM-DDTHH:mm (datetime-local format)
+  // Format as YYYY-MM-DDTHH:mm:ss (datetime-local format with seconds)
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   const hours = String(date.getHours()).padStart(2, "0");
   const minutes = String(date.getMinutes()).padStart(2, "0");
-  return `${year}-${month}-${day}T${hours}:${minutes}`;
+  const seconds = String(date.getSeconds()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
 }
 
 /**

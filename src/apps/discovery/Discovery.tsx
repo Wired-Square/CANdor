@@ -509,12 +509,6 @@ export default function Discovery() {
   // For PostgreSQL, currentTime comes from frame timestamps via onTimeUpdate callback
   const displayTimeSeconds = isRealtime ? realtimeClock : currentTime;
 
-  // Format display time for the clock (like Decoder)
-  const displayTime = displayTimeSeconds
-    ? new Date(displayTimeSeconds * 1000).toISOString().replace("T", " ").replace("Z", "").slice(0, 19)
-    : null;
-
-
   // Initialize IO profile and history buffer from settings
   useEffect(() => {
     if (settings?.default_read_profile) {
@@ -1278,7 +1272,7 @@ export default function Discovery() {
   };
 
   return (
-    <div className="h-screen flex flex-col bg-slate-50 dark:bg-slate-900 overflow-hidden">
+    <div className="h-full flex flex-col bg-slate-50 dark:bg-slate-900 overflow-hidden">
       <DiscoveryTopBar
         ioProfiles={settings?.io_profiles || []}
         ioProfile={ioProfile}
@@ -1330,7 +1324,7 @@ export default function Discovery() {
               displayTimeFormat={displayTimeFormat}
               onBookmark={isRecorded ? handleBookmark : undefined}
               isStreaming={isStreaming}
-              displayTime={displayTime}
+              timestamp={displayTimeSeconds}
               streamStartTimeUs={streamStartTimeUs}
               showTimeRange={showTimeRange}
               startTime={startTime}
@@ -1434,7 +1428,7 @@ export default function Discovery() {
         onClose={() => setShowIoReaderPickerDialog(false)}
         ioProfiles={settings?.io_profiles || []}
         selectedId={ioProfile}
-        selectedIds={multiBusMode ? ioProfiles : []}
+        selectedIds={multiBusMode ? ioProfiles : undefined}
         defaultId={settings?.default_read_profile}
         onSelect={handleIoProfileChange}
         onSelectMultiple={handleSelectMultiple}

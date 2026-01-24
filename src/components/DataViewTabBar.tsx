@@ -4,7 +4,8 @@
 // Provides consistent dark-themed tabbed interface with status display and controls.
 
 import { ReactNode } from 'react';
-import { Clock, History } from 'lucide-react';
+import { History } from 'lucide-react';
+import TimeDisplay from './TimeDisplay';
 import {
   bgDarkToolbar,
   borderDarkView,
@@ -55,7 +56,9 @@ export interface DataViewTabBarProps {
   status?: StreamingStatus;
   /** @deprecated Use status instead. Whether data is currently streaming */
   isStreaming?: boolean;
-  /** Current timestamp display (optional) */
+  /** Current timestamp in epoch seconds (optional) */
+  timestamp?: number | null;
+  /** @deprecated Use timestamp instead. Pre-formatted time string */
   displayTime?: string | null;
   /** Whether the data source is recorded (e.g., PostgreSQL, CSV) vs live */
   isRecorded?: boolean;
@@ -95,6 +98,7 @@ export default function DataViewTabBar({
   protocolBadges,
   status,
   isStreaming,
+  timestamp,
   displayTime,
   isRecorded = false,
   controls,
@@ -126,11 +130,16 @@ export default function DataViewTabBar({
         </div>
       ))}
 
-      {/* Time display as badge */}
-      {displayTime && (
-        <div className="flex items-center gap-1 ml-2 px-2 py-0.5 rounded bg-gray-700/50 text-xs text-gray-300">
-          <Clock className="w-3 h-3" />
-          <span className="font-mono">{displayTime}</span>
+      {/* Time display with timezone support */}
+      {(timestamp != null || displayTime != null) && (
+        <div className="flex items-center gap-1 ml-2">
+          <TimeDisplay
+            timestamp={timestamp ?? displayTime ?? null}
+            showDate={isRecorded}
+            showTime={true}
+            compact={true}
+            allowOverride={true}
+          />
         </div>
       )}
 

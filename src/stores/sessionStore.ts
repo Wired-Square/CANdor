@@ -400,8 +400,6 @@ async function setupSessionEventListeners(
     (event) => {
       const { frames, active_listeners } = event.payload;
       const listeners = active_listeners ?? [];
-
-      // Accumulate frames for throttled delivery
       accumulateFrames(sessionId, frames, listeners);
     }
   );
@@ -449,6 +447,10 @@ async function setupSessionEventListeners(
   const unlistenStreamEnded = await listen<StreamEndedPayload>(
     `stream-ended:${sessionId}`,
     (event) => {
+      // Flush any pending frames before processing stream-ended
+      // This ensures fast playback (e.g., PostgreSQL no-limit) delivers all frames
+      flushPendingFrames();
+
       const payload = event.payload;
       updateSession(sessionId, {
         ioState: "stopped",
@@ -759,6 +761,18 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const currentEventListeners = get()._eventListeners[sessionId];
     if (currentEventListeners) {
       currentEventListeners.registeredListeners.add(listenerId);
+    }
+
+    // Step 5.5: Start the session if it's still stopped (for playback sources like PostgreSQL, CSV)
+    // Playback sources don't auto-start on the backend to avoid emitting frames before listeners are ready.
+    // Now that event listeners are set up, we can safely start.
+    if (ioState === "stopped") {
+      try {
+        await startReaderSession(sessionId);
+        ioState = "running";
+      } catch {
+        // Session might have been started by another caller - continue anyway
+      }
     }
 
     // Step 6: Create session entry

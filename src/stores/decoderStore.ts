@@ -17,6 +17,10 @@ import type { FrameDetail, SignalDef, MuxDef, MuxCaseDef } from '../types/decode
 import { isMuxCaseKey, findMatchingMuxCase } from '../utils/muxCaseMatch';
 import type { SelectionSet } from '../utils/selectionSets';
 import type { CanHeaderField, HeaderFieldFormat } from '../apps/catalog/types';
+import type { PlaybackSpeed } from '../components/TimeController';
+
+// Re-export for consumers that import from decoderStore
+export type { PlaybackSpeed } from '../components/TimeController';
 
 /**
  * Normalize a signal definition from TOML, mapping byte_order to endianness.
@@ -206,7 +210,6 @@ export type CanConfig = {
   fields?: Record<string, CanHeaderField>;
 };
 
-export type PlaybackSpeed = 0 | 0.25 | 0.5 | 1 | 2 | 10 | 30 | 60;
 
 /** View mode for decoded frames: single (most recent) or per-source (by source address) */
 export type DecoderViewMode = 'single' | 'per-source';
@@ -299,6 +302,12 @@ interface DecoderState {
 
   // Actions - Decoding
   decodeSignals: (frameId: number, bytes: number[], sourceAddress?: number) => void;
+  /** Batch decode multiple frames in a single state update (for high-speed playback) */
+  decodeSignalsBatch: (
+    framesToDecode: Array<{ frameId: number; bytes: number[]; sourceAddress?: number }>,
+    unmatchedFrames: UnmatchedFrame[],
+    filteredFrames: FilteredFrame[]
+  ) => void;
   addUnmatchedFrame: (frame: UnmatchedFrame) => void;
   clearUnmatchedFrames: () => void;
   addFilteredFrame: (frame: FilteredFrame) => void;
@@ -913,6 +922,190 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
     }
 
     set({ decoded: next, decodedPerSource: nextPerSource, seenHeaderFieldValues: nextSeenValues });
+  },
+
+  decodeSignalsBatch: (framesToDecode, unmatchedToAdd, filteredToAdd) => {
+    if (framesToDecode.length === 0 && unmatchedToAdd.length === 0 && filteredToAdd.length === 0) {
+      return;
+    }
+
+    const { frames, decoded, decodedPerSource, protocol, canConfig, serialConfig, unmatchedFrames, filteredFrames, seenHeaderFieldValues, streamStartTimeSeconds } = get();
+
+    // Start with current state, will mutate in place then set once at end
+    const nextDecoded = new Map(decoded);
+    const nextDecodedPerSource = new Map(decodedPerSource);
+    const nextSeenValues = new Map(seenHeaderFieldValues);
+    let newStreamStartTime = streamStartTimeSeconds;
+
+    // Determine default byte order from catalog config
+    const defaultByteOrder: 'little' | 'big' =
+      (protocol === 'can' ? canConfig?.default_byte_order : serialConfig?.default_byte_order) || 'little';
+
+    // Capture current timestamp for signals
+    const now = Date.now() / 1000;
+
+    // Set stream start time if not already set
+    if (newStreamStartTime === null && framesToDecode.length > 0) {
+      newStreamStartTime = now;
+    }
+
+    // Helper to create a unique key for a signal
+    const signalKey = (signal: DecodedSignal) =>
+      signal.muxValue !== undefined ? `${signal.muxValue}:${signal.name}` : signal.name;
+
+    // Process all frames to decode
+    for (const { frameId, bytes, sourceAddress } of framesToDecode) {
+      // Apply frame_id_mask before catalog lookup
+      let maskedFrameId = frameId;
+      const headerFields: HeaderFieldValue[] = [];
+      let effectiveSourceAddress = sourceAddress;
+
+      if (protocol === 'can' && canConfig) {
+        if (canConfig.frame_id_mask !== undefined) {
+          maskedFrameId = frameId & canConfig.frame_id_mask;
+        }
+        if (canConfig.fields) {
+          for (const [name, field] of Object.entries(canConfig.fields)) {
+            let shift = field.shift;
+            if (shift === undefined && field.mask > 0) {
+              shift = 0;
+              let m = field.mask;
+              while ((m & 1) === 0 && m > 0) {
+                shift++;
+                m >>>= 1;
+              }
+            }
+            const value = (frameId & field.mask) >>> (shift ?? 0);
+            const format = field.format ?? 'hex';
+            const display = format === 'decimal' ? String(value) : `0x${value.toString(16).toUpperCase()}`;
+            headerFields.push({ name, value, display, format });
+
+            const lowerName = name.toLowerCase();
+            if (lowerName === 'source_address' || lowerName === 'sender' || lowerName === 'source' || lowerName === 'src' || lowerName === 'sa') {
+              effectiveSourceAddress = value;
+            }
+          }
+        }
+      } else if (protocol === 'serial' && serialConfig) {
+        if (serialConfig.frame_id_mask !== undefined) {
+          maskedFrameId = frameId & serialConfig.frame_id_mask;
+        }
+        if (serialConfig.header_fields && serialConfig.header_fields.length > 0) {
+          for (const field of serialConfig.header_fields) {
+            if (field.name === 'id') continue;
+            if (field.start_byte < bytes.length) {
+              let value = 0;
+              const endByte = Math.min(field.start_byte + field.bytes, bytes.length);
+              if (field.byte_order === 'little') {
+                for (let i = field.start_byte; i < endByte; i++) {
+                  value |= bytes[i] << ((i - field.start_byte) * 8);
+                }
+              } else {
+                for (let i = field.start_byte; i < endByte; i++) {
+                  value = (value << 8) | bytes[i];
+                }
+              }
+              const shiftedMask = field.mask >>> (field.start_byte * 8);
+              value = value & shiftedMask;
+              const format = field.format ?? 'hex';
+              const display = format === 'decimal' ? String(value) : `0x${value.toString(16).toUpperCase()}`;
+              headerFields.push({ name: field.name, value, display, format });
+            }
+          }
+        }
+      }
+
+      const frame = frames.get(maskedFrameId);
+      if (!frame) continue;
+
+      // Decode plain signals
+      const plainDecoded = frame.signals.map((signal, idx) => {
+        const decoded = decodeSignal(bytes, signal, signal.name || `Signal ${idx + 1}`, defaultByteOrder);
+        return {
+          name: decoded.name,
+          value: decoded.display,
+          unit: decoded.unit,
+          format: signal.format,
+          rawValue: decoded.value,
+          timestamp: now,
+        };
+      });
+
+      // Decode mux signals
+      const muxResult = frame.mux
+        ? decodeMuxSignals(bytes, frame.mux, defaultByteOrder, now)
+        : { signals: [], selectors: [] };
+
+      // Merge with existing decoded values
+      const existingFrame = nextDecoded.get(maskedFrameId);
+      const existingSignals = existingFrame?.signals || [];
+
+      const mergedSignals = new Map<string, DecodedSignal>();
+      for (const signal of existingSignals) {
+        mergedSignals.set(signalKey(signal), signal);
+      }
+      for (const signal of [...plainDecoded, ...muxResult.signals]) {
+        mergedSignals.set(signalKey(signal), signal);
+      }
+
+      const decodedFrame: DecodedFrame = {
+        signals: Array.from(mergedSignals.values()),
+        rawBytes: bytes,
+        headerFields,
+        sourceAddress: effectiveSourceAddress,
+        muxSelectors: muxResult.selectors.length > 0 ? muxResult.selectors : undefined,
+      };
+
+      nextDecoded.set(maskedFrameId, decodedFrame);
+
+      if (effectiveSourceAddress !== undefined) {
+        const perSourceKey = `${maskedFrameId}:${effectiveSourceAddress}`;
+        nextDecodedPerSource.set(perSourceKey, decodedFrame);
+      }
+
+      // Accumulate header field values
+      for (const field of headerFields) {
+        let fieldMap = nextSeenValues.get(field.name);
+        if (!fieldMap) {
+          fieldMap = new Map();
+          nextSeenValues.set(field.name, fieldMap);
+        }
+        const existing = fieldMap.get(field.value);
+        if (existing) {
+          existing.count++;
+        } else {
+          fieldMap.set(field.value, { display: field.display, count: 1 });
+        }
+      }
+    }
+
+    // Add unmatched frames (with limit)
+    let nextUnmatched = unmatchedFrames;
+    if (unmatchedToAdd.length > 0) {
+      nextUnmatched = [...unmatchedFrames, ...unmatchedToAdd];
+      if (nextUnmatched.length > MAX_UNMATCHED_FRAMES) {
+        nextUnmatched = nextUnmatched.slice(-MAX_UNMATCHED_FRAMES);
+      }
+    }
+
+    // Add filtered frames (with limit)
+    let nextFiltered = filteredFrames;
+    if (filteredToAdd.length > 0) {
+      nextFiltered = [...filteredFrames, ...filteredToAdd];
+      if (nextFiltered.length > MAX_FILTERED_FRAMES) {
+        nextFiltered = nextFiltered.slice(-MAX_FILTERED_FRAMES);
+      }
+    }
+
+    // Single state update for all changes
+    set({
+      decoded: nextDecoded,
+      decodedPerSource: nextDecodedPerSource,
+      seenHeaderFieldValues: nextSeenValues,
+      streamStartTimeSeconds: newStreamStartTime,
+      unmatchedFrames: nextUnmatched,
+      filteredFrames: nextFiltered,
+    });
   },
 
   addUnmatchedFrame: (frame) => {

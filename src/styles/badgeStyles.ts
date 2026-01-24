@@ -65,6 +65,11 @@ export const badgeSmallWarning = `${badgeSmallBase} bg-amber-100 dark:bg-amber-9
  */
 export const badgeSmallPurple = `${badgeSmallBase} bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300`;
 
+/**
+ * Small info badge - blue, for active/override states
+ */
+export const badgeSmallInfo = `${badgeSmallBase} bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300`;
+
 // ============================================================================
 // Dark Panel Badges - for use in permanently dark panels (e.g., decoder view)
 // These use transparent backgrounds that work well on dark backgrounds

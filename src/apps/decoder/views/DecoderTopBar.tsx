@@ -155,7 +155,7 @@ export default function DecoderTopBar({
             className={buttonBase}
             title="Set playback speed"
           >
-            <span>{speed === 0 ? "No Limit" : `${speed}x`}</span>
+            <span>{speed === 1 ? "1x" : `${speed}x`}</span>
           </button>
         )}
 

@@ -213,7 +213,7 @@ export default function IoReaderPickerDialog({
   const [endTime, setEndTime] = useState<string>("");
   const [maxFrames, setMaxFrames] = useState<string>("");
   const [bookmarks, setBookmarks] = useState<TimeRangeFavorite[]>([]);
-  const [selectedSpeed, setSelectedSpeed] = useState(0);
+  const [selectedSpeed, setSelectedSpeed] = useState(1); // Default to 1x realtime with pacing
   // Timezone mode: "local" (default) or "utc"
   const [timezoneMode, setTimezoneMode] = useState<"local" | "utc">("local");
   const localTzAbbr = useMemo(() => getLocalTimezoneAbbr(), []);
@@ -300,7 +300,8 @@ export default function IoReaderPickerDialog({
       setStartTime("");
       setEndTime("");
       setMaxFrames("");
-      setSelectedSpeed(externalIngestSpeed ?? 0);
+      // Speed 0 means unlimited (ingest mode) - not valid for Watch, so default to 1x
+      setSelectedSpeed(externalIngestSpeed && externalIngestSpeed > 0 ? externalIngestSpeed : 1);
       setFramingConfig(null);
       // If currently ingesting, pre-select that profile; otherwise use currently selected profile
       // But don't pre-select buffer profile as checkedReaderId (it's shown separately)
@@ -325,7 +326,10 @@ export default function IoReaderPickerDialog({
       setSingleBusOverrideMap(new Map());
       probedProfilesRef.current.clear();
     }
-  }, [isOpen, externalIngestSpeed, ingestProfileId, selectedId, selectedIds]);
+  // Note: externalIngestSpeed intentionally not in deps - we only use it for initialization
+  // If it were a dep, changing speed would re-run this effect and reset checkedReaderId
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, ingestProfileId, selectedId, selectedIds]);
 
   // Refresh buffer list periodically while dialog is open
   // This catches transitions from streaming to stopped even if the stream-ended
@@ -663,8 +667,10 @@ export default function IoReaderPickerDialog({
       const unlistenError = await listen<string>(`can-bytes-error:${INGEST_SESSION_ID}`, (event) => {
         setInternalIngestError(event.payload);
       });
-      const unlistenFrames = await listen<unknown[]>(`frame-message:${INGEST_SESSION_ID}`, (event) => {
-        setInternalIngestFrameCount((prev) => prev + event.payload.length);
+      const unlistenFrames = await listen<{ frames: unknown[] } | unknown[]>(`frame-message:${INGEST_SESSION_ID}`, (event) => {
+        // Handle both legacy array format and new FrameBatchPayload format
+        const frames = Array.isArray(event.payload) ? event.payload : event.payload.frames;
+        setInternalIngestFrameCount((prev) => prev + frames.length);
       });
 
       unlistenRefs.current = [unlistenStreamEnded, unlistenError, unlistenFrames];

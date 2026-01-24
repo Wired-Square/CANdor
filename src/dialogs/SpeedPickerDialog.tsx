@@ -4,17 +4,7 @@ import { Check, X } from "lucide-react";
 import Dialog from "../components/Dialog";
 import type { PlaybackSpeed } from "../components/TimeController";
 import { h2, cardElevated, paddingCard, borderDefault, hoverLight, roundedDefault, textSuccess } from "../styles";
-
-const SPEED_OPTIONS: { value: PlaybackSpeed; label: string }[] = [
-  { value: 0.25, label: "0.25x" },
-  { value: 0.5, label: "0.5x" },
-  { value: 1, label: "1x (realtime)" },
-  { value: 2, label: "2x" },
-  { value: 10, label: "10x" },
-  { value: 30, label: "30x" },
-  { value: 60, label: "60x" },
-  { value: 0, label: "No Limit" },
-];
+import { SPEED_OPTIONS } from "./io-reader-picker/utils";
 
 type Props = {
   isOpen: boolean;

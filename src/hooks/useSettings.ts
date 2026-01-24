@@ -86,6 +86,7 @@ export interface AppSettings {
   display_frame_id_format?: FrameIdFormat;
   save_frame_id_format?: FrameIdFormat;
   display_time_format?: TimeFormat;
+  display_timezone?: 'local' | 'utc';
   default_frame_type?: DefaultFrameType;
   signal_colour_none?: string;
   signal_colour_low?: string;

@@ -57,6 +57,7 @@ interface AppSettings {
   display_frame_id_format?: 'hex' | 'decimal';
   save_frame_id_format?: 'hex' | 'decimal';
   display_time_format?: 'delta-last' | 'delta-start' | 'timestamp' | 'human';
+  display_timezone?: 'local' | 'utc';
   default_frame_type?: DefaultFrameType;
   signal_colour_none?: string;
   signal_colour_low?: string;
@@ -160,6 +161,7 @@ interface SettingsState {
     frameIdFormat: 'hex' | 'decimal';
     saveFrameIdFormat: 'hex' | 'decimal';
     timeFormat: 'delta-last' | 'delta-start' | 'timestamp' | 'human';
+    timezone: 'local' | 'utc';
     signalColours: SignalColours;
     binaryOneColour: string;
     binaryZeroColour: string;
@@ -223,6 +225,7 @@ interface SettingsState {
   setDisplayFrameIdFormat: (format: 'hex' | 'decimal') => void;
   setSaveFrameIdFormat: (format: 'hex' | 'decimal') => void;
   setDisplayTimeFormat: (format: 'delta-last' | 'delta-start' | 'timestamp' | 'human') => void;
+  setTimezone: (timezone: 'local' | 'utc') => void;
   setSignalColour: (level: keyof SignalColours, colour: string) => void;
   resetSignalColour: (level: keyof SignalColours) => void;
   setBinaryOneColour: (colour: string) => void;
@@ -278,6 +281,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     frameIdFormat: 'hex',
     saveFrameIdFormat: 'hex',
     timeFormat: 'human',
+    timezone: 'local',
     signalColours: { ...defaultSignalColours },
     binaryOneColour: '#14b8a6',
     binaryZeroColour: '#94a3b8',
@@ -344,6 +348,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         display_frame_id_format: settings.display_frame_id_format === 'decimal' ? 'decimal' : 'hex',
         save_frame_id_format: settings.save_frame_id_format === 'decimal' ? 'decimal' : 'hex',
         display_time_format: settings.display_time_format ?? 'human',
+        display_timezone: settings.display_timezone ?? 'local',
         signal_colour_none: settings.signal_colour_none || defaultSignalColours.none,
         signal_colour_low: settings.signal_colour_low || defaultSignalColours.low,
         signal_colour_medium: settings.signal_colour_medium || defaultSignalColours.medium,
@@ -380,6 +385,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           timeFormat: (['delta-last', 'delta-start', 'timestamp'].includes(normalized.display_time_format || '')
             ? normalized.display_time_format
             : 'human') as 'delta-last' | 'delta-start' | 'timestamp' | 'human',
+          timezone: normalized.display_timezone === 'utc' ? 'utc' : 'local',
           signalColours: {
             none: normalized.signal_colour_none || defaultSignalColours.none,
             low: normalized.signal_colour_low || defaultSignalColours.low,
@@ -446,6 +452,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         display_frame_id_format: display.frameIdFormat,
         save_frame_id_format: display.saveFrameIdFormat,
         display_time_format: display.timeFormat,
+        display_timezone: display.timezone,
         default_frame_type: general.defaultFrameType,
         signal_colour_none: display.signalColours.none,
         signal_colour_low: display.signalColours.low,
@@ -486,6 +493,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       display_frame_id_format: display.frameIdFormat,
       save_frame_id_format: display.saveFrameIdFormat,
       display_time_format: display.timeFormat,
+      display_timezone: display.timezone,
       default_frame_type: general.defaultFrameType,
       signal_colour_none: display.signalColours.none,
       signal_colour_low: display.signalColours.low,
@@ -676,6 +684,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setDisplayTimeFormat: (format) => {
     set((state) => ({
       display: { ...state.display, timeFormat: format },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  setTimezone: (timezone) => {
+    set((state) => ({
+      display: { ...state.display, timezone },
     }));
     scheduleSave(get().saveSettings);
   },

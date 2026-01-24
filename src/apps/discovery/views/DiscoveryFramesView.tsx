@@ -20,6 +20,8 @@ type Props = {
   isStreaming?: boolean;
 
   // Time display
+  timestamp?: number | null;
+  /** @deprecated Use timestamp instead */
   displayTime?: string | null;
 
   // Stream start time - for "Delta Since Start" display (persists across buffer rotations)
@@ -54,6 +56,7 @@ function DiscoveryFramesView({
   displayTimeFormat,
   onBookmark,
   isStreaming = false,
+  timestamp,
   displayTime,
   streamStartTimeUs,
   showTimeRange,
@@ -504,6 +507,7 @@ function DiscoveryFramesView({
               onTabChange={(id) => setActiveTab(id as 'frames' | 'analysis')}
               protocolLabel={protocol}
               isStreaming={isStreaming}
+              timestamp={timestamp}
               displayTime={displayTime}
               isRecorded={isRecorded}
               tabBarControls={
@@ -580,6 +584,7 @@ function DiscoveryFramesView({
               onTabChange={(id) => setActiveTab(id as 'frames' | 'analysis')}
               protocolLabel={protocol}
               isStreaming={isStreaming}
+              timestamp={timestamp}
               displayTime={displayTime}
               isRecorded={isRecorded}
 
@@ -598,7 +603,7 @@ function DiscoveryFramesView({
               displayTimeFormat={displayTimeFormat}
             />
 
-            <div className={`flex-1 min-h-0 overflow-auto ${bgDarkView} p-4`}>
+            <div className={`flex-1 min-h-0 overflow-auto overscroll-none ${bgDarkView} p-4`}>
               {toolboxResults.changesResults && (
                 <ChangesResultView />
               )}

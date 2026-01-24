@@ -9,6 +9,12 @@
 //   Standard: t<ID:3hex><DLC:1hex><DATA:2hex*DLC>\r
 //   Extended: T<ID:8hex><DLC:1hex><DATA:2hex*DLC>\r
 //   RTR:      r<ID:3hex><DLC:1hex>\r / R<ID:8hex><DLC:1hex>\r
+//
+// NOTE: The standalone SlcanReader is now legacy code. All real-time devices now use
+// MultiSourceReader which has its own slcan source implementation. The SlcanReader
+// struct and related functions are kept for reference but not actively used.
+
+#![allow(dead_code)]
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

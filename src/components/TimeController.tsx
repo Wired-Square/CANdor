@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Play, Pause, Square, Clock, Zap } from "lucide-react";
+import TimeDisplay from "./TimeDisplay";
 import type { IOCapabilities } from '../api/io';
 import {
   playButtonBase,
@@ -12,7 +13,7 @@ import {
   stopButtonCompact,
 } from "../styles";
 
-export type PlaybackSpeed = 0 | 0.25 | 0.5 | 1 | 2 | 10 | 30 | 60;
+export type PlaybackSpeed = 0.25 | 0.5 | 1 | 2 | 10 | 30 | 60;
 export type PlaybackState = "stopped" | "playing" | "paused";
 
 export interface TimeControllerProps {
@@ -62,16 +63,7 @@ export interface TimeControllerProps {
   capabilities?: IOCapabilities | null;
 }
 
-const SPEED_OPTIONS: { value: PlaybackSpeed; label: string }[] = [
-  { value: 0, label: "No Limit" },
-  { value: 60, label: "60x" },
-  { value: 30, label: "30x" },
-  { value: 10, label: "10x" },
-  { value: 2, label: "2x" },
-  { value: 1, label: "1x" },
-  { value: 0.5, label: "0.5x" },
-  { value: 0.25, label: "0.25x" },
-];
+import { SPEED_OPTIONS } from "../dialogs/io-reader-picker/utils";
 
 export default function TimeController({
   state,
@@ -92,8 +84,6 @@ export default function TimeController({
 }: TimeControllerProps) {
   const [localStartTime, setLocalStartTime] = useState(startTime || "");
   const [localEndTime, setLocalEndTime] = useState(endTime || "");
-  const [displayTime, setDisplayTime] = useState<string>("");
-  const [displayDate, setDisplayDate] = useState<string>("");
 
   // Determine what to show based on capabilities
   const showPauseButton = capabilities?.can_pause ?? true;
@@ -109,46 +99,6 @@ export default function TimeController({
   useEffect(() => {
     setLocalEndTime(endTime || "");
   }, [endTime]);
-
-  // Format current time for display
-  useEffect(() => {
-    if (!currentTime) {
-      setDisplayTime("--:--:--");
-      setDisplayDate("");
-      return;
-    }
-
-    const updateDisplay = () => {
-      let date: Date;
-      if (typeof currentTime === "string") {
-        try {
-          date = new Date(currentTime);
-        } catch {
-          setDisplayTime(currentTime);
-          setDisplayDate("");
-          return;
-        }
-      } else {
-        // Epoch seconds
-        date = new Date(currentTime * 1000);
-      }
-
-      setDisplayTime(date.toLocaleTimeString());
-      setDisplayDate(
-        date.toLocaleDateString(undefined, {
-          weekday: "short",
-          year: "numeric",
-          month: "short",
-          day: "numeric",
-        })
-      );
-    };
-
-    updateDisplay();
-
-    const intervalId = setInterval(updateDisplay, 1000);
-    return () => clearInterval(intervalId);
-  }, [currentTime]);
 
   const handleStartTimeBlur = useCallback(() => {
     if (onStartTimeChange && localStartTime !== startTime) {
@@ -232,18 +182,13 @@ export default function TimeController({
             isPlaying ? "animate-pulse" : ""
           }`}
         />
-        <div className="flex flex-col">
-          <span className="font-mono text-slate-900 dark:text-slate-100 min-w-[80px] leading-tight">
-            {displayTime}
-          </span>
-          {displayDate && (
-            <span
-              className={`font-mono text-slate-500 dark:text-slate-400 leading-tight ${compact ? "text-[10px]" : "text-xs"}`}
-            >
-              {displayDate}
-            </span>
-          )}
-        </div>
+        <TimeDisplay
+          timestamp={currentTime ?? null}
+          showDate={true}
+          showTime={true}
+          compact={compact}
+          allowOverride={true}
+        />
       </div>
 
       {/* Speed control - only show if supported */}

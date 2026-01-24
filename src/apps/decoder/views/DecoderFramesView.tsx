@@ -75,6 +75,9 @@ type Props = {
   isDecoding: boolean;
   showRawBytes: boolean;
   onToggleRawBytes: () => void;
+  /** Current timestamp in epoch seconds */
+  timestamp?: number | null;
+  /** @deprecated Use timestamp instead */
   displayTime?: string | null;
   /** Protocol type from catalog (default_frame) */
   protocol?: "can" | "serial";
@@ -695,6 +698,7 @@ export default function DecoderFramesView({
   isDecoding,
   showRawBytes,
   onToggleRawBytes: _onToggleRawBytes, // Unused - moved to DecoderTopBar
+  timestamp,
   displayTime,
   protocol = "can",
   serialConfig,
@@ -836,8 +840,8 @@ export default function DecoderFramesView({
   // Show playback controls when we have seek support (buffer replay) OR speed control (CSV, PostgreSQL)
   const showPlaybackControls = isReady && (supportsSeek || supportsSpeedControl || canPause);
 
-  // Speed options for replay - must match PlaybackSpeed type
-  const speedOptions: PlaybackSpeed[] = [0.25, 0.5, 1, 2, 10, 30, 60, 0];
+  // Speed options for replay - must match PlaybackSpeed type (no unlimited for Watch mode)
+  const speedOptions: PlaybackSpeed[] = [0.25, 0.5, 1, 2, 10, 30, 60];
 
   // Tab definitions - Signals tab always, plus Unmatched/Filtered tabs always visible
   // Show ">" prefix when buffer is at maximum capacity
@@ -1025,7 +1029,7 @@ export default function DecoderFramesView({
         >
           {speedOptions.map((s) => (
             <option key={s} value={s}>
-              {s === 0 ? "No Limit" : `${s}x`}
+              {s === 1 ? "1x (realtime)" : `${s}x`}
             </option>
           ))}
         </select>
@@ -1044,6 +1048,7 @@ export default function DecoderFramesView({
         protocolLabel={protocol.toUpperCase()}
         protocolBadges={protocolBadges}
         isStreaming={isDecoding && !isPaused}
+        timestamp={timestamp}
         displayTime={displayTime ?? undefined}
         isRecorded={false}
         tabBarControls={tabBarControls}
@@ -1070,7 +1075,7 @@ export default function DecoderFramesView({
       />
 
       {/* Frame cards - the main data view */}
-      <div className={`flex-1 min-h-0 overflow-auto ${bgDarkView} p-4 space-y-4`}>
+      <div className={`flex-1 min-h-0 overflow-auto overscroll-none ${bgDarkView} p-4 space-y-4`}>
         {activeTab === 'signals' ? (
           // Signals tab content
           <>

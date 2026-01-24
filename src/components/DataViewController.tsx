@@ -16,6 +16,9 @@ interface DataViewControllerProps {
   /** Optional badges to show next to the protocol label (e.g., framing mode, filter) */
   protocolBadges?: ProtocolBadge[];
   isStreaming?: boolean;
+  /** Current timestamp in epoch seconds */
+  timestamp?: number | null;
+  /** @deprecated Use timestamp instead */
   displayTime?: string | null;
   isRecorded?: boolean;
   /** Custom controls to show in the tab bar (e.g., ASCII toggle button) */
@@ -66,6 +69,7 @@ export default function DataViewController({
   protocolLabel,
   protocolBadges,
   isStreaming = false,
+  timestamp,
   displayTime,
   isRecorded = false,
   tabBarControls,
@@ -104,6 +108,7 @@ export default function DataViewController({
         protocolLabel={protocolLabel}
         protocolBadges={protocolBadges}
         isStreaming={isStreaming}
+        timestamp={timestamp}
         displayTime={displayTime}
         isRecorded={isRecorded}
         controls={tabBarControls}

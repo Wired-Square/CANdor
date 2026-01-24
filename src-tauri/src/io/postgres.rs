@@ -428,8 +428,8 @@ async fn run_postgres_stream(
     const HIGH_SPEED_BATCH_SIZE: usize = 50; // Max batch size for high-speed emission
     const MIN_DELAY_MS: f64 = 1.0; // Below this, batch frames instead of sleeping
     const PACING_INTERVAL_MS: u64 = 50; // Check pacing every 50ms of wall-clock time
-    const NO_LIMIT_BATCH_SIZE: usize = 1000; // Batch size for no-limit mode
-    const NO_LIMIT_YIELD_MS: u64 = 10; // Yield to UI event loop in no-limit mode (10ms = ~100 batches/sec = ~100k frames/sec)
+    const NO_LIMIT_BATCH_SIZE: usize = 50; // Batch size for no-limit mode (matches frontend throttling threshold)
+    const NO_LIMIT_YIELD_MS: u64 = 2; // Yield to UI event loop in no-limit mode (2ms per 50 frames)
 
     let mut frame_queue: VecDeque<FrameMessage> = VecDeque::new();
     let mut total_fetched = 0i64;
@@ -626,12 +626,7 @@ async fn run_postgres_stream(
                 // Buffer frames for replay
                 buffer_store::append_frames(batch_buffer.clone());
 
-                emit_to_session(
-                    &app_handle,
-                    "frame-message",
-                    &session_id,
-                    batch_buffer.clone(),
-                );
+                emit_frames(&app_handle, &session_id, batch_buffer.clone());
                 batch_buffer.clear();
 
                 // Emit playback time with the batch
@@ -687,12 +682,7 @@ async fn run_postgres_stream(
                 // Buffer frames for replay
                 buffer_store::append_frames(batch_buffer.clone());
 
-                emit_to_session(
-                    &app_handle,
-                    "frame-message",
-                    &session_id,
-                    batch_buffer.clone(),
-                );
+                emit_frames(&app_handle, &session_id, batch_buffer.clone());
                 batch_buffer.clear();
 
                 // Emit playback time with the batch
@@ -713,12 +703,7 @@ async fn run_postgres_stream(
                 // Buffer frames for replay
                 buffer_store::append_frames(batch_buffer.clone());
 
-                emit_to_session(
-                    &app_handle,
-                    "frame-message",
-                    &session_id,
-                    batch_buffer.clone(),
-                );
+                emit_frames(&app_handle, &session_id, batch_buffer.clone());
                 batch_buffer.clear();
             }
 

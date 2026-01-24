@@ -28,7 +28,7 @@ import FilterDialog from "./dialogs/FilterDialog";
 import { WINDOW_EVENTS, type CatalogSavedPayload, type BufferChangedPayload } from "../../events/registry";
 import { addSelectionSet, updateSelectionSet, markSelectionSetUsed, type SelectionSet } from "../../utils/selectionSets";
 import { markFavoriteUsed, type TimeRangeFavorite } from "../../utils/favorites";
-import { formatDisplayTime, localToUtc } from "../../utils/timeFormat";
+import { localToUtc } from "../../utils/timeFormat";
 import type { PlaybackSpeed, PlaybackState } from "../../components/TimeController";
 import type { FrameMessage } from "../../types/frame";
 
@@ -986,7 +986,7 @@ export default function Decoder() {
           isDecoding={isDecoding}
           showRawBytes={showRawBytes}
           onToggleRawBytes={toggleShowRawBytes}
-          displayTime={isDecoding ? formatDisplayTime(displayTime) : null}
+          timestamp={isDecoding ? displayTime : null}
           protocol={protocol}
           serialConfig={serialConfig}
           unmatchedFrames={unmatchedFrames}

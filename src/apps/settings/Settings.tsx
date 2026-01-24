@@ -47,6 +47,8 @@ export default function Settings() {
   const setDisplayFrameIdFormat = useSettingsStore((s) => s.setDisplayFrameIdFormat);
   const displayTimeFormat = useSettingsStore((s) => s.display.timeFormat);
   const setDisplayTimeFormat = useSettingsStore((s) => s.setDisplayTimeFormat);
+  const timezone = useSettingsStore((s) => s.display.timezone);
+  const setTimezone = useSettingsStore((s) => s.setTimezone);
   const signalColours = useSettingsStore((s) => s.display.signalColours);
   const setSignalColour = useSettingsStore((s) => s.setSignalColour);
   const resetSignalColour = useSettingsStore((s) => s.resetSignalColour);
@@ -201,6 +203,8 @@ export default function Settings() {
               displayTimeFormat={displayTimeFormat}
               onChangeFormat={setDisplayFrameIdFormat}
               onChangeTimeFormat={setDisplayTimeFormat}
+              timezone={timezone}
+              onChangeTimezone={setTimezone}
               signalColours={signalColours}
               onChangeSignalColour={setSignalColour}
               onResetSignalColour={resetSignalColour}

@@ -7,6 +7,13 @@
 //   sudo ip link set can0 up type can bitrate 500000
 //
 // This module is only compiled on Linux.
+//
+// NOTE: The standalone SocketIODevice is now legacy code. All real-time devices now use
+// MultiSourceReader which has its own socketcan source implementation. The SocketIODevice
+// struct and related functions are kept for reference but not actively used.
+
+#![allow(dead_code)]
+#![allow(unused_imports)]
 
 #[cfg(target_os = "linux")]
 mod linux_impl {

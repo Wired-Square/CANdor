@@ -60,6 +60,7 @@ export default function EditBookmarkDialog({
             <Input
               variant="default"
               type="datetime-local"
+              step="1"
               value={startTime}
               onChange={(e) => onChangeStartTime(e.target.value)}
             />
@@ -69,6 +70,7 @@ export default function EditBookmarkDialog({
             <Input
               variant="default"
               type="datetime-local"
+              step="1"
               value={endTime}
               onChange={(e) => onChangeEndTime(e.target.value)}
             />

@@ -11,6 +11,9 @@ import {
   SerializedDockview,
 } from "dockview-react";
 import { Store } from "@tauri-apps/plugin-store";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { Settings as SettingsIcon, Search, Activity, FileText, Calculator, Send } from "lucide-react";
 import "dockview-react/dist/styles/dockview.css";
 import LogoMenu, { type PanelId } from "./LogoMenu";
@@ -20,6 +23,12 @@ import {
   unregisterOpenPanelFn,
   openPanel,
 } from "../utils/windowCommunication";
+import {
+  getOpenMainWindows,
+  addOpenMainWindow,
+  removeOpenMainWindow,
+  getNextMainWindowNumber,
+} from "../utils/persistence";
 import { getAppVersion } from "../api";
 import logo from "../assets/logo.png";
 
@@ -42,7 +51,11 @@ async function getLayoutStore(): Promise<Store> {
   return layoutStorePromise;
 }
 
-const LAYOUT_KEY = "dockview.layout";
+// Get layout key for a specific window (per-window persistence)
+function getLayoutKey(windowLabel: string): string {
+  return `dockview.layout.${windowLabel}`;
+}
+
 const SAVE_DEBOUNCE_MS = 500;
 
 // Panel loading fallback
@@ -57,69 +70,49 @@ function PanelLoading() {
   );
 }
 
+// Panel wrapper to ensure proper height constraints within Dockview panels
+// Panels use h-full (not h-screen) since they're inside the Dockview container
+function PanelWrapper({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="h-full overflow-hidden">
+      <Suspense fallback={<PanelLoading />}>
+        {children}
+      </Suspense>
+    </div>
+  );
+}
+
 // Panel wrapper components for Dockview
 function DiscoveryPanel(_props: IDockviewPanelProps) {
-  return (
-    <Suspense fallback={<PanelLoading />}>
-      <Discovery />
-    </Suspense>
-  );
+  return <PanelWrapper><Discovery /></PanelWrapper>;
 }
 
 function DecoderPanel(_props: IDockviewPanelProps) {
-  return (
-    <Suspense fallback={<PanelLoading />}>
-      <Decoder />
-    </Suspense>
-  );
+  return <PanelWrapper><Decoder /></PanelWrapper>;
 }
 
 function TransmitPanel(_props: IDockviewPanelProps) {
-  return (
-    <Suspense fallback={<PanelLoading />}>
-      <Transmit />
-    </Suspense>
-  );
+  return <PanelWrapper><Transmit /></PanelWrapper>;
 }
 
 function CatalogEditorPanel(_props: IDockviewPanelProps) {
-  return (
-    <Suspense fallback={<PanelLoading />}>
-      <CatalogEditor />
-    </Suspense>
-  );
+  return <PanelWrapper><CatalogEditor /></PanelWrapper>;
 }
 
 function FrameCalculatorPanel(_props: IDockviewPanelProps) {
-  return (
-    <Suspense fallback={<PanelLoading />}>
-      <FrameCalculator />
-    </Suspense>
-  );
+  return <PanelWrapper><FrameCalculator /></PanelWrapper>;
 }
 
 function PayloadAnalysisPanel(_props: IDockviewPanelProps) {
-  return (
-    <Suspense fallback={<PanelLoading />}>
-      <PayloadAnalysis />
-    </Suspense>
-  );
+  return <PanelWrapper><PayloadAnalysis /></PanelWrapper>;
 }
 
 function FrameOrderAnalysisPanel(_props: IDockviewPanelProps) {
-  return (
-    <Suspense fallback={<PanelLoading />}>
-      <FrameOrderAnalysis />
-    </Suspense>
-  );
+  return <PanelWrapper><FrameOrderAnalysis /></PanelWrapper>;
 }
 
 function SettingsPanel(_props: IDockviewPanelProps) {
-  return (
-    <Suspense fallback={<PanelLoading />}>
-      <Settings />
-    </Suspense>
-  );
+  return <PanelWrapper><Settings /></PanelWrapper>;
 }
 
 // Component registry for Dockview
@@ -258,12 +251,17 @@ export default function MainLayout() {
   const [savedLayout, setSavedLayout] = useState<SerializedDockview | null>(null);
   const [layoutLoaded, setLayoutLoaded] = useState(false);
 
+  // Get window label once (doesn't change during component lifetime)
+  const windowLabel = getCurrentWebviewWindow().label;
+  const isDynamicWindow = windowLabel.startsWith("main-");
+  const layoutKey = getLayoutKey(windowLabel);
+
   // Load saved layout on mount
   useEffect(() => {
     async function loadLayout() {
       try {
         const store = await getLayoutStore();
-        const layout = await store.get<SerializedDockview>(LAYOUT_KEY);
+        const layout = await store.get<SerializedDockview>(layoutKey);
         if (layout) {
           setSavedLayout(layout);
         }
@@ -273,9 +271,68 @@ export default function MainLayout() {
       setLayoutLoaded(true);
     }
     loadLayout();
+  }, [layoutKey]);
+
+  // Register this window in the open windows list
+  useEffect(() => {
+    // Add this window to the open windows list
+    addOpenMainWindow(windowLabel).catch(console.error);
+
+    // On window close, remove from the list
+    const currentWindow = getCurrentWebviewWindow();
+    const unlisten = currentWindow.onCloseRequested(async () => {
+      await removeOpenMainWindow(windowLabel);
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [windowLabel]);
+
+  // Dashboard window: restore other windows that were open in previous session
+  useEffect(() => {
+    if (windowLabel !== "dashboard") return;
+
+    async function restoreWindows() {
+      try {
+        const savedWindows = await getOpenMainWindows();
+        for (const label of savedWindows) {
+          // Skip dashboard (already open) and check if window doesn't exist yet
+          if (label === "dashboard") continue;
+          // Create the window via Rust backend
+          await invoke("create_main_window", { label });
+        }
+      } catch (error) {
+        console.error("Failed to restore windows:", error);
+      }
+    }
+    restoreWindows();
+  }, [windowLabel]);
+
+  // Listen for "New Window" menu command
+  useEffect(() => {
+    const setupListener = async () => {
+      const unlisten = await listen("menu-new-window", async () => {
+        try {
+          // Get the next available window number
+          const num = await getNextMainWindowNumber();
+          const label = `main-${num}`;
+          // Create the window via Rust backend
+          await invoke("create_main_window", { label });
+        } catch (error) {
+          console.error("Failed to create new window:", error);
+        }
+      });
+      return unlisten;
+    };
+
+    const unlistenPromise = setupListener();
+    return () => {
+      unlistenPromise.then((fn) => fn());
+    };
   }, []);
 
-  // Save layout with debouncing
+  // Save layout with debouncing (per-window persistence)
   const saveLayout = useCallback(() => {
     if (!apiRef.current) return;
 
@@ -290,14 +347,14 @@ export default function MainLayout() {
         const layout = apiRef.current?.toJSON();
         if (layout) {
           const store = await getLayoutStore();
-          await store.set(LAYOUT_KEY, layout);
+          await store.set(layoutKey, layout);
           await store.save();
         }
       } catch (error) {
         console.error("Failed to save layout:", error);
       }
     }, SAVE_DEBOUNCE_MS);
-  }, []);
+  }, [layoutKey]);
 
   // Handle Dockview ready
   const onReady = useCallback(
@@ -325,6 +382,11 @@ export default function MainLayout() {
         }
       }
 
+      // Dynamic windows show the watermark instead of default panel
+      if (isDynamicWindow) {
+        return;
+      }
+
       // No saved layout or restore failed - open Discovery panel by default
       event.api.addPanel({
         id: "discovery",
@@ -332,7 +394,7 @@ export default function MainLayout() {
         title: panelTitles.discovery,
       });
     },
-    [saveLayout, savedLayout]
+    [saveLayout, savedLayout, isDynamicWindow]
   );
 
   // Handle panel open/focus - used by logo menu and cross-panel communication
@@ -417,7 +479,7 @@ export default function MainLayout() {
   return (
     <div className="h-screen flex flex-col bg-slate-900">
       {/* Dockview container fills the screen */}
-      <div className="flex-1 min-h-0">
+      <div className="flex-1 min-h-0 overflow-hidden">
         <DockviewReact
           className="dockview-theme-abyss"
           onReady={onReady}

@@ -3,11 +3,17 @@
 // GVRET TCP Reader - streams live CAN data over TCP using the GVRET binary protocol.
 // Supports both reading and transmitting CAN frames through the same TCP connection.
 //
+// NOTE: The standalone GvretReader is now legacy code. All real-time devices now use
+// MultiSourceReader which has its own gvret_tcp source implementation. The GvretReader
+// struct and related functions are kept for reference but not actively used.
+//
 // Transmit Architecture:
 // Since the IODevice trait has a synchronous transmit_frame method but TCP I/O is async,
 // we use a standard sync channel (std::sync::mpsc) to send frames to the async stream task.
 // The stream task checks for transmit requests during each read timeout iteration and
 // processes them using async I/O.
+
+#![allow(dead_code)]
 
 use async_trait::async_trait;
 use std::sync::{

@@ -348,7 +348,7 @@ export default function CatalogEditor() {
   }, [expandedNodes, selectedNode, filterByNode, formatFrameIdForDisplay]);
 
   return (
-    <div className="h-screen flex flex-col bg-slate-50 dark:bg-slate-900 overflow-hidden">
+    <div className="h-full flex flex-col bg-slate-50 dark:bg-slate-900 overflow-hidden">
       <CatalogToolbar
         editMode={editMode}
         catalogPath={catalogPath}

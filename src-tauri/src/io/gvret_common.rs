@@ -110,6 +110,9 @@ pub fn apply_bus_mapping(frame: &mut FrameMessage, mappings: &[BusMapping]) -> b
 // ============================================================================
 
 /// Get the IOCapabilities for GVRET devices (shared by TCP and USB)
+/// NOTE: This is now only used by the legacy standalone readers. MultiSourceReader
+/// builds its own capabilities based on the combined sources.
+#[allow(dead_code)]
 pub fn gvret_capabilities() -> IOCapabilities {
     IOCapabilities {
         can_pause: false,           // Live stream, would lose data

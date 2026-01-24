@@ -15,23 +15,17 @@ use crate::{
         JoinSessionResult, ListenerInfo, RegisterListenerResult, ReinitializeResult, BufferReader,
         BusMapping,
         CsvReader, CsvReaderOptions,
-        GvretReader, GvretDeviceInfo, probe_gvret_tcp, probe_gvret_usb,
-        GvretUsbConfig, GvretUsbReader,
+        GvretDeviceInfo, probe_gvret_tcp, probe_gvret_usb,
         MqttConfig, MqttReader,
         MultiSourceReader, SourceConfig,
         Parity, PostgresConfig, PostgresReader, PostgresReaderOptions, PostgresSourceType,
         SerialConfig, SerialFramingConfig, SerialReader,
-        SlcanConfig, SlcanReader,
-        SocketCanConfig, SocketIODevice,
         CanTransmitFrame, TransmitResult,
     },
     profile_tracker,
     serial_framer::{FrameIdConfig, FramingEncoding},
     settings::{self, AppSettings, IOProfile},
 };
-
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-use crate::io::{GsUsbConfig, GsUsbReader};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -157,6 +151,53 @@ fn choose_profile_by_id(settings: &AppSettings, profile_id: Option<&str>) -> Opt
     }
 }
 
+/// Check if a profile kind is a real-time device that can use MultiSourceReader.
+/// These devices support the multi-source architecture for unified session handling.
+fn is_realtime_device(kind: &str) -> bool {
+    matches!(
+        kind,
+        "gvret_tcp" | "gvret-tcp" | "gvret_usb" | "gvret-usb" | "slcan" | "gs_usb" | "socketcan"
+    )
+}
+
+/// Create a SourceConfig from an IOProfile for use with MultiSourceReader.
+/// This extracts the common device configuration logic used by both single-device
+/// and multi-device session creation.
+///
+/// Returns None for non-realtime devices (postgres, csv_file, mqtt, serial, buffer)
+/// which should use their direct readers instead.
+fn create_source_config_from_profile(
+    profile: &IOProfile,
+    bus_override: Option<u8>,
+) -> Option<SourceConfig> {
+    if !is_realtime_device(&profile.kind) {
+        return None;
+    }
+
+    // Build default bus mapping: device bus 0 -> output bus (0 or override)
+    let output_bus = bus_override.unwrap_or_else(|| {
+        profile
+            .connection
+            .get("bus_override")
+            .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+            .map(|v| v as u8)
+            .unwrap_or(0)
+    });
+
+    let bus_mappings = vec![BusMapping {
+        device_bus: 0,
+        output_bus,
+        enabled: true,
+    }];
+
+    Some(SourceConfig {
+        profile_id: profile.id.clone(),
+        profile_kind: profile.kind.clone(),
+        display_name: profile.name.clone(),
+        bus_mappings,
+    })
+}
+
 /// Create a new reader session
 #[tauri::command(rename_all = "snake_case")]
 pub async fn create_reader_session(
@@ -197,70 +238,20 @@ pub async fn create_reader_session(
     let profile_id_for_tracking = profile.id.clone();
 
     // Create the appropriate reader based on profile kind
-    let reader: Box<dyn IODevice> = match profile.kind.as_str() {
-        "gvret_tcp" | "gvret-tcp" => {
-            let host = profile
-                .connection
-                .get("host")
-                .and_then(|v| v.as_str())
-                .unwrap_or("127.0.0.1")
-                .to_string();
-            let port = profile
-                .connection
-                .get("port")
-                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(23) as u16;
-            let timeout_sec = profile
-                .connection
-                .get("timeout")
-                .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(5.0);
-            let bus_override = profile
-                .connection
-                .get("bus_override")
-                .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .map(|v| v as u8);
+    // Real-time devices (gvret, slcan, gs_usb, socketcan) use MultiSourceReader for unified handling
+    let reader: Box<dyn IODevice> = if is_realtime_device(&profile.kind) {
+        // Use MultiSourceReader for all real-time devices (unified path)
+        let source_config = create_source_config_from_profile(&profile, bus_override)
+            .ok_or_else(|| format!("Failed to create source config for profile '{}'", profile.id))?;
 
-            Box::new(GvretReader::new(
-                app.clone(),
-                session_id.clone(),
-                host,
-                port,
-                timeout_sec,
-                limit,
-                bus_override,
-            ))
-        }
-        "gvret_usb" | "gvret-usb" => {
-            let port = profile
-                .connection
-                .get("port")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| "Serial port is required for GVRET USB".to_string())?
-                .to_string();
-
-            let baud_rate = profile
-                .connection
-                .get("baud_rate")
-                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(115200) as u32;
-
-            let bus_override = profile
-                .connection
-                .get("bus_override")
-                .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .map(|v| v as u8);
-
-            let config = GvretUsbConfig {
-                port,
-                baud_rate,
-                limit,
-                display_name: Some(profile.name.clone()),
-                bus_override,
-            };
-
-            Box::new(GvretUsbReader::new(app.clone(), session_id.clone(), config))
-        }
+        Box::new(MultiSourceReader::single_source(
+            app.clone(),
+            session_id.clone(),
+            source_config,
+        ))
+    } else {
+        // Non-realtime devices use their direct readers
+        match profile.kind.as_str() {
         "postgres" => {
             let config = PostgresConfig {
                 host: profile
@@ -463,208 +454,6 @@ pub async fn create_reader_session(
 
             Box::new(SerialReader::new(app.clone(), session_id.clone(), config))
         }
-        "slcan" => {
-            let port = profile
-                .connection
-                .get("port")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| "Serial port is required for slcan".to_string())?
-                .to_string();
-
-            let baud_rate = profile
-                .connection
-                .get("baud_rate")
-                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(115200) as u32;
-
-            let bitrate = profile
-                .connection
-                .get("bitrate")
-                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(500000) as u32;
-
-            let silent_mode = profile
-                .connection
-                .get("silent_mode")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-
-            // Serial framing parameters (advanced options, defaults to 8N1)
-            let data_bits = profile
-                .connection
-                .get("data_bits")
-                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(8) as u8;
-
-            let stop_bits = profile
-                .connection
-                .get("stop_bits")
-                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(1) as u8;
-
-            let parity = profile
-                .connection
-                .get("parity")
-                .and_then(|v| v.as_str())
-                .unwrap_or("none")
-                .to_string();
-
-            // Bus number override for multi-bus capture
-            // Command parameter takes precedence over profile config
-            let effective_bus_override = bus_override.or_else(|| {
-                profile
-                    .connection
-                    .get("bus_override")
-                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                    .map(|v| v as u8)
-            });
-
-            let config = SlcanConfig {
-                port,
-                baud_rate,
-                bitrate,
-                silent_mode,
-                limit,
-                display_name: Some(profile.name.clone()),
-                data_bits,
-                stop_bits,
-                parity,
-                bus_override: effective_bus_override,
-            };
-
-            Box::new(SlcanReader::new(app.clone(), session_id.clone(), config))
-        }
-        "socketcan" => {
-            let interface = profile
-                .connection
-                .get("interface")
-                .and_then(|v| v.as_str())
-                .unwrap_or("can0")
-                .to_string();
-
-            // Bus number override for multi-bus capture
-            // Command parameter takes precedence over profile config
-            let effective_bus_override = bus_override.or_else(|| {
-                profile
-                    .connection
-                    .get("bus_override")
-                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                    .map(|v| v as u8)
-            });
-
-            let config = SocketCanConfig {
-                interface,
-                limit,
-                display_name: Some(profile.name.clone()),
-                bus_override: effective_bus_override,
-            };
-
-            Box::new(SocketIODevice::new(app.clone(), session_id.clone(), config))
-        }
-        "gs_usb" => {
-            // gs_usb (candleLight) support
-            // - Linux: Uses SocketCAN (kernel gs_usb driver exposes device as canX interface)
-            // - Windows/macOS: Uses direct USB access via nusb
-
-            #[cfg(target_os = "linux")]
-            {
-                // On Linux, gs_usb devices appear as SocketCAN interfaces
-                let interface = profile
-                    .connection
-                    .get("interface")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        "CAN interface is required for gs_usb on Linux. \
-                        Run 'sudo ip link set canX up type can bitrate NNNN' first."
-                            .to_string()
-                    })?
-                    .to_string();
-
-                // Bus number override for multi-bus capture
-                // Command parameter takes precedence over profile config
-                let effective_bus_override = bus_override.or_else(|| {
-                    profile
-                        .connection
-                        .get("bus_override")
-                        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                        .map(|v| v as u8)
-                });
-
-                let config = SocketCanConfig {
-                    interface,
-                    limit,
-                    display_name: Some(profile.name.clone()),
-                    bus_override: effective_bus_override,
-                };
-
-                Box::new(SocketIODevice::new(app.clone(), session_id.clone(), config))
-            }
-
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
-            {
-                let bus = profile
-                    .connection
-                    .get("bus")
-                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                    .unwrap_or(0) as u8;
-
-                let address = profile
-                    .connection
-                    .get("address")
-                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                    .unwrap_or(0) as u8;
-
-                let bitrate = profile
-                    .connection
-                    .get("bitrate")
-                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                    .unwrap_or(500_000) as u32;
-
-                let listen_only = profile
-                    .connection
-                    .get("listen_only")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(true);
-
-                let channel = profile
-                    .connection
-                    .get("channel")
-                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                    .unwrap_or(0) as u8;
-
-                // Bus number override for multi-bus capture
-                // Command parameter takes precedence over profile config
-                let effective_bus_override = bus_override.or_else(|| {
-                    profile
-                        .connection
-                        .get("bus_override")
-                        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                        .map(|v| v as u8)
-                });
-
-                let config = GsUsbConfig {
-                    bus,
-                    address,
-                    bitrate,
-                    listen_only,
-                    channel,
-                    limit,
-                    display_name: Some(profile.name.clone()),
-                    bus_override: effective_bus_override,
-                };
-
-                Box::new(GsUsbReader::new(app.clone(), session_id.clone(), config))
-            }
-
-            #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-            {
-                return Err(
-                    "gs_usb is not supported on this platform. \
-                    Consider using slcan firmware instead."
-                        .to_string(),
-                );
-            }
-        }
         "mqtt" => {
             let host = profile
                 .connection
@@ -734,6 +523,7 @@ pub async fn create_reader_session(
                 kind
             ));
         }
+    }
     };
 
     let result = create_session(app, session_id.clone(), reader, None).await;
@@ -743,14 +533,20 @@ pub async fn create_reader_session(
     profile_tracker::register_usage(&profile_id_for_tracking, &session_id);
     register_session_profile(&session_id, &profile_id_for_tracking);
 
-    // Auto-start the session after creation (only if this is a new session)
-    // If we joined an existing session, it's already running
-    if result.is_new {
-        eprintln!("[create_reader_session] Auto-starting new session '{}'", session_id);
+    // Auto-start the session after creation (only for real-time devices)
+    // Playback sources (postgres, csv) should NOT auto-start because frames would be emitted
+    // before the frontend has registered its listener and set up event handlers.
+    // The frontend will call start_reader_session after registering the listener.
+    let is_playback_source = matches!(profile.kind.as_str(), "postgres" | "csv_file" | "csv-file");
+
+    if result.is_new && !is_playback_source {
+        eprintln!("[create_reader_session] Auto-starting new session '{}' (real-time device)", session_id);
         if let Err(e) = start_session(&session_id).await {
             eprintln!("[create_reader_session] Failed to auto-start session '{}': {}", session_id, e);
             // Don't fail the whole creation - session is created but not started
         }
+    } else if result.is_new && is_playback_source {
+        eprintln!("[create_reader_session] Created playback session '{}' (not auto-starting - frontend will start after listener registration)", session_id);
     } else {
         eprintln!("[create_reader_session] Joined existing session '{}' (listener_count: {})", session_id, result.listener_count);
     }
@@ -1418,44 +1214,32 @@ pub async fn create_multi_source_session(
         });
     }
 
-    // Validate all profiles are supported types
+    // Validate all profiles are real-time devices supported by MultiSourceReader
     for config in &source_configs {
-        // Check for supported multi-source types
-        match config.profile_kind.as_str() {
-            "gvret_tcp" | "gvret-tcp" | "gvret_usb" | "gvret-usb" => {
-                // Supported
-            }
-            "slcan" => {
-                // Supported
-            }
-            "gs_usb" => {
-                // Supported (nusb driver on Windows/macOS)
-                #[cfg(target_os = "linux")]
-                {
-                    return Err(format!(
-                        "Profile '{}' uses gs_usb which on Linux should use SocketCAN interface. \
-                        Configure a socketcan profile instead.",
-                        config.profile_id
-                    ));
-                }
-            }
-            "socketcan" => {
-                // Supported on Linux
-                #[cfg(not(target_os = "linux"))]
-                {
-                    return Err(format!(
-                        "Profile '{}' uses socketcan which is only available on Linux.",
-                        config.profile_id
-                    ));
-                }
-            }
-            kind => {
-                return Err(format!(
-                    "Profile '{}' has unsupported type '{}' for multi-source mode. \
-                    Currently supported: gvret_tcp, gvret_usb, slcan, gs_usb, socketcan",
-                    config.profile_id, kind
-                ));
-            }
+        if !is_realtime_device(&config.profile_kind) {
+            return Err(format!(
+                "Profile '{}' has unsupported type '{}' for multi-source mode. \
+                Currently supported: gvret_tcp, gvret_usb, slcan, gs_usb, socketcan",
+                config.profile_id, config.profile_kind
+            ));
+        }
+
+        // Platform-specific validation
+        #[cfg(target_os = "linux")]
+        if config.profile_kind == "gs_usb" {
+            return Err(format!(
+                "Profile '{}' uses gs_usb which on Linux should use SocketCAN interface. \
+                Configure a socketcan profile instead.",
+                config.profile_id
+            ));
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        if config.profile_kind == "socketcan" {
+            return Err(format!(
+                "Profile '{}' uses socketcan which is only available on Linux.",
+                config.profile_id
+            ));
         }
 
         // Check if profile is already in use

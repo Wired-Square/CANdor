@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+/* Prevent the entire webview from scrolling/bouncing on macOS */
+html, body {
+  overflow: hidden;
+  overscroll-behavior: none;
+  height: 100%;
+  width: 100%;
+  position: fixed;
+}
+
 /* DSEG7 Classic - 7-segment LED display font */
 @font-face {
   font-family: 'DSEG7';

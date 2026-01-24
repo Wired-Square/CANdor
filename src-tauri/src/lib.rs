@@ -105,6 +105,26 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+/// Create a new main window with the specified label
+#[tauri::command]
+fn create_main_window(app: AppHandle, label: String) -> Result<(), String> {
+    // Check if window already exists
+    if app.get_webview_window(&label).is_some() {
+        return Ok(()); // Window already exists
+    }
+
+    let config = get_window_config("main");
+    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("/".into()))
+        .title(config.title)
+        .inner_size(config.width, config.height)
+        .min_inner_size(config.min_width, config.min_height)
+        .center()
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -112,6 +132,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_window_state::Builder::new().build())
         .setup(|app| {
             // Create About/Settings menu items (App submenu on macOS)
             let about_item = MenuItemBuilder::with_id("about", "About CANdor").build(app)?;
@@ -125,11 +146,9 @@ pub fn run() {
                 .build()?;
 
             // Create View menu items
-            let dashboard_item = MenuItemBuilder::with_id("dashboard", "Dashboard").build(app)?;
-            let catalog_editor_item = MenuItemBuilder::with_id("catalog-editor", "Catalog Editor").build(app)?;
-            let decoder_item = MenuItemBuilder::with_id("decoder", "CAN Decoder").build(app)?;
-            let discovery_item = MenuItemBuilder::with_id("discovery", "CAN Discovery").build(app)?;
-            let frame_calculator_item = MenuItemBuilder::with_id("frame-calculator", "Frame Calculator").build(app)?;
+            let new_window_item = MenuItemBuilder::with_id("new-window", "New Window")
+                .accelerator("cmdOrCtrl+N")
+                .build(app)?;
 
             // Edit menu - use predefined items for native clipboard/undo support
             let find_item = MenuItemBuilder::with_id("find", "Find…")
@@ -151,12 +170,9 @@ pub fn run() {
 
             // Create View submenu
             let view_menu = SubmenuBuilder::new(app, "View")
-                .item(&dashboard_item)
+                .item(&new_window_item)
                 .separator()
-                .item(&catalog_editor_item)
-                .item(&decoder_item)
-                .item(&discovery_item)
-                .item(&frame_calculator_item)
+                .fullscreen()
                 .build()?;
 
             // Create main menu
@@ -184,20 +200,9 @@ pub fn run() {
                     "settings" => {
                         open_or_focus_window(app, "settings", "/settings");
                     }
-                    "catalog-editor" => {
-                        open_or_focus_window(app, "catalog-editor", "/catalog-editor");
-                    }
-                    "decoder" => {
-                        open_or_focus_window(app, "decoder", "/decoder");
-                    }
-                    "discovery" => {
-                        open_or_focus_window(app, "discovery", "/discovery");
-                    }
-                    "frame-calculator" => {
-                        open_or_focus_window(app, "frame-calculator", "/frame-calculator");
-                    }
-                    "dashboard" => {
-                        open_or_focus_window(app, "dashboard", "/");
+                    "new-window" => {
+                        // Emit event to frontend - it will allocate a stable label and create the window
+                        let _ = app.emit("menu-new-window", ());
                     }
                     _ => {
                         // Unknown menu item - ignore
@@ -229,6 +234,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            create_main_window,
             catalog::open_catalog,
             catalog::save_catalog,
             catalog::validate_catalog,

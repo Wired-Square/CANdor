@@ -1,18 +1,14 @@
 // ui/src/apps/transmit/Transmit.tsx
 //
 // Main Transmit app component with tabbed interface for CAN/Serial transmission.
-// Uses useIOSession for session management, like Discovery and Decoder.
+// Uses useIOSessionManager for session management.
 
-import { useEffect, useCallback, useState, useMemo } from "react";
+import { useEffect, useCallback, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Send, AlertCircle, PlugZap, Unplug } from "lucide-react";
 import { useTransmitStore, type TransmitTab } from "../../stores/transmitStore";
-import {
-  createAndStartMultiSourceSession,
-  useMultiBusState,
-  useSessionStore,
-} from "../../stores/sessionStore";
-import { useIOSession } from "../../hooks/useIOSession";
+import { useSessionStore } from "../../stores/sessionStore";
+import { useIOSessionManager, type IngestOptions } from "../../hooks/useIOSessionManager";
 import { useSettings, type IOProfile } from "../../hooks/useSettings";
 import type { TransmitHistoryEvent, SerialTransmitHistoryEvent, RepeatStoppedEvent } from "../../api/transmit";
 import {
@@ -27,12 +23,7 @@ import CanTransmitView from "./views/CanTransmitView";
 import SerialTransmitView from "./views/SerialTransmitView";
 import TransmitQueueView from "./views/TransmitQueueView";
 import TransmitHistoryView from "./views/TransmitHistoryView";
-import IoReaderPickerDialog, {
-  type IngestOptions,
-} from "../../dialogs/IoReaderPickerDialog";
-
-// Multi-source session ID for Transmit
-const MULTI_SESSION_ID = "transmit-multi";
+import IoReaderPickerDialog from "../../dialogs/IoReaderPickerDialog";
 
 export default function Transmit() {
   // Settings for IO profiles
@@ -109,55 +100,46 @@ export default function Transmit() {
   const stopAllRepeats = useTransmitStore((s) => s.stopAllRepeats);
   const stopAllGroupRepeats = useTransmitStore((s) => s.stopAllGroupRepeats);
 
-  // Multi-bus mode state from session store (centralized)
-  const {
-    multiBusMode,
-    multiBusProfiles,
-    setMultiBusMode,
-    setMultiBusProfiles,
-  } = useMultiBusState();
-
-  // Single-profile state (when not in multi-bus mode)
-  const [ioProfile, setIoProfile] = useState<string | null>(null);
-
   // Dialog state
   const [showIoPickerDialog, setShowIoPickerDialog] = useState(false);
-
-  // Track if we've detached from a session (but profile still selected)
-  const [isDetached, setIsDetached] = useState(false);
-
-  // Determine effective session ID
-  const effectiveSessionId = multiBusMode ? MULTI_SESSION_ID : (ioProfile || undefined);
-
-  // Get profile name for display
-  const ioProfileName = useMemo(() => {
-    if (multiBusMode) {
-      return `Multi-Bus (${multiBusProfiles.length} sources)`;
-    }
-    if (!ioProfile) return undefined;
-    const profile = transmitProfiles.find((p) => p.id === ioProfile);
-    return profile?.name;
-  }, [ioProfile, multiBusMode, multiBusProfiles.length, transmitProfiles]);
 
   // Error handler for session errors
   const handleError = useCallback((error: string) => {
     console.error("[Transmit] Session error:", error);
   }, []);
 
-  // Use the useIOSession hook like Discovery does
-  const session = useIOSession({
+  // Use centralized IO session manager
+  const manager = useIOSessionManager({
     appName: "transmit",
-    sessionId: effectiveSessionId,
-    profileName: ioProfileName,
+    ioProfiles: transmitProfiles,
     onError: handleError,
   });
 
-  // Destructure session state and actions
+  // Destructure manager state
   const {
+    ioProfile,
+    setIoProfile,
+    ioProfileName,
+    multiBusMode,
+    multiBusProfiles,
+    setMultiBusMode,
+    setMultiBusProfiles,
+    effectiveSessionId,
+    session,
+    isStreaming,
+    isPaused,
+    isStopped,
+    sessionReady,
     capabilities,
-    state: readerState,
-    isReady: sessionReady,
     joinerCount,
+    isDetached,
+    handleDetach: managerDetach,
+    handleRejoin: managerRejoin,
+    startMultiBusSession,
+  } = manager;
+
+  // Session controls
+  const {
     start,
     stop,
     leave,
@@ -165,10 +147,7 @@ export default function Transmit() {
     reinitialize,
   } = session;
 
-  // Derive state from reader state
-  const isStreaming = readerState === "running";
-  const isPaused = readerState === "paused";
-  const isStopped = readerState === "stopped";
+  // Derive connected state
   const isConnected = sessionReady && (isStreaming || isPaused || isStopped);
 
   // Load profiles on mount
@@ -284,9 +263,6 @@ export default function Transmit() {
         // Set the profile - this triggers useIOSession to create/join the session
         setIoProfile(profileId);
 
-        // Clear detached state
-        setIsDetached(false);
-
         // Reinitialize to ensure session is started
         await reinitialize(profileId);
 
@@ -302,7 +278,7 @@ export default function Transmit() {
         console.error("Failed to create session:", e);
       }
     },
-    [multiBusMode, setMultiBusMode, setMultiBusProfiles, reinitialize, isStreaming, start]
+    [multiBusMode, setMultiBusMode, setMultiBusProfiles, setIoProfile, reinitialize, isStreaming, start]
   );
 
   // Handle stop - also stop all queue repeats and leave session
@@ -325,15 +301,13 @@ export default function Transmit() {
 
   // Handle detach (leave session without stopping it)
   const handleDetach = useCallback(async () => {
-    setIsDetached(true);
-    await leave();
-  }, [leave]);
+    await managerDetach();
+  }, [managerDetach]);
 
   // Handle rejoin after detaching
   const handleRejoin = useCallback(async () => {
-    setIsDetached(false);
-    await rejoin(ioProfile || undefined);
-  }, [rejoin, ioProfile]);
+    await managerRejoin();
+  }, [managerRejoin]);
 
   // Handle joining an existing session from the IO picker dialog
   const handleJoinSession = useCallback(
@@ -354,9 +328,6 @@ export default function Transmit() {
           setIoProfile(sessionId);
         }
 
-        // Clear detached state
-        setIsDetached(false);
-
         // Rejoin the session
         await rejoin(sessionId);
 
@@ -366,17 +337,8 @@ export default function Transmit() {
         console.error("Failed to join session:", e);
       }
     },
-    [multiBusMode, setMultiBusMode, setMultiBusProfiles, rejoin]
+    [multiBusMode, setMultiBusMode, setMultiBusProfiles, setIoProfile, rejoin]
   );
-
-  // Build a map of profile ID to name for multi-source sessions
-  const profileNamesMap = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const profile of transmitProfiles) {
-      map.set(profile.id, profile.name);
-    }
-    return map;
-  }, [transmitProfiles]);
 
   // Handle starting a multi-source session from IO picker (multi-bus mode)
   const handleStartMultiIngest = useCallback(
@@ -385,25 +347,9 @@ export default function Transmit() {
       closeDialog: boolean,
       options: IngestOptions
     ) => {
-      const { busMappings } = options;
-
       try {
-        // Use centralized helper to create multi-source session
-        await createAndStartMultiSourceSession({
-          sessionId: MULTI_SESSION_ID,
-          listenerId: "transmit",
-          profileIds,
-          busMappings,
-          profileNames: profileNamesMap,
-        });
-
-        // Enable multi-bus mode and use the combined session
-        setMultiBusMode(true);
-        setMultiBusProfiles(profileIds);
-        setIoProfile(MULTI_SESSION_ID);
-
-        // Clear detached state
-        setIsDetached(false);
+        // Use manager's centralized multi-bus session handler
+        await startMultiBusSession(profileIds, options);
 
         if (closeDialog) {
           setShowIoPickerDialog(false);
@@ -412,7 +358,7 @@ export default function Transmit() {
         console.error("Failed to create multi-source session:", e);
       }
     },
-    [profileNamesMap, setMultiBusMode, setMultiBusProfiles]
+    [startMultiBusSession]
   );
 
   // Render active tab content

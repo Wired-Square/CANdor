@@ -121,10 +121,12 @@ export function useIngestSession({
             setIngestError(event.payload);
           }
         );
-        const unlistenFrames = await listen<unknown[]>(
+        const unlistenFrames = await listen<{ frames: unknown[] } | unknown[]>(
           `frame-message:${INGEST_SESSION_ID}`,
           (event) => {
-            setIngestFrameCount((prev) => prev + event.payload.length);
+            // Handle both legacy array format and new FrameBatchPayload format
+            const frames = Array.isArray(event.payload) ? event.payload : event.payload.frames;
+            setIngestFrameCount((prev) => prev + frames.length);
           }
         );
 
