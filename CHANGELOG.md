@@ -2,6 +2,48 @@
 
 All notable changes to CANdor will be documented in this file.
 
+## [0.2.33] - 2026-01-24
+
+### Added
+
+- **Multi-Window Support**: Open multiple CANdor windows via View → New Window (Cmd+N). Each window maintains its own independent tab layout.
+- **Per-Window Tab Persistence**: Each window remembers its open tabs and layout. Tabs are restored when the window reopens.
+- **Window State Persistence**: Window size and position are automatically saved and restored on relaunch.
+- **Session Restore**: All open windows are restored when relaunching CANdor, each with their saved tabs, size, and position.
+- **Timezone Display Setting**: New "Default timezone" option in Settings → Display allows choosing between Local and UTC for clock displays. Clock displays in Decoder and Discovery now show a clickable badge (Local/UTC) that cycles through timezone options without changing the global setting.
+- **Date Display for Recorded Sources**: Clock displays now show both date and time when viewing recorded data (PostgreSQL, CSV, buffers), while live sources show time only.
+- **Second-Precision Bookmarks**: Bookmark time inputs now support second-level precision. Previously bookmarks were limited to minute granularity.
+- **Session Joining for Recorded Sources**: Active PostgreSQL sessions now appear in the IO Reader Picker's "Active Sessions" section, allowing other apps (e.g., Decoder) to join an existing streaming session from Discovery. Previously only multi-bus sessions were shown as joinable.
+- **Centralized Bookmark Button**: The bookmark picker button is now part of the session controls (next to play/stop) in Decoder and Discovery top bars. The button only appears when the data source supports time range filtering (e.g., PostgreSQL), and is disabled while streaming since time range cannot be changed mid-stream.
+- **Discovery Speed Picker**: The playback speed button is now visible in the Discovery top bar when using recorded sources (PostgreSQL). Previously only available in Decoder.
+- **Continue Without Reader**: IO Reader Picker dialog now shows a "Continue Without Reader" button when no reader is selected, allowing users to set up Transmit frames before connecting to a device.
+
+### Fixed
+
+- **Ingest Frame Count NaN**: Fixed "Ingesting: NaN frames" display in the IO Reader Picker dialog when ingesting from PostgreSQL and other sources using the new frame batch payload format. The frame message listener now handles both legacy array format and the newer `FrameBatchPayload` object format.
+- **Panel Scroll Overflow**: Fixed app panels scrolling beyond their boundaries and going underneath the title bar on macOS. Root html/body elements now use `position: fixed` and `overscroll-behavior: none` to completely lock the webview in place. App components use `h-full` instead of `h-screen`, a centralized `PanelWrapper` ensures proper height constraints, and scroll containers use `overscroll-none`.
+- **Decoder Unlimited Speed Playback**: Fixed issue where the Decoder would not show decoded signals when playing back from PostgreSQL at unlimited speed (0x). Frames are now flushed immediately when stream ends, ensuring all frames are processed before completion.
+- **Second-Precision Bookmark Timestamps**: Fixed PostgreSQL queries failing when using bookmarks with second-precision timestamps. The timestamp format was being double-suffixed (e.g., `09:04:20:00` instead of `09:04:20`).
+- **Watch Mode Playback Pacing**: Fixed IO Reader Picker defaulting to unlimited speed (0x) for Watch mode instead of 1x realtime. Watch now correctly defaults to 1x with pacing enabled, ensuring recorded data plays back at the intended speed.
+- **IO Reader Picker Selection Stability**: Fixed data source selection being cleared when changing watch speed in the IO Reader Picker dialog. The issue was caused by a new empty array being created on each re-render, triggering the dialog's initialization effect.
+- **Discovery Speed Picker Dialog**: Fixed speed picker in Discovery showing a "Change Speed Mode?" warning dialog instead of the speed picker. Discovery now uses the same SpeedPickerDialog as Decoder, with the confirmation dialog only appearing when switching from No Limit mode with frames present.
+- **Cross-Window Speed Synchronization**: Fixed playback speed not syncing between windows when apps share a session. When Discovery changes speed while Decoder is viewing the same PostgreSQL session, Decoder's speed display now updates automatically. The backend now emits `speed-changed` events and apps subscribe via `onSpeedChange` callback.
+- **Discovery Protocol Badge Case**: Fixed protocol badge showing lowercase "can" in Discovery. Now displays uppercase "CAN" to match Decoder.
+- **Transmit Top Bar Styling**: Fixed Transmit icon color (blue→red) to match the tab icon, and added separator after icon for consistency with Decoder and Discovery.
+- **Transmit Protocol Badge Label**: Fixed protocol badge losing its text when IO session is stopped. Now defaults to "CAN" or "Serial" based on the active tab when no session is connected.
+
+### Changed
+
+- **Shared Protocol Badge Component**: Extracted protocol badge (with status light, protocol label, recorded indicator) into reusable `ProtocolBadge` component. Now used consistently across Decoder, Discovery, and Transmit. The badge is clickable for future protocol configuration features.
+- **Transmit View Styling**: Transmit now has the same dark-themed tab bar style as Decoder and Discovery, with a protocol badge showing streaming status and "CAN" or "Serial" label based on the connected device's capabilities.
+- **Simplified View Menu**: The View menu now contains only "New Window" and "Enter Fullscreen". App shortcuts (Dashboard, Decoder, Discovery, etc.) have been removed in favor of using the logo menu within windows.
+- **Centralized IO Session Management**: Added `useIOSessionManager` hook to consolidate common IO session patterns (profile state, multi-bus coordination, derived state, detach/rejoin handlers). Transmit app now uses this hook, reducing code duplication and establishing a pattern for incremental adoption by other apps.
+- **Unified Session Architecture**: All real-time device sessions (GVRET, slcan, gs_usb, SocketCAN) now use the same internal `MultiSourceReader` path, even for single-device sessions. This simplifies the codebase by eliminating duplicate code paths (~500 lines) while maintaining the same external API. Single-device sessions are now implemented as multi-device sessions with n=1.
+- **PostgreSQL No-Limit Batch Size**: Reduced from 1000 to 50 frames per batch to match frontend throttling thresholds, improving decoder responsiveness during fast playback.
+- **Dialog State Management**: Added `useDialogManager` hook to consolidate multiple `useState` pairs for dialog visibility into a single hook call. Decoder and Discovery now use this hook, reducing boilerplate and providing a cleaner API (`dialogs.xxx.open()`, `dialogs.xxx.close()`, `dialogs.xxx.isOpen`).
+- **Unified IO Session Controls**: Introduced `IOSessionControls` component that combines reader button, speed picker, bookmark button, and session action buttons (stop/resume/detach/rejoin) into a single reusable component. All three apps (Decoder, Discovery, Transmit) now use this unified component for consistent session control layout.
+- **Removed No Limit Mode**: Removed the "No Limit" (0x) playback speed option from Discovery. This mode was intended for fast ingestion but added complexity. Users should now use the standard speed options (0.25x to 60x) for playback. The `PlaybackSpeed` type is now centralized in `TimeController` component.
+
 ## [0.2.32] - 2026-01-22
 
 ### Added
