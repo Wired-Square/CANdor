@@ -46,6 +46,32 @@ pub const GVRET_CMD_NUMBUSES: [u8; 2] = [0xF1, 0x0C];
 pub const DLC_LEN: [usize; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64];
 
 // ============================================================================
+// Device Probing Helpers
+// ============================================================================
+
+/// Parse NUMBUSES response from a buffer.
+///
+/// Searches for the pattern `[0xF1][0x0C][bus_count]` in the buffer.
+/// Returns the validated bus count (1-5), or None if no valid response found.
+///
+/// Used by both TCP and USB probe functions to extract device capabilities.
+pub fn parse_numbuses_response(buffer: &[u8]) -> Option<u8> {
+    // Look for NUMBUSES response: [0xF1][0x0C][bus_count]
+    for i in 0..buffer.len().saturating_sub(2) {
+        if buffer[i] == GVRET_SYNC && buffer[i + 1] == 0x0C && i + 2 < buffer.len() {
+            let bus_count = buffer[i + 2];
+            // Sanity check: GVRET devices have 1-5 buses
+            return Some(if bus_count == 0 || bus_count > 5 {
+                5 // Default to 5 if response is invalid
+            } else {
+                bus_count
+            });
+        }
+    }
+    None
+}
+
+// ============================================================================
 // Device Info Types
 // ============================================================================
 
@@ -647,5 +673,47 @@ mod tests {
 
         let result = validate_gvret_frame(&frame);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_numbuses_response_valid() {
+        // Valid response: [0xF1][0x0C][3] = 3 buses
+        let buffer = vec![0xF1, 0x0C, 0x03];
+        assert_eq!(parse_numbuses_response(&buffer), Some(3));
+    }
+
+    #[test]
+    fn test_parse_numbuses_response_with_prefix() {
+        // Response with garbage before it
+        let buffer = vec![0xAA, 0xBB, 0xF1, 0x0C, 0x02];
+        assert_eq!(parse_numbuses_response(&buffer), Some(2));
+    }
+
+    #[test]
+    fn test_parse_numbuses_response_invalid_count_zero() {
+        // Invalid bus count 0 should default to 5
+        let buffer = vec![0xF1, 0x0C, 0x00];
+        assert_eq!(parse_numbuses_response(&buffer), Some(5));
+    }
+
+    #[test]
+    fn test_parse_numbuses_response_invalid_count_high() {
+        // Invalid bus count >5 should default to 5
+        let buffer = vec![0xF1, 0x0C, 0x10];
+        assert_eq!(parse_numbuses_response(&buffer), Some(5));
+    }
+
+    #[test]
+    fn test_parse_numbuses_response_not_found() {
+        // No valid response in buffer
+        let buffer = vec![0xF1, 0x00, 0x03, 0x04];
+        assert_eq!(parse_numbuses_response(&buffer), None);
+    }
+
+    #[test]
+    fn test_parse_numbuses_response_incomplete() {
+        // Incomplete response (only 2 bytes)
+        let buffer = vec![0xF1, 0x0C];
+        assert_eq!(parse_numbuses_response(&buffer), None);
     }
 }

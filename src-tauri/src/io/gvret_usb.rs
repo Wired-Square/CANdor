@@ -13,8 +13,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use super::gvret_common::{
-    apply_bus_mappings_gvret, parse_gvret_frames, BusMapping, BINARY_MODE_ENABLE, DEVICE_INFO_PROBE,
-    GVRET_CMD_NUMBUSES, GVRET_SYNC, GvretDeviceInfo,
+    apply_bus_mappings_gvret, parse_gvret_frames, parse_numbuses_response, BusMapping,
+    BINARY_MODE_ENABLE, DEVICE_INFO_PROBE, GVRET_CMD_NUMBUSES, GvretDeviceInfo,
 };
 use super::types::{io_error, SourceMessage, TransmitRequest};
 
@@ -97,28 +97,13 @@ pub fn probe_gvret_usb(port: &str, baud_rate: u32) -> Result<GvretDeviceInfo, St
             Ok(n) => {
                 total_read += n;
 
-                // Look for NUMBUSES response: [0xF1][0x0C][bus_count]
-                for i in 0..total_read.saturating_sub(2) {
-                    if buf[i] == GVRET_SYNC && buf[i + 1] == 0x0C && i + 2 < total_read {
-                        let bus_count = buf[i + 2];
-                        // Sanity check: GVRET devices have 1-5 buses
-                        let bus_count = if bus_count == 0 || bus_count > 5 {
-                            // Default to 5 if response is invalid
-                            eprintln!(
-                                "[probe_gvret_usb] Invalid bus count {}, defaulting to 5",
-                                bus_count
-                            );
-                            5
-                        } else {
-                            bus_count
-                        };
-
-                        eprintln!(
-                            "[probe_gvret_usb] SUCCESS: Device at {} has {} buses available",
-                            port, bus_count
-                        );
-                        return Ok(GvretDeviceInfo { bus_count });
-                    }
+                // Check for NUMBUSES response
+                if let Some(bus_count) = parse_numbuses_response(&buf[..total_read]) {
+                    eprintln!(
+                        "[probe_gvret_usb] SUCCESS: Device at {} has {} buses available",
+                        port, bus_count
+                    );
+                    return Ok(GvretDeviceInfo { bus_count });
                 }
 
                 // If we've read enough data without finding the response, give up
