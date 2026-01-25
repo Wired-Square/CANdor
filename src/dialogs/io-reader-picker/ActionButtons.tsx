@@ -1,9 +1,9 @@
 // ui/src/dialogs/io-reader-picker/ActionButtons.tsx
 
-import { Download, Eye, Loader2, Upload, Check, Plug, Play, GitMerge } from "lucide-react";
+import { Download, Eye, Loader2, Upload, Check, Plug, Play, GitMerge, Unplug, RotateCcw } from "lucide-react";
 import type { IOProfile } from "../../hooks/useSettings";
 import { CSV_EXTERNAL_ID, isRealtimeProfile } from "./utils";
-import { primaryButtonBase, successButtonBase, panelFooter, errorBoxCompact } from "../../styles";
+import { primaryButtonBase, successButtonBase, panelFooter, errorBoxCompact, dangerButtonBase } from "../../styles";
 
 type Props = {
   isIngesting: boolean;
@@ -36,6 +36,14 @@ type Props = {
   multiSelectCount?: number;
   /** Called when user wants to watch multiple profiles (multi-bus mode) */
   onMultiWatchClick?: () => void;
+  /** Called when user wants to release/reset the dialog state */
+  onRelease?: () => void;
+  /** Called when user wants to restart a live session with updated config */
+  onRestartClick?: () => void;
+  /** Whether there's a live multi-source session for the selected profiles */
+  isMultiSourceLive?: boolean;
+  /** Called when user wants to restart a live multi-source session with updated config */
+  onMultiRestartClick?: () => void;
 };
 
 export default function ActionButtons({
@@ -58,9 +66,29 @@ export default function ActionButtons({
   multiSelectMode = false,
   multiSelectCount = 0,
   onMultiWatchClick,
+  onRelease,
+  onRestartClick,
+  isMultiSourceLive = false,
+  onMultiRestartClick,
 }: Props) {
   const isCsvSelected = checkedReaderId === CSV_EXTERNAL_ID;
   const isCheckedRealtime = checkedProfile ? isRealtimeProfile(checkedProfile) : false;
+
+  // Show release button when there's a selection that can be released
+  const hasSelection = checkedReaderId !== null || isBufferSelected || (multiSelectMode && multiSelectCount > 0);
+  const showRelease = onRelease && hasSelection && !isIngesting;
+
+  // Leave button component for inline use - red button that leaves the session
+  const releaseButton = showRelease ? (
+    <button
+      onClick={onRelease}
+      className={`${dangerButtonBase} gap-1.5`}
+      title="Leave session and reset selection"
+    >
+      <Unplug className="w-3.5 h-3.5" />
+      <span>Leave</span>
+    </button>
+  ) : null;
 
   return (
     <div className={panelFooter}>
@@ -70,15 +98,27 @@ export default function ActionButtons({
           <span>Ingesting from {ingestProfileId}...</span>
         </div>
       ) : multiSelectMode ? (
-        // Multi-select mode - show Multi-Bus Watch button
+        // Multi-select mode - show Multi-Bus Watch/Restart buttons
         multiSelectCount > 0 && onMultiWatchClick ? (
-          <button
-            onClick={onMultiWatchClick}
-            className={`w-full ${successButtonBase}`}
-          >
-            <GitMerge className="w-4 h-4" />
-            <span>Watch {multiSelectCount} Buses</span>
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={onMultiWatchClick}
+              className={`flex-1 ${successButtonBase}`}
+            >
+              <GitMerge className="w-4 h-4" />
+              <span>Watch</span>
+            </button>
+            {isMultiSourceLive && onMultiRestartClick && (
+              <button
+                onClick={onMultiRestartClick}
+                className={`flex-1 ${primaryButtonBase}`}
+                title="Restart session with updated configuration"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>Restart</span>
+              </button>
+            )}
+          </div>
         ) : (
           <div className="text-center text-sm text-slate-400 dark:text-slate-500 py-1">
             Select real-time readers to watch
@@ -87,23 +127,26 @@ export default function ActionButtons({
       ) : isCsvSelected ? (
         // CSV selected - show Import button
         <div className="space-y-2">
-          <button
-            onClick={onImport}
-            disabled={isImporting}
-            className={`w-full ${primaryButtonBase}`}
-          >
-            {isImporting ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Importing...</span>
-              </>
-            ) : (
-              <>
-                <Upload className="w-4 h-4" />
-                <span>Import</span>
-              </>
-            )}
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={onImport}
+              disabled={isImporting}
+              className={`flex-1 ${primaryButtonBase}`}
+            >
+              {isImporting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Importing...</span>
+                </>
+              ) : (
+                <>
+                  <Upload className="w-4 h-4" />
+                  <span>Import</span>
+                </>
+              )}
+            </button>
+            {releaseButton}
+          </div>
           {importError && (
             <div className={errorBoxCompact}>
               {importError}
@@ -113,25 +156,40 @@ export default function ActionButtons({
       ) : checkedReaderId ? (
         // IO reader selected - show action buttons based on session state
         isCheckedProfileLive && !isCheckedProfileStopped && onJoinClick ? (
-          // Profile has a running session - show Join button only
-          <button
-            onClick={onJoinClick}
-            className={`w-full ${successButtonBase}`}
-          >
-            <Plug className="w-4 h-4" />
-            <span>Join Session</span>
-          </button>
+          // Profile has a running session - show Join + Restart buttons
+          <div className="flex gap-2">
+            <button
+              onClick={onJoinClick}
+              className={`flex-1 ${successButtonBase}`}
+            >
+              <Plug className="w-4 h-4" />
+              <span>Join</span>
+            </button>
+            {onRestartClick && (
+              <button
+                onClick={onRestartClick}
+                className={`flex-1 ${primaryButtonBase}`}
+                title="Restart session with updated configuration"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>Restart</span>
+              </button>
+            )}
+          </div>
         ) : isCheckedProfileStopped && onStartClick ? (
           // Profile has a stopped session - show Resume (which also joins) + Watch/Ingest (reinitialize)
           <div className="space-y-2">
             {/* Row 1: Resume restarts and joins the session */}
-            <button
-              onClick={onStartClick}
-              className={`w-full ${successButtonBase}`}
-            >
-              <Play className="w-4 h-4" />
-              <span>Resume and Join</span>
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={onStartClick}
+                className={`flex-1 ${successButtonBase}`}
+              >
+                <Play className="w-4 h-4" />
+                <span>Resume and Join</span>
+              </button>
+              {releaseButton}
+            </div>
             {/* Row 2: Watch/Ingest to reinitialize with new options */}
             <div className="flex gap-2">
               {!isCheckedRealtime && (
@@ -171,17 +229,21 @@ export default function ActionButtons({
               <Eye className="w-4 h-4" />
               <span>Watch</span>
             </button>
+            {releaseButton}
           </div>
         )
       ) : isBufferSelected ? (
         // Buffer is selected, no IO reader checked - show OK to keep buffer
-        <button
-          onClick={onClose}
-          className={`w-full ${primaryButtonBase}`}
-        >
-          <Check className="w-4 h-4" />
-          <span>OK</span>
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={onClose}
+            className={`flex-1 ${primaryButtonBase}`}
+          >
+            <Check className="w-4 h-4" />
+            <span>OK</span>
+          </button>
+          {releaseButton}
+        </div>
       ) : onSkip ? (
         // Nothing selected but skip is available
         <button

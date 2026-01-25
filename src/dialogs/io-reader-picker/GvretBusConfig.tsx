@@ -2,6 +2,7 @@
 //
 // Bus configuration UI for GVRET devices.
 // Shows available buses with toggles to enable/disable and optional bus remapping.
+// Also supports protocol selection when used in profile settings.
 
 import { Loader2, AlertCircle, Bus } from "lucide-react";
 import type { GvretDeviceInfo, BusMapping } from "../../api/io";
@@ -15,6 +16,12 @@ const BUS_NAMES: Record<number, string> = {
   4: "Bus 4",
 };
 
+/** Extended bus mapping with optional protocol field for settings mode */
+export interface BusMappingWithProtocol extends BusMapping {
+  /** Protocol type (for settings mode) */
+  protocol?: 'can' | 'canfd';
+}
+
 interface GvretBusConfigProps {
   /** Device info from probing (null while loading or on error) */
   deviceInfo: GvretDeviceInfo | null;
@@ -23,15 +30,19 @@ interface GvretBusConfigProps {
   /** Error message from probe (null if success) */
   error: string | null;
   /** Current bus mapping configuration */
-  busConfig: BusMapping[];
+  busConfig: BusMappingWithProtocol[];
   /** Called when bus config changes */
-  onBusConfigChange: (config: BusMapping[]) => void;
+  onBusConfigChange: (config: BusMappingWithProtocol[]) => void;
   /** Profile name for display */
   profileName?: string;
   /** Use compact inline styling (no header, reduced padding) */
   compact?: boolean;
   /** Output bus numbers that are already used by other sources (for duplicate warning) */
   usedOutputBuses?: Set<number>;
+  /** Show output bus selector (default: true) - set to false for settings mode */
+  showOutputBus?: boolean;
+  /** Show protocol selector (default: false) - set to true for settings mode */
+  showProtocol?: boolean;
 }
 
 export default function GvretBusConfig({
@@ -43,6 +54,8 @@ export default function GvretBusConfig({
   profileName,
   compact = false,
   usedOutputBuses,
+  showOutputBus = true,
+  showProtocol = false,
 }: GvretBusConfigProps) {
   // Toggle a bus enabled/disabled
   const toggleBus = (deviceBus: number) => {
@@ -59,6 +72,16 @@ export default function GvretBusConfig({
     const newConfig = busConfig.map((mapping) =>
       mapping.deviceBus === deviceBus
         ? { ...mapping, outputBus }
+        : mapping
+    );
+    onBusConfigChange(newConfig);
+  };
+
+  // Change protocol for a bus
+  const setProtocol = (deviceBus: number, protocol: 'can' | 'canfd') => {
+    const newConfig = busConfig.map((mapping) =>
+      mapping.deviceBus === deviceBus
+        ? { ...mapping, protocol }
         : mapping
     );
     onBusConfigChange(newConfig);
@@ -138,8 +161,22 @@ export default function GvretBusConfig({
                   </span>
                 </label>
 
-                {/* Output bus selector (only show if enabled) */}
-                {mapping.enabled && (
+                {/* Protocol selector (only show if enabled and showProtocol is true) */}
+                {mapping.enabled && showProtocol && (
+                  <select
+                    value={mapping.protocol || 'can'}
+                    onChange={(e) =>
+                      setProtocol(mapping.deviceBus, e.target.value as 'can' | 'canfd')
+                    }
+                    className="px-1 py-0.5 rounded border text-xs border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-cyan-500"
+                  >
+                    <option value="can">CAN</option>
+                    <option value="canfd">CAN FD</option>
+                  </select>
+                )}
+
+                {/* Output bus selector (only show if enabled and showOutputBus is true) */}
+                {mapping.enabled && showOutputBus && (
                   <div className="flex items-center gap-1">
                     <span className="text-slate-400 dark:text-slate-500">→</span>
                     <select
@@ -212,8 +249,25 @@ export default function GvretBusConfig({
                 </span>
               </label>
 
-              {/* Output bus selector (only show if enabled) */}
-              {mapping.enabled && (
+              {/* Protocol selector (only show if enabled and showProtocol is true) */}
+              {mapping.enabled && showProtocol && (
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="text-slate-500 dark:text-slate-400">Protocol:</span>
+                  <select
+                    value={mapping.protocol || 'can'}
+                    onChange={(e) =>
+                      setProtocol(mapping.deviceBus, e.target.value as 'can' | 'canfd')
+                    }
+                    className="px-1.5 py-0.5 rounded border text-xs border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-cyan-500"
+                  >
+                    <option value="can">CAN</option>
+                    <option value="canfd">CAN FD</option>
+                  </select>
+                </div>
+              )}
+
+              {/* Output bus selector (only show if enabled and showOutputBus is true) */}
+              {mapping.enabled && showOutputBus && (
                 <div className="flex items-center gap-1.5 text-xs">
                   <span className="text-slate-500 dark:text-slate-400">→ Output:</span>
                   <select

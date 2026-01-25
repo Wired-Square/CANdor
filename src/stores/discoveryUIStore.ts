@@ -54,7 +54,7 @@ interface DiscoveryUIState {
   selectionSetDirty: boolean;
 
   // Frame view tab state
-  framesViewActiveTab: 'frames' | 'analysis';
+  framesViewActiveTab: 'frames' | 'filtered' | 'analysis';
 
   // CAN frame view display options
   showAsciiColumn: boolean;
@@ -95,7 +95,7 @@ interface DiscoveryUIState {
   setSelectionSetDirty: (dirty: boolean) => void;
 
   // Actions - Frame view tabs
-  setFramesViewActiveTab: (tab: 'frames' | 'analysis') => void;
+  setFramesViewActiveTab: (tab: 'frames' | 'filtered' | 'analysis') => void;
 
   // Actions - CAN frame view display options
   toggleShowAsciiColumn: () => void;

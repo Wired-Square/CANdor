@@ -17,19 +17,25 @@ pub mod serial; // pub for Tauri command access (list_serial_ports)
 mod serial_utils;
 pub mod slcan; // pub for slcan transmit_frame access
 mod socketcan;
+mod timeline_base;
+pub mod traits;
+mod types;
 
 // Re-export device implementations
 pub use buffer::BufferReader;
 pub use csv::{parse_csv_file, CsvReader, CsvReaderOptions};
 #[cfg(any(target_os = "windows", target_os = "macos"))]
+#[allow(unused_imports)]
 pub use gs_usb::GsUsbConfig;
 pub use gvret_common::{BusMapping, GvretDeviceInfo};
 pub use gvret_tcp::probe_gvret_tcp;
 pub use gvret_usb::probe_gvret_usb;
 pub use multi_source::{MultiSourceReader, SourceConfig};
+// Note: types module exports are used internally by interface modules
 pub use mqtt::{MqttConfig, MqttReader};
 pub use postgres::{PostgresConfig, PostgresReader, PostgresReaderOptions, PostgresSourceType};
 pub use serial::{Parity, SerialConfig, SerialFramingConfig, SerialReader};
+// Note: traits module is used directly via crate::io::traits in multi_source.rs
 // Note: SlcanConfig, SlcanReader, SocketCanConfig, SocketIODevice are used internally
 // by MultiSourceReader but not exported from mod.rs since all real-time devices now
 // go through MultiSourceReader
@@ -46,27 +52,6 @@ use tokio::sync::Mutex;
 // ============================================================================
 // Shared Types (used by multiple readers)
 // ============================================================================
-
-/// Raw CAN bytes payload for debugging/display
-/// NOTE: Only used by legacy standalone readers (GvretReader, GvretUsbReader)
-#[allow(dead_code)]
-#[derive(Clone, Serialize)]
-pub struct CanBytesPayload {
-    pub hex: String,
-    pub len: usize,
-    pub timestamp_ms: u128,
-    pub source: String,
-}
-
-/// Get current time in milliseconds since UNIX epoch
-/// NOTE: Only used by legacy standalone readers
-#[allow(dead_code)]
-pub fn now_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0)
-}
 
 /// Parsed frame message - the main data structure emitted by all readers
 #[derive(Clone, Serialize, Deserialize)]
@@ -165,6 +150,42 @@ impl TransmitResult {
 // IO Device Trait and Capabilities
 // ============================================================================
 
+/// Temporal mode of an interface/session
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TemporalMode {
+    /// Real-time streaming from live devices (GVRET, slcan, gs_usb, SocketCAN, MQTT)
+    Realtime,
+    /// Timeline/playback from recorded sources (PostgreSQL, CSV, Buffer)
+    Timeline,
+}
+
+/// Protocol family for frame-based communication
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Protocol {
+    /// CAN 2.0A/2.0B (standard/extended)
+    Can,
+    /// CAN FD (flexible data rate) - compatible with Can
+    #[serde(rename = "canfd")]
+    CanFd,
+    /// Modbus RTU/TCP
+    Modbus,
+    /// Raw serial bytes
+    Serial,
+}
+
+/// Combined interface traits for formal session/interface characterization
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InterfaceTraits {
+    /// Temporal mode of the interface
+    pub temporal_mode: TemporalMode,
+    /// Protocols supported by the interface
+    pub protocols: Vec<Protocol>,
+    /// Whether the interface can transmit frames
+    pub can_transmit: bool,
+}
+
 /// IO device capabilities - what this device type supports
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IOCapabilities {
@@ -197,6 +218,159 @@ pub struct IOCapabilities {
     /// Available bus numbers (empty = single bus, [0,1,2] = multi-bus like GVRET)
     #[serde(default)]
     pub available_buses: Vec<u8>,
+    /// Emits raw bytes (serial sessions without server-side framing, or with emit_raw_bytes=true)
+    #[serde(default)]
+    pub emits_raw_bytes: bool,
+    /// Formal interface traits (temporal mode, protocols, transmit capability)
+    /// If None, traits are derived from legacy fields for backward compatibility
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traits: Option<InterfaceTraits>,
+}
+
+impl IOCapabilities {
+    /// Create capabilities for a realtime CAN source (slcan, socketcan, gvret, gs_usb).
+    ///
+    /// Defaults:
+    /// - No pause/resume (would lose data)
+    /// - No time range or speed control
+    /// - Supports extended IDs and RTR
+    /// - Single bus (override with `with_buses`)
+    /// - No transmit (override with `with_transmit`)
+    pub fn realtime_can() -> Self {
+        Self {
+            can_pause: false,
+            supports_time_range: false,
+            is_realtime: true,
+            supports_speed_control: false,
+            supports_seek: false,
+            can_transmit: false,
+            can_transmit_serial: false,
+            supports_canfd: false,
+            supports_extended_id: true,
+            supports_rtr: true,
+            available_buses: vec![0],
+            emits_raw_bytes: false,
+            traits: None,
+        }
+    }
+
+    /// Create capabilities for a timeline/replay CAN source (buffer, csv, postgres).
+    ///
+    /// Defaults:
+    /// - Supports pause/resume and speed control
+    /// - No transmit (replay source)
+    /// - No seek (override with `with_seek`)
+    pub fn timeline_can() -> Self {
+        Self {
+            can_pause: true,
+            supports_time_range: false,
+            is_realtime: false,
+            supports_speed_control: true,
+            supports_seek: false,
+            can_transmit: false,
+            can_transmit_serial: false,
+            supports_canfd: false,
+            supports_extended_id: true,
+            supports_rtr: false,
+            available_buses: vec![],
+            emits_raw_bytes: false,
+            traits: None,
+        }
+    }
+
+    /// Create capabilities for a real-time serial source.
+    ///
+    /// Defaults:
+    /// - Real-time streaming with pause support
+    /// - Serial transmit enabled
+    /// - Emits raw bytes (client-side framing)
+    pub fn realtime_serial() -> Self {
+        Self {
+            can_pause: true,
+            supports_time_range: false,
+            is_realtime: true,
+            supports_speed_control: false,
+            supports_seek: false,
+            can_transmit: false,
+            can_transmit_serial: true,
+            supports_canfd: false,
+            supports_extended_id: false,
+            supports_rtr: false,
+            available_buses: vec![],
+            emits_raw_bytes: false, // Set via with_emits_raw_bytes()
+            traits: None,
+        }
+    }
+
+    /// Set CAN transmit capability
+    pub fn with_transmit(mut self, can_transmit: bool) -> Self {
+        self.can_transmit = can_transmit;
+        self
+    }
+
+    /// Set available buses
+    pub fn with_buses(mut self, buses: Vec<u8>) -> Self {
+        self.available_buses = buses;
+        self
+    }
+
+    /// Set CAN FD support
+    pub fn with_canfd(mut self, supports_canfd: bool) -> Self {
+        self.supports_canfd = supports_canfd;
+        self
+    }
+
+    /// Set seek support (for timeline sources)
+    pub fn with_seek(mut self, supports_seek: bool) -> Self {
+        self.supports_seek = supports_seek;
+        self
+    }
+
+    /// Set time range filter support (for timeline sources)
+    pub fn with_time_range(mut self, supports_time_range: bool) -> Self {
+        self.supports_time_range = supports_time_range;
+        self
+    }
+
+    /// Set raw bytes emission (for serial sources)
+    pub fn with_emits_raw_bytes(mut self, emits_raw_bytes: bool) -> Self {
+        self.emits_raw_bytes = emits_raw_bytes;
+        self
+    }
+
+    /// Set interface traits explicitly
+    #[allow(dead_code)]
+    pub fn with_traits(mut self, traits: InterfaceTraits) -> Self {
+        self.traits = Some(traits);
+        self
+    }
+
+    /// Get the interface traits, deriving from legacy fields if not explicitly set
+    #[allow(dead_code)]
+    pub fn get_traits(&self) -> InterfaceTraits {
+        if let Some(ref traits) = self.traits {
+            traits.clone()
+        } else {
+            // Derive from legacy fields
+            let protocols = if self.can_transmit_serial {
+                vec![Protocol::Serial]
+            } else if self.supports_canfd {
+                vec![Protocol::Can, Protocol::CanFd]
+            } else {
+                vec![Protocol::Can]
+            };
+
+            InterfaceTraits {
+                temporal_mode: if self.is_realtime {
+                    TemporalMode::Realtime
+                } else {
+                    TemporalMode::Timeline
+                },
+                protocols,
+                can_transmit: self.can_transmit || self.can_transmit_serial,
+            }
+        }
+    }
 }
 
 /// Current state of an IO session
@@ -332,6 +506,8 @@ pub struct IOSession {
     pub joiner_count: usize,
     /// Map of listener IDs to their listener info (replaces joiner_heartbeats)
     pub listeners: HashMap<String, SessionListener>,
+    /// Display names of the sources in this session (for logging)
+    pub source_names: Vec<String>,
 }
 
 /// Convert IOState to a simple string for TypeScript
@@ -482,6 +658,7 @@ pub async fn create_session(
     session_id: String,
     device: Box<dyn IODevice>,
     listener_id: Option<String>,
+    source_names: Option<Vec<String>>,
 ) -> CreateSessionResult {
     // Clear the closing flag in case this is a new session for a previously closed window
     clear_session_closing(&session_id);
@@ -569,6 +746,7 @@ pub async fn create_session(
         app,
         joiner_count: listener_count,
         listeners,
+        source_names: source_names.unwrap_or_default(),
     };
 
     sessions.insert(session_id.clone(), session);
@@ -766,12 +944,18 @@ async fn log_session_status() {
             IOState::Error(_) => "error",
         };
         let listener_ids: Vec<&str> = session.listeners.keys().map(|s| s.as_str()).collect();
+        let sources = if session.source_names.is_empty() {
+            String::new()
+        } else {
+            format!(", sources={:?}", session.source_names)
+        };
         eprintln!(
-            "[session status]   '{}': state={}, listeners={} {:?}",
+            "[session status]   '{}': state={}, listeners={} {:?}{}",
             session_id,
             state,
             session.listeners.len(),
-            listener_ids
+            listener_ids,
+            sources
         );
     }
     eprintln!("[session status] =====================================");

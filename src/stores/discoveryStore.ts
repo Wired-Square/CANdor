@@ -47,7 +47,7 @@ export { useDiscoveryToolboxStore } from './discoveryToolboxStore';
 
 /** Raw serial bytes event payload from backend - batched for performance */
 export type SerialRawBytesPayload = {
-  bytes: Array<{ byte: number; timestamp_us: number }>;
+  bytes: Array<{ byte: number; timestamp_us: number; bus?: number }>;
   port: string;
 };
 
@@ -55,6 +55,8 @@ export type SerialRawBytesPayload = {
 export type TimestampedByte = {
   byte: number;
   timestamp_us: number;
+  /** Bus/interface number (for multi-source sessions) */
+  bus?: number;
 };
 
 // Combined state type for backward compatibility
@@ -112,7 +114,7 @@ type CombinedDiscoveryState = {
   setError: (error: string | null) => void;
   showError: (title: string, message: string, details?: string) => void;
   closeErrorDialog: () => void;
-  addFrames: (newFrames: FrameMessage[]) => void;
+  addFrames: (newFrames: FrameMessage[], skipFramePicker?: boolean) => void;
   clearBuffer: () => void;
   clearFramePicker: () => void;
   clearAll: () => void;
@@ -155,6 +157,7 @@ type CombinedDiscoveryState = {
   applyFraming: () => Promise<FrameMessage[]>;
   acceptFraming: (bufferName?: string) => Promise<FrameMessage[]>;
   resetFraming: () => void;
+  undoAcceptFraming: () => void;
   applyFrameIdMapping: (config: import('./discoverySerialStore').ByteExtractionConfig) => void;
   clearFrameIdMapping: () => void;
   applySourceMapping: (config: import('./discoverySerialStore').ByteExtractionConfig) => void;
@@ -253,8 +256,8 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     showInfoView: toolboxStore.showInfoView,
 
     // Frame store actions (with coordination)
-    addFrames: (newFrames) => {
-      frameStore.addFrames(newFrames, uiStore.maxBuffer);
+    addFrames: (newFrames, skipFramePicker) => {
+      frameStore.addFrames(newFrames, uiStore.maxBuffer, skipFramePicker);
     },
     clearBuffer: frameStore.clearBuffer,
     clearFramePicker: frameStore.clearFramePicker,
@@ -337,6 +340,8 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
       // Get backend buffer info BEFORE calling acceptFraming (which clears serialBytes)
       const { framedBufferId, backendFrameCount } = serialStore;
       const hasBackendFrames = framedBufferId !== null && backendFrameCount > 0;
+      // Streaming mode: frames go directly to mainFrames (framedBufferId is null)
+      const hasStreamingFrames = framedBufferId === null && backendFrameCount > 0;
 
       const frames = serialStore.acceptFraming();
 
@@ -352,6 +357,69 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
           console.log(`[discoveryStore] Loaded ${frameInfoList.length} unique frame IDs from backend buffer`);
         } catch (e) {
           console.error('[discoveryStore] Failed to load frame info from backend buffer:', e);
+        }
+      } else if (hasStreamingFrames) {
+        // Streaming mode: frames are already in mainFrames, just need to update frame info
+        // Frames were added via addFrames() during streaming
+        const mainFrames = frameStore.frames;
+        if (mainFrames.length > 0) {
+          // Apply extraction configs to update frame IDs/source addresses in the actual frames
+          const { frameIdExtractionConfig, sourceExtractionConfig } = serialStore;
+          if (frameIdExtractionConfig || sourceExtractionConfig) {
+            const updatedFrames = mainFrames.map(frame => {
+              const newFrame = { ...frame };
+
+              // Apply ID extraction if configured
+              if (frameIdExtractionConfig) {
+                const { startByte, numBytes, endianness } = frameIdExtractionConfig;
+                const resolvedStart = startByte >= 0 ? startByte : Math.max(0, frame.bytes.length + startByte);
+                if (resolvedStart < frame.bytes.length) {
+                  let frameId = 0;
+                  const endByte = Math.min(resolvedStart + numBytes, frame.bytes.length);
+                  if (endianness === 'big') {
+                    for (let i = resolvedStart; i < endByte; i++) {
+                      frameId = (frameId << 8) | frame.bytes[i];
+                    }
+                  } else {
+                    for (let i = resolvedStart; i < endByte; i++) {
+                      frameId |= frame.bytes[i] << (8 * (i - resolvedStart));
+                    }
+                  }
+                  newFrame.frame_id = frameId;
+                }
+              }
+
+              // Apply source extraction if configured
+              if (sourceExtractionConfig) {
+                const { startByte, numBytes, endianness } = sourceExtractionConfig;
+                const resolvedStart = startByte >= 0 ? startByte : Math.max(0, frame.bytes.length + startByte);
+                if (resolvedStart < frame.bytes.length) {
+                  let source = 0;
+                  const endByte = Math.min(resolvedStart + numBytes, frame.bytes.length);
+                  if (endianness === 'big') {
+                    for (let i = resolvedStart; i < endByte; i++) {
+                      source = (source << 8) | frame.bytes[i];
+                    }
+                  } else {
+                    for (let i = resolvedStart; i < endByte; i++) {
+                      source |= frame.bytes[i] << (8 * (i - resolvedStart));
+                    }
+                  }
+                  newFrame.source_address = source;
+                }
+              }
+
+              return newFrame;
+            });
+
+            // Replace frames in store with updated ones
+            frameStore.setFrames(updatedFrames);
+            console.log(`[discoveryStore] Applied extraction configs to ${updatedFrames.length} streaming frames`);
+          } else {
+            // No extraction configs, just rebuild frame picker
+            frameStore.rebuildFramePickerFromBuffer();
+          }
+          console.log(`[discoveryStore] Accepted ${mainFrames.length} streaming frames`);
         }
       } else if (frames.length > 0) {
         // Local framing mode: frames are in memory
@@ -372,6 +440,7 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
       return frames;
     },
     resetFraming: serialStore.resetFraming,
+    undoAcceptFraming: serialStore.undoAcceptFraming,
     applyFrameIdMapping: serialStore.applyFrameIdMapping,
     clearFrameIdMapping: serialStore.clearFrameIdMapping,
     applySourceMapping: serialStore.applySourceMapping,

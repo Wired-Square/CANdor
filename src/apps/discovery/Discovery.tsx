@@ -97,6 +97,7 @@ export default function Discovery() {
   const addSerialBytes = useDiscoveryStore((state) => state.addSerialBytes);
   const clearSerialBytes = useDiscoveryStore((state) => state.clearSerialBytes);
   const resetFraming = useDiscoveryStore((state) => state.resetFraming);
+  const undoAcceptFraming = useDiscoveryStore((state) => state.undoAcceptFraming);
   const framedData = useDiscoveryStore((state) => state.framedData);
   const framingAccepted = useDiscoveryStore((state) => state.framingAccepted);
   const serialBytesBuffer = useDiscoveryStore((state) => state.serialBytesBuffer);
@@ -110,8 +111,6 @@ export default function Discovery() {
   const setBackendFrameCount = useDiscoveryStore((state) => state.setBackendFrameCount);
   const serialActiveTab = useDiscoveryStore((state) => state.serialActiveTab);
   const bufferMode = useDiscoveryStore((state) => state.bufferMode);
-  const serialViewConfig = useDiscoveryStore((state) => state.serialViewConfig);
-  const toggleShowAscii = useDiscoveryStore((state) => state.toggleShowAscii);
   const setFramingConfig = useDiscoveryStore((state) => state.setFramingConfig);
 
   const displayFrameIdFormat = getDisplayFrameIdFormat(settings);
@@ -203,9 +202,12 @@ export default function Discovery() {
   // Note: Watch frame counting is handled by useIOSessionManager
   const handleFrames = useCallback((receivedFrames: FrameMessage[]) => {
     if (!receivedFrames || receivedFrames.length === 0) return;
-    addFrames(receivedFrames);
+    // In serial mode, skip frame picker updates until framing is accepted
+    // The frame picker will be populated with correct IDs when acceptFraming is called
+    const skipFramePicker = isSerialMode && !framingAccepted;
+    addFrames(receivedFrames, skipFramePicker);
     incrementBackendFrameCount(receivedFrames.length);
-  }, [addFrames, incrementBackendFrameCount]);
+  }, [addFrames, incrementBackendFrameCount, isSerialMode, framingAccepted]);
 
   const handleError = useCallback((error: string) => {
     showError("Stream Error", "An error occurred while streaming CAN data.", error);
@@ -469,7 +471,7 @@ export default function Discovery() {
     }
   }, [settings, setIoProfile, setMaxBuffer]);
 
-  // Detect if current profile is serial
+  // Detect if current profile is serial - use session traits from capabilities
   const prevIsSerialModeRef = useRef(false);
   useEffect(() => {
     let newIsSerialMode = false;
@@ -477,10 +479,11 @@ export default function Discovery() {
     if (!ioProfile) {
       newIsSerialMode = false;
     } else if (ioProfile === BUFFER_PROFILE_ID) {
+      // Buffer mode: check buffer metadata for bytes type
       newIsSerialMode = bufferMetadata?.buffer_type === "bytes" || bufferType === "bytes" || framedBufferId !== null;
-    } else if (settings?.io_profiles) {
-      const profile = settings.io_profiles.find((p) => p.id === ioProfile);
-      newIsSerialMode = profile?.kind === "serial";
+    } else {
+      // Live session: check session traits from capabilities
+      newIsSerialMode = capabilities?.traits?.protocols?.includes("serial") ?? false;
     }
 
     setSerialMode(newIsSerialMode);
@@ -489,7 +492,7 @@ export default function Discovery() {
       clearSerialBytes();
     }
     prevIsSerialModeRef.current = newIsSerialMode;
-  }, [ioProfile, settings?.io_profiles, bufferMetadata, bufferType, framedBufferId, setSerialMode, clearSerialBytes]);
+  }, [ioProfile, capabilities, bufferMetadata, bufferType, framedBufferId, setSerialMode, clearSerialBytes]);
 
   // Listen for serial-raw-bytes events when in serial mode
   // Events are scoped by session ID (profile ID), not app name
@@ -503,6 +506,7 @@ export default function Discovery() {
           const entries = event.payload.bytes.map((b) => ({
             byte: b.byte,
             timestampUs: b.timestamp_us,
+            bus: b.bus,
           }));
           incrementBackendByteCount(entries.length);
           addSerialBytes(entries);
@@ -732,8 +736,7 @@ export default function Discovery() {
         serialBytesCount={backendByteCount > 0 ? backendByteCount : serialBytesBuffer.length}
         framingAccepted={framingAccepted}
         serialActiveTab={serialActiveTab}
-        showAscii={serialViewConfig.showAscii}
-        onToggleAscii={toggleShowAscii}
+        onUndoFraming={undoAcceptFraming}
         onOpenIoReaderPicker={() => dialogs.ioReaderPicker.open()}
         onSave={openSaveDialog}
         onExport={() => dialogs.export.open()}
@@ -748,6 +751,7 @@ export default function Discovery() {
             isStreaming={isStreaming}
             displayTimeFormat={displayTimeFormat}
             isRecorded={isRecorded}
+            emitsRawBytes={capabilities?.emits_raw_bytes ?? true}
           />
         ) : (
           <DiscoveryFramesView

@@ -7,8 +7,12 @@ export { default as FramingOptions } from "./FramingOptions";
 export { default as FilterOptions } from "./FilterOptions";
 export { default as ActionButtons } from "./ActionButtons";
 export { default as IngestStatus } from "./IngestStatus";
+export { default as GvretBusConfig } from "./GvretBusConfig";
+export { default as SingleBusConfig } from "./SingleBusConfig";
 
 export type { FramingConfig } from "./FramingOptions";
+export type { BusMappingWithProtocol } from "./GvretBusConfig";
+export type { InterfaceFramingConfig } from "./SingleBusConfig";
 
 export {
   localToIsoWithOffset,
@@ -19,4 +23,9 @@ export {
   CSV_EXTERNAL_ID,
   INGEST_SESSION_ID,
   isRealtimeProfile,
+  isMultiSourceCapable,
+  validateProfileSelection,
+  getProfileTraits,
 } from "./utils";
+
+export type { InterfaceTraits, TraitValidation } from "./utils";

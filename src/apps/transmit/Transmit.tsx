@@ -245,12 +245,18 @@ export default function Transmit() {
   // Count active repeats in queue
   const activeRepeats = queue.filter((q) => q.isRepeating).length;
 
+  // Determine interface type from protocol traits
+  // Serial protocol = bytes/serial frames, CAN/CANFD protocol = CAN frames
+  const protocols = capabilities?.traits?.protocols ?? [];
+  const isSerialProtocol = protocols.includes("serial");
+  const isCanProtocol = protocols.some(p => p === "can" || p === "canfd");
+
   // Render active tab content
   const renderTabContent = () => {
     switch (activeTab) {
       case "frame":
-        // Show Serial view if device supports serial but not CAN, otherwise CAN
-        return capabilities?.can_transmit_serial && !capabilities?.can_transmit ? (
+        // Show Serial view for serial protocol, CAN view for CAN protocol
+        return isSerialProtocol && !isCanProtocol ? (
           <SerialTransmitView />
         ) : (
           <CanTransmitView />
@@ -336,8 +342,7 @@ export default function Transmit() {
             {/* Protocol badge with status light */}
             <div className="ml-1">
               <ProtocolBadge
-                canTransmit={capabilities?.can_transmit}
-                canTransmitSerial={capabilities?.can_transmit_serial}
+                label={isSerialProtocol && !isCanProtocol ? "Serial" : "CAN"}
                 isStreaming={isStreaming}
               />
             </div>
@@ -347,7 +352,8 @@ export default function Transmit() {
               onClick={() => handlers.handleTabClick("frame")}
               className={dataViewTabClass(activeTab === "frame")}
             >
-              Frame
+              {/* Show "Bytes" for serial protocol, "Frame" for CAN */}
+              {isSerialProtocol && !isCanProtocol ? "Bytes" : "Frame"}
             </button>
             <button
               onClick={() => handlers.handleTabClick("queue")}
@@ -393,7 +399,7 @@ export default function Transmit() {
         onClose={handlers.handleCloseIoPicker}
         ioProfiles={transmitProfiles}
         selectedId={ioProfile ?? null}
-        defaultId={null}
+        defaultId={settings?.default_read_profile}
         onSelect={() => {}}
         onStartIngest={handlers.handleStartSession}
         onStartMultiIngest={handlers.handleStartMultiIngest}
@@ -402,6 +408,9 @@ export default function Transmit() {
         allowMultiSelect={true}
         disabledProfiles={transmitStatusMap}
         onSkip={handlers.handleSkip}
+        isIngesting={isStreaming}
+        ingestProfileId={isStreaming ? effectiveSessionId : null}
+        onStopIngest={handlers.handleStop}
       />
     </div>
   );

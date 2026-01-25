@@ -419,10 +419,15 @@ function DiscoveryFramesView({
 
   // Build tab definitions for shared tab bar
   const frameCount = filteredCount > 0 ? filteredCount : frames.length;
-  const tabs: TabDefinition[] = useMemo(() => [
-    { id: 'frames', label: 'Frames', count: frameCount, countColor: 'green' as const },
-    { id: 'analysis', label: 'Analysis', hasIndicator: hasAnalysisResults },
-  ], [frameCount, hasAnalysisResults]);
+  const tabs: TabDefinition[] = useMemo(() => {
+    const result: TabDefinition[] = [
+      { id: 'frames', label: 'Frames', count: frameCount, countColor: 'green' as const },
+    ];
+    // Filtered tab is a placeholder for now - will be implemented in a future update
+    // result.push({ id: 'filtered', label: 'Filtered', count: 0, countColor: 'amber' as const });
+    result.push({ id: 'analysis', label: 'Analysis', hasIndicator: hasAnalysisResults });
+    return result;
+  }, [frameCount, hasAnalysisResults]);
 
   // Handle page size change - reset to page 0
   const handlePageSizeChange = useCallback((size: number) => {
@@ -504,7 +509,7 @@ function DiscoveryFramesView({
               // Tab bar
               tabs={tabs}
               activeTab={activeTab}
-              onTabChange={(id) => setActiveTab(id as 'frames' | 'analysis')}
+              onTabChange={(id) => setActiveTab(id as 'frames' | 'filtered' | 'analysis')}
               protocolLabel={protocol.toUpperCase()}
               isStreaming={isStreaming}
               timestamp={timestamp}
@@ -581,7 +586,7 @@ function DiscoveryFramesView({
             <DiscoveryViewController
               tabs={tabs}
               activeTab={activeTab}
-              onTabChange={(id) => setActiveTab(id as 'frames' | 'analysis')}
+              onTabChange={(id) => setActiveTab(id as 'frames' | 'filtered' | 'analysis')}
               protocolLabel={protocol.toUpperCase()}
               isStreaming={isStreaming}
               timestamp={timestamp}

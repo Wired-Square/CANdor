@@ -305,7 +305,7 @@ export default function SerialAnalysisResultView() {
           </h4>
           <ol className="text-sm text-slate-600 dark:text-slate-400 space-y-1 list-decimal list-inside">
             <li>Click "Apply" on a framing mode above, or configure manually in the Framing dialog</li>
-            <li>Review the framed data in the "Framed Data" tab</li>
+            <li>Review the framed data in the "Framed Bytes" tab</li>
             <li>Run analysis again to identify ID bytes and checksums</li>
           </ol>
         </div>

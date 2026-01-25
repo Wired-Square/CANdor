@@ -37,7 +37,7 @@ interface DiscoveryFrameState {
   };
 
   // Actions - Data management
-  addFrames: (newFrames: FrameMessage[], maxBuffer: number) => void;
+  addFrames: (newFrames: FrameMessage[], maxBuffer: number, skipFramePicker?: boolean) => void;
   clearBuffer: () => void;
   clearFramePicker: () => void;
   clearAll: () => void;
@@ -73,7 +73,7 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
   bufferMode: { enabled: false, totalFrames: 0 },
 
   // Data management actions
-  addFrames: (newFrames, maxBuffer) => {
+  addFrames: (newFrames, maxBuffer, skipFramePicker = false) => {
     pendingFrames.push(...newFrames);
 
     if (flushTimeout === null) {
@@ -107,65 +107,68 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
 
         const stateUpdate: Partial<DiscoveryFrameState> = { frames: updatedFrames };
 
-        const newlyDiscovered: number[] = [];
-        for (const f of framesToProcess) {
-          if (!seenIds.has(f.frame_id)) {
-            newlyDiscovered.push(f.frame_id);
-          }
-        }
-
-        if (newlyDiscovered.length > 0) {
-          const nextSeenIds = new Set(seenIds);
-          const nextSelectedFrames = new Set(selectedFrames);
-          newlyDiscovered.forEach((id) => {
-            nextSeenIds.add(id);
-            nextSelectedFrames.add(id);
-          });
-          stateUpdate.seenIds = nextSeenIds;
-          stateUpdate.selectedFrames = nextSelectedFrames;
-        }
-
-        // Update frame info map
-        let frameInfoChanged = newlyDiscovered.length > 0;
-
-        if (!frameInfoChanged) {
+        // Skip frame picker updates if requested (e.g., serial mode before framing is accepted)
+        if (!skipFramePicker) {
+          const newlyDiscovered: number[] = [];
           for (const f of framesToProcess) {
-            const current = frameInfoMap.get(f.frame_id);
-            if (current) {
-              const newLen = Math.max(current.len, f.dlc);
-              const lenMismatch = current.lenMismatch || current.len !== f.dlc;
-              if (current.len !== newLen || current.lenMismatch !== lenMismatch) {
-                frameInfoChanged = true;
-                break;
+            if (!seenIds.has(f.frame_id)) {
+              newlyDiscovered.push(f.frame_id);
+            }
+          }
+
+          if (newlyDiscovered.length > 0) {
+            const nextSeenIds = new Set(seenIds);
+            const nextSelectedFrames = new Set(selectedFrames);
+            newlyDiscovered.forEach((id) => {
+              nextSeenIds.add(id);
+              nextSelectedFrames.add(id);
+            });
+            stateUpdate.seenIds = nextSeenIds;
+            stateUpdate.selectedFrames = nextSelectedFrames;
+          }
+
+          // Update frame info map
+          let frameInfoChanged = newlyDiscovered.length > 0;
+
+          if (!frameInfoChanged) {
+            for (const f of framesToProcess) {
+              const current = frameInfoMap.get(f.frame_id);
+              if (current) {
+                const newLen = Math.max(current.len, f.dlc);
+                const lenMismatch = current.lenMismatch || current.len !== f.dlc;
+                if (current.len !== newLen || current.lenMismatch !== lenMismatch) {
+                  frameInfoChanged = true;
+                  break;
+                }
               }
             }
           }
-        }
 
-        if (frameInfoChanged) {
-          const nextFrameInfoMap = new Map(frameInfoMap);
+          if (frameInfoChanged) {
+            const nextFrameInfoMap = new Map(frameInfoMap);
 
-          for (const f of framesToProcess) {
-            const current = nextFrameInfoMap.get(f.frame_id);
-            const newLen = current ? Math.max(current.len, f.dlc) : f.dlc;
-            const newBus = current?.bus ?? f.bus;
-            const newExtended = current?.isExtended ?? f.is_extended;
-            const lenMismatch = current ? current.lenMismatch || current.len !== f.dlc : false;
-            const protocol = current?.protocol ?? f.protocol;
+            for (const f of framesToProcess) {
+              const current = nextFrameInfoMap.get(f.frame_id);
+              const newLen = current ? Math.max(current.len, f.dlc) : f.dlc;
+              const newBus = current?.bus ?? f.bus;
+              const newExtended = current?.isExtended ?? f.is_extended;
+              const lenMismatch = current ? current.lenMismatch || current.len !== f.dlc : false;
+              const protocol = current?.protocol ?? f.protocol;
 
-            if (
-              !current ||
-              current.len !== newLen ||
-              current.isExtended !== newExtended ||
-              current.bus !== newBus ||
-              current.lenMismatch !== lenMismatch ||
-              current.protocol !== protocol
-            ) {
-              nextFrameInfoMap.set(f.frame_id, { len: newLen, isExtended: newExtended, bus: newBus, lenMismatch, protocol });
+              if (
+                !current ||
+                current.len !== newLen ||
+                current.isExtended !== newExtended ||
+                current.bus !== newBus ||
+                current.lenMismatch !== lenMismatch ||
+                current.protocol !== protocol
+              ) {
+                nextFrameInfoMap.set(f.frame_id, { len: newLen, isExtended: newExtended, bus: newBus, lenMismatch, protocol });
+              }
             }
-          }
 
-          stateUpdate.frameInfoMap = nextFrameInfoMap;
+            stateUpdate.frameInfoMap = nextFrameInfoMap;
+          }
         }
 
         set(stateUpdate);

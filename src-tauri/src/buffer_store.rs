@@ -32,6 +32,9 @@ pub struct TimestampedByte {
     pub byte: u8,
     /// Timestamp in microseconds since epoch
     pub timestamp_us: u64,
+    /// Bus/interface number (for multi-source sessions)
+    #[serde(default)]
+    pub bus: u8,
 }
 
 /// Metadata about a buffer
@@ -526,6 +529,34 @@ pub fn find_buffer_offset_for_timestamp(
 // ============================================================================
 // Public API - Data Access (Byte Buffers)
 // ============================================================================
+
+/// Append raw bytes to the active buffer.
+/// Silently returns if there's no active buffer or it's not a byte buffer.
+pub fn append_raw_bytes(new_bytes: Vec<TimestampedByte>) {
+    if new_bytes.is_empty() {
+        return;
+    }
+
+    let mut registry = BUFFER_REGISTRY.write().unwrap();
+
+    let active_id = match &registry.active_id {
+        Some(id) => id.clone(),
+        None => return,
+    };
+
+    if let Some(buffer) = registry.buffers.get_mut(&active_id) {
+        if let BufferData::Bytes(ref mut bytes) = buffer.data {
+            // Update time range
+            if buffer.metadata.start_time_us.is_none() {
+                buffer.metadata.start_time_us = new_bytes.first().map(|b| b.timestamp_us);
+            }
+            buffer.metadata.end_time_us = new_bytes.last().map(|b| b.timestamp_us);
+
+            bytes.extend(new_bytes);
+            buffer.metadata.count = bytes.len();
+        }
+    }
+}
 
 /// Append raw bytes to a specific buffer by ID.
 /// Silently returns if buffer doesn't exist or is not a byte buffer.

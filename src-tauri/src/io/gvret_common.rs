@@ -17,7 +17,7 @@
 use hex::ToHex;
 use tauri::AppHandle;
 
-use super::{now_us, CanTransmitFrame, FrameMessage, IOCapabilities, StreamEndedPayload, TransmitResult, emit_to_session};
+use super::{now_us, CanTransmitFrame, FrameMessage, InterfaceTraits, Protocol, StreamEndedPayload, TemporalMode, TransmitResult, emit_to_session};
 use crate::buffer_store::{self, BufferType};
 
 // ============================================================================
@@ -65,6 +65,12 @@ pub struct BusMapping {
     pub enabled: bool,
     /// Bus number to use in emitted frames (0-255)
     pub output_bus: u8,
+    /// Human-readable interface identifier (e.g., "can0", "serial1")
+    #[serde(default)]
+    pub interface_id: String,
+    /// Traits for this specific interface
+    #[serde(default)]
+    pub traits: Option<InterfaceTraits>,
 }
 
 impl Default for BusMapping {
@@ -73,11 +79,18 @@ impl Default for BusMapping {
             device_bus: 0,
             enabled: true,
             output_bus: 0,
+            interface_id: "can0".to_string(),
+            traits: Some(InterfaceTraits {
+                temporal_mode: TemporalMode::Realtime,
+                protocols: vec![Protocol::Can],
+                can_transmit: true,
+            }),
         }
     }
 }
 
-/// Create default bus mappings for a device with the given bus count
+/// Create default bus mappings for a device with the given bus count.
+/// All buses are assumed to be CAN interfaces.
 #[allow(dead_code)]
 pub fn default_bus_mappings(bus_count: u8) -> Vec<BusMapping> {
     (0..bus_count)
@@ -85,6 +98,12 @@ pub fn default_bus_mappings(bus_count: u8) -> Vec<BusMapping> {
             device_bus: i,
             enabled: true,
             output_bus: i,
+            interface_id: format!("can{}", i),
+            traits: Some(InterfaceTraits {
+                temporal_mode: TemporalMode::Realtime,
+                protocols: vec![Protocol::Can, Protocol::CanFd],
+                can_transmit: true,
+            }),
         })
         .collect()
 }
@@ -106,27 +125,57 @@ pub fn apply_bus_mapping(frame: &mut FrameMessage, mappings: &[BusMapping]) -> b
 }
 
 // ============================================================================
-// Capabilities
+// Frame Batch Helpers
 // ============================================================================
 
-/// Get the IOCapabilities for GVRET devices (shared by TCP and USB)
-/// NOTE: This is now only used by the legacy standalone readers. MultiSourceReader
-/// builds its own capabilities based on the combined sources.
+/// Apply bus mappings to a batch of frames, filtering out disabled buses.
+///
+/// This consolidates the common pattern used by real-time drivers:
+/// ```ignore
+/// frames.into_iter()
+///     .filter_map(|mut frame| {
+///         if apply_bus_mapping(&mut frame, &mappings) { Some(frame) } else { None }
+///     })
+///     .collect()
+/// ```
+///
+/// Available for drivers that produce `Vec<FrameMessage>` directly.
+/// For GVRET drivers, use `apply_bus_mappings_gvret` instead.
 #[allow(dead_code)]
-pub fn gvret_capabilities() -> IOCapabilities {
-    IOCapabilities {
-        can_pause: false,           // Live stream, would lose data
-        supports_time_range: false,
-        is_realtime: true,
-        supports_speed_control: false,
-        supports_seek: false,
-        can_transmit: true,         // GVRET supports transmission
-        can_transmit_serial: false,
-        supports_canfd: true,       // GVRET supports CAN FD
-        supports_extended_id: true, // GVRET supports extended IDs
-        supports_rtr: true,         // GVRET supports RTR frames
-        available_buses: vec![0, 1, 2, 3, 4], // GVRET supports multiple buses
-    }
+pub fn apply_bus_mappings_batch(
+    frames: Vec<FrameMessage>,
+    mappings: &[BusMapping],
+) -> Vec<FrameMessage> {
+    frames
+        .into_iter()
+        .filter_map(|mut frame| {
+            if apply_bus_mapping(&mut frame, mappings) {
+                Some(frame)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Apply bus mappings to GVRET frames (which include raw hex strings).
+/// Returns only the FrameMessage portion, discarding the raw strings.
+///
+/// Used by gvret_tcp and gvret_usb after calling `parse_gvret_frames`.
+pub fn apply_bus_mappings_gvret(
+    frames: Vec<(FrameMessage, String)>,
+    mappings: &[BusMapping],
+) -> Vec<FrameMessage> {
+    frames
+        .into_iter()
+        .filter_map(|(mut frame, _raw)| {
+            if apply_bus_mapping(&mut frame, mappings) {
+                Some(frame)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 // ============================================================================

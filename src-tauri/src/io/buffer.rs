@@ -6,19 +6,15 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{
-    atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicI64, Ordering},
     Arc,
 };
 use std::time::Duration;
 use tauri::AppHandle;
 
-use super::{emit_frames, emit_to_session, IODevice, FrameMessage, IOCapabilities, IOState};
+use super::timeline_base::TimelineControl;
+use super::{emit_frames, emit_to_session, FrameMessage, IOCapabilities, IODevice, IOState};
 use crate::buffer_store;
-
-/// Helper function to read f64 from atomic U64
-fn read_speed(speed: &Arc<AtomicU64>) -> f64 {
-    f64::from_bits(speed.load(Ordering::Relaxed))
-}
 
 /// Sentinel value meaning "no seek requested"
 const NO_SEEK: i64 = i64::MIN;
@@ -28,10 +24,8 @@ pub struct BufferReader {
     app: AppHandle,
     session_id: String,
     state: IOState,
-    cancel_flag: Arc<AtomicBool>,
-    pause_flag: Arc<AtomicBool>,
-    pacing_enabled: Arc<AtomicBool>,
-    speed: Arc<AtomicU64>,
+    /// Shared timeline control (pause, speed, cancel)
+    control: TimelineControl,
     /// Seek target in microseconds. Set to NO_SEEK when no seek is pending.
     seek_target_us: Arc<AtomicI64>,
     /// Set to true when the stream completes naturally (not cancelled)
@@ -41,19 +35,11 @@ pub struct BufferReader {
 
 impl BufferReader {
     pub fn new(app: AppHandle, session_id: String, speed: f64) -> Self {
-        let pacing_enabled = speed > 0.0;
         Self {
             app,
             session_id,
             state: IOState::Stopped,
-            cancel_flag: Arc::new(AtomicBool::new(false)),
-            pause_flag: Arc::new(AtomicBool::new(false)),
-            pacing_enabled: Arc::new(AtomicBool::new(pacing_enabled)),
-            speed: Arc::new(AtomicU64::new(if pacing_enabled {
-                speed.to_bits()
-            } else {
-                1.0_f64.to_bits()
-            })),
+            control: TimelineControl::new(speed),
             seek_target_us: Arc::new(AtomicI64::new(NO_SEEK)),
             completed_flag: Arc::new(AtomicBool::new(false)),
             task_handle: None,
@@ -64,19 +50,7 @@ impl BufferReader {
 #[async_trait]
 impl IODevice for BufferReader {
     fn capabilities(&self) -> IOCapabilities {
-        IOCapabilities {
-            can_pause: true,
-            supports_time_range: false,
-            is_realtime: false,
-            supports_speed_control: true,
-            supports_seek: true,
-            can_transmit: false, // Buffer is a replay source
-            can_transmit_serial: false,
-            supports_canfd: false, // Buffer replays what was captured
-            supports_extended_id: true, // Buffer can contain extended IDs
-            supports_rtr: false,
-            available_buses: vec![], // Single bus (depends on source)
-        }
+        IOCapabilities::timeline_can().with_seek(true)
     }
 
     async fn start(&mut self) -> Result<(), String> {
@@ -96,28 +70,15 @@ impl IODevice for BufferReader {
         }
 
         self.state = IOState::Starting;
-        self.cancel_flag.store(false, Ordering::Relaxed);
-        self.pause_flag.store(false, Ordering::Relaxed);
+        self.control.reset();
 
         let app = self.app.clone();
         let session_id = self.session_id.clone();
-        let cancel_flag = self.cancel_flag.clone();
-        let pause_flag = self.pause_flag.clone();
-        let pacing_enabled = self.pacing_enabled.clone();
-        let speed = self.speed.clone();
+        let control = self.control.clone();
         let seek_target_us = self.seek_target_us.clone();
         let completed_flag = self.completed_flag.clone();
 
-        let handle = spawn_buffer_stream(
-            app,
-            session_id,
-            cancel_flag,
-            pause_flag,
-            pacing_enabled,
-            speed,
-            seek_target_us,
-            completed_flag,
-        );
+        let handle = spawn_buffer_stream(app, session_id, control, seek_target_us, completed_flag);
         self.task_handle = Some(handle);
         self.state = IOState::Running;
 
@@ -125,7 +86,7 @@ impl IODevice for BufferReader {
     }
 
     async fn stop(&mut self) -> Result<(), String> {
-        self.cancel_flag.store(true, Ordering::Relaxed);
+        self.control.cancel();
 
         if let Some(handle) = self.task_handle.take() {
             let _ = handle.await;
@@ -140,7 +101,7 @@ impl IODevice for BufferReader {
             return Err("Reader is not running".to_string());
         }
 
-        self.pause_flag.store(true, Ordering::Relaxed);
+        self.control.pause();
         self.state = IOState::Paused;
         Ok(())
     }
@@ -150,30 +111,24 @@ impl IODevice for BufferReader {
             return Err("Reader is not paused".to_string());
         }
 
-        self.pause_flag.store(false, Ordering::Relaxed);
+        self.control.resume();
         self.state = IOState::Running;
         Ok(())
     }
 
     fn set_speed(&mut self, speed: f64) -> Result<(), String> {
-        if speed < 0.0 {
-            return Err("Speed cannot be negative".to_string());
-        }
         if speed == 0.0 {
             eprintln!(
                 "[Buffer:{}] set_speed: disabling pacing (speed=0)",
                 self.session_id
             );
-            self.pacing_enabled.store(false, Ordering::Relaxed);
         } else {
             eprintln!(
                 "[Buffer:{}] set_speed: enabling pacing at {}x",
                 self.session_id, speed
             );
-            self.pacing_enabled.store(true, Ordering::Relaxed);
-            self.speed.store(speed.to_bits(), Ordering::Relaxed);
         }
-        Ok(())
+        self.control.set_speed(speed)
     }
 
     fn set_time_range(
@@ -257,35 +212,19 @@ fn build_snapshot(frames: &[FrameMessage], up_to_index: usize) -> Vec<FrameMessa
 fn spawn_buffer_stream(
     app_handle: AppHandle,
     session_id: String,
-    cancel_flag: Arc<AtomicBool>,
-    pause_flag: Arc<AtomicBool>,
-    pacing_enabled: Arc<AtomicBool>,
-    speed: Arc<AtomicU64>,
+    control: TimelineControl,
     seek_target_us: Arc<AtomicI64>,
     completed_flag: Arc<AtomicBool>,
 ) -> tauri::async_runtime::JoinHandle<()> {
     tauri::async_runtime::spawn(async move {
-        run_buffer_stream(
-            app_handle,
-            session_id,
-            cancel_flag,
-            pause_flag,
-            pacing_enabled,
-            speed,
-            seek_target_us,
-            completed_flag,
-        )
-        .await;
+        run_buffer_stream(app_handle, session_id, control, seek_target_us, completed_flag).await;
     })
 }
 
 async fn run_buffer_stream(
     app_handle: AppHandle,
     session_id: String,
-    cancel_flag: Arc<AtomicBool>,
-    pause_flag: Arc<AtomicBool>,
-    pacing_enabled: Arc<AtomicBool>,
-    speed: Arc<AtomicU64>,
+    control: TimelineControl,
     seek_target_us: Arc<AtomicI64>,
     completed_flag: Arc<AtomicBool>,
 ) {
@@ -302,8 +241,8 @@ async fn run_buffer_stream(
     }
 
     let metadata = buffer_store::get_metadata();
-    let initial_speed = read_speed(&speed);
-    let initial_pacing = pacing_enabled.load(Ordering::Relaxed);
+    let initial_speed = control.read_speed();
+    let initial_pacing = control.is_pacing_enabled();
     eprintln!(
         "[Buffer:{}] Starting stream (frames: {}, speed: {}x, pacing: {}, source: '{}')",
         session_id,
@@ -337,7 +276,7 @@ async fn run_buffer_stream(
     // Track wall-clock time vs playback time for proper pacing
     let mut wall_clock_baseline = std::time::Instant::now();
     let mut playback_baseline_secs = stream_start_secs;
-    let mut last_speed = read_speed(&speed);
+    let mut last_speed = control.read_speed();
     let mut last_pacing_check = std::time::Instant::now();
 
     eprintln!(
@@ -347,7 +286,7 @@ async fn run_buffer_stream(
 
     while frame_index < frames.len() {
         // Check if cancelled
-        if cancel_flag.load(Ordering::Relaxed) {
+        if control.is_cancelled() {
             eprintln!(
                 "[Buffer:{}] Stream cancelled, stopping immediately ({} remaining frames)",
                 session_id,
@@ -367,7 +306,7 @@ async fn run_buffer_stream(
                 .binary_search_by(|f| (f.timestamp_us as i64).cmp(&seek_target))
                 .unwrap_or_else(|i| i.min(frames.len().saturating_sub(1)));
 
-            let is_paused = pause_flag.load(Ordering::Relaxed);
+            let is_paused = control.is_paused();
             eprintln!(
                 "[Buffer:{}] Seeking to frame {} (timestamp {}us, paused={})",
                 session_id, target_idx, seek_target, is_paused
@@ -416,7 +355,7 @@ async fn run_buffer_stream(
         }
 
         // Check if paused (after seek check so seek works while paused)
-        if pause_flag.load(Ordering::Relaxed) {
+        if control.is_paused() {
             tokio::time::sleep(Duration::from_millis(50)).await;
             continue;
         }
@@ -424,8 +363,8 @@ async fn run_buffer_stream(
         let frame = frames[frame_index].clone();
         frame_index += 1;
 
-        let is_pacing = pacing_enabled.load(Ordering::Relaxed);
-        let current_speed = read_speed(&speed);
+        let is_pacing = control.is_pacing_enabled();
+        let current_speed = control.read_speed();
 
         // Check for speed change and reset timing baseline
         if is_pacing && (current_speed - last_speed).abs() > 0.001 {
@@ -547,7 +486,7 @@ async fn run_buffer_stream(
             }
 
             // Re-check pause after sleeping
-            if pause_flag.load(Ordering::Relaxed) {
+            if control.is_paused() {
                 frame_index -= 1; // Re-process this frame after resume
                 continue;
             }
@@ -566,7 +505,7 @@ async fn run_buffer_stream(
     }
 
     // Check if we completed naturally (not cancelled)
-    let was_cancelled = cancel_flag.load(Ordering::Relaxed);
+    let was_cancelled = control.is_cancelled();
     let reason = if was_cancelled { "stopped" } else { "complete" };
 
     if !was_cancelled {

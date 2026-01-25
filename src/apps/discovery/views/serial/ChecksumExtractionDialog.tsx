@@ -2,7 +2,7 @@
 //
 // Dialog for configuring checksum detection and validation.
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { X } from 'lucide-react';
 import Dialog from '../../../../components/Dialog';
 import { resolveByteIndexSync, type ChecksumAlgorithm } from '../../../../utils/analysis/checksums';
@@ -14,12 +14,22 @@ import {
 } from './serialTypes';
 import { byteToHex } from '../../../../utils/byteUtils';
 
+const DEFAULT_CHECKSUM_CONFIG: ChecksumConfig = {
+  startByte: -2,
+  numBytes: 2,
+  endianness: 'little',
+  algorithm: 'crc16_modbus',
+  calcStartByte: 0,
+  calcEndByte: -2, // Up to but not including checksum
+};
+
 interface ChecksumExtractionDialogProps {
   isOpen: boolean;
   onClose: () => void;
   sampleFrames: number[][];
   initialConfig: ChecksumConfig | null;
   onApply: (config: ChecksumConfig) => void;
+  onClear?: () => void;
 }
 
 export default function ChecksumExtractionDialog({
@@ -28,19 +38,14 @@ export default function ChecksumExtractionDialog({
   sampleFrames,
   initialConfig,
   onApply,
+  onClear,
 }: ChecksumExtractionDialogProps) {
-  const defaultConfig: ChecksumConfig = {
-    startByte: -2,
-    numBytes: 2,
-    endianness: 'little',
-    algorithm: 'crc16_modbus',
-    calcStartByte: 0,
-    calcEndByte: -2, // Up to but not including checksum
-  };
-
-  const [config, setConfig] = useState<ChecksumConfig>(initialConfig ?? defaultConfig);
+  const [config, setConfig] = useState<ChecksumConfig>(initialConfig ?? DEFAULT_CHECKSUM_CONFIG);
   const [detectedAlgorithms, setDetectedAlgorithms] = useState<{ algorithm: ChecksumAlgorithm; matchCount: number }[]>([]);
   const [matchRate, setMatchRate] = useState<{ matches: number; total: number }>({ matches: 0, total: 0 });
+
+  // Track whether we've initialized for this dialog open session
+  const hasInitializedRef = useRef(false);
 
   // Detect which algorithms match the sample frames
   const detectAlgorithms = useCallback(async () => {
@@ -145,11 +150,16 @@ export default function ChecksumExtractionDialog({
     setMatchRate({ matches, total: framesToCheck.length });
   }, [config, sampleFrames]);
 
-  // Reset state and detect algorithms when dialog opens
+  // Reset state and detect algorithms when dialog opens (only once per open)
   useEffect(() => {
-    if (isOpen) {
-      setConfig(initialConfig ?? defaultConfig);
+    if (isOpen && !hasInitializedRef.current) {
+      hasInitializedRef.current = true;
+      setConfig(initialConfig ?? DEFAULT_CHECKSUM_CONFIG);
       detectAlgorithms();
+    }
+    if (!isOpen) {
+      // Reset the flag when dialog closes
+      hasInitializedRef.current = false;
     }
   }, [isOpen, initialConfig, detectAlgorithms]);
 
@@ -264,7 +274,7 @@ export default function ChecksumExtractionDialog({
           </label>
 
           <label className="flex flex-col gap-1 text-sm text-gray-300">
-            Endianness:
+            Byte order:
             <select
               value={config.endianness}
               onChange={(e) => setConfig(prev => ({ ...prev, endianness: e.target.value as 'big' | 'little' }))}
@@ -317,12 +327,24 @@ export default function ChecksumExtractionDialog({
 
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-2">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm bg-gray-600 hover:bg-gray-500 rounded"
-          >
-            Cancel
-          </button>
+          {onClear ? (
+            <button
+              onClick={() => {
+                onClear();
+                onClose();
+              }}
+              className="px-4 py-2 text-sm bg-red-600 hover:bg-red-500 rounded"
+            >
+              Clear
+            </button>
+          ) : (
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-sm bg-gray-600 hover:bg-gray-500 rounded"
+            >
+              Cancel
+            </button>
+          )}
           <button
             onClick={() => {
               onApply(config);

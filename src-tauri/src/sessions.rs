@@ -13,7 +13,7 @@ use crate::{
         seek_session, set_listener_active, start_session, stop_session, transmit_frame, unregister_listener,
         update_session_speed, update_session_time_range, ActiveSessionInfo, IOCapabilities, IODevice, IOState,
         JoinSessionResult, ListenerInfo, RegisterListenerResult, ReinitializeResult, BufferReader,
-        BusMapping,
+        BusMapping, InterfaceTraits, Protocol, TemporalMode,
         CsvReader, CsvReaderOptions,
         GvretDeviceInfo, probe_gvret_tcp, probe_gvret_usb,
         MqttConfig, MqttReader,
@@ -156,7 +156,7 @@ fn choose_profile_by_id(settings: &AppSettings, profile_id: Option<&str>) -> Opt
 fn is_realtime_device(kind: &str) -> bool {
     matches!(
         kind,
-        "gvret_tcp" | "gvret-tcp" | "gvret_usb" | "gvret-usb" | "slcan" | "gs_usb" | "socketcan"
+        "gvret_tcp" | "gvret-tcp" | "gvret_usb" | "gvret-usb" | "slcan" | "gs_usb" | "socketcan" | "serial"
     )
 }
 
@@ -174,7 +174,92 @@ fn create_source_config_from_profile(
         return None;
     }
 
-    // Build default bus mapping: device bus 0 -> output bus (0 or override)
+    // Try to read interfaces configuration from profile (for GVRET multi-bus)
+    let bus_mappings = if let Some(mappings) = parse_interfaces_from_profile(profile, bus_override)
+    {
+        mappings
+    } else {
+        // Fall back to default single bus mapping
+        create_default_bus_mapping(profile, bus_override)
+    };
+
+    Some(SourceConfig {
+        profile_id: profile.id.clone(),
+        profile_kind: profile.kind.clone(),
+        display_name: profile.name.clone(),
+        bus_mappings,
+        // Single-source sessions don't pass framing through session options
+        // (they use profile.connection settings or session-level reinitialize options)
+        framing_encoding: None,
+        delimiter: None,
+        max_frame_length: None,
+        min_frame_length: None,
+        emit_raw_bytes: None,
+    })
+}
+
+/// Parse interfaces configuration from profile connection field.
+/// Returns None if no interfaces are configured, otherwise returns bus mappings.
+fn parse_interfaces_from_profile(
+    profile: &IOProfile,
+    bus_override: Option<u8>,
+) -> Option<Vec<BusMapping>> {
+    // Only GVRET profiles have multi-bus interface configuration
+    if !matches!(
+        profile.kind.as_str(),
+        "gvret_tcp" | "gvret-tcp" | "gvret_usb" | "gvret-usb"
+    ) {
+        return None;
+    }
+
+    let interfaces = profile.connection.get("interfaces")?.as_array()?;
+    if interfaces.is_empty() {
+        return None;
+    }
+
+    let mappings: Vec<BusMapping> = interfaces
+        .iter()
+        .filter_map(|item| {
+            let obj = item.as_object()?;
+            let device_bus = obj.get("device_bus")?.as_u64()? as u8;
+            let enabled = obj.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+            let protocol = obj
+                .get("protocol")
+                .and_then(|v| v.as_str())
+                .unwrap_or("can");
+
+            // Use bus_override for output_bus if provided, otherwise use device_bus
+            let output_bus = bus_override.unwrap_or(device_bus);
+
+            // Determine protocols based on interface protocol setting
+            let protocols = match protocol {
+                "canfd" => vec![Protocol::Can, Protocol::CanFd],
+                _ => vec![Protocol::Can],
+            };
+
+            Some(BusMapping {
+                device_bus,
+                enabled,
+                output_bus,
+                interface_id: format!("can{}", device_bus),
+                traits: Some(InterfaceTraits {
+                    temporal_mode: TemporalMode::Realtime,
+                    protocols,
+                    can_transmit: true,
+                }),
+            })
+        })
+        .collect();
+
+    if mappings.is_empty() {
+        None
+    } else {
+        Some(mappings)
+    }
+}
+
+/// Create default single-bus mapping for devices without interface configuration.
+fn create_default_bus_mapping(profile: &IOProfile, bus_override: Option<u8>) -> Vec<BusMapping> {
     let output_bus = bus_override.unwrap_or_else(|| {
         profile
             .connection
@@ -184,18 +269,28 @@ fn create_source_config_from_profile(
             .unwrap_or(0)
     });
 
-    let bus_mappings = vec![BusMapping {
+    // Determine interface traits based on profile kind
+    let (interface_id, protocols, can_transmit) = match profile.kind.as_str() {
+        "gvret_tcp" | "gvret-tcp" | "gvret_usb" | "gvret-usb" => {
+            ("can0".to_string(), vec![Protocol::Can, Protocol::CanFd], true)
+        }
+        "slcan" => ("can0".to_string(), vec![Protocol::Can], true),
+        "gs_usb" => ("can0".to_string(), vec![Protocol::Can, Protocol::CanFd], true),
+        "socketcan" => ("can0".to_string(), vec![Protocol::Can, Protocol::CanFd], true),
+        _ => ("can0".to_string(), vec![Protocol::Can], true),
+    };
+
+    vec![BusMapping {
         device_bus: 0,
         output_bus,
         enabled: true,
-    }];
-
-    Some(SourceConfig {
-        profile_id: profile.id.clone(),
-        profile_kind: profile.kind.clone(),
-        display_name: profile.name.clone(),
-        bus_mappings,
-    })
+        interface_id,
+        traits: Some(InterfaceTraits {
+            temporal_mode: TemporalMode::Realtime,
+            protocols,
+            can_transmit,
+        }),
+    }]
 }
 
 /// Create a new reader session
@@ -248,7 +343,7 @@ pub async fn create_reader_session(
             app.clone(),
             session_id.clone(),
             source_config,
-        ))
+        )?)
     } else {
         // Non-realtime devices use their direct readers
         match profile.kind.as_str() {
@@ -526,7 +621,7 @@ pub async fn create_reader_session(
     }
     };
 
-    let result = create_session(app, session_id.clone(), reader, None).await;
+    let result = create_session(app, session_id.clone(), reader, None, None).await;
 
     // Register profile usage for all profile kinds
     // This allows other apps (like Transmit) to find and join existing sessions
@@ -678,7 +773,7 @@ pub async fn create_buffer_reader_session(
         speed.unwrap_or(0.0), // 0 = no limit by default
     );
 
-    let result = create_session(app, session_id, Box::new(reader), None).await;
+    let result = create_session(app, session_id, Box::new(reader), None, None).await;
     Ok(result.capabilities)
 }
 
@@ -706,7 +801,7 @@ pub async fn transition_to_buffer_reader(
         speed.unwrap_or(1.0), // Default to 1x speed for replay
     );
 
-    let result = create_session(app, session_id, Box::new(reader), None).await;
+    let result = create_session(app, session_id, Box::new(reader), None, None).await;
     Ok(result.capabilities)
 }
 
@@ -1149,6 +1244,21 @@ pub struct MultiSourceInput {
     pub display_name: Option<String>,
     /// Bus mappings for this source
     pub bus_mappings: Vec<BusMapping>,
+    /// Framing encoding for serial sources (overrides profile settings if provided)
+    #[serde(default)]
+    pub framing_encoding: Option<String>,
+    /// Delimiter bytes for delimiter-based framing
+    #[serde(default)]
+    pub delimiter: Option<Vec<u8>>,
+    /// Maximum frame length for delimiter-based framing
+    #[serde(default)]
+    pub max_frame_length: Option<usize>,
+    /// Minimum frame length - frames shorter than this are discarded
+    #[serde(default)]
+    pub min_frame_length: Option<usize>,
+    /// Whether to emit raw bytes in addition to framed data
+    #[serde(default)]
+    pub emit_raw_bytes: Option<bool>,
 }
 
 /// Create a multi-source reader session that combines frames from multiple devices.
@@ -1187,6 +1297,17 @@ pub async fn create_multi_source_session(
         let display_name = input.display_name.unwrap_or_else(|| profile.name.clone());
         let profile_kind = profile.kind.clone();
 
+        // Determine interface traits based on profile kind
+        let (default_interface_id, default_protocols, default_can_transmit) = match profile_kind.as_str() {
+            "gvret_tcp" | "gvret-tcp" | "gvret_usb" | "gvret-usb" => {
+                ("can0".to_string(), vec![Protocol::Can, Protocol::CanFd], true)
+            }
+            "slcan" => ("can0".to_string(), vec![Protocol::Can], true),
+            "gs_usb" => ("can0".to_string(), vec![Protocol::Can, Protocol::CanFd], true),
+            "socketcan" => ("can0".to_string(), vec![Protocol::Can, Protocol::CanFd], true),
+            _ => ("can0".to_string(), vec![Protocol::Can], true),
+        };
+
         // Use provided bus mappings, or auto-assign if none provided
         // The frontend now handles sequential assignment, so we trust mappings as-is
         let bus_mappings = if input.bus_mappings.is_empty() {
@@ -1200,6 +1321,12 @@ pub async fn create_multi_source_session(
                 device_bus: 0,
                 enabled: true,
                 output_bus,
+                interface_id: default_interface_id,
+                traits: Some(InterfaceTraits {
+                    temporal_mode: TemporalMode::Realtime,
+                    protocols: default_protocols,
+                    can_transmit: default_can_transmit,
+                }),
             }]
         } else {
             // Mappings provided by frontend - use as-is (frontend handles sequential assignment)
@@ -1211,6 +1338,11 @@ pub async fn create_multi_source_session(
             profile_kind,
             display_name,
             bus_mappings,
+            framing_encoding: input.framing_encoding,
+            delimiter: input.delimiter,
+            max_frame_length: input.max_frame_length,
+            min_frame_length: input.min_frame_length,
+            emit_raw_bytes: input.emit_raw_bytes,
         });
     }
 
@@ -1219,7 +1351,7 @@ pub async fn create_multi_source_session(
         if !is_realtime_device(&config.profile_kind) {
             return Err(format!(
                 "Profile '{}' has unsupported type '{}' for multi-source mode. \
-                Currently supported: gvret_tcp, gvret_usb, slcan, gs_usb, socketcan",
+                Currently supported: gvret_tcp, gvret_usb, slcan, gs_usb, socketcan, serial",
                 config.profile_id, config.profile_kind
             ));
         }
@@ -1256,10 +1388,14 @@ pub async fn create_multi_source_session(
         let _ = destroy_session(&session_id).await;
     }
 
-    // Create the multi-source reader
-    let reader = MultiSourceReader::new(app.clone(), session_id.clone(), source_configs);
+    // Create the multi-source reader (validates interface trait compatibility)
+    // Extract display names for logging before moving source_configs
+    let source_display_names: Vec<String> = source_configs.iter()
+        .map(|c| c.display_name.clone())
+        .collect();
+    let reader = MultiSourceReader::new(app.clone(), session_id.clone(), source_configs)?;
 
-    let result = create_session(app, session_id.clone(), Box::new(reader), None).await;
+    let result = create_session(app, session_id.clone(), Box::new(reader), None, Some(source_display_names)).await;
 
     // Register profile usage for all source profiles
     for profile_id in &profile_ids {

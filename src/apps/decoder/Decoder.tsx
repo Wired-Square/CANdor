@@ -69,7 +69,6 @@ export default function Decoder() {
   const selectionSetDirty = useDecoderStore((state) => state.selectionSetDirty);
   const playbackSpeed = useDecoderStore((state) => state.playbackSpeed);
   const serialConfig = useDecoderStore((state) => state.serialConfig);
-  const canConfig = useDecoderStore((state) => state.canConfig);
   const protocol = useDecoderStore((state) => state.protocol);
   const viewMode = useDecoderStore((state) => state.viewMode);
   const hideUnseen = useDecoderStore((state) => state.hideUnseen);
@@ -133,12 +132,8 @@ export default function Decoder() {
   const decodeSignalsRef = useRef(decodeSignals);
   const updateCurrentTimeRef = useRef(updateCurrentTime);
   const selectedFramesRef = useRef(selectedFrames);
-  const framesRef = useRef(frames);
   const addUnmatchedFrameRef = useRef(addUnmatchedFrame);
   const addFilteredFrameRef = useRef(addFilteredFrame);
-  const serialConfigRef = useRef(serialConfig);
-  const canConfigRef = useRef(canConfig);
-  const protocolRef = useRef(protocol);
   const frameIdFilterSetRef = useRef(frameIdFilterSet);
 
   // Keep refs up to date
@@ -152,23 +147,11 @@ export default function Decoder() {
     selectedFramesRef.current = selectedFrames;
   }, [selectedFrames]);
   useEffect(() => {
-    framesRef.current = frames;
-  }, [frames]);
-  useEffect(() => {
     addUnmatchedFrameRef.current = addUnmatchedFrame;
   }, [addUnmatchedFrame]);
   useEffect(() => {
     addFilteredFrameRef.current = addFilteredFrame;
   }, [addFilteredFrame]);
-  useEffect(() => {
-    serialConfigRef.current = serialConfig;
-  }, [serialConfig]);
-  useEffect(() => {
-    canConfigRef.current = canConfig;
-  }, [canConfig]);
-  useEffect(() => {
-    protocolRef.current = protocol;
-  }, [protocol]);
   useEffect(() => {
     frameIdFilterSetRef.current = frameIdFilterSet;
   }, [frameIdFilterSet]);
@@ -223,15 +206,17 @@ export default function Decoder() {
     // Accumulate ALL frames to ensure mux cases aren't lost
     // Use ref for selectedFrames to avoid stale closure
     const currentSelectedFrames = selectedFramesRef.current;
-    const catalogFrames = framesRef.current;
-    const minFrameLength = serialConfigRef.current?.min_frame_length ?? 0;
+    // Get state directly from store to avoid ref timing issues
+    const storeState = useDecoderStore.getState();
+    const catalogFrames = storeState.frames;
+    const minFrameLength = storeState.serialConfig?.min_frame_length ?? 0;
     const idFilterSet = frameIdFilterSetRef.current;
 
     // Get frame_id_mask for catalog matching (from canConfig or serialConfig based on protocol)
-    const currentProtocol = protocolRef.current;
+    const currentProtocol = storeState.protocol;
     const frameIdMask = currentProtocol === 'can'
-      ? canConfigRef.current?.frame_id_mask
-      : serialConfigRef.current?.frame_id_mask;
+      ? storeState.canConfig?.frame_id_mask
+      : storeState.serialConfig?.frame_id_mask;
 
     for (const f of receivedFrames) {
       const timestamp = f.timestamp_us !== undefined ? f.timestamp_us / 1_000_000 : Date.now() / 1000;

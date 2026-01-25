@@ -28,6 +28,10 @@ pub mod linux;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod nusb_driver;
 
+// Re-export multi-source streaming functions
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+pub use nusb_driver::{encode_frame, run_source};
+
 // ============================================================================
 // USB Constants
 // ============================================================================

@@ -7,19 +7,11 @@ use async_trait::async_trait;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
-    Arc,
-};
 use std::time::Duration;
 use tauri::AppHandle;
 
-use super::{emit_frames, emit_to_session, IODevice, FrameMessage, IOCapabilities, IOState};
-
-/// Helper function to read f64 from atomic U64
-fn read_speed(speed: &Arc<AtomicU64>) -> f64 {
-    f64::from_bits(speed.load(Ordering::Relaxed))
-}
+use super::timeline_base::TimelineControl;
+use super::{emit_frames, emit_to_session, FrameMessage, IOCapabilities, IODevice, IOState};
 
 /// CSV reader options for playback control
 #[derive(Clone, Debug)]
@@ -43,30 +35,19 @@ pub struct CsvReader {
     session_id: String,
     options: CsvReaderOptions,
     state: IOState,
-    cancel_flag: Arc<AtomicBool>,
-    pause_flag: Arc<AtomicBool>,
-    pacing_enabled: Arc<AtomicBool>,
-    speed: Arc<AtomicU64>,
+    /// Shared timeline control (pause, speed, cancel)
+    control: TimelineControl,
     task_handle: Option<tauri::async_runtime::JoinHandle<()>>,
 }
 
 impl CsvReader {
     pub fn new(app: AppHandle, session_id: String, options: CsvReaderOptions) -> Self {
-        let initial_speed = options.speed;
-        let pacing_enabled = initial_speed > 0.0;
         Self {
             app,
             session_id,
+            control: TimelineControl::new(options.speed),
             options,
             state: IOState::Stopped,
-            cancel_flag: Arc::new(AtomicBool::new(false)),
-            pause_flag: Arc::new(AtomicBool::new(false)),
-            pacing_enabled: Arc::new(AtomicBool::new(pacing_enabled)),
-            speed: Arc::new(AtomicU64::new(if pacing_enabled {
-                initial_speed.to_bits()
-            } else {
-                1.0_f64.to_bits()
-            })),
             task_handle: None,
         }
     }
@@ -75,19 +56,7 @@ impl CsvReader {
 #[async_trait]
 impl IODevice for CsvReader {
     fn capabilities(&self) -> IOCapabilities {
-        IOCapabilities {
-            can_pause: true,
-            supports_time_range: false, // Could add later
-            is_realtime: false,
-            supports_speed_control: true,
-            supports_seek: false,
-            can_transmit: false, // CSV is a replay source
-            can_transmit_serial: false,
-            supports_canfd: false,
-            supports_extended_id: false,
-            supports_rtr: false,
-            available_buses: vec![],
-        }
+        IOCapabilities::timeline_can()
     }
 
     async fn start(&mut self) -> Result<(), String> {
@@ -96,26 +65,14 @@ impl IODevice for CsvReader {
         }
 
         self.state = IOState::Starting;
-        self.cancel_flag.store(false, Ordering::Relaxed);
-        self.pause_flag.store(false, Ordering::Relaxed);
+        self.control.reset();
 
         let app = self.app.clone();
         let session_id = self.session_id.clone();
         let options = self.options.clone();
-        let cancel_flag = self.cancel_flag.clone();
-        let pause_flag = self.pause_flag.clone();
-        let pacing_enabled = self.pacing_enabled.clone();
-        let speed = self.speed.clone();
+        let control = self.control.clone();
 
-        let handle = spawn_csv_stream(
-            app,
-            session_id,
-            options,
-            cancel_flag,
-            pause_flag,
-            pacing_enabled,
-            speed,
-        );
+        let handle = spawn_csv_stream(app, session_id, options, control);
         self.task_handle = Some(handle);
         self.state = IOState::Running;
 
@@ -123,7 +80,7 @@ impl IODevice for CsvReader {
     }
 
     async fn stop(&mut self) -> Result<(), String> {
-        self.cancel_flag.store(true, Ordering::Relaxed);
+        self.control.cancel();
 
         if let Some(handle) = self.task_handle.take() {
             let _ = handle.await;
@@ -138,7 +95,7 @@ impl IODevice for CsvReader {
             return Err("Reader is not running".to_string());
         }
 
-        self.pause_flag.store(true, Ordering::Relaxed);
+        self.control.pause();
         self.state = IOState::Paused;
         Ok(())
     }
@@ -148,30 +105,24 @@ impl IODevice for CsvReader {
             return Err("Reader is not paused".to_string());
         }
 
-        self.pause_flag.store(false, Ordering::Relaxed);
+        self.control.resume();
         self.state = IOState::Running;
         Ok(())
     }
 
     fn set_speed(&mut self, speed: f64) -> Result<(), String> {
-        if speed < 0.0 {
-            return Err("Speed cannot be negative".to_string());
-        }
         if speed == 0.0 {
             eprintln!(
                 "[CSV:{}] set_speed: disabling pacing (speed=0)",
                 self.session_id
             );
-            self.pacing_enabled.store(false, Ordering::Relaxed);
         } else {
             eprintln!(
                 "[CSV:{}] set_speed: enabling pacing at {}x",
                 self.session_id, speed
             );
-            self.pacing_enabled.store(true, Ordering::Relaxed);
-            self.speed.store(speed.to_bits(), Ordering::Relaxed);
         }
-        Ok(())
+        self.control.set_speed(speed)
     }
 
     fn set_time_range(
@@ -358,22 +309,11 @@ fn spawn_csv_stream(
     app_handle: AppHandle,
     session_id: String,
     options: CsvReaderOptions,
-    cancel_flag: Arc<AtomicBool>,
-    pause_flag: Arc<AtomicBool>,
-    pacing_enabled: Arc<AtomicBool>,
-    speed: Arc<AtomicU64>,
+    control: TimelineControl,
 ) -> tauri::async_runtime::JoinHandle<()> {
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = run_csv_stream(
-            app_handle.clone(),
-            session_id.clone(),
-            options,
-            cancel_flag,
-            pause_flag,
-            pacing_enabled,
-            speed,
-        )
-        .await
+        if let Err(e) = run_csv_stream(app_handle.clone(), session_id.clone(), options, control)
+            .await
         {
             emit_to_session(
                 &app_handle,
@@ -389,10 +329,7 @@ async fn run_csv_stream(
     app_handle: AppHandle,
     session_id: String,
     options: CsvReaderOptions,
-    cancel_flag: Arc<AtomicBool>,
-    pause_flag: Arc<AtomicBool>,
-    pacing_enabled: Arc<AtomicBool>,
-    speed: Arc<AtomicU64>,
+    control: TimelineControl,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     eprintln!(
         "[CSV:{}] Opening file: {}",
@@ -466,7 +403,7 @@ async fn run_csv_stream(
     // Track wall-clock time vs playback time for proper pacing
     let mut wall_clock_baseline = std::time::Instant::now();
     let mut playback_baseline_secs = stream_start_secs;
-    let mut last_speed = read_speed(&speed);
+    let mut last_speed = control.read_speed();
     let mut last_pacing_check = std::time::Instant::now();
 
     eprintln!(
@@ -476,7 +413,7 @@ async fn run_csv_stream(
 
     while let Some(frame) = frames.pop_front() {
         // Check if cancelled
-        if cancel_flag.load(Ordering::Relaxed) {
+        if control.is_cancelled() {
             eprintln!(
                 "[CSV:{}] Stream cancelled, stopping immediately (discarding {} remaining frames)",
                 session_id,
@@ -486,15 +423,15 @@ async fn run_csv_stream(
         }
 
         // Check if paused
-        if pause_flag.load(Ordering::Relaxed) {
+        if control.is_paused() {
             // Put frame back and wait
             frames.push_front(frame);
             tokio::time::sleep(Duration::from_millis(50)).await;
             continue;
         }
 
-        let is_pacing = pacing_enabled.load(Ordering::Relaxed);
-        let current_speed = read_speed(&speed);
+        let is_pacing = control.is_pacing_enabled();
+        let current_speed = control.read_speed();
 
         // Log pacing state changes periodically
         if total_emitted % 1000 == 0 {
@@ -616,7 +553,7 @@ async fn run_csv_stream(
             }
 
             // Re-check pause after sleeping
-            if pause_flag.load(Ordering::Relaxed) {
+            if control.is_paused() {
                 frames.push_front(frame);
                 continue;
             }

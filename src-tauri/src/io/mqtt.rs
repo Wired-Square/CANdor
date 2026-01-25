@@ -158,19 +158,9 @@ impl MqttReader {
 #[async_trait]
 impl IODevice for MqttReader {
     fn capabilities(&self) -> IOCapabilities {
-        IOCapabilities {
-            can_pause: false,
-            supports_time_range: false,
-            is_realtime: true,
-            supports_speed_control: false,
-            supports_seek: false,
-            can_transmit: false, // MQTT is read-only
-            can_transmit_serial: false,
-            supports_canfd: true,
-            supports_extended_id: true,
-            supports_rtr: false,
-            available_buses: vec![],
-        }
+        IOCapabilities::realtime_can()
+            .with_canfd(true)
+            .with_buses(vec![])
     }
 
     async fn start(&mut self) -> Result<(), String> {

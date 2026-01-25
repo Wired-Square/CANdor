@@ -24,8 +24,12 @@ export interface FramingConfig {
 }
 
 type Props = {
-  /** Currently checked IO profile */
+  /** Currently checked IO profile (single-select mode) */
   checkedProfile: IOProfile | null;
+  /** All IO profiles (for multi-bus mode lookup) */
+  ioProfiles?: IOProfile[];
+  /** Selected profile IDs for multi-bus mode */
+  checkedReaderIds?: string[];
   /** Whether ingesting is in progress */
   isIngesting: boolean;
   /** Current framing configuration */
@@ -82,16 +86,25 @@ function toFramingConfig(panelConfig: FramingPanelConfig | null): FramingConfig 
 
 export default function FramingOptions({
   checkedProfile,
+  ioProfiles = [],
+  checkedReaderIds = [],
   isIngesting,
   framingConfig,
   onFramingConfigChange,
   isBytesBufferSelected = false,
 }: Props) {
+  // Check if any selected profile in multi-bus mode supports framing
+  const anyMultiBusProfileSupportsFraming = checkedReaderIds.some((id) => {
+    const profile = ioProfiles.find((p) => p.id === id);
+    return supportsFraming(profile || null);
+  });
+
   // Show framing options if:
   // 1. A serial IO profile is selected (for capture with framing), OR
-  // 2. A bytes buffer is selected (to apply framing to existing bytes)
+  // 2. Any profile in multi-bus selection supports framing, OR
+  // 3. A bytes buffer is selected (to apply framing to existing bytes)
   // Don't show while ingesting
-  const showFraming = (supportsFraming(checkedProfile) || isBytesBufferSelected) && !isIngesting;
+  const showFraming = (supportsFraming(checkedProfile) || anyMultiBusProfileSupportsFraming || isBytesBufferSelected) && !isIngesting;
   if (!showFraming) {
     return null;
   }

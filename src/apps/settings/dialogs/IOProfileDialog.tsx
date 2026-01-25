@@ -1,6 +1,6 @@
 // ui/src/apps/settings/dialogs/IOProfileDialog.tsx
 import { useState, useEffect, useCallback } from "react";
-import { ArrowLeft, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import Dialog from "../../../components/Dialog";
 import type { IOProfile } from "../stores/settingsStore";
 import SerialPortPicker from "../components/SerialPortPicker";
@@ -8,6 +8,7 @@ import GsUsbDevicePicker from "../components/GsUsbDevicePicker";
 import LinuxCanSetupHelper from "../components/LinuxCanSetupHelper";
 import SecurePasswordField from "../components/SecurePasswordField";
 import IODeviceStatus, { type DeviceProbeState, type DeviceProbeResult } from "../components/IODeviceStatus";
+import { GvretBusConfig, type BusMappingWithProtocol } from "../../../dialogs/io-reader-picker";
 import { Input, Select, FormField, PrimaryButton, SecondaryButton } from "../../../components/forms";
 import {
   h2,
@@ -19,7 +20,9 @@ import {
 } from "../../../styles";
 import { probeSlcanDevice } from "../../../api/serial";
 import { probeGsUsbDevice } from "../../../api/gs_usb";
+import { probeDevice, type GvretDeviceInfo } from "../../../api/io";
 import { isWindows, isLinux, isMacOS } from "../../../utils/platform";
+import type { GvretInterfaceConfig } from "../../../hooks/useSettings";
 
 export type MqttFormatKind = "json" | "savvycan" | "decode";
 export type MqttFormatField = "topic" | "enabled";
@@ -71,6 +74,109 @@ export default function IOProfileDialog({
 
   // slcan advanced options collapsed state
   const [slcanAdvancedOpen, setSlcanAdvancedOpen] = useState(false);
+
+  // GVRET device probe state
+  const [gvretProbeState, setGvretProbeState] = useState<DeviceProbeState>("idle");
+  const [gvretDeviceInfo, setGvretDeviceInfo] = useState<GvretDeviceInfo | null>(null);
+  const [gvretProbeError, setGvretProbeError] = useState<string | null>(null);
+
+  // Reset GVRET probe state when dialog closes or profile type changes
+  useEffect(() => {
+    if (!isOpen || (profileForm.kind !== "gvret_tcp" && profileForm.kind !== "gvret_usb")) {
+      setGvretProbeState("idle");
+      setGvretDeviceInfo(null);
+      setGvretProbeError(null);
+    }
+  }, [isOpen, profileForm.kind]);
+
+  // Initialize GVRET device info from profile connection if available
+  useEffect(() => {
+    if (isOpen && (profileForm.kind === "gvret_tcp" || profileForm.kind === "gvret_usb")) {
+      const busCount = profileForm.connection._probed_bus_count;
+      if (typeof busCount === "number" && busCount > 0) {
+        setGvretDeviceInfo({ bus_count: busCount });
+        setGvretProbeState("success");
+      }
+    }
+  }, [isOpen, profileForm.kind, profileForm.connection._probed_bus_count]);
+
+  // Probe GVRET device
+  const probeGvret = useCallback(async () => {
+    if (!editingProfileId) {
+      setGvretProbeError("Save profile first to probe device");
+      setGvretProbeState("error");
+      return;
+    }
+
+    setGvretProbeState("probing");
+    setGvretProbeError(null);
+
+    try {
+      const result = await probeDevice(editingProfileId);
+      if (result.success) {
+        setGvretDeviceInfo({ bus_count: result.busCount });
+        setGvretProbeState("success");
+
+        const existingInterfaces = profileForm.connection.interfaces as GvretInterfaceConfig[] | undefined;
+        const configuredCount = existingInterfaces?.length || 0;
+
+        if (configuredCount === 0) {
+          // No interfaces configured yet - create defaults from probe
+          const defaultInterfaces: GvretInterfaceConfig[] = Array.from(
+            { length: result.busCount },
+            (_, i) => ({
+              device_bus: i,
+              enabled: true,
+              protocol: "can" as const,
+            })
+          );
+          onUpdateConnectionField("interfaces", defaultInterfaces as any);
+        } else if (configuredCount !== result.busCount) {
+          // Interface count mismatch - warn user but keep their config
+          setGvretProbeError(
+            `Device reports ${result.busCount} interface(s), but ${configuredCount} configured. ` +
+            `Delete interfaces field in settings to re-probe.`
+          );
+        }
+        // Store probed bus count (always update to track device state)
+        onUpdateConnectionField("_probed_bus_count", result.busCount as any);
+      } else {
+        setGvretProbeError(result.error || "Probe failed");
+        setGvretProbeState("error");
+      }
+    } catch (e) {
+      setGvretProbeError(e instanceof Error ? e.message : String(e));
+      setGvretProbeState("error");
+    }
+  }, [editingProfileId, profileForm.connection.interfaces, onUpdateConnectionField]);
+
+  // Convert GvretInterfaceConfig[] to BusMappingWithProtocol[] for the component
+  const getGvretBusConfig = useCallback((): BusMappingWithProtocol[] => {
+    const interfaces = profileForm.connection.interfaces as GvretInterfaceConfig[] | undefined;
+    if (!interfaces || interfaces.length === 0) {
+      // No interfaces configured - show empty state
+      return [];
+    }
+    return interfaces.map((iface) => ({
+      deviceBus: iface.device_bus,
+      enabled: iface.enabled,
+      outputBus: iface.device_bus, // Not used in settings mode
+      protocol: iface.protocol,
+    }));
+  }, [profileForm.connection.interfaces]);
+
+  // Handle bus config changes from GvretBusConfig component
+  const handleGvretBusConfigChange = useCallback(
+    (config: BusMappingWithProtocol[]) => {
+      const interfaces: GvretInterfaceConfig[] = config.map((mapping) => ({
+        device_bus: mapping.deviceBus,
+        enabled: mapping.enabled,
+        protocol: mapping.protocol || "can",
+      }));
+      onUpdateConnectionField("interfaces", interfaces as any);
+    },
+    [onUpdateConnectionField]
+  );
 
   // Probe slcan device
   const probeSlcan = useCallback(async () => {
@@ -551,6 +657,61 @@ export default function IOProfileDialog({
                 </label>
               </div>
 
+              {/* Interface Configuration */}
+              <div className={`border-t ${borderDefault} pt-4 mt-4`}>
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-medium text-slate-900 dark:text-white">
+                    CAN Interfaces
+                    {gvretProbeState === "success" && (
+                      <span className="ml-2 text-xs text-green-600 dark:text-green-400">
+                        (device online)
+                      </span>
+                    )}
+                  </h4>
+                  <SecondaryButton
+                    onClick={probeGvret}
+                    disabled={gvretProbeState === "probing"}
+                    className="text-xs py-1 px-2"
+                  >
+                    <RefreshCw className={`w-3 h-3 mr-1 ${gvretProbeState === "probing" ? "animate-spin" : ""}`} />
+                    {gvretProbeState === "probing" ? "Probing..." : "Probe Device"}
+                  </SecondaryButton>
+                </div>
+
+                {!editingProfileId && (
+                  <div className={alertInfo}>
+                    <p className="text-sm text-blue-800 dark:text-blue-200">
+                      Save the profile first to probe the device and configure interfaces.
+                    </p>
+                  </div>
+                )}
+
+                {gvretProbeError && (
+                  <div className={alertWarning}>
+                    <p className="text-sm text-amber-800 dark:text-amber-200">
+                      {gvretProbeError}
+                    </p>
+                  </div>
+                )}
+
+                {getGvretBusConfig().length > 0 && (
+                  <GvretBusConfig
+                    deviceInfo={gvretDeviceInfo}
+                    isLoading={gvretProbeState === "probing"}
+                    error={gvretProbeState === "error" ? gvretProbeError : null}
+                    busConfig={getGvretBusConfig()}
+                    onBusConfigChange={handleGvretBusConfigChange}
+                    showOutputBus={false}
+                    showProtocol={true}
+                  />
+                )}
+
+                {editingProfileId && getGvretBusConfig().length === 0 && gvretProbeState !== "probing" && gvretProbeState !== "error" && (
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Click "Probe Device" to detect available interfaces.
+                  </p>
+                )}
+              </div>
             </div>
           )}
 
@@ -587,6 +748,62 @@ export default function IOProfileDialog({
                   Works with ESP32-RET, M2RET, CANDue, and other GVRET-compatible hardware over USB serial.
                   Supports multi-bus devices and frame transmission.
                 </p>
+              </div>
+
+              {/* Interface Configuration */}
+              <div className={`border-t ${borderDefault} pt-4 mt-4`}>
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-medium text-slate-900 dark:text-white">
+                    CAN Interfaces
+                    {gvretProbeState === "success" && (
+                      <span className="ml-2 text-xs text-green-600 dark:text-green-400">
+                        (device online)
+                      </span>
+                    )}
+                  </h4>
+                  <SecondaryButton
+                    onClick={probeGvret}
+                    disabled={gvretProbeState === "probing"}
+                    className="text-xs py-1 px-2"
+                  >
+                    <RefreshCw className={`w-3 h-3 mr-1 ${gvretProbeState === "probing" ? "animate-spin" : ""}`} />
+                    {gvretProbeState === "probing" ? "Probing..." : "Probe Device"}
+                  </SecondaryButton>
+                </div>
+
+                {!editingProfileId && (
+                  <div className={alertInfo}>
+                    <p className="text-sm text-blue-800 dark:text-blue-200">
+                      Save the profile first to probe the device and configure interfaces.
+                    </p>
+                  </div>
+                )}
+
+                {gvretProbeError && (
+                  <div className={alertWarning}>
+                    <p className="text-sm text-amber-800 dark:text-amber-200">
+                      {gvretProbeError}
+                    </p>
+                  </div>
+                )}
+
+                {getGvretBusConfig().length > 0 && (
+                  <GvretBusConfig
+                    deviceInfo={gvretDeviceInfo}
+                    isLoading={gvretProbeState === "probing"}
+                    error={gvretProbeState === "error" ? gvretProbeError : null}
+                    busConfig={getGvretBusConfig()}
+                    onBusConfigChange={handleGvretBusConfigChange}
+                    showOutputBus={false}
+                    showProtocol={true}
+                  />
+                )}
+
+                {editingProfileId && getGvretBusConfig().length === 0 && gvretProbeState !== "probing" && gvretProbeState !== "error" && (
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Click "Probe Device" to detect available interfaces.
+                  </p>
+                )}
               </div>
             </div>
           )}

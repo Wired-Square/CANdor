@@ -42,6 +42,8 @@ pub enum FramingEncoding {
         /// Whether to validate CRC
         validate_crc: bool,
     },
+    /// Raw mode - no framing, emit bytes as read
+    Raw,
 }
 
 impl Default for FramingEncoding {
@@ -412,6 +414,71 @@ impl FramerImpl for ModbusRtuFramer {
 }
 
 // =============================================================================
+// Raw Framer (Pass-through)
+// =============================================================================
+
+/// Raw framer that passes through bytes as-is, batched by read chunks
+struct RawFramer {
+    buffer: Vec<u8>,
+    /// Maximum bytes before emitting a frame
+    max_length: usize,
+}
+
+impl RawFramer {
+    fn new() -> Self {
+        RawFramer {
+            buffer: Vec::new(),
+            max_length: 256, // Emit chunks of up to 256 bytes
+        }
+    }
+}
+
+impl FramerImpl for RawFramer {
+    fn feed(&mut self, data: &[u8]) -> Vec<FrameResult> {
+        let mut frames = Vec::new();
+
+        for &byte in data {
+            self.buffer.push(byte);
+
+            // Emit frame when buffer reaches max length
+            if self.buffer.len() >= self.max_length {
+                let frame: Vec<u8> = self.buffer.drain(..).collect();
+                frames.push(FrameResult {
+                    bytes: frame,
+                    incomplete: false,
+                    crc_valid: None,
+                });
+            }
+        }
+
+        // Also emit any remaining data as a frame (for real-time display)
+        if !self.buffer.is_empty() {
+            let frame: Vec<u8> = self.buffer.drain(..).collect();
+            frames.push(FrameResult {
+                bytes: frame,
+                incomplete: false,
+                crc_valid: None,
+            });
+        }
+
+        frames
+    }
+
+    fn flush(&mut self) -> Option<FrameResult> {
+        if self.buffer.is_empty() {
+            None
+        } else {
+            let frame: Vec<u8> = self.buffer.drain(..).collect();
+            Some(FrameResult {
+                bytes: frame,
+                incomplete: true,
+                crc_valid: None,
+            })
+        }
+    }
+}
+
+// =============================================================================
 // Public SerialFramer
 // =============================================================================
 
@@ -439,6 +506,7 @@ impl SerialFramer {
                 device_address,
                 validate_crc,
             } => Box::new(ModbusRtuFramer::new(*device_address, *validate_crc)),
+            FramingEncoding::Raw => Box::new(RawFramer::new()),
         };
 
         SerialFramer { framer }

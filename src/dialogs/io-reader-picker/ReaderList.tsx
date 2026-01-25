@@ -4,9 +4,10 @@ import { Bookmark, Wifi, Database, FolderOpen, GitMerge, Radio, Play } from "luc
 import type { IOProfile } from "../../hooks/useSettings";
 import type { Session } from "../../stores/sessionStore";
 import type { ActiveSessionInfo } from "../../api/io";
-import { CSV_EXTERNAL_ID, isRealtimeProfile } from "./utils";
+import { CSV_EXTERNAL_ID, isRealtimeProfile, isMultiSourceCapable } from "./utils";
 import { badgeSmallNeutral, badgeSmallSuccess, badgeSmallWarning, badgeSmallPurple } from "../../styles/badgeStyles";
 import type { ReactNode } from "react";
+import { AlertCircle } from "lucide-react";
 
 /** Status for a profile that may be disabled */
 export interface ProfileDisabledStatus {
@@ -17,22 +18,18 @@ export interface ProfileDisabledStatus {
 type Props = {
   ioProfiles: IOProfile[];
   checkedReaderId: string | null;
-  /** Selected reader IDs when in multi-select mode */
+  /** Selected reader IDs for multi-bus sessions */
   checkedReaderIds?: string[];
   defaultId?: string | null;
   isIngesting: boolean;
   onSelectReader: (readerId: string | null) => void;
-  /** Called when toggling a reader in multi-select mode */
+  /** Called when toggling a multi-source-capable reader */
   onToggleReader?: (readerId: string) => void;
   /** Check if a profile has an active session (is "live") */
   isProfileLive?: (profileId: string) => boolean;
   /** Get session for a profile (to check state) */
   getSessionForProfile?: (profileId: string) => Session | undefined;
-  /** Enable multi-select mode for real-time profiles */
-  multiSelectMode?: boolean;
-  /** Callback to toggle multi-select mode */
-  onToggleMultiSelectMode?: (enabled: boolean) => void;
-  /** Render additional content below a profile when selected in multi-select mode */
+  /** Render additional content below a profile when selected */
   renderProfileExtra?: (profileId: string) => ReactNode;
   /** Active multi-source sessions that can be joined */
   activeMultiSourceSessions?: ActiveSessionInfo[];
@@ -44,6 +41,10 @@ type Props = {
   hideExternal?: boolean;
   /** Hide the Recorded Sources section - for transmit mode */
   hideRecorded?: boolean;
+  /** Validation error for incompatible selection */
+  validationError?: string | null;
+  /** Allow multi-select mode (default: true for real-time CAN interfaces) */
+  allowMultiSelect?: boolean;
 };
 
 export default function ReaderList({
@@ -56,25 +57,22 @@ export default function ReaderList({
   onToggleReader,
   isProfileLive,
   getSessionForProfile,
-  multiSelectMode = false,
-  onToggleMultiSelectMode,
   renderProfileExtra,
   activeMultiSourceSessions = [],
   onSelectMultiSourceSession,
   disabledProfiles,
   hideExternal = false,
   hideRecorded = false,
+  validationError,
+  allowMultiSelect = true,
 }: Props) {
   // All profiles are read profiles now (mode field removed), separate by type
   const readProfiles = ioProfiles;
   const realtimeProfiles = readProfiles.filter(isRealtimeProfile);
   const recordedProfiles = readProfiles.filter((p) => !isRealtimeProfile(p));
 
-  // CAN-capable real-time profiles that support multi-source mode
-  const multiSourceCapableProfiles = realtimeProfiles.filter(
-    (p) => p.kind === "gvret_tcp" || p.kind === "gvret_usb" ||
-           p.kind === "slcan" || p.kind === "gs_usb" || p.kind === "socketcan"
-  );
+  // Multi-bus mode is implicit when >1 interface is selected
+  const isMultiBusMode = checkedReaderIds.length > 1;
 
   const isCsvSelected = checkedReaderId === CSV_EXTERNAL_ID;
   const checkedProfile = checkedReaderId && checkedReaderId !== CSV_EXTERNAL_ID
@@ -95,8 +93,9 @@ export default function ReaderList({
     return undefined;
   };
 
-  // When a reader is selected, show only that reader in collapsed view
-  if (checkedReaderId && !isIngesting) {
+  // When a single reader is selected (not multi-bus) and not ingesting, show collapsed view
+  // Multi-bus mode (checkedReaderIds.length > 0) always shows full list
+  if (checkedReaderId && checkedReaderIds.length === 0 && !isIngesting) {
     // Determine display name and subtitle based on selection type
     let displayName: string;
     let subtitle: string;
@@ -283,53 +282,37 @@ export default function ReaderList({
             <div className="flex items-center gap-1.5">
               <Wifi className="w-3 h-3" />
               <span>Real-time</span>
-              {multiSelectMode && checkedReaderIds.length > 0 && (
+              {isMultiBusMode && (
                 <span className={badgeSmallPurple}>
-                  {checkedReaderIds.length} selected
+                  <GitMerge className="w-3 h-3 inline mr-1" />
+                  {checkedReaderIds.length} buses
                 </span>
               )}
             </div>
-            {multiSourceCapableProfiles.length > 1 && onToggleMultiSelectMode && (
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => onToggleMultiSelectMode(false)}
-                  className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
-                    !multiSelectMode
-                      ? "bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300"
-                      : "bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600"
-                  }`}
-                >
-                  Single
-                </button>
-                <button
-                  onClick={() => onToggleMultiSelectMode(true)}
-                  className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors flex items-center gap-1 ${
-                    multiSelectMode
-                      ? "bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300"
-                      : "bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600"
-                  }`}
-                >
-                  <GitMerge className="w-3 h-3" />
-                  Multi-Bus
-                </button>
-              </div>
-            )}
           </div>
+          {/* Validation error */}
+          {validationError && (
+            <div className="mx-3 mb-2 px-3 py-2 text-xs text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>{validationError}</span>
+            </div>
+          )}
           <div className="px-3 pb-2 space-y-1">
             {realtimeProfiles.map((profile) => {
-              const isProfileChecked = multiSelectMode ? checkedReaderIds.includes(profile.id) : checkedReaderId === profile.id;
+              const canMultiSelect = allowMultiSelect && isMultiSourceCapable(profile);
+              const isProfileChecked = canMultiSelect
+                ? checkedReaderIds.includes(profile.id)
+                : checkedReaderId === profile.id;
               const disabledStatus = disabledProfiles?.get(profile.id);
               const isDisabledForTransmit = disabledStatus && !disabledStatus.canTransmit;
-              // In multi-select mode, only CAN-capable real-time profiles can be selected
-              const isMultiSourceCapable = profile.kind === "gvret_tcp" || profile.kind === "gvret_usb" ||
-                profile.kind === "slcan" || profile.kind === "gs_usb" || profile.kind === "socketcan";
-              const isDisabledForMultiSelect = multiSelectMode && !isMultiSourceCapable;
-              const isDisabled = isDisabledForTransmit || isDisabledForMultiSelect;
-              const disabledReason = isDisabledForTransmit
-                ? disabledStatus?.reason
-                : isDisabledForMultiSelect
-                ? "Not a CAN interface"
-                : undefined;
+              const isDisabled = isDisabledForTransmit;
+              const disabledReason = isDisabledForTransmit ? disabledStatus?.reason : undefined;
+
+              // Handler: multi-source-capable profiles toggle, others select exclusively
+              const handleSelect = canMultiSelect && onToggleReader
+                ? () => onToggleReader(profile.id)
+                : onSelectReader;
+
               return (
                 <div key={profile.id}>
                   <ReaderButton
@@ -339,14 +322,14 @@ export default function ReaderList({
                     isIngesting={isIngesting}
                     isLive={isProfileLive?.(profile.id) ?? false}
                     sessionState={getSessionForProfile?.(profile.id)?.ioState}
-                    onSelect={multiSelectMode && onToggleReader ? () => onToggleReader(profile.id) : onSelectReader}
-                    useCheckbox={multiSelectMode}
+                    onSelect={handleSelect}
+                    useCheckbox={canMultiSelect}
                     busNumber={getBusNumber(profile)}
                     isDisabled={isDisabled}
                     disabledReason={disabledReason}
                   />
                   {/* Render extra content (e.g., bus config) inline below selected profile */}
-                  {multiSelectMode && isProfileChecked && renderProfileExtra?.(profile.id)}
+                  {isProfileChecked && renderProfileExtra?.(profile.id)}
                 </div>
               );
             })}

@@ -5,6 +5,61 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+// ============================================================================
+// Interface Traits
+// ============================================================================
+
+/**
+ * Temporal mode of an interface/session.
+ * - "realtime": Live streaming from hardware (GVRET, slcan, gs_usb, SocketCAN, MQTT)
+ * - "timeline": Recorded playback (PostgreSQL, CSV, Buffer)
+ */
+export type TemporalMode = "realtime" | "timeline";
+
+/**
+ * Protocol family for frame-based communication.
+ * CAN and CAN-FD are compatible (can coexist in a session).
+ * Other protocols are incompatible with each other.
+ */
+export type Protocol = "can" | "canfd" | "modbus" | "serial";
+
+/**
+ * Combined interface traits for formal session/interface characterization.
+ */
+export interface InterfaceTraits {
+  /** Temporal mode of the interface */
+  temporal_mode: TemporalMode;
+  /** Protocols supported by the interface */
+  protocols: Protocol[];
+  /** Whether the interface can transmit frames */
+  can_transmit: boolean;
+}
+
+/**
+ * Get traits from IOCapabilities, deriving from legacy fields if not present.
+ */
+export function getTraits(caps: IOCapabilities): InterfaceTraits {
+  if (caps.traits) {
+    return caps.traits;
+  }
+  // Derive from legacy fields
+  const protocols: Protocol[] = caps.can_transmit_serial
+    ? ["serial"]
+    : caps.supports_canfd
+      ? ["can", "canfd"]
+      : ["can"];
+
+  return {
+    temporal_mode: caps.is_realtime ? "realtime" : "timeline",
+    protocols,
+    can_transmit: caps.can_transmit || caps.can_transmit_serial,
+  };
+}
+
+// ============================================================================
+// IO Capabilities
+// ============================================================================
+
 /**
  * IO capabilities - what an IO device type supports.
  */
@@ -31,6 +86,10 @@ export interface IOCapabilities {
   supports_rtr: boolean;
   /** Available bus numbers (empty = single bus) */
   available_buses: number[];
+  /** Emits raw bytes (serial sessions without framing or with emit_raw_bytes=true) */
+  emits_raw_bytes?: boolean;
+  /** Formal interface traits (temporal mode, protocols, transmit) */
+  traits?: InterfaceTraits;
 }
 
 /**
@@ -592,6 +651,10 @@ export interface BusMapping {
   enabled: boolean;
   /** Bus number to use in emitted frames (0-255) */
   outputBus: number;
+  /** Human-readable interface identifier (e.g., "can0", "serial1") */
+  interfaceId?: string;
+  /** Traits for this specific interface */
+  traits?: InterfaceTraits;
 }
 
 /**
@@ -669,13 +732,24 @@ export async function probeDevice(profileId: string): Promise<DeviceProbeResult>
  * All buses are enabled and map to sequential output numbers starting from offset.
  * @param busCount Number of buses on the device
  * @param outputBusOffset Starting output bus number (default 0)
+ * @param protocol Protocol type for all interfaces (default "can")
  * @returns Array of default bus mappings
  */
-export function createDefaultBusMappings(busCount: number, outputBusOffset: number = 0): BusMapping[] {
+export function createDefaultBusMappings(
+  busCount: number,
+  outputBusOffset: number = 0,
+  protocol: Protocol = "can"
+): BusMapping[] {
   return Array.from({ length: busCount }, (_, i) => ({
     deviceBus: i,
     enabled: true,
     outputBus: outputBusOffset + i,
+    interfaceId: `${protocol}${i}`,
+    traits: {
+      temporal_mode: "realtime" as TemporalMode,
+      protocols: protocol === "can" ? ["can", "canfd"] : [protocol],
+      can_transmit: true,
+    },
   }));
 }
 
@@ -694,6 +768,16 @@ export interface MultiSourceInput {
   displayName?: string;
   /** Bus mappings for this source (device bus -> output bus) */
   busMappings: BusMapping[];
+  /** Framing encoding for serial sources (overrides profile settings) */
+  framingEncoding?: string;
+  /** Delimiter bytes for delimiter-based framing */
+  delimiter?: number[];
+  /** Maximum frame length for delimiter-based framing */
+  maxFrameLength?: number;
+  /** Minimum frame length - frames shorter than this are discarded */
+  minFrameLength?: number;
+  /** Whether to emit raw bytes in addition to framed data */
+  emitRawBytes?: boolean;
 }
 
 /**
@@ -731,7 +815,14 @@ export async function createMultiSourceSession(
       device_bus: m.deviceBus,
       enabled: m.enabled,
       output_bus: m.outputBus,
+      interface_id: m.interfaceId,
+      traits: m.traits,
     })),
+    // Serial framing options (overrides profile settings)
+    framing_encoding: source.framingEncoding,
+    delimiter: source.delimiter,
+    max_frame_length: source.maxFrameLength,
+    emit_raw_bytes: source.emitRawBytes,
   }));
 
   return invoke("create_multi_source_session", {
@@ -772,7 +863,13 @@ export async function listActiveSessions(): Promise<ActiveSessionInfo[]> {
     multi_source_configs: Array<{
       profile_id: string;
       display_name: string;
-      bus_mappings: Array<{ device_bus: number; enabled: boolean; output_bus: number }>;
+      bus_mappings: Array<{
+        device_bus: number;
+        enabled: boolean;
+        output_bus: number;
+        interface_id?: string;
+        traits?: InterfaceTraits;
+      }>;
     }> | null;
   }> = await invoke("list_active_sessions");
 
@@ -789,6 +886,8 @@ export async function listActiveSessions(): Promise<ActiveSessionInfo[]> {
         deviceBus: m.device_bus,
         enabled: m.enabled,
         outputBus: m.output_bus,
+        interfaceId: m.interface_id,
+        traits: m.traits,
       })),
     })) ?? null,
   }));

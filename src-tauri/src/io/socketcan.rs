@@ -7,31 +7,22 @@
 //   sudo ip link set can0 up type can bitrate 500000
 //
 // This module is only compiled on Linux.
-//
-// NOTE: The standalone SocketIODevice is now legacy code. All real-time devices now use
-// MultiSourceReader which has its own socketcan source implementation. The SocketIODevice
-// struct and related functions are kept for reference but not actively used.
-
-#![allow(dead_code)]
-#![allow(unused_imports)]
 
 #[cfg(target_os = "linux")]
 mod linux_impl {
-    use async_trait::async_trait;
     use serde::{Deserialize, Serialize};
-    use socketcan::{CanSocket, EmbeddedFrame, Frame, Socket};
+    use socketcan::{CanDataFrame, CanSocket, EmbeddedFrame, ExtendedId, Frame, Id, Socket, StandardId};
     use std::sync::{
         atomic::{AtomicBool, Ordering},
+        mpsc as std_mpsc,
         Arc,
     };
     use std::time::Duration;
-    use tauri::AppHandle;
+    use tokio::sync::mpsc;
 
-    use crate::buffer_store::{self, BufferType};
-    use crate::io::{
-        emit_frames, emit_to_session, now_us, IODevice, FrameMessage, IOCapabilities, IOState,
-        StreamEndedPayload,
-    };
+    use crate::io::gvret_common::{apply_bus_mapping, BusMapping};
+    use crate::io::types::{io_error, SourceMessage, TransmitRequest};
+    use crate::io::{now_us, CanTransmitFrame, FrameMessage};
 
     // ============================================================================
     // Types and Configuration
@@ -87,13 +78,14 @@ mod linux_impl {
     impl SocketCanReader {
         /// Create a new SocketCAN reader for the given interface
         pub fn new(interface: &str) -> Result<Self, String> {
+            let device = format!("socketcan({})", interface);
             let socket = CanSocket::open(interface)
-                .map_err(|e| format!("Failed to open {}: {}", interface, e))?;
+                .map_err(|e| io_error(&device, "open", e))?;
 
             // Set read timeout for non-blocking reads
             socket
                 .set_read_timeout(Duration::from_millis(100))
-                .map_err(|e| format!("Failed to set read timeout: {}", e))?;
+                .map_err(|e| io_error(&device, "set read timeout", e))?;
 
             Ok(Self { socket })
         }
@@ -148,300 +140,177 @@ mod linux_impl {
     }
 
     // ============================================================================
-    // SocketCAN IODevice (for single-source sessions)
+    // Multi-Source Streaming
     // ============================================================================
 
-    /// SocketCAN reader implementing IODevice trait
-    pub struct SocketIODevice {
-        app: AppHandle,
-        session_id: String,
-        config: SocketCanConfig,
-        state: IOState,
-        cancel_flag: Arc<AtomicBool>,
-        task_handle: Option<tauri::async_runtime::JoinHandle<()>>,
+    /// Encode a CAN frame for SocketCAN (struct can_frame format, 16 bytes)
+    pub fn encode_frame(frame: &CanTransmitFrame) -> [u8; 16] {
+        let mut buf = [0u8; 16];
+
+        // can_id with flags
+        let mut can_id = frame.frame_id;
+        if frame.is_extended {
+            can_id |= 0x8000_0000; // CAN_EFF_FLAG
+        }
+        if frame.is_rtr {
+            can_id |= 0x4000_0000; // CAN_RTR_FLAG
+        }
+
+        buf[0..4].copy_from_slice(&can_id.to_ne_bytes());
+        buf[4] = frame.data.len().min(8) as u8; // DLC
+        // bytes 5-7 are padding
+
+        // Data (up to 8 bytes)
+        let len = frame.data.len().min(8);
+        buf[8..8 + len].copy_from_slice(&frame.data[..len]);
+
+        buf
     }
 
-    impl SocketIODevice {
-        pub fn new(app: AppHandle, session_id: String, config: SocketCanConfig) -> Self {
-            Self {
-                app,
-                session_id,
-                config,
-                state: IOState::Stopped,
-                cancel_flag: Arc::new(AtomicBool::new(false)),
-                task_handle: None,
-            }
-        }
-    }
-
-    #[async_trait]
-    impl IODevice for SocketIODevice {
-        fn capabilities(&self) -> IOCapabilities {
-            IOCapabilities {
-                can_pause: false,
-                supports_time_range: false,
-                is_realtime: true,
-                supports_speed_control: false,
-                supports_seek: false,
-                can_transmit: true, // SocketCAN supports transmission
-                can_transmit_serial: false,
-                supports_canfd: false, // TODO: CAN FD support
-                supports_extended_id: true, // SocketCAN supports extended IDs
-                supports_rtr: true, // SocketCAN supports RTR frames
-                available_buses: vec![0], // Single interface per reader
-            }
-        }
-
-        async fn start(&mut self) -> Result<(), String> {
-            if self.state == IOState::Running {
-                return Err("Reader is already running".to_string());
-            }
-
-            self.state = IOState::Starting;
-            self.cancel_flag.store(false, Ordering::Relaxed);
-
-            let app = self.app.clone();
-            let session_id = self.session_id.clone();
-            let config = self.config.clone();
-            let cancel_flag = self.cancel_flag.clone();
-
-            let handle = spawn_socketcan_stream(app, session_id, config, cancel_flag);
-            self.task_handle = Some(handle);
-            self.state = IOState::Running;
-
-            Ok(())
-        }
-
-        async fn stop(&mut self) -> Result<(), String> {
-            self.cancel_flag.store(true, Ordering::Relaxed);
-
-            if let Some(handle) = self.task_handle.take() {
-                let _ = handle.await;
-            }
-
-            self.state = IOState::Stopped;
-            Ok(())
-        }
-
-        async fn pause(&mut self) -> Result<(), String> {
-            Err("SocketCAN is a live stream and cannot be paused.".to_string())
-        }
-
-        async fn resume(&mut self) -> Result<(), String> {
-            Err("SocketCAN is a live stream and does not support pause/resume.".to_string())
-        }
-
-        fn set_speed(&mut self, _speed: f64) -> Result<(), String> {
-            Err("SocketCAN is a live stream and does not support speed control.".to_string())
-        }
-
-        fn set_time_range(
-            &mut self,
-            _start: Option<String>,
-            _end: Option<String>,
-        ) -> Result<(), String> {
-            Err("SocketCAN is a live stream and does not support time range filtering.".to_string())
-        }
-
-        fn state(&self) -> IOState {
-            self.state.clone()
-        }
-
-        fn session_id(&self) -> &str {
-            &self.session_id
-        }
-    }
-
-    // ============================================================================
-    // Stream Implementation
-    // ============================================================================
-
-    /// Helper to emit stream-ended event
-    fn emit_stream_ended(app_handle: &AppHandle, session_id: &str, reason: &str) {
-        let metadata = buffer_store::finalize_buffer();
-
-        let (buffer_id, buffer_type, count, time_range, buffer_available) = match metadata {
-            Some(ref m) => {
-                let type_str = match m.buffer_type {
-                    BufferType::Frames => "frames",
-                    BufferType::Bytes => "bytes",
-                };
-                (
-                    Some(m.id.clone()),
-                    Some(type_str.to_string()),
-                    m.count,
-                    match (m.start_time_us, m.end_time_us) {
-                        (Some(start), Some(end)) => Some((start, end)),
-                        _ => None,
-                    },
-                    m.count > 0,
-                )
-            }
-            None => (None, None, 0, None, false),
-        };
-
-        emit_to_session(
-            app_handle,
-            "stream-ended",
-            session_id,
-            StreamEndedPayload {
-                reason: reason.to_string(),
-                buffer_available,
-                buffer_id,
-                buffer_type,
-                count,
-                time_range,
-            },
-        );
-        eprintln!(
-            "[SocketCAN:{}] Stream ended (reason: {}, count: {})",
-            session_id, reason, count
-        );
-    }
-
-    /// Spawn the SocketCAN stream task
-    fn spawn_socketcan_stream(
-        app_handle: AppHandle,
-        session_id: String,
-        config: SocketCanConfig,
-        cancel_flag: Arc<AtomicBool>,
-    ) -> tauri::async_runtime::JoinHandle<()> {
-        tauri::async_runtime::spawn(async move {
-            let result = tokio::task::spawn_blocking(move || {
-                run_socketcan_stream_blocking(app_handle, session_id, config, cancel_flag)
-            })
-            .await;
-
-            if let Err(e) = result {
-                eprintln!("[SocketCAN] Task panicked: {:?}", e);
-            }
-        })
-    }
-
-    /// Blocking SocketCAN stream implementation
-    #[allow(unused_assignments)]
-    fn run_socketcan_stream_blocking(
-        app_handle: AppHandle,
-        session_id: String,
-        config: SocketCanConfig,
-        cancel_flag: Arc<AtomicBool>,
+    /// Run SocketCAN source and send frames to merge task
+    pub async fn run_source(
+        source_idx: usize,
+        interface: String,
+        bus_mappings: Vec<BusMapping>,
+        stop_flag: Arc<AtomicBool>,
+        tx: mpsc::Sender<SourceMessage>,
     ) {
-        let buffer_name = config
-            .display_name
-            .clone()
-            .unwrap_or_else(|| format!("SocketCAN {}", config.interface));
-        let _buffer_id = buffer_store::create_buffer(BufferType::Frames, buffer_name);
+        let device = format!("socketcan({})", interface);
 
-        let mut stream_reason = "stopped";
-        let mut total_frames: i64 = 0;
-
-        // Open SocketCAN interface
-        let socket = match CanSocket::open(&config.interface) {
+        // Open socket
+        let socket = match CanSocket::open(&interface) {
             Ok(s) => s,
             Err(e) => {
-                emit_to_session(
-                    &app_handle,
-                    "can-bytes-error",
-                    &session_id,
-                    format!(
-                        "Failed to open {}: {}. Is the interface configured? Try: sudo ip link set {} up type can bitrate 500000",
-                        config.interface, e, config.interface
-                    ),
-                );
-                emit_stream_ended(&app_handle, &session_id, "error");
+                let _ = tx
+                    .send(SourceMessage::Error(
+                        source_idx,
+                        io_error(&device, "open", e),
+                    ))
+                    .await;
                 return;
             }
         };
 
-        // Set read timeout for cancellation check
-        if let Err(e) = socket.set_read_timeout(Duration::from_millis(100)) {
-            eprintln!(
-                "[SocketCAN:{}] Warning: could not set read timeout: {}",
-                session_id, e
-            );
+        // Set read timeout
+        if let Err(e) = socket.set_read_timeout(Duration::from_millis(50)) {
+            eprintln!("[socketcan] Warning: could not set read timeout: {}", e);
         }
+
+        // Create transmit channel
+        let (transmit_tx, transmit_rx) = std_mpsc::sync_channel::<TransmitRequest>(32);
+        let _ = tx
+            .send(SourceMessage::TransmitReady(source_idx, transmit_tx))
+            .await;
 
         eprintln!(
-            "[SocketCAN:{}] Starting stream (interface: {}, limit: {:?})",
-            session_id, config.interface, config.limit
+            "[socketcan] Source {} connected to {}",
+            source_idx, interface
         );
 
-        let mut pending_frames: Vec<FrameMessage> = Vec::with_capacity(32);
-        let mut last_emit_time = std::time::Instant::now();
-        let emit_interval = Duration::from_millis(25);
+        // Read loop (blocking)
+        let tx_clone = tx.clone();
+        let stop_flag_clone = stop_flag.clone();
 
-        loop {
-            if cancel_flag.load(Ordering::Relaxed) {
-                stream_reason = "stopped";
-                break;
-            }
+        let blocking_handle = tokio::task::spawn_blocking(move || {
+            while !stop_flag_clone.load(Ordering::Relaxed) {
+                // Check for transmit requests
+                while let Ok(req) = transmit_rx.try_recv() {
+                    let result = (|| {
+                        if req.data.len() < 16 {
+                            return Err("Frame data too short".to_string());
+                        }
 
-            if let Some(limit) = config.limit {
-                if total_frames >= limit {
-                    eprintln!("[SocketCAN:{}] Reached limit of {} frames, stopping", session_id, limit);
-                    stream_reason = "complete";
-                    break;
+                        // Parse struct can_frame
+                        let can_id = u32::from_ne_bytes([req.data[0], req.data[1], req.data[2], req.data[3]]);
+                        let dlc = req.data[4] as usize;
+                        let frame_data = &req.data[8..8 + dlc.min(8)];
+
+                        let is_extended = (can_id & 0x8000_0000) != 0;
+                        let raw_id = can_id & 0x1FFF_FFFF;
+
+                        let frame = if is_extended {
+                            let id = ExtendedId::new(raw_id)
+                                .ok_or_else(|| format!("Invalid extended ID: 0x{:08X}", raw_id))?;
+                            CanDataFrame::new(Id::Extended(id), frame_data)
+                                .ok_or_else(|| "Failed to create extended frame".to_string())?
+                        } else {
+                            let id = StandardId::new(raw_id as u16)
+                                .ok_or_else(|| format!("Invalid standard ID: 0x{:03X}", raw_id))?;
+                            CanDataFrame::new(Id::Standard(id), frame_data)
+                                .ok_or_else(|| "Failed to create standard frame".to_string())?
+                        };
+
+                        socket.write_frame(&frame)
+                            .map_err(|e| format!("Write error: {}", e))
+                    })();
+
+                    let _ = req.result_tx.send(result);
+                }
+
+                // Read frame
+                match socket.read_frame() {
+                    Ok(frame) => {
+                        let mut frame_msg = FrameMessage {
+                            protocol: "can".to_string(),
+                            timestamp_us: now_us(),
+                            frame_id: frame.raw_id() & 0x1FFF_FFFF,
+                            bus: 0,
+                            dlc: frame.len() as u8,
+                            bytes: frame.data().to_vec(),
+                            is_extended: frame.is_extended(),
+                            is_fd: false,
+                            source_address: None,
+                            incomplete: None,
+                            direction: None,
+                        };
+
+                        if apply_bus_mapping(&mut frame_msg, &bus_mappings) {
+                            let _ = tx_clone
+                                .blocking_send(SourceMessage::Frames(source_idx, vec![frame_msg]));
+                        }
+                    }
+                    Err(ref e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::TimedOut =>
+                    {
+                        // Timeout - continue
+                    }
+                    Err(e) => {
+                        let _ = tx_clone.blocking_send(SourceMessage::Error(
+                            source_idx,
+                            format!("Read error: {}", e),
+                        ));
+                        return;
+                    }
                 }
             }
 
-            match socket.read_frame() {
-                Ok(frame) => {
-                    let msg = convert_socketcan_frame(&frame, config.bus_override);
-                    pending_frames.push(msg);
-                    total_frames += 1;
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    // Timeout - check cancel flag
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                    // Timeout - check cancel flag
-                }
-                Err(e) => {
-                    emit_to_session(
-                        &app_handle,
-                        "can-bytes-error",
-                        &session_id,
-                        format!("Read error: {}", e),
-                    );
-                    stream_reason = "error";
-                    break;
-                }
-            }
+            let _ = tx_clone.blocking_send(SourceMessage::Ended(source_idx, "stopped".to_string()));
+        });
 
-            // Emit batched frames periodically with active listener filtering
-            if last_emit_time.elapsed() >= emit_interval && !pending_frames.is_empty() {
-                let frames = std::mem::take(&mut pending_frames);
-                buffer_store::append_frames(frames.clone());
-                emit_frames(&app_handle, &session_id, frames);
-                last_emit_time = std::time::Instant::now();
-            }
-        }
-
-        // Emit any remaining frames with active listener filtering
-        if !pending_frames.is_empty() {
-            buffer_store::append_frames(pending_frames.clone());
-            emit_frames(&app_handle, &session_id, pending_frames);
-        }
-
-        emit_stream_ended(&app_handle, &session_id, stream_reason);
+        let _ = blocking_handle.await;
     }
 }
 
 // Re-export for Linux
 #[cfg(target_os = "linux")]
-pub use linux_impl::{SocketCanConfig, SocketCanReader, SocketIODevice};
+pub use linux_impl::{encode_frame, run_source, SocketCanConfig, SocketCanReader};
 
 // ============================================================================
 // Non-Linux Stub
 // ============================================================================
 
 #[cfg(not(target_os = "linux"))]
+#[allow(dead_code)]
 mod stub {
-    use async_trait::async_trait;
     use serde::{Deserialize, Serialize};
-    use tauri::AppHandle;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
 
-    use crate::io::{IODevice, IOCapabilities, IOState};
+    use crate::io::gvret_common::BusMapping;
+    use crate::io::types::SourceMessage;
+    use crate::io::CanTransmitFrame;
 
     /// SocketCAN configuration (stub for non-Linux)
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -453,72 +322,28 @@ mod stub {
         pub bus_override: Option<u8>,
     }
 
-    /// SocketCAN reader stub for non-Linux platforms
-    pub struct SocketIODevice {
-        _session_id: String,
+    /// Stub encode_frame for non-Linux (not actually usable)
+    pub fn encode_frame(_frame: &CanTransmitFrame) -> [u8; 16] {
+        [0u8; 16]
     }
 
-    impl SocketIODevice {
-        pub fn new(_app: AppHandle, session_id: String, _config: SocketCanConfig) -> Self {
-            Self { _session_id: session_id }
-        }
-    }
-
-    #[async_trait]
-    impl IODevice for SocketIODevice {
-        fn capabilities(&self) -> IOCapabilities {
-            IOCapabilities {
-                can_pause: false,
-                supports_time_range: false,
-                is_realtime: true,
-                supports_speed_control: false,
-                supports_seek: false,
-                can_transmit: false, // Not available on this platform
-                can_transmit_serial: false,
-                supports_canfd: false,
-                supports_extended_id: false,
-                supports_rtr: false,
-                available_buses: vec![],
-            }
-        }
-
-        async fn start(&mut self) -> Result<(), String> {
-            Err("SocketCAN is only available on Linux. Use slcan for macOS/Windows.".to_string())
-        }
-
-        async fn stop(&mut self) -> Result<(), String> {
-            Ok(())
-        }
-
-        async fn pause(&mut self) -> Result<(), String> {
-            Err("SocketCAN is only available on Linux.".to_string())
-        }
-
-        async fn resume(&mut self) -> Result<(), String> {
-            Err("SocketCAN is only available on Linux.".to_string())
-        }
-
-        fn set_speed(&mut self, _speed: f64) -> Result<(), String> {
-            Err("SocketCAN is only available on Linux.".to_string())
-        }
-
-        fn set_time_range(
-            &mut self,
-            _start: Option<String>,
-            _end: Option<String>,
-        ) -> Result<(), String> {
-            Err("SocketCAN is only available on Linux.".to_string())
-        }
-
-        fn state(&self) -> IOState {
-            IOState::Stopped
-        }
-
-        fn session_id(&self) -> &str {
-            &self._session_id
-        }
+    /// Stub run_source for non-Linux
+    pub async fn run_source(
+        source_idx: usize,
+        _interface: String,
+        _bus_mappings: Vec<BusMapping>,
+        _stop_flag: Arc<AtomicBool>,
+        tx: mpsc::Sender<SourceMessage>,
+    ) {
+        let _ = tx
+            .send(SourceMessage::Error(
+                source_idx,
+                "SocketCAN is only available on Linux".to_string(),
+            ))
+            .await;
     }
 }
 
 #[cfg(not(target_os = "linux"))]
-pub use stub::{SocketCanConfig, SocketIODevice};
+#[allow(unused_imports)]
+pub use stub::{encode_frame, run_source, SocketCanConfig};

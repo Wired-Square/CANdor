@@ -1,40 +1,22 @@
 // ui/src-tauri/src/io/gvret_usb.rs
 //
-// GVRET USB serial protocol device for devices like ESP32-RET, M2RET, CANDue
+// GVRET USB serial protocol implementation for devices like ESP32-RET, M2RET, CANDue
 // and other GVRET-compatible hardware over USB serial.
 //
 // Protocol reference: https://github.com/collin80/GVRET
-//
-// This is the USB/serial version of the GVRET protocol, which uses binary mode
-// for efficient frame transfer. The protocol is the same as GVRET TCP but over
-// a serial port connection.
-//
-// NOTE: The standalone GvretUsbReader is now legacy code. All real-time devices now use
-// MultiSourceReader which has its own gvret_usb source implementation. The GvretUsbReader
-// struct and related functions are kept for reference but not actively used.
 
-#![allow(dead_code)]
-
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::time::Duration;
-use tauri::AppHandle;
+use tokio::sync::mpsc;
 
 use super::gvret_common::{
-    encode_gvret_frame, gvret_capabilities, parse_gvret_frames, validate_gvret_frame,
-    emit_stream_ended, BINARY_MODE_ENABLE, DEVICE_INFO_PROBE, GVRET_CMD_NUMBUSES,
-    GvretDeviceInfo, GVRET_SYNC,
+    apply_bus_mappings_gvret, parse_gvret_frames, BusMapping, BINARY_MODE_ENABLE, DEVICE_INFO_PROBE,
+    GVRET_CMD_NUMBUSES, GVRET_SYNC, GvretDeviceInfo,
 };
-use super::{
-    emit_frames, emit_to_session, now_ms, CanBytesPayload, CanTransmitFrame, FrameMessage, IOCapabilities,
-    IODevice, IOState, TransmitResult,
-};
-use crate::buffer_store::{self, BufferType};
+use super::types::{io_error, SourceMessage, TransmitRequest};
 
 // ============================================================================
 // Configuration
@@ -58,454 +40,239 @@ pub struct GvretUsbConfig {
 }
 
 // ============================================================================
-// GVRET USB Reader
+// Device Probing
 // ============================================================================
 
-/// Shared serial port type for GVRET reader/writer access
-pub type SharedSerialPort = Arc<Mutex<Option<Box<dyn serialport::SerialPort>>>>;
+/// Probe a GVRET USB device to discover its capabilities
+///
+/// This function opens the serial port, queries the number of available buses,
+/// and returns device information. The connection is closed after probing.
+pub fn probe_gvret_usb(port: &str, baud_rate: u32) -> Result<GvretDeviceInfo, String> {
+    eprintln!(
+        "[probe_gvret_usb] Probing GVRET device at {} (baud: {})",
+        port, baud_rate
+    );
 
-/// GVRET USB protocol reader implementing IODevice trait
-pub struct GvretUsbReader {
-    app: AppHandle,
-    session_id: String,
-    config: GvretUsbConfig,
-    state: IOState,
-    cancel_flag: Arc<AtomicBool>,
-    task_handle: Option<tauri::async_runtime::JoinHandle<()>>,
-    /// Shared serial port - allows transmit while reading
-    port: SharedSerialPort,
-}
+    let device = format!("gvret_usb({})", port);
 
-impl GvretUsbReader {
-    pub fn new(app: AppHandle, session_id: String, config: GvretUsbConfig) -> Self {
-        Self {
-            app,
-            session_id,
-            config,
-            state: IOState::Stopped,
-            cancel_flag: Arc::new(AtomicBool::new(false)),
-            task_handle: None,
-            port: Arc::new(Mutex::new(None)),
+    // Open serial port
+    let mut serial_port = serialport::new(port, baud_rate)
+        .timeout(Duration::from_millis(500))
+        .open()
+        .map_err(|e| io_error(&device, "open", e))?;
+
+    eprintln!("[probe_gvret_usb] Opened serial port {}", port);
+
+    // Clear any pending data
+    let _ = serial_port.clear(serialport::ClearBuffer::All);
+
+    // Enter binary mode
+    serial_port
+        .write_all(&BINARY_MODE_ENABLE)
+        .map_err(|e| io_error(&device, "enable binary mode", e))?;
+    let _ = serial_port.flush();
+
+    // Wait for device to process
+    std::thread::sleep(Duration::from_millis(100));
+
+    // Query number of buses
+    serial_port
+        .write_all(&GVRET_CMD_NUMBUSES)
+        .map_err(|e| io_error(&device, "send NUMBUSES command", e))?;
+    let _ = serial_port.flush();
+
+    // Read response with timeout
+    // Response format: [0xF1][0x0C][bus_count]
+    let mut buf = vec![0u8; 256];
+    let mut total_read = 0;
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+
+    loop {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+
+        match serial_port.read(&mut buf[total_read..]) {
+            Ok(0) => break, // No data
+            Ok(n) => {
+                total_read += n;
+
+                // Look for NUMBUSES response: [0xF1][0x0C][bus_count]
+                for i in 0..total_read.saturating_sub(2) {
+                    if buf[i] == GVRET_SYNC && buf[i + 1] == 0x0C && i + 2 < total_read {
+                        let bus_count = buf[i + 2];
+                        // Sanity check: GVRET devices have 1-5 buses
+                        let bus_count = if bus_count == 0 || bus_count > 5 {
+                            // Default to 5 if response is invalid
+                            eprintln!(
+                                "[probe_gvret_usb] Invalid bus count {}, defaulting to 5",
+                                bus_count
+                            );
+                            5
+                        } else {
+                            bus_count
+                        };
+
+                        eprintln!(
+                            "[probe_gvret_usb] SUCCESS: Device at {} has {} buses available",
+                            port, bus_count
+                        );
+                        return Ok(GvretDeviceInfo { bus_count });
+                    }
+                }
+
+                // If we've read enough data without finding the response, give up
+                if total_read > 128 {
+                    break;
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                // Timeout on this read, continue if we still have time
+            }
+            Err(e) => {
+                return Err(io_error(&device, "read response", e));
+            }
         }
     }
 
-    /// Transmit a CAN frame through this reader's serial port
-    ///
-    /// This acquires the port lock briefly to write the frame, allowing
-    /// the read task to continue receiving frames between transmissions.
-    pub fn transmit_frame(&self, frame: &CanTransmitFrame) -> Result<TransmitResult, String> {
-        // Validate frame using shared validation
-        if let Err(result) = validate_gvret_frame(frame) {
-            return Ok(result);
-        }
-
-        // Acquire lock on the shared port
-        let mut port_guard = self
-            .port
-            .lock()
-            .map_err(|e| format!("Failed to lock port: {}", e))?;
-        let port = port_guard.as_mut().ok_or("Port not open")?;
-
-        // Encode and send using shared encoder
-        let cmd = encode_gvret_frame(frame);
-        port.write_all(&cmd)
-            .map_err(|e| format!("Failed to write frame: {}", e))?;
-        port.flush()
-            .map_err(|e| format!("Failed to flush port: {}", e))?;
-
-        let transmit_result = TransmitResult::success();
-
-        eprintln!(
-            "[GVRET_USB:{}] Transmit succeeded, emitting TX frame for ID 0x{:X}",
-            self.session_id, frame.frame_id
-        );
-
-        // Emit the transmitted frame back to the session so it shows in Discovery
-        let tx_frame = FrameMessage {
-            protocol: "can".to_string(),
-            timestamp_us: transmit_result.timestamp_us,
-            frame_id: frame.frame_id,
-            bus: frame.bus,
-            dlc: frame.data.len() as u8,
-            bytes: frame.data.clone(),
-            is_extended: frame.is_extended,
-            is_fd: frame.is_fd,
-            source_address: None,
-            incomplete: None,
-            direction: Some("tx".to_string()),
-        };
-
-        // Buffer the TX frame for replay
-        buffer_store::append_frames(vec![tx_frame.clone()]);
-
-        // Emit as a single-frame batch with active listener filtering
-        emit_frames(&self.app, &self.session_id, vec![tx_frame]);
-
-        Ok(transmit_result)
-    }
-}
-
-#[async_trait]
-impl IODevice for GvretUsbReader {
-    fn capabilities(&self) -> IOCapabilities {
-        gvret_capabilities()
-    }
-
-    async fn start(&mut self) -> Result<(), String> {
-        if self.state == IOState::Running {
-            return Err("Reader is already running".to_string());
-        }
-
-        self.state = IOState::Starting;
-        self.cancel_flag.store(false, Ordering::Relaxed);
-
-        let app = self.app.clone();
-        let session_id = self.session_id.clone();
-        let config = self.config.clone();
-        let cancel_flag = self.cancel_flag.clone();
-        let port = self.port.clone();
-
-        let handle = spawn_gvret_usb_stream(app, session_id, config, cancel_flag, port);
-        self.task_handle = Some(handle);
-        self.state = IOState::Running;
-
-        Ok(())
-    }
-
-    async fn stop(&mut self) -> Result<(), String> {
-        self.cancel_flag.store(true, Ordering::Relaxed);
-
-        if let Some(handle) = self.task_handle.take() {
-            let _ = handle.await;
-        }
-
-        // Close the serial port
-        if let Ok(mut port_guard) = self.port.lock() {
-            *port_guard = None;
-        }
-
-        self.state = IOState::Stopped;
-        Ok(())
-    }
-
-    async fn pause(&mut self) -> Result<(), String> {
-        Err("GVRET USB is a live stream and cannot be paused. Data would be lost.".to_string())
-    }
-
-    async fn resume(&mut self) -> Result<(), String> {
-        Err("GVRET USB is a live stream and does not support pause/resume.".to_string())
-    }
-
-    fn set_speed(&mut self, _speed: f64) -> Result<(), String> {
-        Err("GVRET USB is a live stream and does not support speed control.".to_string())
-    }
-
-    fn set_time_range(
-        &mut self,
-        _start: Option<String>,
-        _end: Option<String>,
-    ) -> Result<(), String> {
-        Err("GVRET USB is a live stream and does not support time range filtering.".to_string())
-    }
-
-    fn state(&self) -> IOState {
-        self.state.clone()
-    }
-
-    fn session_id(&self) -> &str {
-        &self.session_id
-    }
-
-    fn transmit_frame(&self, frame: &CanTransmitFrame) -> Result<TransmitResult, String> {
-        // Delegate to the impl method
-        GvretUsbReader::transmit_frame(self, frame)
-    }
+    // If we didn't get a response, assume 1 bus (safer default)
+    eprintln!("[probe_gvret_usb] No NUMBUSES response received, defaulting to 1 bus");
+    Ok(GvretDeviceInfo { bus_count: 1 })
 }
 
 // ============================================================================
-// Stream Implementation
+// Multi-Source Streaming
 // ============================================================================
 
-/// Spawn the GVRET USB stream task
-fn spawn_gvret_usb_stream(
-    app_handle: AppHandle,
-    session_id: String,
-    config: GvretUsbConfig,
-    cancel_flag: Arc<AtomicBool>,
-    shared_port: SharedSerialPort,
-) -> tauri::async_runtime::JoinHandle<()> {
-    tauri::async_runtime::spawn(async move {
-        // Run blocking serial I/O in a dedicated thread
-        let result = tokio::task::spawn_blocking(move || {
-            run_gvret_usb_stream_blocking(app_handle, session_id, config, cancel_flag, shared_port)
-        })
-        .await;
-
-        if let Err(e) = result {
-            eprintln!("[gvret_usb] Task panicked: {:?}", e);
-        }
-    })
-}
-
-/// Blocking GVRET USB stream implementation
-fn run_gvret_usb_stream_blocking(
-    app_handle: AppHandle,
-    session_id: String,
-    config: GvretUsbConfig,
-    cancel_flag: Arc<AtomicBool>,
-    shared_port: SharedSerialPort,
+/// Run GVRET USB source and send frames to merge task
+pub async fn run_source(
+    source_idx: usize,
+    port: String,
+    baud_rate: u32,
+    bus_mappings: Vec<BusMapping>,
+    stop_flag: Arc<AtomicBool>,
+    tx: mpsc::Sender<SourceMessage>,
 ) {
-    let buffer_name = config
-        .display_name
-        .clone()
-        .unwrap_or_else(|| format!("GVRET USB {}", config.port));
-    let _buffer_id = buffer_store::create_buffer(BufferType::Frames, buffer_name);
-    let source = config.port.clone();
-
-    let stream_reason;
-    let mut total_frames: i64 = 0;
-
-    // Open serial port and store in shared location
-    let port = match serialport::new(&config.port, config.baud_rate)
-        .timeout(Duration::from_millis(100))
+    // Open serial port
+    let serial_port = match serialport::new(&port, baud_rate)
+        .timeout(Duration::from_millis(10))
         .open()
     {
         Ok(p) => p,
         Err(e) => {
-            emit_to_session(
-                &app_handle,
-                "can-bytes-error",
-                &session_id,
-                format!("Failed to open {}: {}", config.port, e),
-            );
-            emit_stream_ended(&app_handle, &session_id, "error", "gvret_usb");
+            let _ = tx
+                .send(SourceMessage::Error(
+                    source_idx,
+                    format!("Failed to open port: {}", e),
+                ))
+                .await;
             return;
         }
     };
 
-    eprintln!(
-        "[gvret_usb:{}] Opened {} at {} baud",
-        session_id, config.port, config.baud_rate
-    );
+    // Wrap in Arc<Mutex> for shared access between read and transmit
+    let serial_port = Arc::new(Mutex::new(serial_port));
 
-    // Store port in shared location
-    {
-        if let Ok(mut port_guard) = shared_port.lock() {
-            *port_guard = Some(port);
-        } else {
-            emit_to_session(
-                &app_handle,
-                "can-bytes-error",
-                &session_id,
-                "Failed to store port in shared location".to_string(),
-            );
-            emit_stream_ended(&app_handle, &session_id, "error", "gvret_usb");
-            return;
-        }
+    // Clear buffers and initialize (do all sync work without awaiting)
+    let init_result: Result<(), String> = (|| {
+        let mut port = serial_port.lock().unwrap();
+        let _ = port.clear(serialport::ClearBuffer::All);
+
+        // Enable binary mode
+        port.write_all(&BINARY_MODE_ENABLE)
+            .map_err(|e| format!("Failed to enable binary mode: {}", e))?;
+        let _ = port.flush();
+        Ok(())
+    })();
+
+    if let Err(e) = init_result {
+        let _ = tx.send(SourceMessage::Error(source_idx, e)).await;
+        return;
     }
 
-    // Wait for USB serial device to be ready
-    std::thread::sleep(Duration::from_millis(500));
+    std::thread::sleep(Duration::from_millis(100));
 
-    // Setup GVRET binary mode (acquire lock briefly)
+    // Send device info probe
     {
-        let setup_result = shared_port
-            .lock()
-            .map_err(|e| format!("Lock error: {}", e))
-            .and_then(|mut guard| {
-                if let Some(ref mut port) = *guard {
-                    setup_gvret(port)
-                } else {
-                    Err("Port not available".to_string())
-                }
-            });
-
-        if let Err(e) = setup_result {
-            emit_to_session(
-                &app_handle,
-                "can-bytes-error",
-                &session_id,
-                format!("GVRET setup failed: {}", e),
-            );
-            emit_stream_ended(&app_handle, &session_id, "error", "gvret_usb");
-            return;
-        }
+        let mut port = serial_port.lock().unwrap();
+        let _ = port.write_all(&DEVICE_INFO_PROBE);
+        let _ = port.flush();
     }
 
+    // Create transmit channel and send it to the merge task
+    let (transmit_tx, transmit_rx) = std_mpsc::sync_channel::<TransmitRequest>(32);
+    let _ = tx
+        .send(SourceMessage::TransmitReady(source_idx, transmit_tx))
+        .await;
+
     eprintln!(
-        "[gvret_usb:{}] Starting stream (limit: {:?})",
-        session_id, config.limit
+        "[gvret_usb] Source {} connected to {}, transmit channel ready",
+        source_idx, port
     );
 
-    // Read and parse frames
-    let mut read_buf = [0u8; 4096];
-    let mut parse_buf: Vec<u8> = Vec::with_capacity(4096);
-    let mut pending_frames: Vec<(FrameMessage, String)> = Vec::with_capacity(32);
-    let mut last_emit_time = std::time::Instant::now();
-    let emit_interval = Duration::from_millis(25);
+    // Read loop (blocking, so we run it in a blocking task)
+    let tx_clone = tx.clone();
+    let stop_flag_clone = stop_flag.clone();
+    let serial_port_clone = serial_port.clone();
 
-    loop {
-        if cancel_flag.load(Ordering::Relaxed) {
-            stream_reason = "stopped";
-            break;
-        }
+    // Spawn blocking task for serial reading
+    let blocking_handle = tokio::task::spawn_blocking(move || {
+        let mut buffer = Vec::with_capacity(4096);
+        let mut read_buf = [0u8; 2048];
 
-        // Check frame limit
-        if let Some(limit) = config.limit {
-            if total_frames >= limit {
-                eprintln!(
-                    "[gvret_usb:{}] Reached limit of {} frames, stopping",
-                    session_id, limit
-                );
-                stream_reason = "complete";
-                break;
+        while !stop_flag_clone.load(Ordering::SeqCst) {
+            // Check for transmit requests (non-blocking)
+            while let Ok(req) = transmit_rx.try_recv() {
+                let result = {
+                    let mut port = serial_port_clone.lock().unwrap();
+                    port.write_all(&req.data)
+                        .and_then(|_| port.flush())
+                        .map_err(|e| format!("Write error: {}", e))
+                };
+                let _ = req.result_tx.send(result);
             }
-        }
 
-        // Read from serial port (acquire lock briefly, then release)
-        let read_result = {
-            let mut port_guard = match shared_port.lock() {
-                Ok(g) => g,
-                Err(_) => {
-                    stream_reason = "error";
-                    break;
-                }
-            };
-
-            if let Some(ref mut port) = *port_guard {
+            // Read data
+            let read_result = {
+                let mut port = serial_port_clone.lock().unwrap();
                 port.read(&mut read_buf)
-            } else {
-                // Port was closed externally
-                stream_reason = "disconnected";
-                break;
-            }
-        };
-
-        match read_result {
-            Ok(n) if n > 0 => {
-                // Process received bytes (outside of lock)
-                parse_buf.extend_from_slice(&read_buf[..n]);
-                let frames = parse_gvret_frames(&mut parse_buf);
-
-                // Calculate how many frames to process based on limit
-                let frames_to_process = if let Some(max) = config.limit {
-                    let remaining = max - total_frames;
-                    if remaining <= 0 {
-                        0
-                    } else {
-                        (remaining as usize).min(frames.len())
-                    }
-                } else {
-                    frames.len()
-                };
-
-                if frames_to_process > 0 {
-                    let frames_subset: Vec<_> =
-                        frames.into_iter().take(frames_to_process).collect();
-                    total_frames += frames_subset.len() as i64;
-                    pending_frames.extend(frames_subset);
-                } else if config.limit.is_some() && !frames.is_empty() {
-                    // Hit limit
-                    stream_reason = "complete";
-                    break;
-                }
-            }
-            Ok(0) => {
-                // EOF - port closed
-                stream_reason = "disconnected";
-                break;
-            }
-            Ok(_) => {}
-            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                // Timeout is expected for live streams
-            }
-            Err(e) => {
-                emit_to_session(
-                    &app_handle,
-                    "can-bytes-error",
-                    &session_id,
-                    format!("Read error: {}", e),
-                );
-                stream_reason = "error";
-                break;
-            }
-        }
-
-        // Emit batched frames periodically
-        if last_emit_time.elapsed() >= emit_interval && !pending_frames.is_empty() {
-            let frames = std::mem::take(&mut pending_frames);
-
-            // Emit per-frame raw payloads for debugging
-            for (_, raw_hex) in &frames {
-                let payload = CanBytesPayload {
-                    hex: raw_hex.clone(),
-                    len: raw_hex.len() / 2,
-                    timestamp_ms: now_ms(),
-                    source: source.clone(),
-                };
-                emit_to_session(&app_handle, "can-bytes", &session_id, payload);
-            }
-
-            // Emit parsed frames with active listener filtering
-            // Apply bus_override if configured
-            let frame_only: Vec<FrameMessage> = frames.into_iter().map(|(mut f, _)| {
-                if let Some(bus) = config.bus_override {
-                    f.bus = bus;
-                }
-                f
-            }).collect();
-            buffer_store::append_frames(frame_only.clone());
-            emit_frames(&app_handle, &session_id, frame_only);
-
-            last_emit_time = std::time::Instant::now();
-        }
-    }
-
-    // Emit any remaining frames
-    if !pending_frames.is_empty() {
-        for (_, raw_hex) in &pending_frames {
-            let payload = CanBytesPayload {
-                hex: raw_hex.clone(),
-                len: raw_hex.len() / 2,
-                timestamp_ms: now_ms(),
-                source: source.clone(),
             };
-            emit_to_session(&app_handle, "can-bytes", &session_id, payload);
+
+            match read_result {
+                Ok(0) => {
+                    // No data
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Ok(n) => {
+                    buffer.extend_from_slice(&read_buf[..n]);
+
+                    // Parse GVRET frames and apply bus mappings
+                    let frames = parse_gvret_frames(&mut buffer);
+                    let mapped_frames = apply_bus_mappings_gvret(frames, &bus_mappings);
+
+                    if !mapped_frames.is_empty() {
+                        let _ = tx_clone
+                            .blocking_send(SourceMessage::Frames(source_idx, mapped_frames));
+                    }
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                    // Timeout - continue
+                }
+                Err(e) => {
+                    let _ = tx_clone.blocking_send(SourceMessage::Error(
+                        source_idx,
+                        format!("Read error: {}", e),
+                    ));
+                    return;
+                }
+            }
         }
 
-        // Apply bus_override if configured
-        let frame_only: Vec<FrameMessage> =
-            pending_frames.into_iter().map(|(mut f, _)| {
-                if let Some(bus) = config.bus_override {
-                    f.bus = bus;
-                }
-                f
-            }).collect();
-        buffer_store::append_frames(frame_only.clone());
-        emit_frames(&app_handle, &session_id, frame_only);
-    }
+        let _ = tx_clone.blocking_send(SourceMessage::Ended(source_idx, "stopped".to_string()));
+    });
 
-    emit_stream_ended(&app_handle, &session_id, stream_reason, "gvret_usb");
-}
-
-/// Setup GVRET binary mode
-fn setup_gvret(port: &mut Box<dyn serialport::SerialPort>) -> Result<(), String> {
-    // Clear any pending data
-    let _ = port.clear(serialport::ClearBuffer::All);
-
-    // Enable binary mode (send 0xE7 twice)
-    port.write_all(&BINARY_MODE_ENABLE)
-        .map_err(|e| format!("Failed to enable binary mode: {}", e))?;
-    let _ = port.flush();
-    std::thread::sleep(Duration::from_millis(50));
-
-    // Probe device info (optional, helps ensure device is responsive)
-    port.write_all(&DEVICE_INFO_PROBE)
-        .map_err(|e| format!("Failed to probe device: {}", e))?;
-    let _ = port.flush();
-    std::thread::sleep(Duration::from_millis(50));
-
-    Ok(())
+    // Wait for the blocking task
+    let _ = blocking_handle.await;
 }
 
 // ============================================================================
@@ -515,7 +282,7 @@ fn setup_gvret(port: &mut Box<dyn serialport::SerialPort>) -> Result<(), String>
 #[cfg(test)]
 mod tests {
     use super::super::gvret_common::{encode_gvret_frame, parse_gvret_frames};
-    use super::*;
+    use super::super::CanTransmitFrame;
 
     #[test]
     fn test_encode_standard_frame() {
@@ -669,105 +436,4 @@ mod tests {
         assert!(frames.is_empty());
         assert_eq!(buffer.len(), 4); // Buffer should be preserved
     }
-}
-
-// ============================================================================
-// Device Probing
-// ============================================================================
-
-/// Probe a GVRET USB device to discover its capabilities
-///
-/// This function opens the serial port, queries the number of available buses,
-/// and returns device information. The connection is closed after probing.
-pub fn probe_gvret_usb(port: &str, baud_rate: u32) -> Result<GvretDeviceInfo, String> {
-    eprintln!(
-        "[probe_gvret_usb] Probing GVRET device at {} (baud: {})",
-        port, baud_rate
-    );
-
-    // Open serial port
-    let mut serial_port = serialport::new(port, baud_rate)
-        .timeout(Duration::from_millis(500))
-        .open()
-        .map_err(|e| format!("Failed to open {}: {}", port, e))?;
-
-    eprintln!("[probe_gvret_usb] Opened serial port {}", port);
-
-    // Clear any pending data
-    let _ = serial_port.clear(serialport::ClearBuffer::All);
-
-    // Enter binary mode
-    serial_port
-        .write_all(&BINARY_MODE_ENABLE)
-        .map_err(|e| format!("Failed to enable binary mode: {}", e))?;
-    let _ = serial_port.flush();
-
-    // Wait for device to process
-    std::thread::sleep(Duration::from_millis(100));
-
-    // Query number of buses
-    serial_port
-        .write_all(&GVRET_CMD_NUMBUSES)
-        .map_err(|e| format!("Failed to send NUMBUSES command: {}", e))?;
-    let _ = serial_port.flush();
-
-    // Read response with timeout
-    // Response format: [0xF1][0x0C][bus_count]
-    let mut buf = vec![0u8; 256];
-    let mut total_read = 0;
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-
-    loop {
-        if std::time::Instant::now() >= deadline {
-            break;
-        }
-
-        match serial_port.read(&mut buf[total_read..]) {
-            Ok(0) => break, // No data
-            Ok(n) => {
-                total_read += n;
-
-                // Look for NUMBUSES response: [0xF1][0x0C][bus_count]
-                for i in 0..total_read.saturating_sub(2) {
-                    if buf[i] == GVRET_SYNC && buf[i + 1] == 0x0C && i + 2 < total_read {
-                        let bus_count = buf[i + 2];
-                        // Sanity check: GVRET devices have 1-5 buses
-                        let bus_count = if bus_count == 0 || bus_count > 5 {
-                            // Default to 5 if response is invalid
-                            eprintln!(
-                                "[probe_gvret_usb] Invalid bus count {}, defaulting to 5",
-                                bus_count
-                            );
-                            5
-                        } else {
-                            bus_count
-                        };
-
-                        eprintln!(
-                            "[probe_gvret_usb] SUCCESS: Device at {} has {} buses available",
-                            port, bus_count
-                        );
-                        return Ok(GvretDeviceInfo { bus_count });
-                    }
-                }
-
-                // If we've read enough data without finding the response, give up
-                if total_read > 128 {
-                    break;
-                }
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                // Timeout on this read, continue if we still have time
-            }
-            Err(e) => {
-                return Err(format!("Failed to read response: {}", e));
-            }
-        }
-    }
-
-    // If we didn't get a response, assume 5 buses (standard GVRET)
-    eprintln!(
-        "[probe_gvret_usb] No NUMBUSES response received, defaulting to 5 buses"
-    );
-    Ok(GvretDeviceInfo { bus_count: 5 })
 }

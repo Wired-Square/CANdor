@@ -16,6 +16,7 @@ import {
   joinMultiSourceSession,
   useMultiBusState,
   type CreateMultiSourceOptions,
+  type PerInterfaceFramingConfig,
 } from "../stores/sessionStore";
 import type { BusMapping } from "../api/io";
 import type { IOProfile } from "./useSettings";
@@ -40,6 +41,8 @@ export interface IngestOptions {
   emitRawBytes?: boolean;
   busOverride?: number;
   busMappings?: Map<string, BusMapping[]>;
+  /** Per-interface framing config (for serial profiles in multi-bus mode) */
+  perInterfaceFraming?: Map<string, PerInterfaceFramingConfig>;
 }
 
 /** Store interface for apps that manage ioProfile in their store */
@@ -193,6 +196,56 @@ export interface UseIOSessionManagerResult {
 export const BUFFER_PROFILE_ID = "__imported_buffer__";
 
 /**
+ * Generate a unique multi-source session ID.
+ * Pattern: {protocol}_{shortId}
+ * Examples: can_a7f3c9, serial_b9c2d4
+ *
+ * Profile names are passed to the backend separately for logging purposes.
+ */
+function generateMultiSessionId(
+  busMappings: Map<string, BusMapping[]>,
+  profileNames: Map<string, string>
+): string {
+  // Determine protocol from first enabled bus
+  let protocol: string | null = null;
+
+  for (const [profileId, mappings] of busMappings.entries()) {
+    for (const mapping of mappings) {
+      if (mapping.enabled && !protocol) {
+        // First choice: explicit protocol from traits
+        if (mapping.traits?.protocols?.length) {
+          protocol = mapping.traits.protocols[0].toLowerCase();
+        }
+        // Second choice: infer from interfaceId (e.g., "can0" → "can")
+        else if (mapping.interfaceId) {
+          const match = mapping.interfaceId.match(/^([a-z]+)/i);
+          if (match) {
+            protocol = match[1].toLowerCase();
+          }
+        }
+        // Third choice: infer from profile name
+        else {
+          const profileName = profileNames.get(profileId)?.toLowerCase() || "";
+          if (profileName.includes("gs_usb") || profileName.includes("candlelight") ||
+              profileName.includes("gvret") || profileName.includes("slcan") ||
+              profileName.includes("socketcan")) {
+            protocol = "can";
+          } else if (profileName.includes("serial")) {
+            protocol = "serial";
+          }
+        }
+      }
+    }
+  }
+
+  // Generate short random suffix (6 hex chars)
+  const shortId = Math.random().toString(16).slice(2, 8);
+
+  // Build session ID: protocol_shortId
+  return `${protocol || "session"}_${shortId}`;
+}
+
+/**
  * High-level IO session management hook.
  * Wraps common patterns used by Discovery, Decoder, and Transmit apps.
  */
@@ -237,12 +290,14 @@ export function useIOSessionManager(
   const [watchFrameCount, setWatchFrameCount] = useState(0);
   const [isWatching, setIsWatching] = useState(false);
 
-  // ---- Derived Values ----
-  // Multi-session ID for this app
-  const MULTI_SESSION_ID = `${appName}-multi`;
+  // ---- Multi-Session ID State ----
+  // Generated dynamically when starting a multi-source session to avoid collisions
+  // between multiple windows of the same app type
+  const [multiSessionId, setMultiSessionId] = useState<string | null>(null);
 
+  // ---- Derived Values ----
   // Effective session ID: multi-bus ID or single profile ID
-  const effectiveSessionId = multiBusMode ? MULTI_SESSION_ID : (ioProfile || undefined);
+  const effectiveSessionId = multiBusMode ? (multiSessionId ?? undefined) : (ioProfile ?? undefined);
 
   // Profile name for display
   const ioProfileName = useMemo(() => {
@@ -341,14 +396,27 @@ export function useIOSessionManager(
     profileIds: string[],
     opts: IngestOptions
   ) => {
-    const { busMappings } = opts;
+    const { busMappings, framingEncoding, delimiter, maxFrameLength, emitRawBytes, perInterfaceFraming, minFrameLength } = opts;
+
+    // Generate unique session ID to avoid collisions between windows
+    const sessionId = busMappings
+      ? generateMultiSessionId(busMappings, profileNamesMap)
+      : `session_${Math.random().toString(16).slice(2, 8)}`;
 
     const createOptions: CreateMultiSourceOptions = {
-      sessionId: MULTI_SESSION_ID,
+      sessionId,
       listenerId: appName,
       profileIds,
       busMappings,
       profileNames: profileNamesMap,
+      // Pass framing config for serial sources
+      framingEncoding,
+      delimiter,
+      maxFrameLength,
+      emitRawBytes,
+      minFrameLength,
+      // Per-interface framing overrides
+      perInterfaceFraming,
     };
 
     await createAndStartMultiSourceSession(createOptions);
@@ -356,9 +424,10 @@ export function useIOSessionManager(
     // Update state
     setMultiBusMode(true);
     setMultiBusProfiles(profileIds);
-    setIoProfile(MULTI_SESSION_ID);
+    setMultiSessionId(sessionId);
+    setIoProfile(sessionId);
     setIsDetached(false);
-  }, [MULTI_SESSION_ID, appName, profileNamesMap, setMultiBusMode, setMultiBusProfiles, setIoProfile]);
+  }, [appName, profileNamesMap, setMultiBusMode, setMultiBusProfiles, setIoProfile]);
 
   // Join existing multi-source session
   const joinExistingSession = useCallback(async (

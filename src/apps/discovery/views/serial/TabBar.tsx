@@ -4,17 +4,20 @@
 // Uses the shared DiscoveryTabBar with serial-specific controls.
 
 import { useMemo } from 'react';
-import { Layers, Filter, Settings } from 'lucide-react';
+import { Layers, Filter, Settings, Network, FileText } from 'lucide-react';
 import { DiscoveryTabBar, type TabDefinition } from '../../components';
 import type { FramingConfig } from '../../../../stores/discoveryStore';
+import { useDiscoveryUIStore } from '../../../../stores/discoveryUIStore';
 
-export type TabId = 'raw' | 'framed' | 'analysis';
+export type TabId = 'raw' | 'framed' | 'filtered' | 'analysis';
 
 interface TabBarProps {
   activeTab: TabId;
   onTabChange: (tab: TabId) => void;
   frameCount: number;
   byteCount: number;
+  /** Count of frames excluded by minFrameLength filter */
+  filteredCount: number;
   framingConfig: FramingConfig | null;
   /** Independent minimum frame length filter (0 = no filter) */
   minFrameLength: number;
@@ -26,6 +29,8 @@ interface TabBarProps {
   onOpenFilterDialog: () => void;
   /** Whether framing has been accepted - hides Raw Bytes tab when true */
   framingAccepted?: boolean;
+  /** Whether the session emits raw bytes (from capabilities) - defaults to true for standalone serial */
+  emitsRawBytes?: boolean;
 }
 
 export default function TabBar({
@@ -33,6 +38,7 @@ export default function TabBar({
   onTabChange,
   frameCount,
   byteCount,
+  filteredCount,
   framingConfig,
   minFrameLength,
   hasAnalysisResults,
@@ -42,7 +48,13 @@ export default function TabBar({
   onOpenFramingDialog,
   onOpenFilterDialog,
   framingAccepted = false,
+  emitsRawBytes = true, // Default true for standalone serial sessions
 }: TabBarProps) {
+  // Column visibility toggles from UI store (shared with CAN view)
+  const showBusColumn = useDiscoveryUIStore((s) => s.showBusColumn);
+  const toggleShowBusColumn = useDiscoveryUIStore((s) => s.toggleShowBusColumn);
+  const showAsciiColumn = useDiscoveryUIStore((s) => s.showAsciiColumn);
+  const toggleShowAsciiColumn = useDiscoveryUIStore((s) => s.toggleShowAsciiColumn);
   const getFramingLabel = () => {
     if (!framingConfig) return 'Framing';
     switch (framingConfig.mode) {
@@ -52,25 +64,58 @@ export default function TabBar({
     }
   };
 
-  // Build tab definitions - hide Raw Bytes tab after framing is accepted
+  // Build tab definitions
+  // Raw Bytes tab is shown if:
+  // 1. The session emits raw bytes (emitsRawBytes from capabilities), AND
+  // 2. Framing hasn't been accepted yet (user hasn't applied client-side framing)
   const tabs: TabDefinition[] = useMemo(() => {
     const result: TabDefinition[] = [];
 
-    // Only show Raw Bytes tab if framing hasn't been accepted yet
-    if (!framingAccepted) {
+    // Only show Raw Bytes tab if session emits bytes and framing hasn't been accepted
+    if (emitsRawBytes && !framingAccepted) {
       result.push({ id: 'raw', label: 'Raw Bytes', count: byteCount, countColor: 'gray' as const });
     }
 
-    result.push({ id: 'framed', label: 'Framed Data', count: frameCount, countColor: 'green' as const });
+    result.push({ id: 'framed', label: 'Framed Bytes', count: frameCount, countColor: 'green' as const });
+
+    // Show Filtered tab when there are filtered frames (frames excluded by minFrameLength filter)
+    if (filteredCount > 0) {
+      result.push({ id: 'filtered', label: 'Filtered', count: filteredCount, countColor: 'orange' as const });
+    }
+
     result.push({ id: 'analysis', label: 'Analysis', hasIndicator: hasAnalysisResults });
 
     return result;
-  }, [byteCount, frameCount, hasAnalysisResults, framingAccepted]);
+  }, [byteCount, frameCount, filteredCount, hasAnalysisResults, framingAccepted, emitsRawBytes]);
 
   // Serial-specific control buttons (compact styling)
   // Only show controls on raw and framed tabs, not on analysis tab
   const serialControls = (activeTab === 'raw' || activeTab === 'framed') ? (
     <>
+      {/* Column visibility toggles */}
+      <button
+        onClick={toggleShowBusColumn}
+        className={`p-1.5 rounded transition-colors ${
+          showBusColumn
+            ? 'bg-cyan-600 text-white hover:bg-cyan-500'
+            : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200'
+        }`}
+        title={showBusColumn ? 'Hide Bus column' : 'Show Bus column'}
+      >
+        <Network className="w-3.5 h-3.5" />
+      </button>
+      <button
+        onClick={toggleShowAsciiColumn}
+        className={`p-1.5 rounded transition-colors ${
+          showAsciiColumn
+            ? 'bg-yellow-600 text-white hover:bg-yellow-500'
+            : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200'
+        }`}
+        title={showAsciiColumn ? 'Hide ASCII column' : 'Show ASCII column'}
+      >
+        <FileText className="w-3.5 h-3.5" />
+      </button>
+
       {/* View settings - only on raw bytes tab */}
       {activeTab === 'raw' && (
         <button
@@ -83,18 +128,21 @@ export default function TabBar({
         </button>
       )}
 
-      <button
-        onClick={onOpenFramingDialog}
-        className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-colors ${
-          framingConfig
-            ? 'bg-blue-600 text-white hover:bg-blue-500'
-            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-        }`}
-        title="Configure framing mode"
-      >
-        <Layers className="w-3 h-3" />
-        {getFramingLabel()}
-      </button>
+      {/* Framing button - only shown when raw bytes are available for client-side framing */}
+      {emitsRawBytes && (
+        <button
+          onClick={onOpenFramingDialog}
+          className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-colors ${
+            framingConfig
+              ? 'bg-blue-600 text-white hover:bg-blue-500'
+              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+          }`}
+          title="Configure framing mode"
+        >
+          <Layers className="w-3 h-3" />
+          {getFramingLabel()}
+        </button>
+      )}
 
       {/* Filter button - only on framed tab (filtering applies to frames, not bytes) */}
       {activeTab === 'framed' && (

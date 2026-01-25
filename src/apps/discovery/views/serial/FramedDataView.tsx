@@ -6,6 +6,7 @@ import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useDiscoveryStore, type FrameMessage } from '../../../../stores/discoveryStore';
 import { useDiscoverySerialStore } from '../../../../stores/discoverySerialStore';
 import { useDiscoveryToolboxStore } from '../../../../stores/discoveryToolboxStore';
+import { useDiscoveryUIStore } from '../../../../stores/discoveryUIStore';
 import { getBufferFramesPaginatedById, getBufferMetadataById, findBufferOffsetForTimestamp, type BufferFrame } from '../../../../api/buffer';
 import type { SerialFrameConfig } from '../../../../utils/frameExport';
 import { resolveByteIndexSync } from '../../../../utils/analysis/checksums';
@@ -160,22 +161,26 @@ function ColoredHexBytes({ bytes, idConfig, srcConfig, checksumConfig, incomplet
 }
 
 // ============================================================================
-// Framed Data View
+// Framed Bytes View
 // ============================================================================
 
 interface FramedDataViewProps {
   frames: FrameMessage[];
   onAccept: (serialConfig?: SerialFrameConfig) => void | Promise<unknown>;
   onApplyIdMapping: (config: ExtractionConfig) => void;
+  onClearIdMapping?: () => void;
   onApplySourceMapping: (config: ExtractionConfig) => void;
+  onClearSourceMapping?: () => void;
   accepted: boolean;
   framingMode?: string;
   displayTimeFormat?: 'delta-last' | 'delta-start' | 'timestamp' | 'human';
-  showAscii?: boolean;
   isStreaming?: boolean;
 }
 
-export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onApplySourceMapping, accepted, framingMode, displayTimeFormat = 'human', showAscii = true, isStreaming = false }: FramedDataViewProps) {
+export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onClearIdMapping, onApplySourceMapping, onClearSourceMapping, accepted, framingMode, displayTimeFormat = 'human', isStreaming = false }: FramedDataViewProps) {
+  // Column visibility from UI store (shared with CAN views and ByteView)
+  const showBusColumn = useDiscoveryUIStore((s) => s.showBusColumn);
+  const showAsciiColumn = useDiscoveryUIStore((s) => s.showAsciiColumn);
   // Read serialConfig from store to initialize extraction configs
   const serialConfig = useDiscoveryStore((s) => s.serialConfig);
 
@@ -200,9 +205,10 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onA
   // Determine if we're using backend buffer mode
   const useBackendBuffer = framedBufferId !== null;
 
-  // Extraction configurations - initialized from store's serialConfig
-  const [idConfig, setIdConfig] = useState<ExtractionConfig | null>(null);
-  const [srcConfig, setSrcConfig] = useState<ExtractionConfig | null>(null);
+  // Extraction configurations - read directly from serial store
+  const idConfig = useDiscoverySerialStore((s) => s.frameIdExtractionConfig);
+  const srcConfig = useDiscoverySerialStore((s) => s.sourceExtractionConfig);
+  // Checksum config is local state since it's only used for TOML export, not stored in serial store
   const [checksumConfig, setChecksumConfig] = useState<ChecksumConfig | null>(null);
 
   // Dialog state
@@ -232,42 +238,20 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onA
     };
   }, [serialPayloadResults]);
 
-  // Sync extraction configs from store's serialConfig when it changes
+  // Sync checksum config from store's serialConfig when it changes
+  // (ID and source configs are read directly from serial store, not synced)
   useEffect(() => {
-    if (serialConfig) {
-      // Sync ID config
-      if (serialConfig.frame_id_start_byte !== undefined && serialConfig.frame_id_bytes !== undefined) {
-        setIdConfig({
-          startByte: serialConfig.frame_id_start_byte,
-          numBytes: serialConfig.frame_id_bytes,
-          endianness: serialConfig.frame_id_byte_order || 'big',
-        });
-      } else {
-        setIdConfig(null);
-      }
-      // Sync source config
-      if (serialConfig.source_address_start_byte !== undefined && serialConfig.source_address_bytes !== undefined) {
-        setSrcConfig({
-          startByte: serialConfig.source_address_start_byte,
-          numBytes: serialConfig.source_address_bytes,
-          endianness: serialConfig.source_address_byte_order || 'big',
-        });
-      } else {
-        setSrcConfig(null);
-      }
-      // Sync checksum config
-      if (serialConfig.checksum) {
-        setChecksumConfig({
-          startByte: serialConfig.checksum.start_byte,
-          numBytes: serialConfig.checksum.byte_length,
-          endianness: 'big', // Checksums are typically big-endian
-          algorithm: serialConfig.checksum.algorithm as DiscoveryChecksumAlgorithm,
-          calcStartByte: serialConfig.checksum.calc_start_byte,
-          calcEndByte: serialConfig.checksum.calc_end_byte,
-        });
-      } else {
-        setChecksumConfig(null);
-      }
+    if (serialConfig?.checksum) {
+      setChecksumConfig({
+        startByte: serialConfig.checksum.start_byte,
+        numBytes: serialConfig.checksum.byte_length,
+        endianness: 'big', // Checksums are typically big-endian
+        algorithm: serialConfig.checksum.algorithm as DiscoveryChecksumAlgorithm,
+        calcStartByte: serialConfig.checksum.calc_start_byte,
+        calcEndByte: serialConfig.checksum.calc_end_byte,
+      });
+    } else if (!serialConfig) {
+      setChecksumConfig(null);
     }
   }, [serialConfig]);
 
@@ -424,18 +408,28 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onA
   }, [useBackendBuffer, completeFrames, effectivePageSize]);
 
   const handleApplyIdConfig = (config: ExtractionConfig) => {
-    setIdConfig(config);
     onApplyIdMapping(config);
   };
 
+  const handleClearIdConfig = () => {
+    onClearIdMapping?.();
+  };
+
   const handleApplySrcConfig = (config: ExtractionConfig) => {
-    setSrcConfig(config);
     onApplySourceMapping(config);
+  };
+
+  const handleClearSrcConfig = () => {
+    onClearSourceMapping?.();
   };
 
   const handleApplyChecksumConfig = (config: ChecksumConfig) => {
     setChecksumConfig(config);
     // Checksum is for validation/export only, no frame update needed
+  };
+
+  const handleClearChecksumConfig = () => {
+    setChecksumConfig(null);
   };
 
   // Build SerialFrameConfig from extraction configs for TOML export
@@ -506,6 +500,61 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onA
     const endIndex = startIndex + effectivePageSize;
     return completeFrames.slice(startIndex, endIndex);
   }, [useBackendBuffer, backendFrames, completeFrames, isStreaming, totalFrames, effectivePageSize, currentPage]);
+
+  // Apply ID and source extraction configs to frames for display
+  // This is needed for streaming sessions where frames come directly from backend
+  // without the extraction applied
+  const processedFrames = useMemo(() => {
+    if (!idConfig && !srcConfig) {
+      return displayFrames;
+    }
+
+    return displayFrames.map(frame => {
+      let newFrame = { ...frame };
+
+      // Apply ID extraction if configured
+      if (idConfig) {
+        const { startByte, numBytes, endianness } = idConfig;
+        const resolvedStart = startByte >= 0 ? startByte : Math.max(0, frame.bytes.length + startByte);
+        if (resolvedStart < frame.bytes.length) {
+          let frameId = 0;
+          const endByte = Math.min(resolvedStart + numBytes, frame.bytes.length);
+          if (endianness === 'big') {
+            for (let i = resolvedStart; i < endByte; i++) {
+              frameId = (frameId << 8) | frame.bytes[i];
+            }
+          } else {
+            for (let i = resolvedStart; i < endByte; i++) {
+              frameId |= frame.bytes[i] << (8 * (i - resolvedStart));
+            }
+          }
+          newFrame.frame_id = frameId;
+        }
+      }
+
+      // Apply source extraction if configured
+      if (srcConfig) {
+        const { startByte, numBytes, endianness } = srcConfig;
+        const resolvedStart = startByte >= 0 ? startByte : Math.max(0, frame.bytes.length + startByte);
+        if (resolvedStart < frame.bytes.length) {
+          let source = 0;
+          const endByte = Math.min(resolvedStart + numBytes, frame.bytes.length);
+          if (endianness === 'big') {
+            for (let i = resolvedStart; i < endByte; i++) {
+              source = (source << 8) | frame.bytes[i];
+            }
+          } else {
+            for (let i = resolvedStart; i < endByte; i++) {
+              source |= frame.bytes[i] << (8 * (i - resolvedStart));
+            }
+          }
+          newFrame.source_address = source;
+        }
+      }
+
+      return newFrame;
+    });
+  }, [displayFrames, idConfig, srcConfig]);
 
   // Custom byte renderer with extraction region coloring
   const renderColoredBytes = useCallback((frame: FrameRow) => {
@@ -585,14 +634,16 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onA
 
       {/* Frame Table */}
       <FrameDataTable
-        frames={displayFrames}
+        frames={processedFrames}
         displayFrameIdFormat="hex"
         formatTime={formatTime}
         showSourceAddress={hasSourceAddresses}
         sourceByteCount={srcConfig?.numBytes ?? 2}
         renderBytes={renderColoredBytes}
         emptyMessage={isLoadingPage ? 'Loading frames...' : accepted ? 'Framing accepted - data moved to Discovery' : 'Apply framing to see frames here'}
-        showAscii={showAscii}
+        showAscii={showAsciiColumn}
+        showBus={showBusColumn}
+        showId={idConfig !== null || (serialConfig?.frame_id_start_byte !== undefined && serialConfig?.frame_id_bytes !== undefined)}
       />
 
       {/* Extraction Dialogs */}
@@ -603,6 +654,7 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onA
         sampleFrames={sampleFrames}
         initialConfig={idConfig ?? { startByte: 0, numBytes: 2, endianness: 'big' }}
         onApply={handleApplyIdConfig}
+        onClear={idConfig ? handleClearIdConfig : undefined}
         color="cyan"
       />
       <ByteExtractionDialog
@@ -612,6 +664,7 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onA
         sampleFrames={sampleFrames}
         initialConfig={srcConfig ?? { startByte: 2, numBytes: 2, endianness: 'big' }}
         onApply={handleApplySrcConfig}
+        onClear={srcConfig ? handleClearSrcConfig : undefined}
         color="purple"
       />
       <ChecksumExtractionDialog
@@ -620,6 +673,7 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onA
         sampleFrames={sampleFrames}
         initialConfig={checksumConfig ?? suggestedChecksumConfig}
         onApply={handleApplyChecksumConfig}
+        onClear={checksumConfig ? handleClearChecksumConfig : undefined}
       />
     </div>
   );

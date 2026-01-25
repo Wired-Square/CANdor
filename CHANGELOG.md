@@ -2,6 +2,26 @@
 
 All notable changes to CANdor will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **GVRET Interface Configuration**: GVRET profiles (TCP and USB) now support per-interface configuration in Settings. After saving a profile, click "Probe Device" to detect available interfaces. Each interface can be enabled/disabled and configured for CAN or CAN FD protocol. The backend reads this configuration when creating sessions, using the correct protocol traits for each bus. Profiles without interface configuration continue to work with a single default bus for backward compatibility.
+- **Interface-Level Trait System**: Formalized traits at the interface level with validation. Each interface (bus mapping) now has explicit traits: `TemporalMode` (realtime/timeline), `Protocol` (can/canfd/modbus/serial), `can_transmit`, and a human-readable `interface_id` (e.g., "can0", "serial1"). Sessions validate trait compatibility when combining multiple interfaces - temporal modes must match, timeline sessions are limited to 1 interface, and protocols must be compatible (CAN + CAN-FD OK, but not CAN + Serial). This enables future support for devices with mixed interface types (e.g., 2 CAN + 2 Serial interfaces).
+- **Serial Multi-Bus Support**: Serial interfaces can now be combined in multi-bus sessions alongside other serial ports. Supports full framing (SLIP, Modbus RTU, delimiter-based) with raw bytes visible in the Bytes tab when using Raw framing mode.
+
+### Fixed
+
+- **GVRET Probe Default Bus Count**: Fixed GVRET device probing defaulting to 5 buses when the device doesn't respond to the NUMBUSES query. Now defaults to 1 bus, which is safer for single-bus devices.
+- **Decoder Frame Matching on Session Start**: Fixed issue where starting an IO session from the Decoder would cause frames to never match the catalog. The `clearFrames` function was incorrectly clearing the catalog frame definitions along with session data. Now only session/buffer data is cleared, preserving the loaded catalog.
+- **Multi-Window Session ID Collision**: Fixed potential session ID collision when multiple windows of the same app type (e.g., two Decoder windows) start multi-bus sessions. Session IDs are now generated dynamically using the pattern `{protocol}_{shortId}` (e.g., `can_a7f3c9`) instead of the fixed `{appName}-multi` pattern. Single-bus devices (gs_usb, slcan, etc.) now properly include interface traits in their bus mappings, enabling accurate protocol detection for session naming.
+- **IO Reader Picker Selection Conflict**: Fixed issue where selecting a GVRET interface then a serial interface would cause the serial interface to probe forever. The dialog now clears multi-bus selection (`checkedReaderIds`) when selecting a single profile, ensuring mutual exclusivity between single-select and multi-select modes.
+
+### Changed
+
+- **IO Reader Picker Release Button**: The Release button is now positioned inline with action buttons (Watch, Ingest, Join Session, etc.) instead of appearing in a separate row above them. This provides a more compact layout.
+- **IO Module Refactoring**: Internal code organization improvements including unified `TransmitRequest` type, shared `io_error()` helper for consistent error context, and new `traits.rs`/`types.rs` modules for better separation of concerns.
+
 ## [0.2.33] - 2026-01-24
 
 ### Added

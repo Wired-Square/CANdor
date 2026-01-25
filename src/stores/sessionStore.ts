@@ -1311,6 +1311,17 @@ export function useMultiBusState(): MultiBusState {
 // ============================================================================
 
 /**
+ * Per-interface framing configuration (simplified for UI).
+ * Used when each serial interface in a multi-source session needs different framing.
+ */
+export interface PerInterfaceFramingConfig {
+  /** Framing encoding: "raw", "slip", "modbus_rtu", "delimiter" */
+  encoding: FramingEncoding;
+  /** Delimiter hex string for delimiter mode (e.g., "0D0A") */
+  delimiterHex?: string;
+}
+
+/**
  * Options for creating a multi-source session.
  */
 export interface CreateMultiSourceOptions {
@@ -1324,6 +1335,18 @@ export interface CreateMultiSourceOptions {
   busMappings?: Map<string, BusMapping[]>;
   /** Map of profile ID to display name */
   profileNames?: Map<string, string>;
+  /** Framing encoding for serial sources (e.g., "slip", "delimiter", "modbus_rtu", "raw") */
+  framingEncoding?: string;
+  /** Delimiter bytes for delimiter-based framing */
+  delimiter?: number[];
+  /** Maximum frame length for delimiter-based framing */
+  maxFrameLength?: number;
+  /** Minimum frame length - frames shorter than this are discarded */
+  minFrameLength?: number;
+  /** Whether to emit raw bytes in addition to framed data */
+  emitRawBytes?: boolean;
+  /** Per-interface framing config (overrides session-level framing for specific profiles) */
+  perInterfaceFraming?: Map<string, PerInterfaceFramingConfig>;
 }
 
 /**
@@ -1345,17 +1368,61 @@ export interface MultiSourceSessionResult {
  * @param options Configuration for the multi-source session
  * @returns The session result with capabilities
  */
+/**
+ * Parse a hex string to byte array (e.g., "0D0A" -> [0x0D, 0x0A]).
+ */
+function parseHexDelimiter(hex: string): number[] {
+  const bytes: number[] = [];
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes.push(parseInt(hex.slice(i, i + 2), 16));
+  }
+  return bytes;
+}
+
 export async function createAndStartMultiSourceSession(
   options: CreateMultiSourceOptions
 ): Promise<MultiSourceSessionResult> {
-  const { sessionId, listenerId, profileIds, busMappings, profileNames } = options;
+  const {
+    sessionId,
+    listenerId,
+    profileIds,
+    busMappings,
+    profileNames,
+    framingEncoding,
+    delimiter,
+    maxFrameLength,
+    minFrameLength,
+    emitRawBytes,
+    perInterfaceFraming,
+  } = options;
 
-  // Build source configs with bus mappings
-  const sources: MultiSourceInput[] = profileIds.map((profileId) => ({
-    profileId,
-    displayName: profileNames?.get(profileId),
-    busMappings: busMappings?.get(profileId) || [],
-  }));
+  // Build source configs with bus mappings and framing config
+  const sources: MultiSourceInput[] = profileIds.map((profileId) => {
+    // Check for per-interface framing override
+    const interfaceFraming = perInterfaceFraming?.get(profileId);
+
+    // Use per-interface framing if specified, otherwise fall back to session-level
+    const sourceFramingEncoding = interfaceFraming?.encoding ?? framingEncoding;
+    const sourceDelimiter = interfaceFraming?.delimiterHex
+      ? parseHexDelimiter(interfaceFraming.delimiterHex)
+      : delimiter;
+
+    // For "raw" framing mode, set emitRawBytes to true
+    const sourceEmitRawBytes = sourceFramingEncoding === "raw" ? true : emitRawBytes;
+
+    return {
+      profileId,
+      displayName: profileNames?.get(profileId),
+      busMappings: busMappings?.get(profileId) || [],
+      // Apply framing config (per-interface or session-level)
+      // Serial sources will use these overrides, CAN sources will ignore them
+      framingEncoding: sourceFramingEncoding,
+      delimiter: sourceDelimiter,
+      maxFrameLength,
+      minFrameLength,
+      emitRawBytes: sourceEmitRawBytes,
+    };
+  });
 
   // Create the multi-source session in Rust
   const capabilities = await createMultiSourceSession({

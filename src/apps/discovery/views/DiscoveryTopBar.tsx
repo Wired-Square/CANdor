@@ -1,6 +1,6 @@
 // ui/src/apps/discovery/views/DiscoveryTopBar.tsx
 
-import { Search, ChevronRight, ListFilter, Save, Trash2, Info, Wrench, Download, Type } from "lucide-react";
+import { Search, ChevronRight, ListFilter, Save, Trash2, Info, Wrench, Download, Undo2 } from "lucide-react";
 import type { IOProfile } from "../../../types/common";
 import type { BufferMetadata } from "../../../api/buffer";
 import FlexSeparator from "../../../components/FlexSeparator";
@@ -57,12 +57,10 @@ type Props = {
   serialBytesCount?: number;
   /** True when framing has been accepted in serial mode */
   framingAccepted?: boolean;
-  /** Active tab in serial mode: 'raw', 'framed', or 'analysis' */
-  serialActiveTab?: 'raw' | 'framed' | 'analysis';
-
-  // ASCII toggle (for serial mode)
-  showAscii?: boolean;
-  onToggleAscii?: () => void;
+  /** Active tab in serial mode: 'raw', 'framed', 'filtered', or 'analysis' */
+  serialActiveTab?: 'raw' | 'framed' | 'filtered' | 'analysis';
+  /** Called when user wants to undo framing acceptance */
+  onUndoFraming?: () => void;
 
   // Dialogs
   onOpenIoReaderPicker: () => void;
@@ -97,8 +95,7 @@ export default function DiscoveryTopBar({
   serialBytesCount = 0,
   framingAccepted = false,
   serialActiveTab = 'raw',
-  showAscii = false,
-  onToggleAscii,
+  onUndoFraming,
   supportsTimeRange = false,
   onOpenBookmarkPicker,
   speed = 1,
@@ -162,6 +159,17 @@ export default function DiscoveryTopBar({
           </span>
         </button>
 
+        {/* Undo Framing button - shows in serial mode when framing is accepted */}
+        {isSerialMode && framingAccepted && onUndoFraming && (
+          <button
+            onClick={onUndoFraming}
+            className={iconButtonBase}
+            title="Undo framing acceptance"
+          >
+            <Undo2 className="w-4 h-4" />
+          </button>
+        )}
+
         {/* Right arrow icon */}
         <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
 
@@ -216,20 +224,6 @@ export default function DiscoveryTopBar({
           <Info className="w-4 h-4" />
         </button>
 
-        {/* ASCII toggle - only shown in serial mode */}
-        {isSerialMode && onToggleAscii && (
-          <button
-            onClick={onToggleAscii}
-            className={`${iconButtonBase} ${
-              showAscii
-                ? "!bg-yellow-600 !text-white hover:!bg-yellow-500"
-                : ""
-            }`}
-            title={showAscii ? "Hide ASCII column" : "Show ASCII column"}
-          >
-            <Type className="w-4 h-4" />
-          </button>
-        )}
       </div>
     </div>
   );

@@ -398,7 +398,11 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
         // Skip 'config' key - it's the protocol config, not a frame
         if (idKey === 'config') return;
 
-        const numId = parseInt(String(idKey).replace(/"/g, ''), 16) || parseInt(String(idKey), 10);
+        // Parse frame ID: handle both "0x100" and "100" formats
+        // Note: parseInt("0x100", 16) returns 0 because 'x' is invalid hex,
+        // so we must strip the 0x prefix before parsing
+        const cleanedKey = String(idKey).replace(/"/g, '').replace(/^0x/i, '');
+        const numId = parseInt(cleanedKey, 16);
         if (!Number.isFinite(numId)) return;
 
         const len = body?.length ?? 0;
@@ -428,7 +432,11 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
         // Skip 'config' key - it's the protocol config, not a frame
         if (idKey === 'config') return;
 
-        const numId = parseInt(String(idKey).replace(/"/g, ''), 16) || parseInt(String(idKey), 10);
+        // Parse frame ID: handle both "0x100" and "100" formats
+        // Note: parseInt("0x100", 16) returns 0 because 'x' is invalid hex,
+        // so we must strip the 0x prefix before parsing
+        const cleanedKey = String(idKey).replace(/"/g, '').replace(/^0x/i, '');
+        const numId = parseInt(cleanedKey, 16);
         if (!Number.isFinite(numId)) return;
 
         const len = body?.length ?? 0;
@@ -477,12 +485,10 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
           frame_id_mask: rawCanConfig.frame_id_mask,
           fields,
         };
-        console.log('[decoderStore] parsed canConfig:', canConfig);
       }
 
       // Extract serial config from [meta.serial]
       const rawSerialConfig = parsed?.meta?.serial;
-      console.log('[decoderStore] rawSerialConfig from catalog:', rawSerialConfig);
       let serialConfig: SerialFrameConfig | null = null;
       if (rawSerialConfig && typeof rawSerialConfig === 'object') {
         // Parse checksum config if present
@@ -584,7 +590,6 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
           header_length: rawSerialConfig.header_length,
           header_fields: headerFieldDefs.length > 0 ? headerFieldDefs : undefined,
         };
-        console.log('[decoderStore] parsed serialConfig:', serialConfig);
       }
 
       // Preserve existing frame selection when reloading catalog
@@ -628,7 +633,6 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
         const hasCanFrames = Object.keys(canFrames).filter(k => k !== 'config').length > 0;
         protocol = hasSerialFrames && !hasCanFrames ? 'serial' : 'can';
       }
-      console.log('[decoderStore] protocol:', protocol, 'metaDefaultFrame:', metaDefaultFrame);
 
       set({
         frames: frameMap,
@@ -714,11 +718,16 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
   },
 
   clearFrames: () => {
+    // Only clear session/buffer data, NOT the catalog frames
     set({
-      frames: new Map(),
-      selectedFrames: new Set(),
       seenIds: new Set(),
       decoded: new Map(),
+      decodedPerSource: new Map(),
+      unmatchedFrames: [],
+      filteredFrames: [],
+      seenHeaderFieldValues: new Map(),
+      headerFieldFilters: new Map(),
+      streamStartTimeSeconds: null,
     });
   },
 

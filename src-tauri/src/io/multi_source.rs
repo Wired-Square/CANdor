@@ -4,34 +4,35 @@
 // Used for multi-bus capture where frames from diverse sources are merged.
 
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use tauri::AppHandle;
 use tokio::sync::mpsc;
 
-use std::collections::HashMap;
-
-use super::gvret_common::{apply_bus_mapping, emit_stream_ended, encode_gvret_frame, validate_gvret_frame, BusMapping};
+use super::gvret_common::{emit_stream_ended, encode_gvret_frame, validate_gvret_frame, BusMapping};
+use super::slcan::encode_transmit_frame as encode_slcan_frame;
+#[cfg(target_os = "linux")]
+use super::socketcan::encode_frame as encode_socketcan_frame;
+use super::traits::{get_traits_for_profile_kind, validate_session_traits};
+use super::types::{SourceMessage, TransmitRequest, TransmitSender};
 use super::{
-    emit_frames, emit_to_session, CanTransmitFrame,
-    FrameMessage, IOCapabilities, IODevice, IOState, TransmitResult,
+    emit_frames, emit_to_session, CanTransmitFrame, FrameMessage, IOCapabilities, IODevice,
+    IOState, InterfaceTraits, Protocol, TemporalMode, TransmitResult,
 };
-use crate::buffer_store::{self, BufferType};
+use crate::buffer_store::{self, BufferType, TimestampedByte};
+use crate::serial_framer::{FrameIdConfig, FramingEncoding};
 
-// ============================================================================
-// Transmit Types
-// ============================================================================
+// Import interface-specific source runners
+use super::gvret_tcp::run_source as run_gvret_tcp_source;
+use super::gvret_usb::run_source as run_gvret_usb_source;
+use super::serial::{run_source as run_serial_source, SerialRawBytesPayload};
+use super::slcan::run_source as run_slcan_source;
+#[cfg(target_os = "linux")]
+use super::socketcan::run_source as run_socketcan_source;
 
-/// Transmit request sent through the channel
-struct TransmitRequest {
-    /// Encoded frame bytes ready to send
-    data: Vec<u8>,
-    /// Sync oneshot channel to send the result back
-    result_tx: std_mpsc::SyncSender<Result<(), String>>,
-}
-
-/// Sender type for transmit requests (sync-safe)
-type TransmitSender = std_mpsc::SyncSender<TransmitRequest>;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use super::gs_usb::{encode_frame as encode_gs_usb_frame, run_source as run_gs_usb_source};
 
 // ============================================================================
 // Types
@@ -42,24 +43,27 @@ type TransmitSender = std_mpsc::SyncSender<TransmitRequest>;
 pub struct SourceConfig {
     /// Profile ID for this source
     pub profile_id: String,
-    /// Profile kind (gvret_tcp, gvret_usb, gs_usb, socketcan, slcan)
+    /// Profile kind (gvret_tcp, gvret_usb, gs_usb, socketcan, slcan, serial)
     pub profile_kind: String,
     /// Display name for this source
     pub display_name: String,
     /// Bus mappings for this source (device bus -> output bus)
     pub bus_mappings: Vec<BusMapping>,
-}
-
-/// Internal message from sub-readers to the merge task
-enum SourceMessage {
-    /// Frames from a source (source_index, frames)
-    Frames(usize, Vec<FrameMessage>),
-    /// Source ended (source_index, reason)
-    Ended(usize, String),
-    /// Source error (source_index, error)
-    Error(usize, String),
-    /// Transmit channel is ready (source_index, transmit_sender)
-    TransmitReady(usize, TransmitSender),
+    /// Framing encoding for serial sources (overrides profile settings if provided)
+    #[serde(default)]
+    pub framing_encoding: Option<String>,
+    /// Delimiter bytes for delimiter-based framing
+    #[serde(default)]
+    pub delimiter: Option<Vec<u8>>,
+    /// Maximum frame length for delimiter-based framing
+    #[serde(default)]
+    pub max_frame_length: Option<usize>,
+    /// Minimum frame length - frames shorter than this are discarded
+    #[serde(default)]
+    pub min_frame_length: Option<usize>,
+    /// Whether to emit raw bytes in addition to framed data
+    #[serde(default)]
+    pub emit_raw_bytes: Option<bool>,
 }
 
 // ============================================================================
@@ -99,18 +103,47 @@ pub struct MultiSourceReader {
     transmit_routes: HashMap<u8, TransmitRoute>,
     /// Transmit channels by source index (populated when sources connect)
     transmit_channels: TransmitChannels,
+    /// Derived session traits from all interfaces
+    session_traits: InterfaceTraits,
+    /// Whether this session emits raw bytes (for serial sources without framing)
+    emits_raw_bytes: bool,
 }
 
 impl MultiSourceReader {
     /// Create a multi-source reader with exactly one source.
     /// This is the preferred way to create sessions for real-time devices,
     /// as it uses the same code path as multi-device sessions.
-    pub fn single_source(app: AppHandle, session_id: String, source: SourceConfig) -> Self {
+    pub fn single_source(app: AppHandle, session_id: String, source: SourceConfig) -> Result<Self, String> {
         Self::new(app, session_id, vec![source])
     }
 
     /// Create a new multi-source reader
-    pub fn new(app: AppHandle, session_id: String, sources: Vec<SourceConfig>) -> Self {
+    ///
+    /// Validates that all interfaces have compatible traits:
+    /// - All interfaces must have the same temporal mode
+    /// - Timeline sessions are limited to 1 interface
+    /// - Protocols must be compatible (CAN + CAN-FD OK, but not CAN + Serial)
+    pub fn new(app: AppHandle, session_id: String, sources: Vec<SourceConfig>) -> Result<Self, String> {
+        // Collect traits from all enabled interfaces across all sources
+        let interface_traits: Vec<InterfaceTraits> = sources
+            .iter()
+            .flat_map(|source| {
+                source.bus_mappings.iter()
+                    .filter(|m| m.enabled)
+                    .filter_map(|m| {
+                        // Use interface-level traits if available, fall back to profile-level
+                        m.traits.clone().or_else(|| Some(get_traits_for_profile_kind(&source.profile_kind)))
+                    })
+            })
+            .collect();
+
+        let validation = validate_session_traits(&interface_traits);
+        if !validation.valid {
+            return Err(validation.error.unwrap_or_else(|| "Unknown validation error".to_string()));
+        }
+
+        let session_traits = validation.session_traits.unwrap();
+
         let (tx, rx) = mpsc::channel(1024);
 
         // Build transmit routing table: output_bus -> (source_idx, device_bus, kind)
@@ -131,7 +164,25 @@ impl MultiSourceReader {
             }
         }
 
-        Self {
+        // Determine if this session emits raw bytes
+        // Raw bytes are emitted if any serial source either:
+        // 1. Has no framing (raw mode), or
+        // 2. Has framing but emit_raw_bytes is explicitly true
+        let emits_raw_bytes = sources.iter().any(|source| {
+            if source.profile_kind != "serial" {
+                return false;
+            }
+            let framing = source.framing_encoding.as_deref().unwrap_or("raw");
+            if framing == "raw" {
+                // No framing means raw bytes are emitted
+                true
+            } else {
+                // Has framing - only emit raw bytes if explicitly requested
+                source.emit_raw_bytes.unwrap_or(false)
+            }
+        });
+
+        Ok(Self {
             app,
             session_id,
             sources,
@@ -142,7 +193,9 @@ impl MultiSourceReader {
             tx,
             transmit_routes,
             transmit_channels: Arc::new(Mutex::new(HashMap::new())),
-        }
+            session_traits,
+            emits_raw_bytes,
+        })
     }
 
     /// Get the source configurations for this multi-source session
@@ -158,16 +211,26 @@ impl MultiSourceReader {
         // - No time range (real-time only for now)
         // - Real-time since we're combining live sources
         // - Transmit is supported by routing to the appropriate source
+
+        // Check if we have any CAN-capable sources that can transmit
+        // Serial sources don't count for CAN transmit capability
+        let has_can_transmit_routes = self.transmit_routes.values().any(|route| {
+            matches!(
+                route.profile_kind.as_str(),
+                "gvret_tcp" | "gvret_usb" | "slcan" | "gs_usb" | "socketcan"
+            )
+        });
+
         IOCapabilities {
             can_pause: false,
             supports_time_range: false,
-            is_realtime: true,
+            is_realtime: self.session_traits.temporal_mode == TemporalMode::Realtime,
             supports_speed_control: false,
             supports_seek: false,
-            // Can transmit if we have any transmit routes configured
-            can_transmit: !self.transmit_routes.is_empty(),
-            can_transmit_serial: false,
-            supports_canfd: true,
+            // Can transmit CAN frames if we have any CAN-capable transmit routes
+            can_transmit: self.session_traits.can_transmit && has_can_transmit_routes,
+            can_transmit_serial: self.session_traits.protocols.contains(&Protocol::Serial),
+            supports_canfd: self.session_traits.protocols.contains(&Protocol::CanFd),
             supports_extended_id: true,
             supports_rtr: true,
             // Collect all output bus numbers from all source mappings (sorted)
@@ -182,7 +245,12 @@ impl MultiSourceReader {
                 buses.sort();
                 buses
             },
+            emits_raw_bytes: false, // Set via builder below
+            // Include the formal session traits
+            traits: Some(self.session_traits.clone()),
         }
+        // Whether raw bytes are emitted (serial sources without framing or with emit_raw_bytes=true)
+        .with_emits_raw_bytes(self.emits_raw_bytes)
     }
 }
 
@@ -212,9 +280,37 @@ impl IODevice for MultiSourceReader {
         self.state = IOState::Starting;
         self.stop_flag.store(false, Ordering::SeqCst);
 
-        // Create a frame buffer for this multi-source session
+        // Determine if any source produces actual frames (vs just raw bytes)
+        let has_framing = self.sources.iter().any(|source| {
+            if source.profile_kind != "serial" {
+                return true; // Non-serial sources produce frames
+            }
+            let framing = source.framing_encoding.as_deref().unwrap_or("raw");
+            framing != "raw" // Serial sources with non-raw framing produce frames
+        });
+
+        // Create appropriate buffer(s) for this multi-source session
+        // We may need both a Frames buffer (for CAN, framed serial) and a Bytes buffer (for raw serial)
         let buffer_name = format!("Multi-Source {}", self.session_id);
-        let _buffer_id = buffer_store::create_buffer(BufferType::Frames, buffer_name);
+        let mut bytes_buffer_id: Option<String> = None;
+
+        if has_framing {
+            // Create a frames buffer as active (for frame operations)
+            buffer_store::create_buffer(BufferType::Frames, buffer_name.clone());
+        }
+
+        if self.emits_raw_bytes {
+            if has_framing {
+                // Create a bytes buffer in addition to frames buffer (not as active)
+                bytes_buffer_id = Some(buffer_store::create_buffer_inactive(
+                    BufferType::Bytes,
+                    format!("{} (bytes)", buffer_name),
+                ));
+            } else {
+                // Only raw bytes - create a bytes buffer as active
+                buffer_store::create_buffer(BufferType::Bytes, buffer_name.clone());
+            }
+        }
 
         // Clear any stale transmit channels from previous run
         if let Ok(mut channels) = self.transmit_channels.lock() {
@@ -227,6 +323,7 @@ impl IODevice for MultiSourceReader {
         let stop_flag = self.stop_flag.clone();
         let tx = self.tx.clone();
         let transmit_channels = self.transmit_channels.clone();
+        let emits_raw_bytes = self.emits_raw_bytes;
 
         // Take the receiver - we'll use it in the merge task
         // This should always succeed now since we checked/recreated above
@@ -234,7 +331,18 @@ impl IODevice for MultiSourceReader {
 
         // Spawn the merge task that collects frames from all sources
         let merge_handle = tokio::spawn(async move {
-            run_merge_task(app, session_id, sources, stop_flag, rx, tx, transmit_channels).await;
+            run_merge_task(
+                app,
+                session_id,
+                sources,
+                emits_raw_bytes,
+                bytes_buffer_id,
+                stop_flag,
+                rx,
+                tx,
+                transmit_channels,
+            )
+            .await;
         });
 
         self.task_handles.push(merge_handle);
@@ -333,7 +441,7 @@ impl IODevice for MultiSourceReader {
             }
             "slcan" => {
                 // Encode for slcan protocol
-                encode_slcan_transmit_frame(&routed_frame)
+                encode_slcan_frame(&routed_frame)
             }
             #[cfg(target_os = "linux")]
             "socketcan" => {
@@ -365,6 +473,51 @@ impl IODevice for MultiSourceReader {
         Ok(TransmitResult::success())
     }
 
+    fn transmit_serial(&self, bytes: &[u8]) -> Result<TransmitResult, String> {
+        if bytes.is_empty() {
+            return Ok(TransmitResult::error("No bytes to transmit".to_string()));
+        }
+
+        // Find the first serial source in the transmit routes
+        let serial_route = self
+            .transmit_routes
+            .values()
+            .find(|route| route.profile_kind == "serial")
+            .ok_or_else(|| {
+                "No serial source configured in this session".to_string()
+            })?;
+
+        // Get the transmit channel for this source
+        let channels = self.transmit_channels.lock()
+            .map_err(|e| format!("Failed to lock transmit channels: {}", e))?;
+
+        let tx = channels.get(&serial_route.source_idx)
+            .ok_or_else(|| {
+                format!(
+                    "No transmit channel for serial source {} (profile '{}') - source may not be connected",
+                    serial_route.source_idx, serial_route.profile_id
+                )
+            })?
+            .clone();
+        drop(channels); // Release lock before blocking
+
+        // Create a sync channel to receive the result
+        let (result_tx, result_rx) = std_mpsc::sync_channel(1);
+
+        // Send the raw bytes directly (no encoding needed for serial)
+        tx.try_send(TransmitRequest { data: bytes.to_vec(), result_tx })
+            .map_err(|e| format!("Failed to queue serial transmit request: {}", e))?;
+
+        // Wait for the result with a timeout
+        let result = result_rx
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .map_err(|e| format!("Serial transmit timeout or channel closed: {}", e))?;
+
+        result?;
+
+        Ok(TransmitResult::success())
+    }
+
     fn state(&self) -> IOState {
         self.state.clone()
     }
@@ -386,11 +539,13 @@ impl IODevice for MultiSourceReader {
 // Merge Task
 // ============================================================================
 
-/// Main merge task that spawns sub-readers and combines their frames
+/// Main merge task that spawns sub-readers and combines their frames/bytes
 async fn run_merge_task(
     app: AppHandle,
     session_id: String,
     sources: Vec<SourceConfig>,
+    _emits_raw_bytes: bool,
+    bytes_buffer_id: Option<String>,
     stop_flag: Arc<AtomicBool>,
     mut rx: mpsc::Receiver<SourceMessage>,
     tx: mpsc::Sender<SourceMessage>,
@@ -428,6 +583,11 @@ async fn run_merge_task(
         let tx_clone = tx.clone();
         let bus_mappings = source_config.bus_mappings.clone();
         let display_name = source_config.display_name.clone();
+        let framing_encoding = source_config.framing_encoding.clone();
+        let delimiter = source_config.delimiter.clone();
+        let max_frame_length = source_config.max_frame_length;
+        let min_frame_length = source_config.min_frame_length;
+        let emit_raw_bytes = source_config.emit_raw_bytes;
 
         let handle = tokio::spawn(async move {
             run_source_reader(
@@ -437,6 +597,11 @@ async fn run_merge_task(
                 profile,
                 bus_mappings,
                 display_name,
+                framing_encoding,
+                delimiter,
+                max_frame_length,
+                min_frame_length,
+                emit_raw_bytes,
                 stop_flag_clone,
                 tx_clone,
             )
@@ -449,6 +614,7 @@ async fn run_merge_task(
     // Track which sources are still active
     let mut active_sources = sources.len();
     let mut pending_frames: Vec<FrameMessage> = Vec::new();
+    let mut pending_bytes: Vec<TimestampedByte> = Vec::new();
     let mut last_emit = std::time::Instant::now();
 
     // Track frames per bus for periodic logging
@@ -466,6 +632,16 @@ async fn run_merge_task(
                         *frames_per_bus.entry(frame.bus).or_insert(0) += 1;
                     }
                     pending_frames.extend(frames);
+                }
+                SourceMessage::RawBytes(_source_idx, raw_entries) => {
+                    // Convert RawByteEntry (i64 timestamp) to TimestampedByte (u64 timestamp)
+                    for entry in raw_entries {
+                        pending_bytes.push(TimestampedByte {
+                            byte: entry.byte,
+                            timestamp_us: entry.timestamp_us as u64,
+                            bus: entry.bus,
+                        });
+                    }
                 }
                 SourceMessage::Ended(source_idx, reason) => {
                     eprintln!(
@@ -524,21 +700,48 @@ async fn run_merge_task(
             last_bus_log = std::time::Instant::now();
         }
 
-        // Emit frames if we have any and either:
-        // - We have a decent batch (>= 100 frames)
+        // Emit data if we have any and either:
+        // - We have a decent batch (>= 100 items)
         // - It's been more than 50ms since last emit
-        if !pending_frames.is_empty()
-            && (pending_frames.len() >= 100 || last_emit.elapsed().as_millis() >= 50)
-        {
-            // Sort by timestamp for proper ordering
-            pending_frames.sort_by_key(|f| f.timestamp_us);
+        let should_emit = last_emit.elapsed().as_millis() >= 50
+            || pending_frames.len() >= 100
+            || pending_bytes.len() >= 256;
 
-            // Append to buffer
-            buffer_store::append_frames(pending_frames.clone());
+        if should_emit {
+            // Emit frames if we have any
+            if !pending_frames.is_empty() {
+                // Sort by timestamp for proper ordering
+                pending_frames.sort_by_key(|f| f.timestamp_us);
 
-            // Emit to frontend
-            emit_frames(&app, &session_id, pending_frames);
-            pending_frames = Vec::new();
+                // Append to buffer
+                buffer_store::append_frames(pending_frames.clone());
+
+                // Emit to frontend
+                emit_frames(&app, &session_id, pending_frames);
+                pending_frames = Vec::new();
+            }
+
+            // Emit raw bytes if we have any
+            if !pending_bytes.is_empty() {
+                // Sort by timestamp for proper ordering
+                pending_bytes.sort_by_key(|b| b.timestamp_us);
+
+                // Append to buffer (use specific bytes buffer if we have one)
+                if let Some(ref buf_id) = bytes_buffer_id {
+                    buffer_store::append_raw_bytes_to_buffer(buf_id, pending_bytes.clone());
+                } else {
+                    buffer_store::append_raw_bytes(pending_bytes.clone());
+                }
+
+                // Emit to frontend
+                let payload = SerialRawBytesPayload {
+                    bytes: pending_bytes,
+                    port: "multi-source".to_string(),
+                };
+                emit_to_session(&app, "serial-raw-bytes", &session_id, payload);
+                pending_bytes = Vec::new();
+            }
+
             last_emit = std::time::Instant::now();
         }
     }
@@ -548,6 +751,22 @@ async fn run_merge_task(
         pending_frames.sort_by_key(|f| f.timestamp_us);
         buffer_store::append_frames(pending_frames.clone());
         emit_frames(&app, &session_id, pending_frames);
+    }
+
+    // Emit any remaining bytes
+    if !pending_bytes.is_empty() {
+        pending_bytes.sort_by_key(|b| b.timestamp_us);
+        // Append to buffer (use specific bytes buffer if we have one)
+        if let Some(ref buf_id) = bytes_buffer_id {
+            buffer_store::append_raw_bytes_to_buffer(buf_id, pending_bytes.clone());
+        } else {
+            buffer_store::append_raw_bytes(pending_bytes.clone());
+        }
+        let payload = SerialRawBytesPayload {
+            bytes: pending_bytes,
+            port: "multi-source".to_string(),
+        };
+        emit_to_session(&app, "serial-raw-bytes", &session_id, payload);
     }
 
     // Wait for all source tasks to finish
@@ -567,12 +786,18 @@ async fn run_merge_task(
 
 /// Run a single source reader and send frames to the merge task
 async fn run_source_reader(
-    app: AppHandle,
+    _app: AppHandle,
     _session_id: String,
     source_idx: usize,
     profile: crate::settings::IOProfile,
     bus_mappings: Vec<BusMapping>,
     _display_name: String,
+    // Framing config from session options (overrides profile settings for serial)
+    framing_encoding_override: Option<String>,
+    delimiter_override: Option<Vec<u8>>,
+    max_frame_length_override: Option<usize>,
+    min_frame_length_override: Option<usize>,
+    emit_raw_bytes_override: Option<bool>,
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
 ) {
@@ -595,17 +820,8 @@ async fn run_source_reader(
                 .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
                 .unwrap_or(5.0);
 
-            run_gvret_tcp_source(
-                app,
-                source_idx,
-                host,
-                port,
-                timeout_sec,
-                bus_mappings,
-                stop_flag,
-                tx,
-            )
-            .await;
+            run_gvret_tcp_source(source_idx, host, port, timeout_sec, bus_mappings, stop_flag, tx)
+                .await;
         }
         "gvret_usb" | "gvret-usb" => {
             let port = match profile.connection.get("port").and_then(|v| v.as_str()) {
@@ -626,16 +842,7 @@ async fn run_source_reader(
                 .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
                 .unwrap_or(115200) as u32;
 
-            run_gvret_usb_source(
-                app,
-                source_idx,
-                port,
-                baud_rate,
-                bus_mappings,
-                stop_flag,
-                tx,
-            )
-            .await;
+            run_gvret_usb_source(source_idx, port, baud_rate, bus_mappings, stop_flag, tx).await;
         }
         "slcan" => {
             let port = match profile.connection.get("port").and_then(|v| v.as_str()) {
@@ -667,7 +874,6 @@ async fn run_source_reader(
                 .unwrap_or(false);
 
             run_slcan_source(
-                app,
                 source_idx,
                 port,
                 baud_rate,
@@ -681,11 +887,16 @@ async fn run_source_reader(
         }
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         "gs_usb" => {
-            let device_index = profile
+            let bus = profile
                 .connection
-                .get("device_index")
+                .get("bus")
                 .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(0) as usize;
+                .unwrap_or(0) as u8;
+            let address = profile
+                .connection
+                .get("address")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(0) as u8;
             let bitrate = profile
                 .connection
                 .get("bitrate")
@@ -696,13 +907,19 @@ async fn run_source_reader(
                 .get("listen_only")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
+            let channel = profile
+                .connection
+                .get("channel")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(0) as u8;
 
             run_gs_usb_source(
-                app,
                 source_idx,
-                device_index,
+                bus,
+                address,
                 bitrate,
                 listen_only,
+                channel,
                 bus_mappings,
                 stop_flag,
                 tx,
@@ -724,10 +941,154 @@ async fn run_source_reader(
                 }
             };
 
-            run_socketcan_source(
-                app,
+            run_socketcan_source(source_idx, interface, bus_mappings, stop_flag, tx).await;
+        }
+        "serial" => {
+            let port = match profile.connection.get("port").and_then(|v| v.as_str()) {
+                Some(p) => p.to_string(),
+                None => {
+                    let _ = tx
+                        .send(SourceMessage::Error(
+                            source_idx,
+                            "Serial port is required".to_string(),
+                        ))
+                        .await;
+                    return;
+                }
+            };
+            let baud_rate = profile
+                .connection
+                .get("baud_rate")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(115200) as u32;
+            let data_bits = profile
+                .connection
+                .get("data_bits")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(8) as u8;
+            let stop_bits = profile
+                .connection
+                .get("stop_bits")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(1) as u8;
+            let parity_str = profile
+                .connection
+                .get("parity")
+                .and_then(|v| v.as_str())
+                .unwrap_or("none");
+            let parity = match parity_str {
+                "odd" => super::serial::Parity::Odd,
+                "even" => super::serial::Parity::Even,
+                _ => super::serial::Parity::None,
+            };
+
+            // Framing configuration - prefer session override, fall back to profile settings
+            let framing_encoding_str = framing_encoding_override
+                .as_deref()
+                .or_else(|| profile.connection.get("framing_encoding").and_then(|v| v.as_str()))
+                .unwrap_or("raw"); // Default to raw if nothing configured
+
+            let framing_encoding = match framing_encoding_str {
+                "slip" => FramingEncoding::Slip,
+                "modbus_rtu" => {
+                    let device_address = profile
+                        .connection
+                        .get("modbus_device_address")
+                        .and_then(|v| v.as_i64())
+                        .map(|n| n as u8);
+                    let validate_crc = profile
+                        .connection
+                        .get("modbus_validate_crc")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+                    FramingEncoding::ModbusRtu { device_address, validate_crc }
+                }
+                "delimiter" => {
+                    // Use session override if provided, else profile settings
+                    let delimiter = delimiter_override
+                        .clone()
+                        .or_else(|| {
+                            profile.connection.get("delimiter")
+                                .and_then(|v| v.as_array())
+                                .map(|arr| arr.iter().filter_map(|v| v.as_i64().map(|n| n as u8)).collect())
+                        })
+                        .unwrap_or_else(|| vec![0x0A]); // Default to newline
+                    let max_length = max_frame_length_override
+                        .or_else(|| profile.connection.get("max_frame_length").and_then(|v| v.as_i64()).map(|n| n as usize))
+                        .unwrap_or(1024);
+                    let include_delimiter = profile
+                        .connection
+                        .get("include_delimiter")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    FramingEncoding::Delimiter { delimiter, max_length, include_delimiter }
+                }
+                "raw" | _ => {
+                    // Raw mode - emit bytes as individual "frames" with length as ID
+                    FramingEncoding::Raw
+                }
+            };
+
+            // Log framing config for debugging
+            eprintln!(
+                "[multi_source] Serial source {} using framing: {:?} (override: {:?})",
+                source_idx, framing_encoding, framing_encoding_override
+            );
+
+            // Frame ID extraction config
+            let frame_id_config = profile.connection.get("frame_id_start_byte").and_then(|_| {
+                Some(FrameIdConfig {
+                    start_byte: profile.connection.get("frame_id_start_byte")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0) as i32,
+                    num_bytes: profile.connection.get("frame_id_bytes")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(1) as u8,
+                    big_endian: profile.connection.get("frame_id_big_endian")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true),
+                })
+            });
+
+            // Source address extraction config
+            let source_address_config = profile.connection.get("source_address_start_byte").and_then(|_| {
+                Some(FrameIdConfig {
+                    start_byte: profile.connection.get("source_address_start_byte")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0) as i32,
+                    num_bytes: profile.connection.get("source_address_bytes")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(1) as u8,
+                    big_endian: profile.connection.get("source_address_big_endian")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true),
+                })
+            });
+
+            let min_frame_length = min_frame_length_override
+                .or_else(|| profile.connection.get("min_frame_length").and_then(|v| v.as_i64()).map(|n| n as usize))
+                .unwrap_or(0);
+
+            // Determine if we should emit raw bytes
+            // For "raw" framing mode, raw bytes are the primary output
+            // For other modes, only emit if explicitly requested
+            let emit_raw_bytes = match framing_encoding_str {
+                "raw" => true,
+                _ => emit_raw_bytes_override.unwrap_or(false),
+            };
+
+            run_serial_source(
                 source_idx,
-                interface,
+                port,
+                baud_rate,
+                data_bits,
+                stop_bits,
+                parity,
+                framing_encoding,
+                frame_id_config,
+                source_address_config,
+                min_frame_length,
+                emit_raw_bytes,
                 bus_mappings,
                 stop_flag,
                 tx,
@@ -743,949 +1104,4 @@ async fn run_source_reader(
                 .await;
         }
     }
-}
-
-/// Run GVRET TCP source and send frames to merge task
-async fn run_gvret_tcp_source(
-    _app: AppHandle,
-    source_idx: usize,
-    host: String,
-    port: u16,
-    timeout_sec: f64,
-    bus_mappings: Vec<BusMapping>,
-    stop_flag: Arc<AtomicBool>,
-    tx: mpsc::Sender<SourceMessage>,
-) {
-    use super::gvret_common::{parse_gvret_frames, BINARY_MODE_ENABLE, DEVICE_INFO_PROBE};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpStream;
-    use tokio::time::Duration;
-
-    // Connect with timeout
-    let connect_result = tokio::time::timeout(
-        Duration::from_secs_f64(timeout_sec),
-        TcpStream::connect((host.as_str(), port)),
-    )
-    .await;
-
-    let stream = match connect_result {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => {
-            let _ = tx
-                .send(SourceMessage::Error(
-                    source_idx,
-                    format!("Connection failed: {}", e),
-                ))
-                .await;
-            return;
-        }
-        Err(_) => {
-            let _ = tx
-                .send(SourceMessage::Error(
-                    source_idx,
-                    "Connection timed out".to_string(),
-                ))
-                .await;
-            return;
-        }
-    };
-
-    // Split into read/write halves
-    let (mut read_half, mut write_half) = stream.into_split();
-
-    // Enable binary mode
-    if let Err(e) = write_half.write_all(&BINARY_MODE_ENABLE).await {
-        let _ = tx
-            .send(SourceMessage::Error(
-                source_idx,
-                format!("Failed to enable binary mode: {}", e),
-            ))
-            .await;
-        return;
-    }
-    let _ = write_half.flush().await;
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    // Send device info probe
-    let _ = write_half.write_all(&DEVICE_INFO_PROBE).await;
-    let _ = write_half.flush().await;
-
-    // Create transmit channel and send it to the merge task
-    let (transmit_tx, transmit_rx) = std_mpsc::sync_channel::<TransmitRequest>(32);
-    let _ = tx.send(SourceMessage::TransmitReady(source_idx, transmit_tx)).await;
-
-    eprintln!(
-        "[MultiSourceReader] Source {} GVRET TCP connected to {}:{}, transmit channel ready",
-        source_idx, host, port
-    );
-
-    // Wrap write_half in Arc<Mutex> so it can be shared with transmit handling
-    let write_half = Arc::new(tokio::sync::Mutex::new(write_half));
-    let write_half_for_transmit = write_half.clone();
-
-    // Spawn a dedicated task for handling transmit requests
-    // This ensures transmits are processed immediately without waiting for read timeouts
-    let stop_flag_for_transmit = stop_flag.clone();
-    let transmit_task = tokio::spawn(async move {
-        while !stop_flag_for_transmit.load(Ordering::SeqCst) {
-            // Check for transmit requests with a short sleep to avoid busy loop
-            match transmit_rx.recv_timeout(std::time::Duration::from_millis(10)) {
-                Ok(req) => {
-                    let mut writer = write_half_for_transmit.lock().await;
-                    let result = writer.write_all(&req.data).await
-                        .map_err(|e| format!("Write error: {}", e));
-                    let _ = writer.flush().await;
-                    let _ = req.result_tx.send(result);
-                }
-                Err(std_mpsc::RecvTimeoutError::Timeout) => {
-                    // No request, continue loop
-                }
-                Err(std_mpsc::RecvTimeoutError::Disconnected) => {
-                    // Channel closed, exit
-                    break;
-                }
-            }
-        }
-    });
-
-    // Read loop - now only handles reading, transmit is handled by separate task
-    let mut buffer = Vec::with_capacity(4096);
-    let mut read_buf = [0u8; 2048];
-
-    while !stop_flag.load(Ordering::SeqCst) {
-        // Read with timeout
-        match tokio::time::timeout(Duration::from_millis(50), read_half.read(&mut read_buf)).await {
-            Ok(Ok(0)) => {
-                // Connection closed
-                let _ = tx
-                    .send(SourceMessage::Ended(source_idx, "disconnected".to_string()))
-                    .await;
-                return;
-            }
-            Ok(Ok(n)) => {
-                buffer.extend_from_slice(&read_buf[..n]);
-
-                // Parse GVRET frames
-                let frames = parse_gvret_frames(&mut buffer);
-                if !frames.is_empty() {
-                    // Apply bus mappings and filter disabled buses
-                    let mapped_frames: Vec<FrameMessage> = frames
-                        .into_iter()
-                        .filter_map(|(mut frame, _raw)| {
-                            if apply_bus_mapping(&mut frame, &bus_mappings) {
-                                Some(frame)
-                            } else {
-                                None // Bus is disabled
-                            }
-                        })
-                        .collect();
-
-                    if !mapped_frames.is_empty() {
-                        let _ = tx
-                            .send(SourceMessage::Frames(source_idx, mapped_frames))
-                            .await;
-                    }
-                }
-            }
-            Ok(Err(e)) => {
-                let _ = tx
-                    .send(SourceMessage::Error(
-                        source_idx,
-                        format!("Read error: {}", e),
-                    ))
-                    .await;
-                return;
-            }
-            Err(_) => {
-                // Timeout - continue
-            }
-        }
-    }
-
-    // Abort the transmit task when the read loop exits
-    transmit_task.abort();
-
-    let _ = tx
-        .send(SourceMessage::Ended(source_idx, "stopped".to_string()))
-        .await;
-}
-
-/// Run GVRET USB source and send frames to merge task
-async fn run_gvret_usb_source(
-    _app: AppHandle,
-    source_idx: usize,
-    port: String,
-    baud_rate: u32,
-    bus_mappings: Vec<BusMapping>,
-    stop_flag: Arc<AtomicBool>,
-    tx: mpsc::Sender<SourceMessage>,
-) {
-    use super::gvret_common::{parse_gvret_frames, BINARY_MODE_ENABLE, DEVICE_INFO_PROBE};
-    use std::io::{Read, Write};
-    use std::time::Duration;
-
-    // Open serial port
-    let serial_port = match serialport::new(&port, baud_rate)
-        .timeout(Duration::from_millis(10))
-        .open()
-    {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = tx
-                .send(SourceMessage::Error(
-                    source_idx,
-                    format!("Failed to open port: {}", e),
-                ))
-                .await;
-            return;
-        }
-    };
-
-    // Wrap in Arc<Mutex> for shared access between read and transmit
-    let serial_port = Arc::new(std::sync::Mutex::new(serial_port));
-
-    // Clear buffers and initialize (do all sync work without awaiting)
-    let init_result: Result<(), String> = (|| {
-        let mut port = serial_port.lock().unwrap();
-        let _ = port.clear(serialport::ClearBuffer::All);
-
-        // Enable binary mode
-        port.write_all(&BINARY_MODE_ENABLE)
-            .map_err(|e| format!("Failed to enable binary mode: {}", e))?;
-        let _ = port.flush();
-        Ok(())
-    })();
-
-    if let Err(e) = init_result {
-        let _ = tx.send(SourceMessage::Error(source_idx, e)).await;
-        return;
-    }
-
-    std::thread::sleep(Duration::from_millis(100));
-
-    // Send device info probe
-    {
-        let mut port = serial_port.lock().unwrap();
-        let _ = port.write_all(&DEVICE_INFO_PROBE);
-        let _ = port.flush();
-    }
-
-    // Create transmit channel and send it to the merge task
-    let (transmit_tx, transmit_rx) = std_mpsc::sync_channel::<TransmitRequest>(32);
-    let _ = tx.send(SourceMessage::TransmitReady(source_idx, transmit_tx)).await;
-
-    eprintln!(
-        "[MultiSourceReader] Source {} GVRET USB connected to {}, transmit channel ready",
-        source_idx, port
-    );
-
-    // Read loop (blocking, so we run it in a blocking task)
-    let tx_clone = tx.clone();
-    let stop_flag_clone = stop_flag.clone();
-    let serial_port_clone = serial_port.clone();
-
-    // Spawn blocking task for serial reading
-    let blocking_handle = tokio::task::spawn_blocking(move || {
-        let mut buffer = Vec::with_capacity(4096);
-        let mut read_buf = [0u8; 2048];
-
-        while !stop_flag_clone.load(Ordering::SeqCst) {
-            // Check for transmit requests (non-blocking)
-            while let Ok(req) = transmit_rx.try_recv() {
-                let result = {
-                    let mut port = serial_port_clone.lock().unwrap();
-                    port.write_all(&req.data)
-                        .and_then(|_| port.flush())
-                        .map_err(|e| format!("Write error: {}", e))
-                };
-                let _ = req.result_tx.send(result);
-            }
-
-            // Read data
-            let read_result = {
-                let mut port = serial_port_clone.lock().unwrap();
-                port.read(&mut read_buf)
-            };
-
-            match read_result {
-                Ok(0) => {
-                    // No data
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Ok(n) => {
-                    buffer.extend_from_slice(&read_buf[..n]);
-
-                    // Parse GVRET frames
-                    let frames = parse_gvret_frames(&mut buffer);
-                    if !frames.is_empty() {
-                        // Apply bus mappings and filter disabled buses
-                        let mapped_frames: Vec<FrameMessage> = frames
-                            .into_iter()
-                            .filter_map(|(mut frame, _raw)| {
-                                if apply_bus_mapping(&mut frame, &bus_mappings) {
-                                    Some(frame)
-                                } else {
-                                    None // Bus is disabled
-                                }
-                            })
-                            .collect();
-
-                        if !mapped_frames.is_empty() {
-                            // Use blocking send since we're in a sync context
-                            let _ = tx_clone.blocking_send(SourceMessage::Frames(
-                                source_idx,
-                                mapped_frames,
-                            ));
-                        }
-                    }
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                    // Timeout - continue
-                }
-                Err(e) => {
-                    let _ = tx_clone.blocking_send(SourceMessage::Error(
-                        source_idx,
-                        format!("Read error: {}", e),
-                    ));
-                    return;
-                }
-            }
-        }
-
-        let _ = tx_clone.blocking_send(SourceMessage::Ended(source_idx, "stopped".to_string()));
-    });
-
-    // Wait for the blocking task
-    let _ = blocking_handle.await;
-}
-
-/// Run slcan source and send frames to merge task
-async fn run_slcan_source(
-    _app: AppHandle,
-    source_idx: usize,
-    port: String,
-    baud_rate: u32,
-    bitrate: u32,
-    silent_mode: bool,
-    bus_mappings: Vec<BusMapping>,
-    stop_flag: Arc<AtomicBool>,
-    tx: mpsc::Sender<SourceMessage>,
-) {
-    use super::slcan::{parse_slcan_frame, find_bitrate_command};
-    use std::io::{Read, Write};
-    use std::time::Duration;
-
-    // Find the bitrate command
-    let bitrate_cmd = match find_bitrate_command(bitrate) {
-        Ok(cmd) => cmd,
-        Err(e) => {
-            let _ = tx
-                .send(SourceMessage::Error(source_idx, e))
-                .await;
-            return;
-        }
-    };
-
-    // Open serial port
-    let serial_port = match serialport::new(&port, baud_rate)
-        .timeout(Duration::from_millis(10))
-        .open()
-    {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = tx
-                .send(SourceMessage::Error(
-                    source_idx,
-                    format!("Failed to open port: {}", e),
-                ))
-                .await;
-            return;
-        }
-    };
-
-    // Wrap in Arc<Mutex> for shared access between read and transmit
-    let serial_port = Arc::new(std::sync::Mutex::new(serial_port));
-
-    // Initialize the port (sync setup before spawning tasks)
-    {
-        let mut port = serial_port.lock().unwrap();
-
-        // Close any existing connection and configure
-        let _ = port.write_all(b"C\r");
-        let _ = port.flush();
-        std::thread::sleep(Duration::from_millis(50));
-
-        // Set bitrate
-        let bitrate_with_cr = format!("{}\r", bitrate_cmd);
-        if let Err(e) = port.write_all(bitrate_with_cr.as_bytes()) {
-            let _ = tx.blocking_send(SourceMessage::Error(
-                source_idx,
-                format!("Failed to set bitrate: {}", e),
-            ));
-            return;
-        }
-        let _ = port.flush();
-        std::thread::sleep(Duration::from_millis(50));
-
-        // Set mode (silent or normal)
-        let mode_cmd = if silent_mode { b"M1\r" } else { b"M0\r" };
-        let _ = port.write_all(mode_cmd);
-        let _ = port.flush();
-        std::thread::sleep(Duration::from_millis(50));
-
-        // Open CAN channel
-        if let Err(e) = port.write_all(b"O\r") {
-            let _ = tx.blocking_send(SourceMessage::Error(
-                source_idx,
-                format!("Failed to open CAN channel: {}", e),
-            ));
-            return;
-        }
-        let _ = port.flush();
-    }
-
-    // Only create transmit channel if not in silent mode
-    let transmit_rx = if !silent_mode {
-        let (transmit_tx, transmit_rx) = std_mpsc::sync_channel::<TransmitRequest>(32);
-        let _ = tx.send(SourceMessage::TransmitReady(source_idx, transmit_tx)).await;
-        eprintln!(
-            "[MultiSourceReader] Source {} slcan connected to {}, transmit channel ready",
-            source_idx, port
-        );
-        Some(transmit_rx)
-    } else {
-        eprintln!(
-            "[MultiSourceReader] Source {} slcan connected to {} (silent mode, no transmit)",
-            source_idx, port
-        );
-        None
-    };
-
-    let tx_clone = tx.clone();
-    let stop_flag_clone = stop_flag.clone();
-    let serial_port_clone = serial_port.clone();
-
-    // Spawn blocking task for serial reading and transmit handling
-    let blocking_handle = tokio::task::spawn_blocking(move || {
-        let mut read_buf = [0u8; 256];
-        let mut line_buf = String::new();
-
-        while !stop_flag_clone.load(Ordering::SeqCst) {
-            // Check for transmit requests (non-blocking)
-            if let Some(ref rx) = transmit_rx {
-                while let Ok(req) = rx.try_recv() {
-                    let result = {
-                        let mut port = serial_port_clone.lock().unwrap();
-                        // Data is already in slcan ASCII format with trailing \r
-                        port.write_all(&req.data)
-                            .and_then(|_| port.flush())
-                            .map_err(|e| format!("slcan write error: {}", e))
-                    };
-                    let _ = req.result_tx.send(result);
-                }
-            }
-
-            // Read data from serial port
-            let read_result = {
-                let mut port = serial_port_clone.lock().unwrap();
-                port.read(&mut read_buf)
-            };
-
-            match read_result {
-                Ok(0) => {
-                    // EOF
-                    break;
-                }
-                Ok(n) => {
-                    // Append to line buffer and parse complete lines
-                    if let Ok(s) = std::str::from_utf8(&read_buf[..n]) {
-                        line_buf.push_str(s);
-
-                        // Process complete lines (terminated by \r or \n)
-                        while let Some(pos) = line_buf.find(|c| c == '\r' || c == '\n') {
-                            let line = &line_buf[..pos];
-                            let trimmed = line.trim();
-                            if !trimmed.is_empty() {
-                                if let Some(mut frame) = parse_slcan_frame(trimmed) {
-                                    if apply_bus_mapping(&mut frame, &bus_mappings) {
-                                        let _ = tx_clone.blocking_send(SourceMessage::Frames(
-                                            source_idx,
-                                            vec![frame],
-                                        ));
-                                    }
-                                }
-                            }
-                            // Remove processed line including delimiter
-                            line_buf = line_buf[pos + 1..].to_string();
-                        }
-                    }
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                    // Timeout - continue
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    // Would block - continue
-                }
-                Err(e) => {
-                    let _ = tx_clone.blocking_send(SourceMessage::Error(
-                        source_idx,
-                        format!("Read error: {}", e),
-                    ));
-                    break;
-                }
-            }
-        }
-
-        // Close CAN channel
-        {
-            let mut port = serial_port_clone.lock().unwrap();
-            let _ = port.write_all(b"C\r");
-            let _ = port.flush();
-        }
-
-        let _ = tx_clone.blocking_send(SourceMessage::Ended(source_idx, "stopped".to_string()));
-    });
-
-    let _ = blocking_handle.await;
-}
-
-/// Encode a CAN transmit frame to slcan protocol format (ASCII)
-fn encode_slcan_transmit_frame(frame: &CanTransmitFrame) -> Vec<u8> {
-    let mut cmd = String::with_capacity(32);
-
-    // Frame type prefix
-    if frame.is_extended {
-        cmd.push('T');
-        cmd.push_str(&format!("{:08X}", frame.frame_id));
-    } else {
-        cmd.push('t');
-        cmd.push_str(&format!("{:03X}", frame.frame_id & 0x7FF));
-    }
-
-    // DLC
-    let dlc = frame.data.len().min(8);
-    cmd.push_str(&format!("{:X}", dlc));
-
-    // Data bytes
-    for byte in &frame.data[..dlc] {
-        cmd.push_str(&format!("{:02X}", byte));
-    }
-
-    cmd.push('\r');
-    cmd.into_bytes()
-}
-
-/// Encode a CAN transmit frame to SocketCAN frame format (16 bytes)
-/// struct can_frame layout: can_id (4), dlc (1), padding (3), data (8)
-#[cfg(target_os = "linux")]
-fn encode_socketcan_frame(frame: &CanTransmitFrame) -> Vec<u8> {
-    let mut buf = vec![0u8; 16];
-
-    // can_id (4 bytes, little-endian on most Linux systems but use native for socketcan)
-    let mut can_id = frame.frame_id;
-    if frame.is_extended {
-        can_id |= 0x8000_0000; // CAN_EFF_FLAG
-    }
-    if frame.is_rtr {
-        can_id |= 0x4000_0000; // CAN_RTR_FLAG
-    }
-    buf[0..4].copy_from_slice(&can_id.to_ne_bytes());
-
-    // dlc (1 byte)
-    let dlc = frame.data.len().min(8) as u8;
-    buf[4] = dlc;
-
-    // padding (3 bytes) - already zero
-
-    // data (8 bytes)
-    let data_len = frame.data.len().min(8);
-    buf[8..8 + data_len].copy_from_slice(&frame.data[..data_len]);
-
-    buf
-}
-
-/// Encode a CAN frame to gs_usb host frame format (20 bytes)
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-fn encode_gs_usb_frame(frame: &CanTransmitFrame, echo_id: u32) -> [u8; 20] {
-    use super::gs_usb::can_id_flags;
-
-    let mut buf = [0u8; 20];
-
-    // echo_id (4 bytes) - use provided echo_id for TX
-    buf[0..4].copy_from_slice(&echo_id.to_le_bytes());
-
-    // can_id (4 bytes) - includes extended flag if needed
-    let mut can_id = frame.frame_id;
-    if frame.is_extended {
-        can_id |= can_id_flags::EXTENDED;
-    }
-    if frame.is_rtr {
-        can_id |= can_id_flags::RTR;
-    }
-    buf[4..8].copy_from_slice(&can_id.to_le_bytes());
-
-    // can_dlc (1 byte)
-    let dlc = frame.data.len().min(8) as u8;
-    buf[8] = dlc;
-
-    // channel (1 byte) - always 0 for single-channel devices
-    buf[9] = 0;
-
-    // flags (1 byte) - unused for TX
-    buf[10] = 0;
-
-    // reserved (1 byte)
-    buf[11] = 0;
-
-    // data (8 bytes)
-    let data_len = frame.data.len().min(8);
-    buf[12..12 + data_len].copy_from_slice(&frame.data[..data_len]);
-
-    buf
-}
-
-/// Run gs_usb source and send frames to merge task (Windows/macOS only)
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-async fn run_gs_usb_source(
-    _app: AppHandle,
-    source_idx: usize,
-    device_index: usize,
-    bitrate: u32,
-    listen_only: bool,
-    bus_mappings: Vec<BusMapping>,
-    stop_flag: Arc<AtomicBool>,
-    tx: mpsc::Sender<SourceMessage>,
-) {
-    use super::gs_usb::nusb_driver;
-    use super::gs_usb::{GS_USB_VID, GS_USB_PIDS};
-    use std::time::Duration;
-
-    // Find and list devices
-    let devices = match nusb_driver::list_devices() {
-        Ok(d) => d,
-        Err(e) => {
-            let _ = tx
-                .send(SourceMessage::Error(
-                    source_idx,
-                    format!("Failed to enumerate gs_usb devices: {}", e),
-                ))
-                .await;
-            return;
-        }
-    };
-
-    if device_index >= devices.len() {
-        let _ = tx
-            .send(SourceMessage::Error(
-                source_idx,
-                format!(
-                    "Device index {} out of range (found {} devices)",
-                    device_index,
-                    devices.len()
-                ),
-            ))
-            .await;
-        return;
-    }
-
-    let device_info = &devices[device_index];
-    let bus = device_info.bus;
-    let address = device_info.address;
-
-    // Open the device using nusb async API
-    let device = match nusb::list_devices().await {
-        Ok(mut list) => {
-            match list.find(|dev| {
-                let dev_bus = dev.bus_id().parse::<u8>().unwrap_or(0);
-                dev_bus == bus
-                    && dev.device_address() == address
-                    && dev.vendor_id() == GS_USB_VID
-                    && GS_USB_PIDS.contains(&dev.product_id())
-            }) {
-                Some(dev) => match dev.open().await {
-                    Ok(d) => d,
-                    Err(e) => {
-                        let _ = tx
-                            .send(SourceMessage::Error(
-                                source_idx,
-                                format!("Failed to open device: {}", e),
-                            ))
-                            .await;
-                        return;
-                    }
-                },
-                None => {
-                    let _ = tx
-                        .send(SourceMessage::Error(
-                            source_idx,
-                            "Device not found".to_string(),
-                        ))
-                        .await;
-                    return;
-                }
-            }
-        }
-        Err(e) => {
-            let _ = tx
-                .send(SourceMessage::Error(
-                    source_idx,
-                    format!("Failed to list devices: {}", e),
-                ))
-                .await;
-            return;
-        }
-    };
-
-    let interface = match device.claim_interface(0).await {
-        Ok(i) => i,
-        Err(e) => {
-            let _ = tx
-                .send(SourceMessage::Error(
-                    source_idx,
-                    format!("Failed to claim interface: {}", e),
-                ))
-                .await;
-            return;
-        }
-    };
-
-    // Initialize device using the helper from nusb_driver
-    let config = crate::io::GsUsbConfig {
-        bus,
-        address,
-        channel: 0,
-        bitrate,
-        listen_only,
-        limit: None,
-        display_name: None,
-        bus_override: None,
-    };
-
-    if let Err(e) = nusb_driver::initialize_device(&interface, &config).await {
-        let _ = tx
-            .send(SourceMessage::Error(
-                source_idx,
-                format!("Failed to initialize device: {}", e),
-            ))
-            .await;
-        return;
-    }
-
-    // Setup bulk IN endpoint for receiving
-    let mut bulk_in = match interface.endpoint::<nusb::transfer::Bulk, nusb::transfer::In>(0x81) {
-        Ok(ep) => ep,
-        Err(e) => {
-            let _ = tx
-                .send(SourceMessage::Error(
-                    source_idx,
-                    format!("Failed to open IN endpoint: {}", e),
-                ))
-                .await;
-            return;
-        }
-    };
-
-    // Setup bulk OUT endpoint for transmit (if not in listen-only mode)
-    let bulk_out = if !listen_only {
-        match interface.endpoint::<nusb::transfer::Bulk, nusb::transfer::Out>(0x02) {
-            Ok(ep) => Some(ep),
-            Err(e) => {
-                eprintln!(
-                    "[MultiSourceReader] Source {} gs_usb: Failed to open OUT endpoint: {} (transmit disabled)",
-                    source_idx, e
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    // Create transmit channel if we have an OUT endpoint
-    let transmit_task = if let Some(bulk_out) = bulk_out {
-        // Create transmit channel and send it to the merge task
-        let (transmit_tx, transmit_rx) = std_mpsc::sync_channel::<TransmitRequest>(32);
-        let _ = tx.send(SourceMessage::TransmitReady(source_idx, transmit_tx)).await;
-
-        eprintln!(
-            "[MultiSourceReader] Source {} gs_usb connected to bus:{} addr:{}, transmit channel ready",
-            source_idx, bus, address
-        );
-
-        // Create a writer from the endpoint for standard I/O operations
-        let writer = bulk_out.writer(64); // Buffer size for gs_usb frames (20 bytes each)
-        let writer = Arc::new(std::sync::Mutex::new(writer));
-        let writer_for_transmit = writer.clone();
-        let stop_flag_for_transmit = stop_flag.clone();
-
-        // Spawn a blocking task for handling transmit requests (writer uses blocking I/O)
-        let transmit_handle = tokio::task::spawn_blocking(move || {
-            use std::io::Write;
-            while !stop_flag_for_transmit.load(Ordering::SeqCst) {
-                match transmit_rx.recv_timeout(std::time::Duration::from_millis(10)) {
-                    Ok(req) => {
-                        // Write the frame data using standard Write trait
-                        let result = {
-                            let mut w = writer_for_transmit.lock().unwrap();
-                            w.write_all(&req.data)
-                                .and_then(|_| w.flush())
-                                .map_err(|e| format!("USB write error: {}", e))
-                        };
-                        let _ = req.result_tx.send(result);
-                    }
-                    Err(std_mpsc::RecvTimeoutError::Timeout) => {
-                        // No request, continue loop
-                    }
-                    Err(std_mpsc::RecvTimeoutError::Disconnected) => {
-                        // Channel closed, exit
-                        break;
-                    }
-                }
-            }
-        });
-
-        Some(transmit_handle)
-    } else {
-        eprintln!(
-            "[MultiSourceReader] Source {} gs_usb connected to bus:{} addr:{} (listen-only, no transmit)",
-            source_idx, bus, address
-        );
-        None
-    };
-
-    // Pre-submit read requests
-    for _ in 0..4 {
-        bulk_in.submit(bulk_in.allocate(64));
-    }
-
-    // Read loop - now only handles reading, transmit is handled by separate task
-    while !stop_flag.load(Ordering::SeqCst) {
-        let read_result = tokio::time::timeout(
-            Duration::from_millis(50),
-            bulk_in.next_complete(),
-        )
-        .await;
-
-        match read_result {
-            Ok(completion) => {
-                match completion.status {
-                    Ok(()) => {
-                        let len = completion.actual_len;
-                        let data = &completion.buffer[..len];
-                        if len >= 20 {
-                            // Parse gs_usb host frame (20 bytes for classic CAN)
-                            if let Some(mut frame) = nusb_driver::parse_host_frame(data) {
-                                if apply_bus_mapping(&mut frame, &bus_mappings) {
-                                    let _ = tx
-                                        .send(SourceMessage::Frames(source_idx, vec![frame]))
-                                        .await;
-                                }
-                            }
-                        }
-                        // Resubmit for continuous reading
-                        bulk_in.submit(bulk_in.allocate(64));
-                    }
-                    Err(_) => {
-                        // Transfer error - continue
-                    }
-                }
-            }
-            Err(_) => {
-                // Timeout - continue
-            }
-        }
-    }
-
-    // Abort the transmit task when the read loop exits
-    if let Some(task) = transmit_task {
-        task.abort();
-    }
-
-    // Cleanup - stop the device
-    let _ = nusb_driver::stop_device(&interface, &config).await;
-
-    let _ = tx
-        .send(SourceMessage::Ended(source_idx, "stopped".to_string()))
-        .await;
-}
-
-/// Run SocketCAN source and send frames to merge task (Linux only)
-#[cfg(target_os = "linux")]
-async fn run_socketcan_source(
-    _app: AppHandle,
-    source_idx: usize,
-    interface: String,
-    bus_mappings: Vec<BusMapping>,
-    stop_flag: Arc<AtomicBool>,
-    tx: mpsc::Sender<SourceMessage>,
-) {
-    use super::socketcan::SocketCanReader;
-
-    let reader = match SocketCanReader::new(&interface) {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = tx
-                .send(SourceMessage::Error(
-                    source_idx,
-                    format!("Failed to open SocketCAN interface: {}", e),
-                ))
-                .await;
-            return;
-        }
-    };
-
-    // Create transmit channel and send it to the merge task
-    let (transmit_tx, transmit_rx) = std_mpsc::sync_channel::<TransmitRequest>(32);
-    let _ = tx.send(SourceMessage::TransmitReady(source_idx, transmit_tx)).await;
-
-    eprintln!(
-        "[MultiSourceReader] Source {} SocketCAN connected to {}, transmit channel ready",
-        source_idx, interface
-    );
-
-    // Wrap reader in Arc for shared access between read and transmit
-    let reader = Arc::new(reader);
-    let reader_for_task = reader.clone();
-
-    let tx_clone = tx.clone();
-    let stop_flag_clone = stop_flag.clone();
-
-    // Spawn blocking task for socket reading and transmit handling
-    let blocking_handle = tokio::task::spawn_blocking(move || {
-        while !stop_flag_clone.load(Ordering::SeqCst) {
-            // Check for transmit requests (non-blocking)
-            while let Ok(req) = transmit_rx.try_recv() {
-                let result = reader_for_task.write_frame(&req.data)
-                    .map_err(|e| format!("SocketCAN write error: {}", e));
-                let _ = req.result_tx.send(result);
-            }
-
-            // Read frames
-            match reader_for_task.read_frame_timeout(std::time::Duration::from_millis(100)) {
-                Ok(Some(mut frame)) => {
-                    if apply_bus_mapping(&mut frame, &bus_mappings) {
-                        let _ = tx_clone.blocking_send(SourceMessage::Frames(
-                            source_idx,
-                            vec![frame],
-                        ));
-                    }
-                }
-                Ok(None) => {
-                    // Timeout - continue
-                }
-                Err(e) => {
-                    let _ = tx_clone.blocking_send(SourceMessage::Error(
-                        source_idx,
-                        format!("Read error: {}", e),
-                    ));
-                    break;
-                }
-            }
-        }
-
-        let _ = tx_clone.blocking_send(SourceMessage::Ended(source_idx, "stopped".to_string()));
-    });
-
-    let _ = blocking_handle.await;
 }

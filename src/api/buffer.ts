@@ -251,6 +251,8 @@ export async function getBufferFramesById(bufferId: string): Promise<BufferFrame
 export interface TimestampedByte {
   byte: number;
   timestamp_us: number;
+  /** Bus/interface number (for multi-source sessions) */
+  bus?: number;
 }
 
 /**
@@ -356,10 +358,24 @@ export interface FrameIdConfig {
 }
 
 /**
+ * Per-interface framing configuration (overrides default for specific bus).
+ */
+export interface InterfaceFramingConfig {
+  /** Framing mode: "raw", "slip", "modbus_rtu" */
+  mode: 'raw' | 'slip' | 'modbus_rtu';
+  /** For raw mode: delimiter bytes as hex string (e.g., "0D0A") */
+  delimiter?: string;
+  /** For raw mode: max frame length before forced split */
+  max_length?: number;
+  /** For modbus_rtu mode: whether to validate CRC */
+  validate_crc?: boolean;
+}
+
+/**
  * Configuration for backend framing.
  */
 export interface BackendFramingConfig {
-  /** Framing mode: "raw", "slip", "modbus_rtu" */
+  /** Default framing mode: "raw", "slip", "modbus_rtu" */
   mode: 'raw' | 'slip' | 'modbus_rtu';
   /** For raw mode: delimiter bytes as hex string (e.g., "0D0A") */
   delimiter?: string;
@@ -373,6 +389,8 @@ export interface BackendFramingConfig {
   frame_id_config?: FrameIdConfig;
   /** Source address extraction config */
   source_address_config?: FrameIdConfig;
+  /** Per-interface framing overrides (bus number -> config) */
+  per_interface?: Record<number, InterfaceFramingConfig>;
 }
 
 /**
@@ -383,6 +401,10 @@ export interface FramingResult {
   frame_count: number;
   /** ID of the new frame buffer */
   buffer_id: string;
+  /** Number of frames excluded by min_length filter */
+  filtered_count: number;
+  /** ID of the filtered frames buffer (frames that were too short) */
+  filtered_buffer_id: string | null;
 }
 
 /**

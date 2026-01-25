@@ -9,14 +9,7 @@
 //   Standard: t<ID:3hex><DLC:1hex><DATA:2hex*DLC>\r
 //   Extended: T<ID:8hex><DLC:1hex><DATA:2hex*DLC>\r
 //   RTR:      r<ID:3hex><DLC:1hex>\r / R<ID:8hex><DLC:1hex>\r
-//
-// NOTE: The standalone SlcanReader is now legacy code. All real-time devices now use
-// MultiSourceReader which has its own slcan source implementation. The SlcanReader
-// struct and related functions are kept for reference but not actively used.
 
-#![allow(dead_code)]
-
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::sync::{
@@ -24,13 +17,12 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::time::Duration;
-use tauri::AppHandle;
 
-use super::{
-    emit_frames, emit_to_session, now_us, serial_utils, CanTransmitFrame, FrameMessage, IOCapabilities, IODevice, IOState,
-    StreamEndedPayload, TransmitResult,
-};
-use crate::buffer_store::{self, BufferType};
+use tokio::sync::mpsc;
+
+use super::gvret_common::{apply_bus_mapping, BusMapping};
+use super::types::{io_error, SourceMessage, TransmitRequest};
+use super::{now_us, serial_utils, CanTransmitFrame, FrameMessage};
 
 // ============================================================================
 // Constants
@@ -185,7 +177,8 @@ pub fn parse_slcan_frame(line: &str) -> Option<FrameMessage> {
 /// Encode a CAN frame to slcan format for transmission
 ///
 /// Returns the ASCII command string including trailing \r
-pub fn encode_slcan_frame(frame: &FrameMessage) -> String {
+#[cfg(test)]
+fn encode_slcan_frame(frame: &FrameMessage) -> String {
     let mut cmd = String::with_capacity(32);
 
     // Frame type prefix
@@ -207,495 +200,6 @@ pub fn encode_slcan_frame(frame: &FrameMessage) -> String {
 
     cmd.push('\r');
     cmd
-}
-
-// ============================================================================
-// slcan Reader
-// ============================================================================
-
-/// Shared serial port type for slcan reader/writer access
-pub type SharedSerialPort = Arc<Mutex<Option<Box<dyn serialport::SerialPort>>>>;
-
-/// slcan protocol reader implementing CanReader trait
-pub struct SlcanReader {
-    app: AppHandle,
-    session_id: String,
-    config: SlcanConfig,
-    state: IOState,
-    cancel_flag: Arc<AtomicBool>,
-    task_handle: Option<tauri::async_runtime::JoinHandle<()>>,
-    /// Shared serial port - allows transmit while reading
-    port: SharedSerialPort,
-}
-
-impl SlcanReader {
-    pub fn new(app: AppHandle, session_id: String, config: SlcanConfig) -> Self {
-        Self {
-            app,
-            session_id,
-            config,
-            state: IOState::Stopped,
-            cancel_flag: Arc::new(AtomicBool::new(false)),
-            task_handle: None,
-            port: Arc::new(Mutex::new(None)),
-        }
-    }
-
-    /// Check if this reader can transmit (requires non-silent mode)
-    #[allow(dead_code)]
-    pub fn can_transmit(&self) -> bool {
-        !self.config.silent_mode
-    }
-
-    /// Transmit a CAN frame through this reader's serial port
-    ///
-    /// This acquires the port lock briefly to write the frame, allowing
-    /// the read task to continue receiving frames between transmissions.
-    pub fn transmit_frame(&self, frame: &CanTransmitFrame) -> Result<TransmitResult, String> {
-        if self.config.silent_mode {
-            return Err("Cannot transmit in silent mode (M1). Change to normal mode (M0) in IO profile settings.".to_string());
-        }
-
-        // Acquire lock on the shared port
-        let mut port_guard = self.port.lock().map_err(|e| format!("Failed to lock port: {}", e))?;
-        let port = port_guard.as_mut().ok_or("Port not open")?;
-
-        let transmit_result = TransmitResult::success();
-
-        // Convert CanTransmitFrame to FrameMessage for encoding
-        let frame_msg = FrameMessage {
-            protocol: "can".to_string(),
-            timestamp_us: transmit_result.timestamp_us,
-            frame_id: frame.frame_id,
-            bus: frame.bus,
-            dlc: frame.data.len() as u8,
-            bytes: frame.data.clone(),
-            is_extended: frame.is_extended,
-            is_fd: frame.is_fd,
-            source_address: None,
-            incomplete: None,
-            direction: Some("tx".to_string()),
-        };
-
-        // Encode and send
-        let cmd = encode_slcan_frame(&frame_msg);
-        port.write_all(cmd.as_bytes())
-            .map_err(|e| format!("Failed to write frame: {}", e))?;
-        port.flush()
-            .map_err(|e| format!("Failed to flush port: {}", e))?;
-
-        eprintln!(
-            "[slcan:{}] Transmit succeeded, emitting TX frame for ID 0x{:X}",
-            self.session_id, frame.frame_id
-        );
-
-        // Buffer the TX frame for replay
-        buffer_store::append_frames(vec![frame_msg.clone()]);
-
-        // Emit as a single-frame batch with active listener filtering
-        emit_frames(&self.app, &self.session_id, vec![frame_msg]);
-
-        Ok(transmit_result)
-    }
-}
-
-#[async_trait]
-impl IODevice for SlcanReader {
-    fn capabilities(&self) -> IOCapabilities {
-        IOCapabilities {
-            can_pause: false,        // Live stream, would lose data
-            supports_time_range: false,
-            is_realtime: true,
-            supports_speed_control: false,
-            supports_seek: false,
-            can_transmit: !self.config.silent_mode,  // Can transmit in normal mode (M0)
-            can_transmit_serial: false,
-            supports_canfd: false, // slcan is classic CAN only
-            supports_extended_id: true, // slcan supports extended IDs (T/R prefix)
-            supports_rtr: true, // slcan supports RTR frames (r/R prefix)
-            available_buses: vec![0], // Single bus
-        }
-    }
-
-    async fn start(&mut self) -> Result<(), String> {
-        if self.state == IOState::Running {
-            return Err("Reader is already running".to_string());
-        }
-
-        self.state = IOState::Starting;
-        self.cancel_flag.store(false, Ordering::Relaxed);
-
-        let app = self.app.clone();
-        let session_id = self.session_id.clone();
-        let config = self.config.clone();
-        let cancel_flag = self.cancel_flag.clone();
-        let port = self.port.clone();
-
-        let handle = spawn_slcan_stream(app, session_id, config, cancel_flag, port);
-        self.task_handle = Some(handle);
-        self.state = IOState::Running;
-
-        Ok(())
-    }
-
-    async fn stop(&mut self) -> Result<(), String> {
-        self.cancel_flag.store(true, Ordering::Relaxed);
-
-        if let Some(handle) = self.task_handle.take() {
-            let _ = handle.await;
-        }
-
-        // Close the serial port
-        if let Ok(mut port_guard) = self.port.lock() {
-            *port_guard = None;
-        }
-
-        self.state = IOState::Stopped;
-        Ok(())
-    }
-
-    async fn pause(&mut self) -> Result<(), String> {
-        Err("slcan is a live stream and cannot be paused. Data would be lost.".to_string())
-    }
-
-    async fn resume(&mut self) -> Result<(), String> {
-        Err("slcan is a live stream and does not support pause/resume.".to_string())
-    }
-
-    fn set_speed(&mut self, _speed: f64) -> Result<(), String> {
-        Err("slcan is a live stream and does not support speed control.".to_string())
-    }
-
-    fn set_time_range(&mut self, _start: Option<String>, _end: Option<String>) -> Result<(), String> {
-        Err("slcan is a live stream and does not support time range filtering.".to_string())
-    }
-
-    fn state(&self) -> IOState {
-        self.state.clone()
-    }
-
-    fn session_id(&self) -> &str {
-        &self.session_id
-    }
-
-    fn transmit_frame(&self, frame: &CanTransmitFrame) -> Result<TransmitResult, String> {
-        // Delegate to the impl method
-        SlcanReader::transmit_frame(self, frame)
-    }
-}
-
-// ============================================================================
-// Stream Implementation
-// ============================================================================
-
-/// Helper to emit stream-ended event with buffer info
-fn emit_stream_ended(app_handle: &AppHandle, session_id: &str, reason: &str) {
-    let metadata = buffer_store::finalize_buffer();
-
-    let (buffer_id, buffer_type, count, time_range, buffer_available) = match metadata {
-        Some(ref m) => {
-            let type_str = match m.buffer_type {
-                BufferType::Frames => "frames",
-                BufferType::Bytes => "bytes",
-            };
-            (
-                Some(m.id.clone()),
-                Some(type_str.to_string()),
-                m.count,
-                match (m.start_time_us, m.end_time_us) {
-                    (Some(start), Some(end)) => Some((start, end)),
-                    _ => None,
-                },
-                m.count > 0,
-            )
-        }
-        None => (None, None, 0, None, false),
-    };
-
-    emit_to_session(
-        app_handle,
-        "stream-ended",
-        session_id,
-        StreamEndedPayload {
-            reason: reason.to_string(),
-            buffer_available,
-            buffer_id,
-            buffer_type,
-            count,
-            time_range,
-        },
-    );
-    eprintln!(
-        "[slcan:{}] Stream ended (reason: {}, count: {})",
-        session_id, reason, count
-    );
-}
-
-/// Spawn the slcan stream task
-fn spawn_slcan_stream(
-    app_handle: AppHandle,
-    session_id: String,
-    config: SlcanConfig,
-    cancel_flag: Arc<AtomicBool>,
-    shared_port: SharedSerialPort,
-) -> tauri::async_runtime::JoinHandle<()> {
-    tauri::async_runtime::spawn(async move {
-        // Run blocking serial I/O in a dedicated thread
-        let result = tokio::task::spawn_blocking(move || {
-            run_slcan_stream_blocking(app_handle, session_id, config, cancel_flag, shared_port)
-        })
-        .await;
-
-        if let Err(e) = result {
-            eprintln!("[slcan] Task panicked: {:?}", e);
-        }
-    })
-}
-
-/// Blocking slcan stream implementation
-fn run_slcan_stream_blocking(
-    app_handle: AppHandle,
-    session_id: String,
-    config: SlcanConfig,
-    cancel_flag: Arc<AtomicBool>,
-    shared_port: SharedSerialPort,
-) {
-    let buffer_name = config.display_name.clone().unwrap_or_else(|| format!("slcan {}", config.port));
-    let _buffer_id = buffer_store::create_buffer(BufferType::Frames, buffer_name);
-
-    let stream_reason;
-    let mut total_frames: i64 = 0;
-
-    // Convert serial framing parameters
-    let data_bits = serial_utils::to_serialport_data_bits(config.data_bits);
-    let stop_bits = serial_utils::to_serialport_stop_bits(config.stop_bits);
-    let parity = serial_utils::parity_str_to_serialport(&config.parity);
-
-    // Open serial port and store in shared location
-    let port = match serialport::new(&config.port, config.baud_rate)
-        .data_bits(data_bits)
-        .stop_bits(stop_bits)
-        .parity(parity)
-        .timeout(Duration::from_millis(100))
-        .open()
-    {
-        Ok(p) => p,
-        Err(e) => {
-            emit_to_session(
-                &app_handle,
-                "can-bytes-error",
-                &session_id,
-                format!("Failed to open {}: {}", config.port, e),
-            );
-            emit_stream_ended(&app_handle, &session_id, "error");
-            return;
-        }
-    };
-
-    eprintln!(
-        "[slcan:{}] Opened {} at {} baud ({}{}{}) (CAN bitrate: {} bit/s, silent: {})",
-        session_id, config.port, config.baud_rate,
-        config.data_bits, config.parity.chars().next().unwrap_or('N').to_uppercase(), config.stop_bits,
-        config.bitrate, config.silent_mode
-    );
-
-    // Store port in shared location
-    {
-        if let Ok(mut port_guard) = shared_port.lock() {
-            *port_guard = Some(port);
-        } else {
-            emit_to_session(
-                &app_handle,
-                "can-bytes-error",
-                &session_id,
-                "Failed to store port in shared location".to_string(),
-            );
-            emit_stream_ended(&app_handle, &session_id, "error");
-            return;
-        }
-    }
-
-    // Wait for USB serial device to be ready
-    // CANable and similar devices need a brief delay after port open
-    std::thread::sleep(Duration::from_millis(500));
-
-    // Setup slcan interface (acquire lock briefly)
-    {
-        let setup_result = shared_port.lock().map_err(|e| format!("Lock error: {}", e)).and_then(|mut guard| {
-            if let Some(ref mut port) = *guard {
-                setup_slcan(port, &config)
-            } else {
-                Err("Port not available".to_string())
-            }
-        });
-
-        if let Err(e) = setup_result {
-            emit_to_session(
-                &app_handle,
-                "can-bytes-error",
-                &session_id,
-                format!("slcan setup failed: {}", e),
-            );
-            emit_stream_ended(&app_handle, &session_id, "error");
-            return;
-        }
-    }
-
-    eprintln!(
-        "[slcan:{}] Starting stream (limit: {:?})",
-        session_id, config.limit
-    );
-
-    // Read and parse frames
-    let mut line_buf = String::with_capacity(64);
-    let mut read_buf = [0u8; 256];
-    let mut pending_frames: Vec<FrameMessage> = Vec::with_capacity(32);
-    let mut last_emit_time = std::time::Instant::now();
-    let emit_interval = Duration::from_millis(25);
-
-    loop {
-        if cancel_flag.load(Ordering::Relaxed) {
-            stream_reason = "stopped";
-            break;
-        }
-
-        // Check frame limit
-        if let Some(limit) = config.limit {
-            if total_frames >= limit {
-                eprintln!("[slcan:{}] Reached limit of {} frames, stopping", session_id, limit);
-                stream_reason = "complete";
-                break;
-            }
-        }
-
-        // Read from serial port (acquire lock briefly, then release)
-        let read_result = {
-            let mut port_guard = match shared_port.lock() {
-                Ok(g) => g,
-                Err(_) => {
-                    stream_reason = "error";
-                    break;
-                }
-            };
-
-            if let Some(ref mut port) = *port_guard {
-                port.read(&mut read_buf)
-            } else {
-                // Port was closed externally
-                stream_reason = "disconnected";
-                break;
-            }
-        };
-
-        match read_result {
-            Ok(n) if n > 0 => {
-                // Process received bytes (outside of lock)
-                for &byte in &read_buf[..n] {
-                    if byte == b'\r' || byte == b'\n' {
-                        // End of line - try to parse frame
-                        if !line_buf.is_empty() {
-                            if let Some(mut frame) = parse_slcan_frame(&line_buf) {
-                                // Apply bus override if configured
-                                if let Some(bus) = config.bus_override {
-                                    frame.bus = bus;
-                                }
-                                pending_frames.push(frame);
-                                total_frames += 1;
-                            }
-                            line_buf.clear();
-                        }
-                    } else if byte == 0x07 {
-                        // Bell character - slcan error response
-                        eprintln!("[slcan:{}] Received error (bell)", session_id);
-                        line_buf.clear();
-                    } else if byte.is_ascii() && !byte.is_ascii_control() {
-                        line_buf.push(byte as char);
-
-                        // Prevent line buffer overflow
-                        if line_buf.len() > 64 {
-                            line_buf.clear();
-                        }
-                    }
-                }
-            }
-            Ok(0) => {
-                // EOF - port closed
-                stream_reason = "disconnected";
-                break;
-            }
-            Ok(_) => {}
-            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                // Timeout is expected for live streams
-            }
-            Err(e) => {
-                emit_to_session(
-                    &app_handle,
-                    "can-bytes-error",
-                    &session_id,
-                    format!("Read error: {}", e),
-                );
-                stream_reason = "error";
-                break;
-            }
-        }
-
-        // Emit batched frames periodically with active listener filtering
-        if last_emit_time.elapsed() >= emit_interval && !pending_frames.is_empty() {
-            let frames = std::mem::take(&mut pending_frames);
-            buffer_store::append_frames(frames.clone());
-            emit_frames(&app_handle, &session_id, frames);
-            last_emit_time = std::time::Instant::now();
-        }
-    }
-
-    // Emit any remaining frames with active listener filtering
-    if !pending_frames.is_empty() {
-        buffer_store::append_frames(pending_frames.clone());
-        emit_frames(&app_handle, &session_id, pending_frames);
-    }
-
-    // Close slcan channel (acquire lock briefly)
-    if let Ok(mut port_guard) = shared_port.lock() {
-        if let Some(ref mut port) = *port_guard {
-            let _ = port.write_all(b"C\r");
-            let _ = port.flush();
-        }
-    }
-
-    emit_stream_ended(&app_handle, &session_id, stream_reason);
-}
-
-/// Setup the slcan interface (close, set bitrate, set mode, open)
-fn setup_slcan(port: &mut Box<dyn serialport::SerialPort>, config: &SlcanConfig) -> Result<(), String> {
-    // Clear any pending data
-    let _ = port.clear(serialport::ClearBuffer::All);
-
-    // Close any existing channel (ignore errors - might not be open)
-    let _ = port.write_all(b"C\r");
-    let _ = port.flush();
-    std::thread::sleep(Duration::from_millis(50));
-
-    // Set bitrate
-    let bitrate_cmd = find_bitrate_command(config.bitrate)?;
-    port.write_all(format!("{}\r", bitrate_cmd).as_bytes())
-        .map_err(|e| format!("Failed to set bitrate: {}", e))?;
-    let _ = port.flush();
-    std::thread::sleep(Duration::from_millis(50));
-
-    // Set mode: M0 = normal, M1 = silent (no ACK, no transmit)
-    // Silent mode is recommended for passive monitoring/reverse engineering
-    let mode_cmd = if config.silent_mode { "M1" } else { "M0" };
-    port.write_all(format!("{}\r", mode_cmd).as_bytes())
-        .map_err(|e| format!("Failed to set mode: {}", e))?;
-    let _ = port.flush();
-    std::thread::sleep(Duration::from_millis(50));
-
-    // Open channel
-    port.write_all(b"O\r")
-        .map_err(|e| format!("Failed to open channel: {}", e))?;
-    let _ = port.flush();
-
-    Ok(())
 }
 
 // ============================================================================
@@ -744,6 +248,8 @@ pub fn probe_slcan_device(
     let stop_bits = serial_utils::to_serialport_stop_bits(stop_bits.unwrap_or(1));
     let parity = serial_utils::parity_str_to_serialport(&parity.unwrap_or_else(|| "none".to_string()));
 
+    let device = format!("slcan({})", port);
+
     // Open the port with a short timeout
     let mut serial_port = match serialport::new(&port, baud_rate)
         .data_bits(data_bits)
@@ -759,7 +265,7 @@ pub fn probe_slcan_device(
                 version: None,
                 hardware_version: None,
                 serial_number: None,
-                error: Some(format!("Failed to open port: {}", e)),
+                error: Some(io_error(&device, "open", e)),
             };
         }
     };
@@ -903,6 +409,210 @@ fn send_and_read(port: &mut Box<dyn serialport::SerialPort>, cmd: &[u8]) -> Opti
     } else {
         Some(response)
     }
+}
+
+// ============================================================================
+// Multi-Source Streaming
+// ============================================================================
+
+/// Encode a CAN transmit frame to slcan format for transmission
+pub fn encode_transmit_frame(frame: &CanTransmitFrame) -> Vec<u8> {
+    let mut cmd = String::with_capacity(32);
+
+    // Frame type prefix
+    if frame.is_extended {
+        cmd.push('T');
+        cmd.push_str(&format!("{:08X}", frame.frame_id));
+    } else {
+        cmd.push('t');
+        cmd.push_str(&format!("{:03X}", frame.frame_id & 0x7FF));
+    }
+
+    // DLC
+    cmd.push_str(&format!("{:X}", frame.data.len().min(8)));
+
+    // Data bytes
+    for byte in &frame.data {
+        cmd.push_str(&format!("{:02X}", byte));
+    }
+
+    cmd.push('\r');
+    cmd.into_bytes()
+}
+
+/// Run slcan source and send frames to merge task
+pub async fn run_source(
+    source_idx: usize,
+    port_path: String,
+    baud_rate: u32,
+    bitrate: u32,
+    silent_mode: bool,
+    bus_mappings: Vec<BusMapping>,
+    stop_flag: Arc<AtomicBool>,
+    tx: mpsc::Sender<SourceMessage>,
+) {
+    let device = format!("slcan({})", port_path);
+
+    // Open serial port
+    let serial_port = match serialport::new(&port_path, baud_rate)
+        .timeout(Duration::from_millis(50))
+        .open()
+    {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = tx
+                .send(SourceMessage::Error(
+                    source_idx,
+                    io_error(&device, "open", e),
+                ))
+                .await;
+            return;
+        }
+    };
+
+    // Wrap in Arc<Mutex> for shared access between read and transmit
+    let serial_port = Arc::new(Mutex::new(serial_port));
+
+    // Initialize slcan
+    let init_result: Result<(), String> = (|| {
+        let mut port = serial_port.lock().unwrap();
+        let _ = port.clear(serialport::ClearBuffer::All);
+
+        // Wait for device to be ready
+        std::thread::sleep(Duration::from_millis(200));
+
+        // Close any existing channel
+        let _ = port.write_all(b"C\r");
+        let _ = port.flush();
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Set bitrate
+        let bitrate_cmd = find_bitrate_command(bitrate)?;
+        port.write_all(format!("{}\r", bitrate_cmd).as_bytes())
+            .map_err(|e| io_error(&device, "set bitrate", e))?;
+        let _ = port.flush();
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Set mode: M0 = normal, M1 = silent
+        let mode_cmd = if silent_mode { "M1" } else { "M0" };
+        port.write_all(format!("{}\r", mode_cmd).as_bytes())
+            .map_err(|e| io_error(&device, "set mode", e))?;
+        let _ = port.flush();
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Open channel
+        port.write_all(b"O\r")
+            .map_err(|e| io_error(&device, "open channel", e))?;
+        let _ = port.flush();
+
+        Ok(())
+    })();
+
+    if let Err(e) = init_result {
+        let _ = tx.send(SourceMessage::Error(source_idx, e)).await;
+        return;
+    }
+
+    // Create transmit channel (only if not in silent mode)
+    let (transmit_tx, transmit_rx) = std::sync::mpsc::sync_channel::<TransmitRequest>(32);
+    if !silent_mode {
+        let _ = tx
+            .send(SourceMessage::TransmitReady(source_idx, transmit_tx))
+            .await;
+    }
+
+    eprintln!(
+        "[slcan] Source {} connected to {} (bitrate: {}, silent: {})",
+        source_idx, port_path, bitrate, silent_mode
+    );
+
+    // Read loop (blocking)
+    let tx_clone = tx.clone();
+    let stop_flag_clone = stop_flag.clone();
+    let serial_port_clone = serial_port.clone();
+
+    let blocking_handle = tokio::task::spawn_blocking(move || {
+        let mut line_buf = String::with_capacity(64);
+        let mut read_buf = [0u8; 256];
+
+        while !stop_flag_clone.load(Ordering::SeqCst) {
+            // Check for transmit requests (non-blocking)
+            if !silent_mode {
+                while let Ok(req) = transmit_rx.try_recv() {
+                    let result = {
+                        let mut port = serial_port_clone.lock().unwrap();
+                        port.write_all(&req.data)
+                            .and_then(|_| port.flush())
+                            .map_err(|e| format!("Write error: {}", e))
+                    };
+                    let _ = req.result_tx.send(result);
+                }
+            }
+
+            // Read data
+            let read_result = {
+                let mut port = serial_port_clone.lock().unwrap();
+                port.read(&mut read_buf)
+            };
+
+            match read_result {
+                Ok(n) if n > 0 => {
+                    let mut pending_frames: Vec<FrameMessage> = Vec::new();
+
+                    for &byte in &read_buf[..n] {
+                        if byte == b'\r' || byte == b'\n' {
+                            if !line_buf.is_empty() {
+                                if let Some(mut frame) = parse_slcan_frame(&line_buf) {
+                                    // Apply bus mapping
+                                    if apply_bus_mapping(&mut frame, &bus_mappings) {
+                                        pending_frames.push(frame);
+                                    }
+                                }
+                                line_buf.clear();
+                            }
+                        } else if byte == 0x07 {
+                            // Bell = error
+                            line_buf.clear();
+                        } else if byte.is_ascii() && !byte.is_ascii_control() {
+                            line_buf.push(byte as char);
+                            if line_buf.len() > 64 {
+                                line_buf.clear();
+                            }
+                        }
+                    }
+
+                    if !pending_frames.is_empty() {
+                        let _ = tx_clone
+                            .blocking_send(SourceMessage::Frames(source_idx, pending_frames));
+                    }
+                }
+                Ok(0) => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Ok(_) => {}
+                Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                    // Timeout - continue
+                }
+                Err(e) => {
+                    let _ = tx_clone.blocking_send(SourceMessage::Error(
+                        source_idx,
+                        format!("Read error: {}", e),
+                    ));
+                    return;
+                }
+            }
+        }
+
+        // Close channel
+        if let Ok(mut port) = serial_port_clone.lock() {
+            let _ = port.write_all(b"C\r");
+            let _ = port.flush();
+        }
+
+        let _ = tx_clone.blocking_send(SourceMessage::Ended(source_idx, "stopped".to_string()));
+    });
+
+    let _ = blocking_handle.await;
 }
 
 // ============================================================================

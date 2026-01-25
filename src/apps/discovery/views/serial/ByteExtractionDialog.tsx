@@ -17,6 +17,7 @@ interface ByteExtractionDialogProps {
   sampleFrames: number[][];
   initialConfig: ExtractionConfig;
   onApply: (config: ExtractionConfig) => void;
+  onClear?: () => void; // Optional clear handler to remove the config
   color: string; // 'cyan', 'purple', or 'amber'
   supportsNegativeIndex?: boolean; // Enable negative indexing (for checksum at end of frame)
 }
@@ -28,6 +29,7 @@ export default function ByteExtractionDialog({
   sampleFrames,
   initialConfig,
   onApply,
+  onClear,
   color,
   supportsNegativeIndex = false,
 }: ByteExtractionDialogProps) {
@@ -192,7 +194,7 @@ export default function ByteExtractionDialog({
             </select>
           </label>
           <label className="flex items-center gap-2 text-sm text-gray-300">
-            Endianness:
+            Byte order:
             <select
               value={endianness}
               onChange={(e) => setEndianness(e.target.value as 'big' | 'little')}
@@ -206,12 +208,24 @@ export default function ByteExtractionDialog({
 
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-2">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm bg-gray-600 hover:bg-gray-500 rounded"
-          >
-            Cancel
-          </button>
+          {onClear ? (
+            <button
+              onClick={() => {
+                onClear();
+                onClose();
+              }}
+              className="px-4 py-2 text-sm bg-red-600 hover:bg-red-500 rounded"
+            >
+              Clear
+            </button>
+          ) : (
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-sm bg-gray-600 hover:bg-gray-500 rounded"
+            >
+              Cancel
+            </button>
+          )}
           <button
             onClick={() => {
               onApply({ startByte, numBytes, endianness });

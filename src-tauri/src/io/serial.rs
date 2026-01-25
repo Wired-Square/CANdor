@@ -14,22 +14,14 @@ use std::sync::{
 };
 use std::time::Duration;
 use tauri::AppHandle;
+use tokio::sync::mpsc;
 
+use super::gvret_common::{apply_bus_mapping, BusMapping};
+use super::types::{RawByteEntry, SourceMessage, TransmitRequest, TransmitSender};
 use super::{
     emit_frames, emit_to_session, now_us, serial_utils, IODevice, FrameMessage, IOCapabilities,
     IOState, StreamEndedPayload, TransmitResult,
 };
-
-/// Serial transmit request sent through the channel
-struct SerialTransmitRequest {
-    /// Raw bytes to send
-    data: Vec<u8>,
-    /// Sync oneshot channel to send the result back
-    result_tx: std_mpsc::SyncSender<Result<(), String>>,
-}
-
-/// Sender for serial transmit requests
-type SerialTransmitSender = Arc<Mutex<Option<std_mpsc::SyncSender<SerialTransmitRequest>>>>;
 
 // Re-export Parity for external use (sessions.rs imports via serial_reader::Parity)
 pub use super::serial_utils::Parity;
@@ -106,8 +98,8 @@ pub struct SerialReader {
     cancel_flag: Arc<AtomicBool>,
     pause_flag: Arc<AtomicBool>,
     task_handle: Option<tauri::async_runtime::JoinHandle<()>>,
-    /// Channel sender for serial transmit requests
-    transmit_tx: SerialTransmitSender,
+    /// Channel sender for transmit requests
+    transmit_tx: Arc<Mutex<Option<TransmitSender>>>,
 }
 
 impl SerialReader {
@@ -128,19 +120,8 @@ impl SerialReader {
 #[async_trait]
 impl IODevice for SerialReader {
     fn capabilities(&self) -> IOCapabilities {
-        IOCapabilities {
-            can_pause: true,
-            supports_time_range: false,
-            is_realtime: true,
-            supports_speed_control: false,
-            supports_seek: false,
-            can_transmit: false,
-            can_transmit_serial: true, // Serial reader can transmit bytes
-            supports_canfd: false,
-            supports_extended_id: false,
-            supports_rtr: false,
-            available_buses: vec![],
-        }
+        // Standalone serial always emits raw bytes (client-side framing)
+        IOCapabilities::realtime_serial().with_emits_raw_bytes(true)
     }
 
     async fn start(&mut self) -> Result<(), String> {
@@ -153,7 +134,7 @@ impl IODevice for SerialReader {
         self.pause_flag.store(false, Ordering::Relaxed);
 
         // Create transmit channel
-        let (transmit_tx, transmit_rx) = std_mpsc::sync_channel::<SerialTransmitRequest>(32);
+        let (transmit_tx, transmit_rx) = std_mpsc::sync_channel::<TransmitRequest>(32);
         {
             let mut guard = self
                 .transmit_tx
@@ -243,7 +224,7 @@ impl IODevice for SerialReader {
         let (result_tx, result_rx) = std_mpsc::sync_channel(1);
 
         // Send the transmit request
-        tx.try_send(SerialTransmitRequest {
+        tx.try_send(TransmitRequest {
             data: bytes.to_vec(),
             result_tx,
         })
@@ -313,7 +294,7 @@ fn spawn_serial_stream(
     config: SerialConfig,
     cancel_flag: Arc<AtomicBool>,
     pause_flag: Arc<AtomicBool>,
-    transmit_rx: std_mpsc::Receiver<SerialTransmitRequest>,
+    transmit_rx: std_mpsc::Receiver<TransmitRequest>,
 ) -> tauri::async_runtime::JoinHandle<()> {
     tauri::async_runtime::spawn(async move {
         // Run blocking serial I/O in a dedicated thread
@@ -338,7 +319,7 @@ fn run_serial_stream_blocking(
     config: SerialConfig,
     cancel_flag: Arc<AtomicBool>,
     pause_flag: Arc<AtomicBool>,
-    transmit_rx: std_mpsc::Receiver<SerialTransmitRequest>,
+    transmit_rx: std_mpsc::Receiver<TransmitRequest>,
 ) {
     // Convert config to serialport types
     let data_bits = serial_utils::to_serialport_data_bits(config.data_bits);
@@ -486,6 +467,7 @@ fn run_serial_stream_blocking(
                         pending_bytes.push(TimestampedByte {
                             byte,
                             timestamp_us: base_ts,
+                            bus: 0, // Standalone serial is always bus 0
                         });
                     }
                 }
@@ -637,6 +619,235 @@ fn run_serial_stream_blocking(
     }
 
     emit_stream_ended(&app_handle, &session_id, stream_reason);
+}
+
+// ============================================================================
+// Multi-Source Streaming
+// ============================================================================
+
+/// Run serial source and send frames/bytes to merge task.
+/// Can emit raw bytes and/or framed data depending on configuration.
+pub async fn run_source(
+    source_idx: usize,
+    port_path: String,
+    baud_rate: u32,
+    data_bits: u8,
+    stop_bits: u8,
+    parity: Parity,
+    framing_encoding: FramingEncoding,
+    frame_id_config: Option<FrameIdConfig>,
+    source_address_config: Option<FrameIdConfig>,
+    min_frame_length: usize,
+    emit_raw_bytes: bool,
+    bus_mappings: Vec<BusMapping>,
+    stop_flag: Arc<AtomicBool>,
+    tx: mpsc::Sender<SourceMessage>,
+) {
+    // Convert config to serialport types
+    let sp_data_bits = serial_utils::to_serialport_data_bits(data_bits);
+    let sp_stop_bits = serial_utils::to_serialport_stop_bits(stop_bits);
+    let sp_parity = serial_utils::to_serialport_parity(&parity);
+
+    // Open serial port
+    let serial_port = match serialport::new(&port_path, baud_rate)
+        .data_bits(sp_data_bits)
+        .stop_bits(sp_stop_bits)
+        .parity(sp_parity)
+        .timeout(Duration::from_millis(50))
+        .open()
+    {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = tx
+                .send(SourceMessage::Error(
+                    source_idx,
+                    format!("Failed to open {}: {}", port_path, e),
+                ))
+                .await;
+            return;
+        }
+    };
+
+    // Wrap in Arc<Mutex> for shared access between read and transmit
+    let serial_port = Arc::new(Mutex::new(serial_port));
+
+    // Create transmit channel
+    let (transmit_tx, transmit_rx) = std_mpsc::sync_channel::<TransmitRequest>(32);
+    let _ = tx
+        .send(SourceMessage::TransmitReady(source_idx, transmit_tx))
+        .await;
+
+    // Get the output bus from the first enabled mapping (for raw bytes)
+    let output_bus = bus_mappings
+        .iter()
+        .find(|m| m.enabled)
+        .map(|m| m.output_bus)
+        .unwrap_or(0);
+
+    eprintln!(
+        "[serial] Source {} connected to {} (baud: {}, framing: {:?}, emit_raw: {}, bus: {})",
+        source_idx, port_path, baud_rate, framing_encoding, emit_raw_bytes, output_bus
+    );
+
+    // Read loop (blocking)
+    let tx_clone = tx.clone();
+    let stop_flag_clone = stop_flag.clone();
+    let serial_port_clone = serial_port.clone();
+
+    // Check if we have actual framing (not Raw mode)
+    let has_framing = !matches!(framing_encoding, FramingEncoding::Raw);
+
+    let blocking_handle = tokio::task::spawn_blocking(move || {
+        let mut framer = SerialFramer::new(framing_encoding);
+        let mut buf = [0u8; 256];
+
+        while !stop_flag_clone.load(Ordering::SeqCst) {
+            // Check for transmit requests (non-blocking)
+            while let Ok(req) = transmit_rx.try_recv() {
+                let result = {
+                    let mut port = serial_port_clone.lock().unwrap();
+                    port.write_all(&req.data)
+                        .and_then(|_| port.flush())
+                        .map_err(|e| format!("Write error: {}", e))
+                };
+                let _ = req.result_tx.send(result);
+            }
+
+            // Read data
+            let read_result = {
+                let mut port = serial_port_clone.lock().unwrap();
+                port.read(&mut buf)
+            };
+
+            match read_result {
+                Ok(n) if n > 0 => {
+                    let base_ts = now_us();
+                    let read_bytes = &buf[..n];
+
+                    // Emit raw bytes if requested
+                    if emit_raw_bytes {
+                        let raw_entries: Vec<RawByteEntry> = read_bytes
+                            .iter()
+                            .map(|&byte| RawByteEntry {
+                                byte,
+                                timestamp_us: base_ts as i64,
+                                bus: output_bus,
+                            })
+                            .collect();
+                        let _ = tx_clone.blocking_send(SourceMessage::RawBytes(source_idx, raw_entries));
+                    }
+
+                    // Only process through framer if we have actual framing
+                    if has_framing {
+                        let mut pending_frames: Vec<FrameMessage> = Vec::new();
+
+                        // Feed bytes to framer and process resulting frames
+                        let frames = framer.feed(read_bytes);
+                        for frame in frames {
+                            // Skip frames that are too short
+                            if frame.bytes.len() < min_frame_length {
+                                continue;
+                            }
+
+                            // Extract frame ID
+                            let frame_id = frame_id_config
+                                .as_ref()
+                                .and_then(|cfg| extract_frame_id(&frame.bytes, cfg))
+                                .unwrap_or(0);
+
+                            // Extract source address
+                            let source_address = source_address_config
+                                .as_ref()
+                                .and_then(|cfg| extract_frame_id(&frame.bytes, cfg))
+                                .map(|v| v as u16);
+
+                            let mut msg = FrameMessage {
+                                protocol: "serial".to_string(),
+                                timestamp_us: base_ts,
+                                frame_id,
+                                bus: 0,
+                                dlc: frame.bytes.len() as u8,
+                                bytes: frame.bytes,
+                                is_extended: false,
+                                is_fd: false,
+                                source_address,
+                                incomplete: None,
+                                direction: None,
+                            };
+
+                            // Apply bus mapping
+                            if apply_bus_mapping(&mut msg, &bus_mappings) {
+                                pending_frames.push(msg);
+                            }
+                        }
+
+                        if !pending_frames.is_empty() {
+                            let _ = tx_clone
+                                .blocking_send(SourceMessage::Frames(source_idx, pending_frames));
+                        }
+                    }
+                }
+                Ok(0) => {
+                    // EOF - port disconnected
+                    let _ = tx_clone.blocking_send(SourceMessage::Ended(
+                        source_idx,
+                        "disconnected".to_string(),
+                    ));
+                    return;
+                }
+                Ok(_) => {}
+                Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                    // Timeout - continue
+                }
+                Err(e) => {
+                    let _ = tx_clone.blocking_send(SourceMessage::Error(
+                        source_idx,
+                        format!("Read error: {}", e),
+                    ));
+                    return;
+                }
+            }
+        }
+
+        // Flush framer for any remaining partial frame (only if we have actual framing)
+        if has_framing {
+            if let Some(frame) = framer.flush() {
+                if frame.bytes.len() >= min_frame_length {
+                    let frame_id = frame_id_config
+                        .as_ref()
+                        .and_then(|cfg| extract_frame_id(&frame.bytes, cfg))
+                        .unwrap_or(0);
+
+                    let source_address = source_address_config
+                        .as_ref()
+                        .and_then(|cfg| extract_frame_id(&frame.bytes, cfg))
+                        .map(|v| v as u16);
+
+                    let mut msg = FrameMessage {
+                        protocol: "serial".to_string(),
+                        timestamp_us: now_us(),
+                        frame_id,
+                        bus: 0,
+                        dlc: frame.bytes.len() as u8,
+                        bytes: frame.bytes,
+                        is_extended: false,
+                        is_fd: false,
+                        source_address,
+                        incomplete: None,
+                        direction: None,
+                    };
+
+                    if apply_bus_mapping(&mut msg, &bus_mappings) {
+                        let _ = tx_clone.blocking_send(SourceMessage::Frames(source_idx, vec![msg]));
+                    }
+                }
+            }
+        }
+
+        let _ = tx_clone.blocking_send(SourceMessage::Ended(source_idx, "stopped".to_string()));
+    });
+
+    let _ = blocking_handle.await;
 }
 
 // ============================================================================

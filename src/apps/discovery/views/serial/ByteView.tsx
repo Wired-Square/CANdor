@@ -6,6 +6,7 @@
 import { useEffect, useRef, useMemo, useState, useCallback } from 'react';
 import type { SerialBytesEntry, RawBytesViewConfig } from '../../../../stores/discoveryStore';
 import { useDiscoverySerialStore } from '../../../../stores/discoverySerialStore';
+import { useDiscoveryUIStore } from '../../../../stores/discoveryUIStore';
 import { getBufferBytesPaginated, getBufferMetadata, findBufferBytesOffsetForTimestamp, type TimestampedByte } from '../../../../api/buffer';
 import { byteToHex, byteToAscii } from '../../../../utils/byteUtils';
 import { formatHumanUs, formatIsoUs, renderDeltaNode } from '../../../../utils/timeFormat';
@@ -18,6 +19,7 @@ import {
   hoverDarkRow,
   textDataGreen,
   textDataYellow,
+  textDataCyan,
 } from '../../../../styles';
 
 interface ByteViewProps {
@@ -25,7 +27,6 @@ interface ByteViewProps {
   viewConfig: RawBytesViewConfig;
   autoScroll?: boolean;
   displayTimeFormat?: 'delta-last' | 'delta-start' | 'timestamp' | 'human';
-  showAscii?: boolean;
   /** Whether we're currently streaming data */
   isStreaming?: boolean;
 }
@@ -34,6 +35,7 @@ interface ByteViewProps {
 interface ByteChunk {
   bytes: number[];
   timestampUs: number; // Timestamp of first byte in chunk
+  bus?: number; // Bus of first byte in chunk
 }
 
 function chunkBytesByGap(entries: SerialBytesEntry[], gapUs: number): ByteChunk[] {
@@ -44,7 +46,7 @@ function chunkBytesByGap(entries: SerialBytesEntry[], gapUs: number): ByteChunk[
   for (const entry of entries) {
     if (currentChunk === null) {
       // Start first chunk
-      currentChunk = { bytes: [entry.byte], timestampUs: entry.timestampUs };
+      currentChunk = { bytes: [entry.byte], timestampUs: entry.timestampUs, bus: entry.bus };
       lastTimestamp = entry.timestampUs;
     } else if (entry.timestampUs - lastTimestamp <= gapUs) {
       // Within gap threshold, add to current chunk
@@ -53,7 +55,7 @@ function chunkBytesByGap(entries: SerialBytesEntry[], gapUs: number): ByteChunk[
     } else {
       // Gap exceeded, start new chunk
       chunks.push(currentChunk);
-      currentChunk = { bytes: [entry.byte], timestampUs: entry.timestampUs };
+      currentChunk = { bytes: [entry.byte], timestampUs: entry.timestampUs, bus: entry.bus };
       lastTimestamp = entry.timestampUs;
     }
   }
@@ -66,9 +68,13 @@ function chunkBytesByGap(entries: SerialBytesEntry[], gapUs: number): ByteChunk[
   return chunks;
 }
 
-export default function ByteView({ entries, viewConfig, autoScroll = true, displayTimeFormat = 'human', showAscii = true, isStreaming = false }: ByteViewProps) {
+export default function ByteView({ entries, viewConfig, autoScroll = true, displayTimeFormat = 'human', isStreaming = false }: ByteViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wasAtBottom = useRef(true);
+
+  // Column visibility from UI store (shared with CAN views)
+  const showBusColumn = useDiscoveryUIStore((s) => s.showBusColumn);
+  const showAsciiColumn = useDiscoveryUIStore((s) => s.showAsciiColumn);
 
   // Backend buffer state from store
   const backendByteCount = useDiscoverySerialStore((s) => s.backendByteCount);
@@ -130,17 +136,16 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
     fetchMetadata();
   }, [useBackendBuffer, backendByteCount]);
 
-  // Fetch bytes from backend:
-  // - During streaming: fetch last pageSize bytes (sliding window)
-  // - After streaming: fetch based on currentPage (pagination)
+  // Fetch bytes from backend buffer after streaming stops.
+  // During streaming, we use frontend entries (from events) instead.
   // Note: backendByteCount is in the dependency array to ensure refetch when stream
-  // ends and we switch from streaming to buffer mode. The useBackendBuffer and totalBytes
-  // derived values should trigger this, but React batching can sometimes cause issues.
+  // ends and we switch from streaming to buffer mode.
   useEffect(() => {
     // Track whether this effect instance is still current
     let cancelled = false;
 
-    if (!useBackendBuffer) {
+    // Don't fetch during streaming - use frontend entries instead
+    if (!useBackendBuffer || isStreaming) {
       setBackendBytes([]);
       return;
     }
@@ -148,14 +153,8 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
     const fetchPage = async () => {
       setIsLoadingPage(true);
       try {
-        let offset: number;
-        if (isStreaming) {
-          // Streaming mode: show last pageSize bytes (sliding window)
-          offset = Math.max(0, totalBytes - pageSize);
-        } else {
-          // Pagination mode: show page based on currentPage
-          offset = currentPage * pageSize;
-        }
+        // Pagination mode: show page based on currentPage
+        const offset = currentPage * pageSize;
         const response = await getBufferBytesPaginated(offset, pageSize);
 
         // Only update state if this effect instance is still current
@@ -164,6 +163,7 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
         const fetchedEntries: SerialBytesEntry[] = response.bytes.map((b: TimestampedByte) => ({
           byte: b.byte,
           timestampUs: b.timestamp_us,
+          bus: b.bus,
         }));
         setBackendBytes(fetchedEntries);
       } catch (error) {
@@ -187,10 +187,12 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
     return () => {
       cancelled = true;
     };
-  }, [useBackendBuffer, isStreaming, currentPage, pageSize, totalBytes, backendByteCount, bufferReadyTrigger]);
+  }, [useBackendBuffer, isStreaming, currentPage, pageSize, bufferReadyTrigger]);
 
   // Determine which entries to display
-  const displayEntries = useBackendBuffer ? backendBytes : entries;
+  // During streaming, use frontend entries (from events) since backend fetch may fail
+  // After streaming stops, use backend buffer if available
+  const displayEntries = (useBackendBuffer && !isStreaming) ? backendBytes : entries;
 
   // Get first entry timestamp for delta-start reference
   const startTimeUs = displayEntries.length > 0 ? displayEntries[0].timestampUs : 0;
@@ -235,7 +237,7 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
 
   // Build display lines based on view mode
   const lines = useMemo(() => {
-    const result: { timestamp: React.ReactNode; timestampUs: number | null; hex: string; ascii: string }[] = [];
+    const result: { timestamp: React.ReactNode; timestampUs: number | null; bus: number | null; hex: string; ascii: string }[] = [];
     let prevTimestampUs: number | null = null;
 
     if (viewConfig.displayMode === 'individual') {
@@ -244,6 +246,7 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
         result.push({
           timestamp: formatTime(entry.timestampUs, prevTimestampUs),
           timestampUs: entry.timestampUs,
+          bus: entry.bus ?? null,
           hex: byteToHex(entry.byte),
           ascii: byteToAscii(entry.byte),
         });
@@ -262,6 +265,7 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
           result.push({
             timestamp: i === 0 ? formatTime(chunk.timestampUs, prevTimestampUs) : '',
             timestampUs: i === 0 ? chunk.timestampUs : null,
+            bus: i === 0 ? (chunk.bus ?? null) : null,
             hex: hex.padEnd(47, ' '), // 16 bytes * 2 + 15 spaces = 47 chars
             ascii,
           });
@@ -361,8 +365,9 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
               <thead className={`sticky top-0 z-10 ${bgDarkView} ${textDarkMuted} shadow-sm`}>
                 <tr>
                   <th className={`text-left px-2 py-1.5 border-b ${borderDarkView}`}>Time</th>
+                  {showBusColumn && <th className={`text-left px-2 py-1.5 border-b ${borderDarkView}`}>Bus</th>}
                   <th className={`text-left px-2 py-1.5 border-b ${borderDarkView}`}>Hex</th>
-                  {showAscii && <th className={`text-left px-2 py-1.5 border-b ${borderDarkView}`}>ASCII</th>}
+                  {showAsciiColumn && <th className={`text-left px-2 py-1.5 border-b ${borderDarkView}`}>ASCII</th>}
                 </tr>
               </thead>
               <tbody>
@@ -374,8 +379,13 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
                     >
                       {line.timestamp}
                     </td>
+                    {showBusColumn && (
+                      <td className={`${textDataCyan} px-2 py-0.5 whitespace-nowrap`}>
+                        {line.bus !== null ? line.bus : ''}
+                      </td>
+                    )}
                     <td className={`${textDataGreen} px-2 py-0.5 whitespace-nowrap`}>{line.hex}</td>
-                    {showAscii && <td className={`${textDataYellow} px-2 py-0.5 whitespace-nowrap`}>|{line.ascii}|</td>}
+                    {showAsciiColumn && <td className={`${textDataYellow} px-2 py-0.5 whitespace-nowrap`}>|{line.ascii}|</td>}
                   </tr>
                 ))}
               </tbody>

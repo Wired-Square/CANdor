@@ -70,6 +70,8 @@ export interface FrameDataTableProps {
   showAscii?: boolean;
   /** Show bus number column (default: false) */
   showBus?: boolean;
+  /** Show frame ID column (default: true) - set to false for serial frames */
+  showId?: boolean;
   /** Auto-scroll to bottom when new frames arrive (default: true) */
   autoScroll?: boolean;
 }
@@ -92,6 +94,7 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
   renderBytes,
   showAscii = false,
   showBus = false,
+  showId = true,
   autoScroll = true,
 }, ref) => {
   // Internal ref for scrolling (use forwarded ref if provided, otherwise internal)
@@ -154,7 +157,9 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
               <th className={`px-1 py-1.5 w-6 border-b ${borderDarkView}`}></th>
             )}
             <th className={`text-left px-2 py-1.5 border-b ${borderDarkView}`}>Time</th>
-            <th className={`text-right px-2 py-1.5 border-b ${borderDarkView}`}>ID</th>
+            {showId && (
+              <th className={`text-right px-2 py-1.5 border-b ${borderDarkView}`}>ID</th>
+            )}
             {showBus && (
               <th className={`text-center px-2 py-1.5 w-10 border-b ${borderDarkView} ${textDataCyan}`}>Bus</th>
             )}
@@ -199,10 +204,12 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
                 >
                   {formatTime(frame.timestamp_us, prevFrame?.timestamp_us ?? null)}
                 </td>
-                <td className={`px-2 py-0.5 text-right ${frame.incomplete ? textDataOrange : textDataYellow}`}>
-                  {formatId(frame.frame_id, displayFrameIdFormat, frame.is_extended)}
-                  {frame.incomplete && <span className={`ml-1 ${textDataOrange}`}>?</span>}
-                </td>
+                {showId && (
+                  <td className={`px-2 py-0.5 text-right ${frame.incomplete ? textDataOrange : textDataYellow}`}>
+                    {formatId(frame.frame_id, displayFrameIdFormat, frame.is_extended)}
+                    {frame.incomplete && <span className={`ml-1 ${textDataOrange}`}>?</span>}
+                  </td>
+                )}
                 {showBus && (
                   <td className={`px-2 py-0.5 text-center ${textDataCyan}`}>
                     {frame.bus ?? 0}

@@ -2,10 +2,10 @@
 //
 // Tabbed view for serial discovery:
 // - Raw Bytes tab: scrolling hex dump of raw bytes with timestamps
-// - Framed Data tab: frames after framing is applied
+// - Framed Bytes tab: frames after framing is applied
 // - Toolbar with framing controls
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { useDiscoveryStore, useDiscoverySerialStore } from '../../../stores/discoveryStore';
 import {
   ByteView,
@@ -21,9 +21,11 @@ interface SerialDiscoveryViewProps {
   isStreaming?: boolean;
   displayTimeFormat?: 'delta-last' | 'delta-start' | 'timestamp' | 'human';
   isRecorded?: boolean;
+  /** Whether the session emits raw bytes (from capabilities) - defaults to true for standalone serial */
+  emitsRawBytes?: boolean;
 }
 
-export default function SerialDiscoveryView({ isStreaming = false, displayTimeFormat = 'human', isRecorded = false }: SerialDiscoveryViewProps) {
+export default function SerialDiscoveryView({ isStreaming = false, displayTimeFormat = 'human', isRecorded = false, emitsRawBytes = true }: SerialDiscoveryViewProps) {
   const [showFramingDialog, setShowFramingDialog] = useState(false);
   const [showFilterDialog, setShowFilterDialog] = useState(false);
   const [showRawBytesViewDialog, setShowRawBytesViewDialog] = useState(false);
@@ -44,9 +46,10 @@ export default function SerialDiscoveryView({ isStreaming = false, displayTimeFo
   const mainFrames = useDiscoveryStore((s) => s.frames);
   const setFramingConfig = useDiscoverySerialStore((s) => s.setFramingConfig);
   const applyFrameIdMapping = useDiscoverySerialStore((s) => s.applyFrameIdMapping);
+  const clearFrameIdMapping = useDiscoverySerialStore((s) => s.clearFrameIdMapping);
   const applySourceMapping = useDiscoverySerialStore((s) => s.applySourceMapping);
+  const clearSourceMapping = useDiscoverySerialStore((s) => s.clearSourceMapping);
   const setRawBytesViewConfig = useDiscoverySerialStore((s) => s.setRawBytesViewConfig);
-  const serialViewConfig = useDiscoverySerialStore((s) => s.serialViewConfig);
   const backendByteCount = useDiscoverySerialStore((s) => s.backendByteCount);
   const framedBufferId = useDiscoverySerialStore((s) => s.framedBufferId);
   const backendFrameCount = useDiscoverySerialStore((s) => s.backendFrameCount);
@@ -54,6 +57,7 @@ export default function SerialDiscoveryView({ isStreaming = false, displayTimeFo
   const setMinFrameLength = useDiscoverySerialStore((s) => s.setMinFrameLength);
   const frameIdExtractionConfig = useDiscoverySerialStore((s) => s.frameIdExtractionConfig);
   const sourceExtractionConfig = useDiscoverySerialStore((s) => s.sourceExtractionConfig);
+  const filteredFrameCount = useDiscoverySerialStore((s) => s.filteredFrameCount);
 
   // Use composed store for actions that need coordination between stores
   const applyFraming = useDiscoveryStore((s) => s.applyFraming);
@@ -64,6 +68,27 @@ export default function SerialDiscoveryView({ isStreaming = false, displayTimeFo
 
   // Count frames (excluding incomplete ones for unique ID count)
   const completeFrames = framedData.filter(f => !f.incomplete);
+
+  // For streaming sessions, filter mainFrames by minFrameLength
+  // This applies the filter to real-time backend-framed sessions
+  const { filteredStreamingFrames, excludedStreamingFrames } = useMemo(() => {
+    // Only filter mainFrames during streaming when using backend framing (no local framedData)
+    if (!isStreaming || framedData.length > 0) {
+      return { filteredStreamingFrames: mainFrames, excludedStreamingFrames: [] };
+    }
+    if (minFrameLength <= 0) {
+      return { filteredStreamingFrames: mainFrames, excludedStreamingFrames: [] };
+    }
+    const filtered = mainFrames.filter(f => f.dlc >= minFrameLength);
+    const excluded = mainFrames.filter(f => f.dlc < minFrameLength);
+    return { filteredStreamingFrames: filtered, excludedStreamingFrames: excluded };
+  }, [isStreaming, framedData.length, mainFrames, minFrameLength]);
+
+  // Effective filtered count: use backend filteredFrameCount for client-side framing,
+  // or computed excludedStreamingFrames.length for streaming
+  const effectiveFilteredCount = isStreaming && framedData.length === 0
+    ? excludedStreamingFrames.length
+    : filteredFrameCount;
 
   // Track previous values to detect meaningful changes
   const prevFramingConfigRef = useRef<typeof framingConfig>(null);
@@ -164,8 +189,13 @@ export default function SerialDiscoveryView({ isStreaming = false, displayTimeFo
       <TabBar
         activeTab={activeTab}
         onTabChange={setActiveTab}
-        frameCount={framedBufferId ? backendFrameCount : (backendFrameCount > 0 ? backendFrameCount : completeFrames.length)}
+        frameCount={
+          isStreaming && framedData.length === 0
+            ? filteredStreamingFrames.length
+            : (framedBufferId ? backendFrameCount : (backendFrameCount > 0 ? backendFrameCount : completeFrames.length))
+        }
         byteCount={backendByteCount > 0 ? backendByteCount : serialBytesBuffer.length}
+        filteredCount={effectiveFilteredCount}
         framingConfig={framingConfig}
         minFrameLength={minFrameLength}
         hasAnalysisResults={serialFramingResults !== null || serialPayloadResults !== null}
@@ -175,25 +205,39 @@ export default function SerialDiscoveryView({ isStreaming = false, displayTimeFo
         onOpenFramingDialog={() => setShowFramingDialog(true)}
         onOpenFilterDialog={() => setShowFilterDialog(true)}
         framingAccepted={framingAccepted}
+        emitsRawBytes={emitsRawBytes}
       />
 
       {/* Tab Content */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {activeTab === 'raw' && (
-          <ByteView entries={serialBytes} viewConfig={rawBytesViewConfig} displayTimeFormat={displayTimeFormat} showAscii={serialViewConfig.showAscii} isStreaming={isStreaming} />
+          <ByteView entries={serialBytes} viewConfig={rawBytesViewConfig} displayTimeFormat={displayTimeFormat} isStreaming={isStreaming} />
         )}
         {activeTab === 'framed' && (
           <FramedDataView
-            frames={isStreaming && framedData.length === 0 ? mainFrames : framedData}
+            frames={isStreaming && framedData.length === 0 ? filteredStreamingFrames : framedData}
             onAccept={handleAcceptFraming}
             onApplyIdMapping={applyFrameIdMapping}
+            onClearIdMapping={clearFrameIdMapping}
             onApplySourceMapping={applySourceMapping}
+            onClearSourceMapping={clearSourceMapping}
             accepted={framingAccepted}
             framingMode={framingConfig?.mode}
             displayTimeFormat={displayTimeFormat}
-            showAscii={serialViewConfig.showAscii}
             isStreaming={isStreaming}
           />
+        )}
+        {activeTab === 'filtered' && (
+          <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
+            {effectiveFilteredCount > 0 ? (
+              <div className="text-center">
+                <p className="text-amber-400 font-medium">{effectiveFilteredCount} frames filtered out</p>
+                <p className="text-gray-500 mt-1">Frames shorter than {minFrameLength} bytes</p>
+              </div>
+            ) : (
+              <p>No filtered frames. Adjust the minimum frame length filter to see excluded frames.</p>
+            )}
+          </div>
         )}
         {activeTab === 'analysis' && (
           <SerialAnalysisResultView />

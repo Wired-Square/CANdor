@@ -2,9 +2,32 @@
 //
 // Status and bus configuration UI for single-bus devices (slcan, gs_usb, socketcan, serial).
 // Shows device status (online/offline) and allows setting a bus number override.
+// For serial devices, also shows framing configuration.
 
-import { Loader2, AlertCircle, CheckCircle2, Bus } from "lucide-react";
-import type { DeviceProbeResult } from "../../api/io";
+import { Loader2, AlertCircle, CheckCircle2, Bus, Layers } from "lucide-react";
+import type { DeviceProbeResult, FramingEncoding } from "../../api/io";
+
+/** Simplified framing config for per-interface display */
+export interface InterfaceFramingConfig {
+  /** Framing mode */
+  encoding: FramingEncoding;
+  /** Delimiter hex string for delimiter mode (e.g., "0D0A" for CRLF) */
+  delimiterHex?: string;
+  /** Max frame length for delimiter mode */
+  maxFrameLength?: number;
+  /** Whether to validate CRC-16 for Modbus RTU mode */
+  validateCrc?: boolean;
+  /** Also emit raw bytes in addition to frames */
+  emitRawBytes?: boolean;
+}
+
+/** Framing mode options for dropdown */
+const FRAMING_OPTIONS: { value: FramingEncoding; label: string }[] = [
+  { value: "raw", label: "None (Raw)" },
+  { value: "delimiter", label: "Delimiter" },
+  { value: "slip", label: "SLIP" },
+  { value: "modbus_rtu", label: "Modbus RTU" },
+];
 
 interface SingleBusConfigProps {
   /** Probe result (null while loading or before probe) */
@@ -23,6 +46,12 @@ interface SingleBusConfigProps {
   compact?: boolean;
   /** Bus numbers that are already used by other sources (for duplicate warning) */
   usedBuses?: Set<number>;
+  /** Profile kind (e.g., "serial") - shows framing options for serial */
+  profileKind?: string;
+  /** Current framing config (for serial profiles) */
+  framingConfig?: InterfaceFramingConfig;
+  /** Called when framing config changes */
+  onFramingChange?: (config: InterfaceFramingConfig) => void;
 }
 
 export default function SingleBusConfig({
@@ -34,9 +63,14 @@ export default function SingleBusConfig({
   profileName,
   compact = false,
   usedBuses,
+  profileKind,
+  framingConfig,
+  onFramingChange,
 }: SingleBusConfigProps) {
   const effectiveBus = busOverride ?? 0;
   const isDuplicate = usedBuses && usedBuses.has(effectiveBus);
+  const isSerial = profileKind === "serial";
+  const effectiveFraming = framingConfig?.encoding ?? "raw";
 
   // Compact wrapper for inline display
   const wrapperClass = compact
@@ -82,6 +116,10 @@ export default function SingleBusConfig({
 
   // Success state - show status and bus selector
   if (compact) {
+    const showDelimiterOptions = isSerial && effectiveFraming === "delimiter";
+    const showModbusOptions = isSerial && effectiveFraming === "modbus_rtu";
+    const showRawBytesOption = isSerial && effectiveFraming !== "raw";
+
     return (
       <div className={wrapperClass}>
         <div className="flex items-center gap-2 text-xs">
@@ -119,12 +157,93 @@ export default function SingleBusConfig({
           {isDuplicate && (
             <span className="text-amber-500" title="Another source uses this bus number">⚠</span>
           )}
+
+          {/* Framing selector for serial devices */}
+          {isSerial && onFramingChange && (
+            <>
+              <span className="text-slate-300 dark:text-slate-600">|</span>
+              <Layers className="w-3 h-3 text-slate-400 flex-shrink-0" />
+              <select
+                value={effectiveFraming}
+                onChange={(e) => {
+                  onFramingChange({ ...framingConfig, encoding: e.target.value as FramingEncoding });
+                }}
+                className="px-1 py-0.5 rounded border text-xs border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-cyan-500"
+              >
+                {FRAMING_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
         </div>
+
+        {/* Framing sub-options */}
+        {isSerial && onFramingChange && (showDelimiterOptions || showModbusOptions || showRawBytesOption) && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-slate-600 dark:text-slate-400">
+            {/* Delimiter options */}
+            {showDelimiterOptions && (
+              <>
+                <label className="flex items-center gap-1">
+                  <span>Delimiter:</span>
+                  <input
+                    type="text"
+                    value={framingConfig?.delimiterHex ?? "0A"}
+                    onChange={(e) => onFramingChange({ ...framingConfig, encoding: effectiveFraming, delimiterHex: e.target.value })}
+                    placeholder="0A"
+                    className="w-12 px-1 py-0.5 rounded border text-xs border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-cyan-500 font-mono"
+                  />
+                </label>
+                <label className="flex items-center gap-1">
+                  <span>Max:</span>
+                  <input
+                    type="number"
+                    value={framingConfig?.maxFrameLength ?? 1024}
+                    onChange={(e) => onFramingChange({ ...framingConfig, encoding: effectiveFraming, maxFrameLength: parseInt(e.target.value, 10) || 1024 })}
+                    className="w-16 px-1 py-0.5 rounded border text-xs border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-cyan-500"
+                  />
+                </label>
+              </>
+            )}
+
+            {/* Modbus RTU options */}
+            {showModbusOptions && (
+              <label className="flex items-center gap-1 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={framingConfig?.validateCrc ?? true}
+                  onChange={(e) => onFramingChange({ ...framingConfig, encoding: effectiveFraming, validateCrc: e.target.checked })}
+                  className="w-3 h-3 rounded border-slate-300 dark:border-slate-600 text-cyan-500 focus:ring-cyan-500"
+                />
+                <span>Validate CRC-16</span>
+              </label>
+            )}
+
+            {/* Raw bytes option (for any framing mode except raw) */}
+            {showRawBytesOption && (
+              <label className="flex items-center gap-1 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={framingConfig?.emitRawBytes ?? false}
+                  onChange={(e) => onFramingChange({ ...framingConfig, encoding: effectiveFraming, emitRawBytes: e.target.checked })}
+                  className="w-3 h-3 rounded border-slate-300 dark:border-slate-600 text-cyan-500 focus:ring-cyan-500"
+                />
+                <span>Capture raw bytes</span>
+              </label>
+            )}
+          </div>
+        )}
       </div>
     );
   }
 
   // Full mode - separate section display
+  const showDelimiterOptionsFull = isSerial && effectiveFraming === "delimiter";
+  const showModbusOptionsFull = isSerial && effectiveFraming === "modbus_rtu";
+  const showRawBytesOptionFull = isSerial && effectiveFraming !== "raw";
+
   return (
     <div className="border-t border-slate-200 dark:border-slate-700 px-4 py-3">
       <div className="flex items-center justify-between">
@@ -169,8 +288,89 @@ export default function SingleBusConfig({
         )}
       </div>
 
-      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-        Frames from this device will be tagged with the selected bus number.
+      {/* Framing selector for serial devices */}
+      {isSerial && onFramingChange && (
+        <>
+          <div className="flex items-center gap-2 mt-2 text-sm">
+            <Layers className="w-4 h-4 text-slate-400" />
+            <span className="text-slate-600 dark:text-slate-400">Framing:</span>
+            <select
+              value={effectiveFraming}
+              onChange={(e) => {
+                onFramingChange({ ...framingConfig, encoding: e.target.value as FramingEncoding });
+              }}
+              className="px-2 py-1 rounded border text-sm border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-cyan-500"
+            >
+              {FRAMING_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Framing sub-options */}
+          {(showDelimiterOptionsFull || showModbusOptionsFull || showRawBytesOptionFull) && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-2 ml-6 text-sm text-slate-600 dark:text-slate-400">
+              {/* Delimiter options */}
+              {showDelimiterOptionsFull && (
+                <>
+                  <label className="flex items-center gap-1.5">
+                    <span>Delimiter (hex):</span>
+                    <input
+                      type="text"
+                      value={framingConfig?.delimiterHex ?? "0A"}
+                      onChange={(e) => onFramingChange({ ...framingConfig, encoding: effectiveFraming, delimiterHex: e.target.value })}
+                      placeholder="0A"
+                      className="w-16 px-2 py-1 rounded border text-sm border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-cyan-500 font-mono"
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5">
+                    <span>Max length:</span>
+                    <input
+                      type="number"
+                      value={framingConfig?.maxFrameLength ?? 1024}
+                      onChange={(e) => onFramingChange({ ...framingConfig, encoding: effectiveFraming, maxFrameLength: parseInt(e.target.value, 10) || 1024 })}
+                      className="w-20 px-2 py-1 rounded border text-sm border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-cyan-500"
+                    />
+                  </label>
+                </>
+              )}
+
+              {/* Modbus RTU options */}
+              {showModbusOptionsFull && (
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={framingConfig?.validateCrc ?? true}
+                    onChange={(e) => onFramingChange({ ...framingConfig, encoding: effectiveFraming, validateCrc: e.target.checked })}
+                    className="w-4 h-4 rounded border-slate-300 dark:border-slate-600 text-cyan-500 focus:ring-cyan-500"
+                  />
+                  <span>Validate CRC-16</span>
+                </label>
+              )}
+
+              {/* Raw bytes option (for any framing mode except raw) */}
+              {showRawBytesOptionFull && (
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={framingConfig?.emitRawBytes ?? false}
+                    onChange={(e) => onFramingChange({ ...framingConfig, encoding: effectiveFraming, emitRawBytes: e.target.checked })}
+                    className="w-4 h-4 rounded border-slate-300 dark:border-slate-600 text-cyan-500 focus:ring-cyan-500"
+                  />
+                  <span>Capture raw bytes</span>
+                </label>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">
+        {isSerial
+          ? "Configure bus number and framing for this serial device."
+          : "Frames from this device will be tagged with the selected bus number."}
       </p>
     </div>
   );

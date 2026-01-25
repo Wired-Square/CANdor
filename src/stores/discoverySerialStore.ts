@@ -18,6 +18,8 @@ import {
 export type SerialBytesEntry = {
   byte: number;
   timestampUs: number;
+  /** Bus/interface number (for multi-source sessions) */
+  bus?: number;
 };
 
 /** Framing configuration for client-side framing */
@@ -56,7 +58,7 @@ export type ByteExtractionConfig = {
 };
 
 /** Serial view tab IDs */
-export type SerialTabId = 'raw' | 'framed' | 'analysis';
+export type SerialTabId = 'raw' | 'framed' | 'filtered' | 'analysis';
 
 // Buffer limits
 const MAX_SERIAL_BYTES = 100000;
@@ -96,6 +98,12 @@ interface DiscoverySerialState {
   frameIdExtractionConfig: ByteExtractionConfig | null;
   /** Source address extraction config (passed to backend framing) */
   sourceExtractionConfig: ByteExtractionConfig | null;
+  /** Frames excluded by minFrameLength filter (from backend framing) */
+  filteredFrames: FrameMessage[];
+  /** Count of filtered frames in backend buffer */
+  filteredFrameCount: number;
+  /** ID of the filtered frame buffer created by backend framing */
+  filteredBufferId: string | null;
 
   // Actions
   setSerialMode: (enabled: boolean) => void;
@@ -105,6 +113,7 @@ interface DiscoverySerialState {
   applyFraming: (streamStartTimeUs: number | null) => Promise<FrameMessage[]>;
   acceptFraming: () => FrameMessage[];
   resetFraming: () => void;
+  undoAcceptFraming: () => void;
   applyFrameIdMapping: (config: ByteExtractionConfig) => void;
   clearFrameIdMapping: () => void;
   applySourceMapping: (config: ByteExtractionConfig) => void;
@@ -153,6 +162,9 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
   framedDataTrigger: 0, // Incremented to force FramedDataView refetch
   frameIdExtractionConfig: null, // Frame ID extraction config
   sourceExtractionConfig: null, // Source address extraction config
+  filteredFrames: [], // Frames excluded by minFrameLength filter
+  filteredFrameCount: 0, // Count of filtered frames
+  filteredBufferId: null, // ID of filtered frame buffer
 
   // Actions
   setSerialMode: (enabled) => {
@@ -175,6 +187,9 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
       minFrameLength: 0,
       frameIdExtractionConfig: null,
       sourceExtractionConfig: null,
+      filteredFrames: [],
+      filteredFrameCount: 0,
+      filteredBufferId: null,
     });
   },
 
@@ -218,6 +233,9 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
       minFrameLength: 0,
       // Reset trigger when clearing for a fresh capture (but preserve when transitioning to buffer mode)
       bufferReadyTrigger: preserveBackendCount ? state.bufferReadyTrigger : 0,
+      filteredFrames: [],
+      filteredFrameCount: 0,
+      filteredBufferId: null,
     }));
   },
 
@@ -247,12 +265,12 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
   applyFraming: async (_streamStartTimeUs) => {
     const { backendByteCount, framingConfig, framedBufferId: previousBufferId, minFrameLength, frameIdExtractionConfig, sourceExtractionConfig } = get();
     if (!framingConfig) {
-      set({ framedData: [], framedBufferId: null, backendFrameCount: 0 });
+      set({ framedData: [], framedBufferId: null, backendFrameCount: 0, filteredFrameCount: 0, filteredBufferId: null, filteredFrames: [] });
       return [];
     }
 
     if (backendByteCount === 0) {
-      set({ framedData: [], framedBufferId: null, backendFrameCount: 0 });
+      set({ framedData: [], framedBufferId: null, backendFrameCount: 0, filteredFrameCount: 0, filteredBufferId: null, filteredFrames: [] });
       return [];
     }
 
@@ -283,14 +301,18 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
       const result = await applyFramingToBuffer(backendConfig, previousBufferId);
 
       // Store the buffer ID and frame count for FramedDataView
+      // Also store filtered frame count and buffer ID for the Filtered tab
       // Note: We don't fetch the frames here - FramedDataView will use pagination
       // Increment framedDataTrigger to force refetch even if buffer ID/count unchanged
       set((state) => ({
         framedBufferId: result.buffer_id,
         backendFrameCount: result.frame_count,
+        filteredFrameCount: result.filtered_count,
+        filteredBufferId: result.filtered_buffer_id,
         framedDataTrigger: state.framedDataTrigger + 1,
         // Clear local framedData since frames are now in backend
         framedData: [],
+        filteredFrames: [],
       }));
 
       // Return empty array - frames are fetched via pagination in FramedDataView
@@ -298,7 +320,7 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
       return [];
     } catch (error) {
       console.error('Failed to apply framing in backend:', error);
-      set({ framedData: [], framedBufferId: null, backendFrameCount: 0 });
+      set({ framedData: [], framedBufferId: null, backendFrameCount: 0, filteredFrameCount: 0, filteredBufferId: null, filteredFrames: [] });
       return [];
     }
   },
@@ -306,11 +328,14 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
   acceptFraming: () => {
     const { framedData, framedBufferId, backendFrameCount } = get();
 
-    // Check if we have frames - either locally or in backend buffer
+    // Check if we have frames - either locally, in backend buffer, or streaming frames
     const hasLocalFrames = framedData.length > 0;
     const hasBackendFrames = framedBufferId !== null && backendFrameCount > 0;
+    // Also check for streaming mode where frames go directly to mainFrames
+    // (backendFrameCount tracks streaming frames even without framedBufferId)
+    const hasStreamingFrames = framedBufferId === null && backendFrameCount > 0;
 
-    if (!hasLocalFrames && !hasBackendFrames) return [];
+    if (!hasLocalFrames && !hasBackendFrames && !hasStreamingFrames) return [];
 
     // Clear serial bytes since they've been processed
     set({
@@ -331,7 +356,15 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
       backendFrameCount: 0,
       frameIdExtractionConfig: null,
       sourceExtractionConfig: null,
+      filteredFrames: [],
+      filteredFrameCount: 0,
+      filteredBufferId: null,
     });
+  },
+
+  undoAcceptFraming: () => {
+    // Just un-accept framing, keep all config intact so user can reconfigure
+    set({ framingAccepted: false });
   },
 
   applyFrameIdMapping: (config) => {

@@ -16,6 +16,13 @@ export interface IOProfile {
 /** Protocol types that a reader can provide */
 export type ReaderProtocol = 'can' | 'serial' | 'modbus';
 
+/** Interface configuration for GVRET devices (stored in profile connection.interfaces) */
+export interface GvretInterfaceConfig {
+  device_bus: number;  // Device-reported bus number (0-4)
+  enabled: boolean;    // Whether to capture frames from this interface
+  protocol: 'can' | 'canfd';  // Protocol type
+}
+
 /** Get the protocol(s) supported by a reader kind */
 export function getReaderProtocols(kind: IOProfile['kind'], connection?: Record<string, any>): ReaderProtocol[] {
   switch (kind) {
