@@ -1,0 +1,468 @@
+// io/multi_source/spawner.rs
+//
+// Per-protocol source spawning for multi-source sessions.
+
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use tauri::AppHandle;
+use tokio::sync::mpsc;
+
+use crate::io::gvret::{run_gvret_tcp_source, run_gvret_usb_source, BusMapping};
+use crate::io::serial::{run_source as run_serial_source, FrameIdConfig, FramingEncoding, Parity};
+use crate::io::slcan::run_slcan_source;
+use crate::io::types::SourceMessage;
+use crate::settings::IOProfile;
+
+#[cfg(target_os = "linux")]
+use crate::io::socketcan::run_source as run_socketcan_source;
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use crate::io::gs_usb::run_source as run_gs_usb_source;
+
+/// Run a single source reader and send frames to the merge task
+pub(super) async fn run_source_reader(
+    _app: AppHandle,
+    _session_id: String,
+    source_idx: usize,
+    profile: IOProfile,
+    bus_mappings: Vec<BusMapping>,
+    _display_name: String,
+    // Framing config from session options (overrides profile settings for serial)
+    framing_encoding_override: Option<String>,
+    delimiter_override: Option<Vec<u8>>,
+    max_frame_length_override: Option<usize>,
+    min_frame_length_override: Option<usize>,
+    emit_raw_bytes_override: Option<bool>,
+    stop_flag: Arc<AtomicBool>,
+    tx: mpsc::Sender<SourceMessage>,
+) {
+    match profile.kind.as_str() {
+        "gvret_tcp" | "gvret-tcp" => {
+            run_gvret_tcp_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await;
+        }
+        "gvret_usb" | "gvret-usb" => {
+            run_gvret_usb_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await;
+        }
+        "slcan" => {
+            run_slcan_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await;
+        }
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        "gs_usb" => {
+            run_gs_usb_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await;
+        }
+        #[cfg(target_os = "linux")]
+        "socketcan" => {
+            run_socketcan_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await;
+        }
+        "serial" => {
+            run_serial_reader(
+                source_idx,
+                &profile,
+                bus_mappings,
+                framing_encoding_override,
+                delimiter_override,
+                max_frame_length_override,
+                min_frame_length_override,
+                emit_raw_bytes_override,
+                stop_flag,
+                tx,
+            )
+            .await;
+        }
+        kind => {
+            let _ = tx
+                .send(SourceMessage::Error(
+                    source_idx,
+                    format!("Unsupported source type for multi-bus: {}", kind),
+                ))
+                .await;
+        }
+    }
+}
+
+// ============================================================================
+// Per-Protocol Reader Functions
+// ============================================================================
+
+async fn run_gvret_tcp_reader(
+    source_idx: usize,
+    profile: &IOProfile,
+    bus_mappings: Vec<BusMapping>,
+    stop_flag: Arc<AtomicBool>,
+    tx: mpsc::Sender<SourceMessage>,
+) {
+    let host = profile
+        .connection
+        .get("host")
+        .and_then(|v| v.as_str())
+        .unwrap_or("127.0.0.1")
+        .to_string();
+    let port = profile
+        .connection
+        .get("port")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(23) as u16;
+    let timeout_sec = profile
+        .connection
+        .get("timeout")
+        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(5.0);
+
+    run_gvret_tcp_source(source_idx, host, port, timeout_sec, bus_mappings, stop_flag, tx).await;
+}
+
+async fn run_gvret_usb_reader(
+    source_idx: usize,
+    profile: &IOProfile,
+    bus_mappings: Vec<BusMapping>,
+    stop_flag: Arc<AtomicBool>,
+    tx: mpsc::Sender<SourceMessage>,
+) {
+    let port = match profile.connection.get("port").and_then(|v| v.as_str()) {
+        Some(p) => p.to_string(),
+        None => {
+            let _ = tx
+                .send(SourceMessage::Error(
+                    source_idx,
+                    "Serial port is required".to_string(),
+                ))
+                .await;
+            return;
+        }
+    };
+    let baud_rate = profile
+        .connection
+        .get("baud_rate")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(115200) as u32;
+
+    run_gvret_usb_source(source_idx, port, baud_rate, bus_mappings, stop_flag, tx).await;
+}
+
+async fn run_slcan_reader(
+    source_idx: usize,
+    profile: &IOProfile,
+    bus_mappings: Vec<BusMapping>,
+    stop_flag: Arc<AtomicBool>,
+    tx: mpsc::Sender<SourceMessage>,
+) {
+    let port = match profile.connection.get("port").and_then(|v| v.as_str()) {
+        Some(p) => p.to_string(),
+        None => {
+            let _ = tx
+                .send(SourceMessage::Error(
+                    source_idx,
+                    "Serial port is required".to_string(),
+                ))
+                .await;
+            return;
+        }
+    };
+    let baud_rate = profile
+        .connection
+        .get("baud_rate")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(115200) as u32;
+    let bitrate = profile
+        .connection
+        .get("bitrate")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(500_000) as u32;
+    let silent_mode = profile
+        .connection
+        .get("silent_mode")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    run_slcan_source(
+        source_idx,
+        port,
+        baud_rate,
+        bitrate,
+        silent_mode,
+        bus_mappings,
+        stop_flag,
+        tx,
+    )
+    .await;
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+async fn run_gs_usb_reader(
+    source_idx: usize,
+    profile: &IOProfile,
+    bus_mappings: Vec<BusMapping>,
+    stop_flag: Arc<AtomicBool>,
+    tx: mpsc::Sender<SourceMessage>,
+) {
+    let bus = profile
+        .connection
+        .get("bus")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(0) as u8;
+    let address = profile
+        .connection
+        .get("address")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(0) as u8;
+    let bitrate = profile
+        .connection
+        .get("bitrate")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(500_000) as u32;
+    let listen_only = profile
+        .connection
+        .get("listen_only")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let channel = profile
+        .connection
+        .get("channel")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(0) as u8;
+
+    run_gs_usb_source(
+        source_idx,
+        bus,
+        address,
+        bitrate,
+        listen_only,
+        channel,
+        bus_mappings,
+        stop_flag,
+        tx,
+    )
+    .await;
+}
+
+#[cfg(target_os = "linux")]
+async fn run_socketcan_reader(
+    source_idx: usize,
+    profile: &IOProfile,
+    bus_mappings: Vec<BusMapping>,
+    stop_flag: Arc<AtomicBool>,
+    tx: mpsc::Sender<SourceMessage>,
+) {
+    let interface = match profile.connection.get("interface").and_then(|v| v.as_str()) {
+        Some(i) => i.to_string(),
+        None => {
+            let _ = tx
+                .send(SourceMessage::Error(
+                    source_idx,
+                    "SocketCAN interface is required".to_string(),
+                ))
+                .await;
+            return;
+        }
+    };
+
+    run_socketcan_source(source_idx, interface, bus_mappings, stop_flag, tx).await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_serial_reader(
+    source_idx: usize,
+    profile: &IOProfile,
+    bus_mappings: Vec<BusMapping>,
+    framing_encoding_override: Option<String>,
+    delimiter_override: Option<Vec<u8>>,
+    max_frame_length_override: Option<usize>,
+    min_frame_length_override: Option<usize>,
+    emit_raw_bytes_override: Option<bool>,
+    stop_flag: Arc<AtomicBool>,
+    tx: mpsc::Sender<SourceMessage>,
+) {
+    let port = match profile.connection.get("port").and_then(|v| v.as_str()) {
+        Some(p) => p.to_string(),
+        None => {
+            let _ = tx
+                .send(SourceMessage::Error(
+                    source_idx,
+                    "Serial port is required".to_string(),
+                ))
+                .await;
+            return;
+        }
+    };
+    let baud_rate = profile
+        .connection
+        .get("baud_rate")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(115200) as u32;
+    let data_bits = profile
+        .connection
+        .get("data_bits")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(8) as u8;
+    let stop_bits = profile
+        .connection
+        .get("stop_bits")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(1) as u8;
+    let parity_str = profile
+        .connection
+        .get("parity")
+        .and_then(|v| v.as_str())
+        .unwrap_or("none");
+    let parity = match parity_str {
+        "odd" => Parity::Odd,
+        "even" => Parity::Even,
+        _ => Parity::None,
+    };
+
+    // Framing configuration - prefer session override, fall back to profile settings
+    let framing_encoding_str = framing_encoding_override
+        .as_deref()
+        .or_else(|| {
+            profile
+                .connection
+                .get("framing_encoding")
+                .and_then(|v| v.as_str())
+        })
+        .unwrap_or("raw"); // Default to raw if nothing configured
+
+    let framing_encoding = match framing_encoding_str {
+        "slip" => FramingEncoding::Slip,
+        "modbus_rtu" => {
+            let device_address = profile
+                .connection
+                .get("modbus_device_address")
+                .and_then(|v| v.as_i64())
+                .map(|n| n as u8);
+            let validate_crc = profile
+                .connection
+                .get("modbus_validate_crc")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            FramingEncoding::ModbusRtu {
+                device_address,
+                validate_crc,
+            }
+        }
+        "delimiter" => {
+            // Use session override if provided, else profile settings
+            let delimiter = delimiter_override.clone().or_else(|| {
+                profile
+                    .connection
+                    .get("delimiter")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_i64().map(|n| n as u8))
+                            .collect()
+                    })
+            })
+            .unwrap_or_else(|| vec![0x0A]); // Default to newline
+            let max_length = max_frame_length_override
+                .or_else(|| {
+                    profile
+                        .connection
+                        .get("max_frame_length")
+                        .and_then(|v| v.as_i64())
+                        .map(|n| n as usize)
+                })
+                .unwrap_or(1024);
+            let include_delimiter = profile
+                .connection
+                .get("include_delimiter")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            FramingEncoding::Delimiter {
+                delimiter,
+                max_length,
+                include_delimiter,
+            }
+        }
+        "raw" | _ => {
+            // Raw mode - emit bytes as individual "frames" with length as ID
+            FramingEncoding::Raw
+        }
+    };
+
+    // Log framing config for debugging
+    eprintln!(
+        "[multi_source] Serial source {} using framing: {:?} (override: {:?})",
+        source_idx, framing_encoding, framing_encoding_override
+    );
+
+    // Frame ID extraction config
+    let frame_id_config = profile.connection.get("frame_id_start_byte").and_then(|_| {
+        Some(FrameIdConfig {
+            start_byte: profile
+                .connection
+                .get("frame_id_start_byte")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0) as i32,
+            num_bytes: profile
+                .connection
+                .get("frame_id_bytes")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(1) as u8,
+            big_endian: profile
+                .connection
+                .get("frame_id_big_endian")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+        })
+    });
+
+    // Source address extraction config
+    let source_address_config = profile
+        .connection
+        .get("source_address_start_byte")
+        .and_then(|_| {
+            Some(FrameIdConfig {
+                start_byte: profile
+                    .connection
+                    .get("source_address_start_byte")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0) as i32,
+                num_bytes: profile
+                    .connection
+                    .get("source_address_bytes")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(1) as u8,
+                big_endian: profile
+                    .connection
+                    .get("source_address_big_endian")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
+            })
+        });
+
+    let min_frame_length = min_frame_length_override
+        .or_else(|| {
+            profile
+                .connection
+                .get("min_frame_length")
+                .and_then(|v| v.as_i64())
+                .map(|n| n as usize)
+        })
+        .unwrap_or(0);
+
+    // Determine if we should emit raw bytes
+    // For "raw" framing mode, raw bytes are the primary output
+    // For other modes, only emit if explicitly requested
+    let emit_raw_bytes = match framing_encoding_str {
+        "raw" => true,
+        _ => emit_raw_bytes_override.unwrap_or(false),
+    };
+
+    run_serial_source(
+        source_idx,
+        port,
+        baud_rate,
+        data_bits,
+        stop_bits,
+        parity,
+        framing_encoding,
+        frame_id_config,
+        source_address_config,
+        min_frame_length,
+        emit_raw_bytes,
+        bus_mappings,
+        stop_flag,
+        tx,
+    )
+    .await;
+}
