@@ -48,14 +48,3 @@ pub struct TransmitRequest {
 
 /// Sender type for transmit requests (sync-safe)
 pub type TransmitSender = std_mpsc::SyncSender<TransmitRequest>;
-
-// ============================================================================
-// Error Helpers
-// ============================================================================
-
-/// Format an IO error with device and operation context.
-/// Produces errors like: "[device_name] operation: error message"
-#[inline]
-pub fn io_error(device: &str, operation: &str, error: impl std::fmt::Display) -> String {
-    format!("[{}] {}: {}", device, operation, error)
-}

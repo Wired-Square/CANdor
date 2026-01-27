@@ -435,7 +435,7 @@ pub fn get_can_setup_command(interface: String, bitrate: u32) -> String {
 pub fn probe_gs_usb_device(bus: u8, address: u8) -> Result<GsUsbProbeResult, String> {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
-        nusb_driver::probe_device(bus, address)
+        nusb_driver::probe_device(bus, address).map_err(String::from)
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]

@@ -938,7 +938,9 @@ pub async fn probe_gvret_device(
                 .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
                 .unwrap_or(5.0);
 
-            probe_gvret_tcp(host, port, timeout_sec).await
+            probe_gvret_tcp(host, port, timeout_sec)
+                .await
+                .map_err(String::from)
         }
         "gvret_usb" | "gvret-usb" => {
             let port = profile
@@ -954,7 +956,9 @@ pub async fn probe_gvret_device(
 
             // Run blocking serial probe in a dedicated thread
             let port_owned = port.to_string();
-            tokio::task::spawn_blocking(move || probe_gvret_usb(&port_owned, baud_rate))
+            tokio::task::spawn_blocking(move || {
+                probe_gvret_usb(&port_owned, baud_rate).map_err(String::from)
+            })
                 .await
                 .map_err(|e| format!("Probe task failed: {}", e))?
         }
@@ -1057,7 +1061,7 @@ pub async fn probe_device(
                     bus_count: 0,
                     primary_info: None,
                     secondary_info: None,
-                    error: Some(e),
+                    error: Some(e.to_string()),
                 }),
             }
         }
@@ -1088,7 +1092,7 @@ pub async fn probe_device(
                     bus_count: 0,
                     primary_info: None,
                     secondary_info: None,
-                    error: Some(e),
+                    error: Some(e.to_string()),
                 }),
                 Err(e) => Ok(DeviceProbeResult {
                     success: false,

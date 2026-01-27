@@ -6,6 +6,7 @@
 
 mod buffer;
 mod csv;
+mod error;
 pub mod gs_usb; // pub for Tauri command access
 mod gvret_common;
 mod gvret_tcp;
@@ -31,6 +32,9 @@ pub use gvret_common::{BusMapping, GvretDeviceInfo};
 pub use gvret_tcp::probe_gvret_tcp;
 pub use gvret_usb::probe_gvret_usb;
 pub use multi_source::{MultiSourceReader, SourceConfig};
+// Error types (exported for external use even if not currently used within this crate)
+#[allow(unused_imports)]
+pub use error::IoError;
 // Note: types module exports are used internally by interface modules
 pub use mqtt::{MqttConfig, MqttReader};
 pub use postgres::{PostgresConfig, PostgresReader, PostgresReaderOptions, PostgresSourceType};

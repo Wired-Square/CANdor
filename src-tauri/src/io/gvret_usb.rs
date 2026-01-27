@@ -12,11 +12,12 @@ use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+use super::error::IoError;
 use super::gvret_common::{
     apply_bus_mappings_gvret, parse_gvret_frames, parse_numbuses_response, BusMapping,
     BINARY_MODE_ENABLE, DEVICE_INFO_PROBE, GVRET_CMD_NUMBUSES, GvretDeviceInfo,
 };
-use super::types::{io_error, SourceMessage, TransmitRequest};
+use super::types::{SourceMessage, TransmitRequest};
 
 // ============================================================================
 // Configuration
@@ -47,7 +48,10 @@ pub struct GvretUsbConfig {
 ///
 /// This function opens the serial port, queries the number of available buses,
 /// and returns device information. The connection is closed after probing.
-pub fn probe_gvret_usb(port: &str, baud_rate: u32) -> Result<GvretDeviceInfo, String> {
+///
+/// Returns `IoError` for typed error handling. Use `.map_err(String::from)` if
+/// you need a String error for backwards compatibility.
+pub fn probe_gvret_usb(port: &str, baud_rate: u32) -> Result<GvretDeviceInfo, IoError> {
     eprintln!(
         "[probe_gvret_usb] Probing GVRET device at {} (baud: {})",
         port, baud_rate
@@ -59,7 +63,7 @@ pub fn probe_gvret_usb(port: &str, baud_rate: u32) -> Result<GvretDeviceInfo, St
     let mut serial_port = serialport::new(port, baud_rate)
         .timeout(Duration::from_millis(500))
         .open()
-        .map_err(|e| io_error(&device, "open", e))?;
+        .map_err(|e| IoError::connection(&device, e.to_string()))?;
 
     eprintln!("[probe_gvret_usb] Opened serial port {}", port);
 
@@ -69,7 +73,7 @@ pub fn probe_gvret_usb(port: &str, baud_rate: u32) -> Result<GvretDeviceInfo, St
     // Enter binary mode
     serial_port
         .write_all(&BINARY_MODE_ENABLE)
-        .map_err(|e| io_error(&device, "enable binary mode", e))?;
+        .map_err(|e| IoError::protocol(&device, format!("enable binary mode: {}", e)))?;
     let _ = serial_port.flush();
 
     // Wait for device to process
@@ -78,7 +82,7 @@ pub fn probe_gvret_usb(port: &str, baud_rate: u32) -> Result<GvretDeviceInfo, St
     // Query number of buses
     serial_port
         .write_all(&GVRET_CMD_NUMBUSES)
-        .map_err(|e| io_error(&device, "send NUMBUSES command", e))?;
+        .map_err(|e| IoError::protocol(&device, format!("send NUMBUSES command: {}", e)))?;
     let _ = serial_port.flush();
 
     // Read response with timeout
@@ -115,7 +119,7 @@ pub fn probe_gvret_usb(port: &str, baud_rate: u32) -> Result<GvretDeviceInfo, St
                 // Timeout on this read, continue if we still have time
             }
             Err(e) => {
-                return Err(io_error(&device, "read response", e));
+                return Err(IoError::read(&device, e.to_string()));
             }
         }
     }

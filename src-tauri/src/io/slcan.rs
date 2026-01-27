@@ -20,8 +20,9 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
+use super::error::IoError;
 use super::gvret_common::{apply_bus_mapping, BusMapping};
-use super::types::{io_error, SourceMessage, TransmitRequest};
+use super::types::{SourceMessage, TransmitRequest};
 use super::{now_us, serial_utils, CanTransmitFrame, FrameMessage};
 
 // ============================================================================
@@ -85,18 +86,18 @@ fn default_parity() -> String { "none".to_string() }
 // ============================================================================
 
 /// Find the slcan bitrate command for a given bitrate
-pub fn find_bitrate_command(bitrate: u32) -> Result<&'static str, String> {
+pub fn find_bitrate_command(bitrate: u32) -> Result<&'static str, IoError> {
     SLCAN_BITRATES
         .iter()
         .find(|(rate, _)| *rate == bitrate)
         .map(|(_, cmd)| *cmd)
         .ok_or_else(|| {
             let valid: Vec<String> = SLCAN_BITRATES.iter().map(|(r, _)| format!("{}", r)).collect();
-            format!(
+            IoError::configuration(format!(
                 "Invalid CAN bitrate {}. Valid bitrates: {}",
                 bitrate,
                 valid.join(", ")
-            )
+            ))
         })
 }
 
@@ -265,7 +266,7 @@ pub fn probe_slcan_device(
                 version: None,
                 hardware_version: None,
                 serial_number: None,
-                error: Some(io_error(&device, "open", e)),
+                error: Some(IoError::connection(&device, e.to_string()).to_string()),
             };
         }
     };
@@ -463,7 +464,7 @@ pub async fn run_source(
             let _ = tx
                 .send(SourceMessage::Error(
                     source_idx,
-                    io_error(&device, "open", e),
+                    IoError::connection(&device, e.to_string()).to_string(),
                 ))
                 .await;
             return;
@@ -487,22 +488,22 @@ pub async fn run_source(
         std::thread::sleep(Duration::from_millis(50));
 
         // Set bitrate
-        let bitrate_cmd = find_bitrate_command(bitrate)?;
+        let bitrate_cmd = find_bitrate_command(bitrate).map_err(String::from)?;
         port.write_all(format!("{}\r", bitrate_cmd).as_bytes())
-            .map_err(|e| io_error(&device, "set bitrate", e))?;
+            .map_err(|e| IoError::protocol(&device, format!("set bitrate: {}", e)).to_string())?;
         let _ = port.flush();
         std::thread::sleep(Duration::from_millis(50));
 
         // Set mode: M0 = normal, M1 = silent
         let mode_cmd = if silent_mode { "M1" } else { "M0" };
         port.write_all(format!("{}\r", mode_cmd).as_bytes())
-            .map_err(|e| io_error(&device, "set mode", e))?;
+            .map_err(|e| IoError::protocol(&device, format!("set mode: {}", e)).to_string())?;
         let _ = port.flush();
         std::thread::sleep(Duration::from_millis(50));
 
         // Open channel
         port.write_all(b"O\r")
-            .map_err(|e| io_error(&device, "open channel", e))?;
+            .map_err(|e| IoError::protocol(&device, format!("open channel: {}", e)).to_string())?;
         let _ = port.flush();
 
         Ok(())

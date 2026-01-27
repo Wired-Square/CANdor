@@ -23,8 +23,9 @@ use super::{
 use tokio::sync::mpsc;
 
 use crate::buffer_store::{self, BufferType};
+use crate::io::error::IoError;
 use crate::io::gvret_common::{apply_bus_mapping, BusMapping};
-use crate::io::types::{io_error, SourceMessage, TransmitRequest, TransmitSender};
+use crate::io::types::{SourceMessage, TransmitRequest, TransmitSender};
 use crate::io::{
     emit_frames, emit_to_session, now_us, CanTransmitFrame, FrameMessage, IOCapabilities,
     IODevice, IOState, StreamEndedPayload, TransmitResult,
@@ -101,13 +102,13 @@ pub fn list_devices() -> Result<Vec<GsUsbDeviceInfo>, String> {
 }
 
 /// Probe a specific gs_usb device to get its capabilities
-pub fn probe_device(bus: u8, address: u8) -> Result<GsUsbProbeResult, String> {
+pub fn probe_device(bus: u8, address: u8) -> Result<GsUsbProbeResult, IoError> {
     let device = format!("gs_usb({}:{})", bus, address);
 
     // Find the device using blocking .wait()
     let device_info = nusb::list_devices()
         .wait()
-        .map_err(|e| io_error(&device, "list USB devices", e))?
+        .map_err(|e| IoError::other(&device, format!("list USB devices: {}", e)))?
         .find(|dev| {
             let dev_bus = dev.bus_id().parse::<u8>().unwrap_or(0);
             dev_bus == bus
@@ -115,22 +116,23 @@ pub fn probe_device(bus: u8, address: u8) -> Result<GsUsbProbeResult, String> {
                 && dev.vendor_id() == GS_USB_VID
                 && GS_USB_PIDS.contains(&dev.product_id())
         })
-        .ok_or_else(|| io_error(&device, "find", "device not found"))?;
+        .ok_or_else(|| IoError::not_found(&device))?;
 
     // Open the device (also returns MaybeFuture)
     let dev_handle = device_info
         .open()
         .wait()
-        .map_err(|e| io_error(&device, "open", e))?;
+        .map_err(|e| IoError::connection(&device, e.to_string()))?;
 
     // Claim interface 0 (also returns MaybeFuture)
     let interface = dev_handle
         .claim_interface(0)
         .wait()
-        .map_err(|e| io_error(&device, "claim interface", e))?;
+        .map_err(|_| IoError::busy(&device))?;
 
     // Query device config (blocking via wait)
-    let config = get_device_config_sync(&interface)?;
+    let config = get_device_config_sync(&interface)
+        .map_err(|e| IoError::protocol(&device, e))?;
 
     // icount is 0-indexed (number of interfaces - 1), so add 1 to get count
     Ok(GsUsbProbeResult {
@@ -376,8 +378,8 @@ async fn run_gs_usb_stream(
                     && dev.vendor_id() == GS_USB_VID
                     && GS_USB_PIDS.contains(&dev.product_id())
             })
-            .ok_or_else(|| io_error(&device_name, "find", "device not found")),
-        Err(e) => Err(io_error(&device_name, "list devices", e)),
+            .ok_or_else(|| IoError::not_found(&device_name).to_string()),
+        Err(e) => Err(IoError::other(&device_name, format!("list devices: {}", e)).to_string()),
     };
 
     let device_info = match device_info {
@@ -396,7 +398,7 @@ async fn run_gs_usb_stream(
                 &app_handle,
                 "can-bytes-error",
                 &session_id,
-                io_error(&device_name, "open", e),
+                IoError::connection(&device_name, e.to_string()).to_string(),
             );
             emit_stream_ended(&app_handle, &session_id, "error");
             return;
@@ -405,12 +407,12 @@ async fn run_gs_usb_stream(
 
     let interface = match usb_device.claim_interface(0).await {
         Ok(i) => i,
-        Err(e) => {
+        Err(_) => {
             emit_to_session(
                 &app_handle,
                 "can-bytes-error",
                 &session_id,
-                io_error(&device_name, "claim interface", e),
+                IoError::busy(&device_name).to_string(),
             );
             emit_stream_ended(&app_handle, &session_id, "error");
             return;
@@ -428,7 +430,7 @@ async fn run_gs_usb_stream(
             &app_handle,
             "can-bytes-error",
             &session_id,
-            io_error(&device_name, "initialize", e),
+            IoError::protocol(&device_name, format!("initialize: {}", e)).to_string(),
         );
         emit_stream_ended(&app_handle, &session_id, "error");
         return;
@@ -444,7 +446,7 @@ async fn run_gs_usb_stream(
                 &app_handle,
                 "can-bytes-error",
                 &session_id,
-                io_error(&device_name, "open bulk IN endpoint", e),
+                IoError::protocol(&device_name, format!("open bulk IN endpoint: {}", e)).to_string(),
             );
             emit_stream_ended(&app_handle, &session_id, "error");
             return;

@@ -9,11 +9,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
+use super::error::IoError;
 use super::gvret_common::{
     apply_bus_mappings_gvret, parse_gvret_frames, parse_numbuses_response, BusMapping,
     BINARY_MODE_ENABLE, DEVICE_INFO_PROBE, GVRET_CMD_NUMBUSES, GvretDeviceInfo,
 };
-use super::types::{io_error, SourceMessage, TransmitRequest};
+use super::types::{SourceMessage, TransmitRequest};
 
 // ============================================================================
 // Device Probing
@@ -23,11 +24,14 @@ use super::types::{io_error, SourceMessage, TransmitRequest};
 ///
 /// This function connects to the device, queries the number of available buses,
 /// and returns device information. The connection is closed after probing.
+///
+/// Returns `IoError` for typed error handling. Use `.map_err(String::from)` if
+/// you need a String error for backwards compatibility.
 pub async fn probe_gvret_tcp(
     host: &str,
     port: u16,
     timeout_sec: f64,
-) -> Result<GvretDeviceInfo, String> {
+) -> Result<GvretDeviceInfo, IoError> {
     eprintln!(
         "[probe_gvret_tcp] Probing GVRET device at {}:{} (timeout: {}s)",
         host, port, timeout_sec
@@ -47,15 +51,15 @@ pub async fn probe_gvret_tcp(
             eprintln!("[probe_gvret_tcp] Connected to {}:{}", host, port);
             s
         }
-        Ok(Err(e)) => return Err(io_error(&device, "connect", e)),
-        Err(_) => return Err(io_error(&device, "connect", "timed out")),
+        Ok(Err(e)) => return Err(IoError::connection(&device, e.to_string())),
+        Err(_) => return Err(IoError::timeout(&device, "connect")),
     };
 
     // Enter binary mode
     stream
         .write_all(&BINARY_MODE_ENABLE)
         .await
-        .map_err(|e| io_error(&device, "enable binary mode", e))?;
+        .map_err(|e| IoError::protocol(&device, format!("enable binary mode: {}", e)))?;
 
     // Wait a moment for the device to process
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -64,12 +68,12 @@ pub async fn probe_gvret_tcp(
     stream
         .write_all(&GVRET_CMD_NUMBUSES)
         .await
-        .map_err(|e| io_error(&device, "send NUMBUSES command", e))?;
+        .map_err(|e| IoError::protocol(&device, format!("send NUMBUSES command: {}", e)))?;
 
     stream
         .flush()
         .await
-        .map_err(|e| io_error(&device, "flush", e))?;
+        .map_err(|e| IoError::protocol(&device, format!("flush: {}", e)))?;
 
     // Read response with timeout
     // Response format: [0xF1][0x0C][bus_count]
@@ -110,7 +114,7 @@ pub async fn probe_gvret_tcp(
                 }
             }
             Ok(Err(e)) => {
-                return Err(io_error(&device, "read response", e));
+                return Err(IoError::read(&device, e.to_string()));
             }
             Err(_) => {
                 // Timeout on this read, continue if we still have time

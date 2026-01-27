@@ -23,8 +23,9 @@ mod linux_impl {
     use std::time::Duration;
     use tokio::sync::mpsc;
 
+    use crate::io::error::IoError;
     use crate::io::gvret_common::{apply_bus_mapping, BusMapping};
-    use crate::io::types::{io_error, SourceMessage, TransmitRequest};
+    use crate::io::types::{SourceMessage, TransmitRequest};
     use crate::io::{now_us, CanTransmitFrame, FrameMessage};
 
     // ============================================================================
@@ -100,12 +101,12 @@ mod linux_impl {
         pub fn new(interface: &str) -> Result<Self, String> {
             let device = format!("socketcan({})", interface);
             let socket = CanFdSocket::open(interface)
-                .map_err(|e| io_error(&device, "open", e))?;
+                .map_err(|e| IoError::connection(&device, e.to_string()).to_string())?;
 
             // Set read timeout for non-blocking reads
             socket
                 .set_read_timeout(Duration::from_millis(100))
-                .map_err(|e| io_error(&device, "set read timeout", e))?;
+                .map_err(|e| IoError::protocol(&device, format!("set read timeout: {}", e)).to_string())?;
 
             Ok(Self { socket })
         }
@@ -287,7 +288,7 @@ mod linux_impl {
                 let _ = tx
                     .send(SourceMessage::Error(
                         source_idx,
-                        io_error(&device, "open", e),
+                        IoError::connection(&device, e.to_string()).to_string(),
                     ))
                     .await;
                 return;
