@@ -195,6 +195,13 @@ fn create_source_config_from_profile(
         max_frame_length: None,
         min_frame_length: None,
         emit_raw_bytes: None,
+        // Frame ID extraction - not passed for single-source (uses profile settings)
+        frame_id_start_byte: None,
+        frame_id_bytes: None,
+        frame_id_big_endian: None,
+        source_address_start_byte: None,
+        source_address_bytes: None,
+        source_address_big_endian: None,
     })
 }
 
@@ -1286,6 +1293,24 @@ pub struct MultiSourceInput {
     /// Whether to emit raw bytes in addition to framed data
     #[serde(default)]
     pub emit_raw_bytes: Option<bool>,
+    /// Frame ID extraction: start byte position (0-indexed)
+    #[serde(default)]
+    pub frame_id_start_byte: Option<i32>,
+    /// Frame ID extraction: number of bytes (1 or 2)
+    #[serde(default)]
+    pub frame_id_bytes: Option<u8>,
+    /// Frame ID extraction: byte order (true = big endian)
+    #[serde(default)]
+    pub frame_id_big_endian: Option<bool>,
+    /// Source address extraction: start byte position (0-indexed)
+    #[serde(default)]
+    pub source_address_start_byte: Option<i32>,
+    /// Source address extraction: number of bytes (1 or 2)
+    #[serde(default)]
+    pub source_address_bytes: Option<u8>,
+    /// Source address extraction: byte order (true = big endian)
+    #[serde(default)]
+    pub source_address_big_endian: Option<bool>,
 }
 
 /// Create a multi-source reader session that combines frames from multiple devices.
@@ -1370,6 +1395,12 @@ pub async fn create_multi_source_session(
             max_frame_length: input.max_frame_length,
             min_frame_length: input.min_frame_length,
             emit_raw_bytes: input.emit_raw_bytes,
+            frame_id_start_byte: input.frame_id_start_byte,
+            frame_id_bytes: input.frame_id_bytes,
+            frame_id_big_endian: input.frame_id_big_endian,
+            source_address_start_byte: input.source_address_start_byte,
+            source_address_bytes: input.source_address_bytes,
+            source_address_big_endian: input.source_address_big_endian,
         });
     }
 

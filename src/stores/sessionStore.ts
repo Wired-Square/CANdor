@@ -1376,6 +1376,18 @@ export interface CreateMultiSourceOptions {
   emitRawBytes?: boolean;
   /** Per-interface framing config (overrides session-level framing for specific profiles) */
   perInterfaceFraming?: Map<string, PerInterfaceFramingConfig>;
+  /** Frame ID extraction: start byte position (0-indexed) */
+  frameIdStartByte?: number;
+  /** Frame ID extraction: number of bytes (1 or 2) */
+  frameIdBytes?: number;
+  /** Frame ID extraction: byte order (true = big endian) */
+  frameIdBigEndian?: boolean;
+  /** Source address extraction: start byte position (0-indexed) */
+  sourceAddressStartByte?: number;
+  /** Source address extraction: number of bytes (1 or 2) */
+  sourceAddressBytes?: number;
+  /** Source address extraction: byte order (true = big endian) */
+  sourceAddressBigEndian?: boolean;
 }
 
 /**
@@ -1423,6 +1435,12 @@ export async function createAndStartMultiSourceSession(
     minFrameLength,
     emitRawBytes,
     perInterfaceFraming,
+    frameIdStartByte,
+    frameIdBytes,
+    frameIdBigEndian,
+    sourceAddressStartByte,
+    sourceAddressBytes,
+    sourceAddressBigEndian,
   } = options;
 
   // Build source configs with bus mappings and framing config
@@ -1450,6 +1468,13 @@ export async function createAndStartMultiSourceSession(
       maxFrameLength,
       minFrameLength,
       emitRawBytes: sourceEmitRawBytes,
+      // Frame ID extraction config (from catalog)
+      frameIdStartByte,
+      frameIdBytes,
+      frameIdBigEndian,
+      sourceAddressStartByte,
+      sourceAddressBytes,
+      sourceAddressBigEndian,
     };
   });
 

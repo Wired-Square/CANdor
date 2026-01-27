@@ -409,7 +409,20 @@ export function useIOSessionManager(
     profileIds: string[],
     opts: IngestOptions
   ) => {
-    const { busMappings, framingEncoding, delimiter, maxFrameLength, emitRawBytes, perInterfaceFraming, minFrameLength } = opts;
+    const {
+      busMappings,
+      framingEncoding,
+      delimiter,
+      maxFrameLength,
+      emitRawBytes,
+      perInterfaceFraming,
+      minFrameLength,
+      frameIdStartByte,
+      frameIdBytes,
+      sourceAddressStartByte,
+      sourceAddressBytes,
+      sourceAddressEndianness,
+    } = opts;
 
     // Generate unique session ID to avoid collisions between windows
     const sessionId = busMappings
@@ -430,6 +443,13 @@ export function useIOSessionManager(
       minFrameLength,
       // Per-interface framing overrides
       perInterfaceFraming,
+      // Frame ID extraction config (from catalog)
+      frameIdStartByte,
+      frameIdBytes,
+      frameIdBigEndian: frameIdStartByte !== undefined ? true : undefined, // Default to big endian if frame ID is configured
+      sourceAddressStartByte,
+      sourceAddressBytes,
+      sourceAddressBigEndian: sourceAddressEndianness === "big",
     };
 
     await createAndStartMultiSourceSession(createOptions);

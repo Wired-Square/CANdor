@@ -26,7 +26,7 @@ import type { PlaybackSpeed } from "../../../components/TimeController";
 import type { IOCapabilities } from "../../../api/io";
 import type { BufferMetadata } from "../../../api/buffer";
 import type { FrameDetail } from "../../../types/decoder";
-import type { SerialFrameConfig } from "../../../utils/frameExport";
+// Note: SerialFrameConfig is read directly from store in session handlers to avoid stale closures
 import type { SelectionSet } from "../../../utils/selectionSets";
 
 export interface UseDecoderHandlersParams {
@@ -92,7 +92,7 @@ export interface UseDecoderHandlersParams {
   startTime: string;
   endTime: string;
   playbackSpeed: PlaybackSpeed;
-  serialConfig: SerialFrameConfig | null;
+  // Note: serialConfig is read directly from store via getState() to avoid stale closure issues
 
   // Multi-bus state
   setMultiBusMode: (mode: boolean) => void;
@@ -175,7 +175,7 @@ export function useDecoderHandlers(params: UseDecoderHandlersParams): DecoderHan
     startIngest: params.startIngest,
     stopIngest: params.stopIngest,
     isIngesting: params.isIngesting,
-    serialConfig: params.serialConfig,
+    // Note: serialConfig is read from store via getState() to avoid stale closure issues
     isWatching: params.isWatching,
     setIsWatching: params.setIsWatching,
     resetWatchFrameCount: params.resetWatchFrameCount,

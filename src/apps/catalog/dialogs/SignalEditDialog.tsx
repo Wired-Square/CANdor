@@ -173,7 +173,7 @@ export default function SignalEditDialog({
                   variant="default"
                   type="number"
                   value={fields.start_bit}
-                  onChange={(e) => setFields({ ...fields, start_bit: Number(e.target.value) || 0 })}
+                  onChange={(e) => setFields({ ...fields, start_bit: parseInt(e.target.value, 10) || 0 })}
                 />
               </FormField>
               <FormField label="Bit Length" required variant="default">
@@ -181,7 +181,7 @@ export default function SignalEditDialog({
                   variant="default"
                   type="number"
                   value={fields.bit_length}
-                  onChange={(e) => setFields({ ...fields, bit_length: Number(e.target.value) || 1 })}
+                  onChange={(e) => setFields({ ...fields, bit_length: parseInt(e.target.value, 10) || 1 })}
                 />
               </FormField>
             </div>

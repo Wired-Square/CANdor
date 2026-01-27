@@ -839,6 +839,18 @@ export interface MultiSourceInput {
   minFrameLength?: number;
   /** Whether to emit raw bytes in addition to framed data */
   emitRawBytes?: boolean;
+  /** Frame ID extraction: start byte position (0-indexed) */
+  frameIdStartByte?: number;
+  /** Frame ID extraction: number of bytes (1 or 2) */
+  frameIdBytes?: number;
+  /** Frame ID extraction: byte order (true = big endian) */
+  frameIdBigEndian?: boolean;
+  /** Source address extraction: start byte position (0-indexed) */
+  sourceAddressStartByte?: number;
+  /** Source address extraction: number of bytes (1 or 2) */
+  sourceAddressBytes?: number;
+  /** Source address extraction: byte order (true = big endian) */
+  sourceAddressBigEndian?: boolean;
 }
 
 /**
@@ -884,6 +896,13 @@ export async function createMultiSourceSession(
     delimiter: source.delimiter,
     max_frame_length: source.maxFrameLength,
     emit_raw_bytes: source.emitRawBytes,
+    // Frame ID extraction options (from catalog config)
+    frame_id_start_byte: source.frameIdStartByte,
+    frame_id_bytes: source.frameIdBytes,
+    frame_id_big_endian: source.frameIdBigEndian,
+    source_address_start_byte: source.sourceAddressStartByte,
+    source_address_bytes: source.sourceAddressBytes,
+    source_address_big_endian: source.sourceAddressBigEndian,
   }));
 
   return invoke("create_multi_source_session", {

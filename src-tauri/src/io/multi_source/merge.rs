@@ -64,6 +64,13 @@ pub(super) async fn run_merge_task(
         let max_frame_length = source_config.max_frame_length;
         let min_frame_length = source_config.min_frame_length;
         let emit_raw_bytes = source_config.emit_raw_bytes;
+        // Frame ID extraction config from session options
+        let frame_id_start_byte = source_config.frame_id_start_byte;
+        let frame_id_bytes = source_config.frame_id_bytes;
+        let frame_id_big_endian = source_config.frame_id_big_endian;
+        let source_address_start_byte = source_config.source_address_start_byte;
+        let source_address_bytes = source_config.source_address_bytes;
+        let source_address_big_endian = source_config.source_address_big_endian;
 
         let handle = tokio::spawn(async move {
             run_source_reader(
@@ -78,6 +85,12 @@ pub(super) async fn run_merge_task(
                 max_frame_length,
                 min_frame_length,
                 emit_raw_bytes,
+                frame_id_start_byte,
+                frame_id_bytes,
+                frame_id_big_endian,
+                source_address_start_byte,
+                source_address_bytes,
+                source_address_big_endian,
                 stop_flag_clone,
                 tx_clone,
             )

@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useSettings } from '../hooks/useSettings';
 
 export interface BitRange {
@@ -187,11 +187,16 @@ export default function BitPreview({
     return { colorByKey: map, legendEntries: legend };
   }, [ranges]);
 
+  // Use a ref to store onColorMapping to avoid infinite loops when parent passes
+  // an inline function. We only want to call it when colorByKey actually changes.
+  const onColorMappingRef = useRef(onColorMapping);
+  onColorMappingRef.current = onColorMapping;
+
   useEffect(() => {
-    if (onColorMapping) {
-      onColorMapping((range) => colorByKey.get(`${range.type || "signal"}|${range.name ?? ""}|${range.start_bit}|${range.bit_length}`));
+    if (onColorMappingRef.current) {
+      onColorMappingRef.current((range) => colorByKey.get(`${range.type || "signal"}|${range.name ?? ""}|${range.start_bit}|${range.bit_length}`));
     }
-  }, [colorByKey, onColorMapping]);
+  }, [colorByKey]);
 
   const handleMouseDown = useCallback((bitIdx: number, event: React.MouseEvent) => {
     if (!interactive) return;

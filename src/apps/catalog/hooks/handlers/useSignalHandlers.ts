@@ -102,10 +102,13 @@ export function useSignalHandlers({
         ? signal.notes.join("\n")
         : signal.notes
       : undefined;
+    // Coerce start_bit and bit_length to integers to handle string values from TOML
+    const startBit = typeof signal.start_bit === "string" ? parseInt(signal.start_bit, 10) : (signal.start_bit ?? 0);
+    const bitLength = typeof signal.bit_length === "string" ? parseInt(signal.bit_length, 10) : (signal.bit_length ?? 8);
     setSignalFields({
       name: signal.name || "",
-      start_bit: signal.start_bit ?? 0,
-      bit_length: signal.bit_length ?? 8,
+      start_bit: Number.isNaN(startBit) ? 0 : startBit,
+      bit_length: Number.isNaN(bitLength) ? 8 : bitLength,
       factor: signal.factor,
       offset: signal.offset,
       unit: signal.unit,

@@ -143,7 +143,11 @@ export function validateSignalFields(fields: SignalFields): ValidationError[] {
     errors.push({ field: "signal.name", message: "Name is required", path: ["signal", "name"] });
   }
 
-  if (!Number.isInteger(fields.start_bit) || fields.start_bit < 0) {
+  // Coerce to numbers to handle string values from form inputs
+  const startBit = typeof fields.start_bit === "string" ? parseInt(fields.start_bit, 10) : fields.start_bit;
+  const bitLength = typeof fields.bit_length === "string" ? parseInt(fields.bit_length, 10) : fields.bit_length;
+
+  if (!Number.isInteger(startBit) || startBit < 0) {
     errors.push({
       field: "signal.start_bit",
       message: "Start bit must be a non-negative integer",
@@ -151,10 +155,16 @@ export function validateSignalFields(fields: SignalFields): ValidationError[] {
     });
   }
 
-  if (!Number.isInteger(fields.bit_length) || fields.bit_length <= 0 || fields.bit_length > 64) {
+  // String formats (utf8, ascii, hex) can have longer bit lengths for multi-byte strings
+  const isStringFormat = fields.format === "utf8" || fields.format === "ascii" || fields.format === "hex";
+  const maxBitLength = isStringFormat ? 2048 : 64; // 256 bytes max for strings, 64 bits for numbers
+
+  if (!Number.isInteger(bitLength) || bitLength <= 0 || bitLength > maxBitLength) {
     errors.push({
       field: "signal.bit_length",
-      message: "Bit length must be an integer between 1 and 64",
+      message: isStringFormat
+        ? "Bit length must be an integer between 1 and 2048 for string formats"
+        : "Bit length must be an integer between 1 and 64",
       path: ["signal", "bit_length"],
     });
   }

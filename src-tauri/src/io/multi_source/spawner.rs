@@ -33,6 +33,13 @@ pub(super) async fn run_source_reader(
     max_frame_length_override: Option<usize>,
     min_frame_length_override: Option<usize>,
     emit_raw_bytes_override: Option<bool>,
+    // Frame ID extraction config from session options (overrides profile settings for serial)
+    frame_id_start_byte_override: Option<i32>,
+    frame_id_bytes_override: Option<u8>,
+    frame_id_big_endian_override: Option<bool>,
+    source_address_start_byte_override: Option<i32>,
+    source_address_bytes_override: Option<u8>,
+    source_address_big_endian_override: Option<bool>,
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
 ) {
@@ -64,6 +71,12 @@ pub(super) async fn run_source_reader(
                 max_frame_length_override,
                 min_frame_length_override,
                 emit_raw_bytes_override,
+                frame_id_start_byte_override,
+                frame_id_bytes_override,
+                frame_id_big_endian_override,
+                source_address_start_byte_override,
+                source_address_bytes_override,
+                source_address_big_endian_override,
                 stop_flag,
                 tx,
             )
@@ -268,9 +281,17 @@ async fn run_serial_reader(
     max_frame_length_override: Option<usize>,
     min_frame_length_override: Option<usize>,
     emit_raw_bytes_override: Option<bool>,
+    frame_id_start_byte_override: Option<i32>,
+    frame_id_bytes_override: Option<u8>,
+    frame_id_big_endian_override: Option<bool>,
+    source_address_start_byte_override: Option<i32>,
+    source_address_bytes_override: Option<u8>,
+    source_address_big_endian_override: Option<bool>,
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
 ) {
+    use crate::io::serial::FrameIdConfig;
+
     let config = match parse_profile_for_source(
         profile,
         framing_encoding_override.as_deref(),
@@ -291,9 +312,31 @@ async fn run_serial_reader(
         }
     };
 
+    // Build frame_id_config: prefer session overrides, fall back to profile config
+    let frame_id_config = if frame_id_start_byte_override.is_some() {
+        Some(FrameIdConfig {
+            start_byte: frame_id_start_byte_override.unwrap_or(0),
+            num_bytes: frame_id_bytes_override.unwrap_or(1),
+            big_endian: frame_id_big_endian_override.unwrap_or(true),
+        })
+    } else {
+        config.frame_id_config
+    };
+
+    // Build source_address_config: prefer session overrides, fall back to profile config
+    let source_address_config = if source_address_start_byte_override.is_some() {
+        Some(FrameIdConfig {
+            start_byte: source_address_start_byte_override.unwrap_or(0),
+            num_bytes: source_address_bytes_override.unwrap_or(1),
+            big_endian: source_address_big_endian_override.unwrap_or(true),
+        })
+    } else {
+        config.source_address_config
+    };
+
     eprintln!(
-        "[multi_source] Serial source {} using framing: {:?} (override: {:?})",
-        source_idx, config.framing_encoding, framing_encoding_override
+        "[multi_source] Serial source {} using framing: {:?} (override: {:?}), frame_id_config: {:?}",
+        source_idx, config.framing_encoding, framing_encoding_override, frame_id_config
     );
 
     run_serial_source(
@@ -304,8 +347,8 @@ async fn run_serial_reader(
         config.stop_bits,
         config.parity,
         config.framing_encoding,
-        config.frame_id_config,
-        config.source_address_config,
+        frame_id_config,
+        source_address_config,
         config.min_frame_length,
         config.emit_raw_bytes,
         bus_mappings,

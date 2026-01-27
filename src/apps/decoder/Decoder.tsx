@@ -223,6 +223,11 @@ export default function Decoder() {
       ? storeState.canConfig?.frame_id_mask
       : storeState.serialConfig?.frame_id_mask;
 
+    // Get frame ID extraction config from serialConfig for frontend re-extraction
+    // This allows correct frame ID extraction even if catalog was loaded after streaming started
+    const frameIdConfig = storeState.serialConfig;
+    const hasFrameIdConfig = frameIdConfig?.frame_id_start_byte !== undefined && frameIdConfig?.frame_id_bytes !== undefined;
+
     for (const f of receivedFrames) {
       const timestamp = f.timestamp_us !== undefined ? f.timestamp_us / 1_000_000 : Date.now() / 1000;
 
@@ -232,25 +237,49 @@ export default function Decoder() {
         continue;
       }
 
+      // Extract frame ID from raw bytes using catalog config if available
+      // This allows correct frame ID even if Rust session was started without config
+      let frameId = f.frame_id;
+      if (hasFrameIdConfig && f.bytes.length > 0) {
+        const startByte = frameIdConfig.frame_id_start_byte!;
+        const numBytes = frameIdConfig.frame_id_bytes!;
+        const bigEndian = frameIdConfig.frame_id_byte_order === 'big';
+
+        // Extract frame ID from bytes
+        if (startByte >= 0 && startByte + numBytes <= f.bytes.length) {
+          let extractedId = 0;
+          if (bigEndian) {
+            for (let i = 0; i < numBytes; i++) {
+              extractedId = (extractedId << 8) | f.bytes[startByte + i];
+            }
+          } else {
+            for (let i = numBytes - 1; i >= 0; i--) {
+              extractedId = (extractedId << 8) | f.bytes[startByte + i];
+            }
+          }
+          frameId = extractedId;
+        }
+      }
+
       // Check if frame ID matches the filter (if filter is set, matching IDs go to Filtered tab)
-      if (idFilterSet !== null && idFilterSet.has(f.frame_id)) {
-        pendingFilteredRef.current.push({ frameId: f.frame_id, bytes: f.bytes, timestamp, sourceAddress: f.source_address, reason: 'id_filter' });
+      if (idFilterSet !== null && idFilterSet.has(frameId)) {
+        pendingFilteredRef.current.push({ frameId, bytes: f.bytes, timestamp, sourceAddress: f.source_address, reason: 'id_filter' });
         continue;
       }
 
       // Apply frame_id_mask before catalog lookup (same as decodeSignals does)
-      const maskedFrameId = frameIdMask !== undefined ? (f.frame_id & frameIdMask) : f.frame_id;
+      const maskedFrameId = frameIdMask !== undefined ? (frameId & frameIdMask) : frameId;
 
       // Check if frame exists in catalog (using masked ID)
       if (catalogFrames.has(maskedFrameId)) {
         // Frame exists in catalog - decode if selected (check both raw and masked IDs)
-        if (currentSelectedFrames.has(maskedFrameId) || currentSelectedFrames.has(f.frame_id)) {
-          pendingFramesRef.current.push({ frameId: f.frame_id, bytes: f.bytes, sourceAddress: f.source_address });
+        if (currentSelectedFrames.has(maskedFrameId) || currentSelectedFrames.has(frameId)) {
+          pendingFramesRef.current.push({ frameId, bytes: f.bytes, sourceAddress: f.source_address });
         }
       } else {
         // Frame not in catalog - add to unmatched
         pendingUnmatchedRef.current.push({
-          frameId: f.frame_id,
+          frameId,
           bytes: f.bytes,
           timestamp,
           sourceAddress: f.source_address,
@@ -470,7 +499,7 @@ export default function Decoder() {
     startTime,
     endTime,
     playbackSpeed,
-    serialConfig,
+    // Note: serialConfig is read directly from store in session handlers to avoid stale closures
 
     // Multi-bus state
     setMultiBusMode,
@@ -680,9 +709,31 @@ export default function Decoder() {
     };
   }, [catalogPath, loadCatalog, decoderDir]);
 
-  // Note: We removed the useEffect that reinitializes on serialConfig/ioProfile changes.
-  // Reinitialize is now only called from explicit user actions (IO picker dialog, handleIoProfileChange).
-  // This prevents race conditions where multiple reinitialize calls happen concurrently.
+  // Clear frames when catalog's frame ID config changes while streaming.
+  // The frontend now extracts frame IDs from raw bytes using the catalog config,
+  // so we don't need to restart the session - just clear old frames that had wrong IDs.
+  const prevSerialConfigRef = useRef(serialConfig);
+  useEffect(() => {
+    const prevConfig = prevSerialConfigRef.current;
+    prevSerialConfigRef.current = serialConfig;
+
+    // Check if frame ID extraction config has changed
+    const frameIdConfigChanged =
+      prevConfig?.frame_id_start_byte !== serialConfig?.frame_id_start_byte ||
+      prevConfig?.frame_id_bytes !== serialConfig?.frame_id_bytes ||
+      prevConfig?.frame_id_byte_order !== serialConfig?.frame_id_byte_order ||
+      prevConfig?.frame_id_mask !== serialConfig?.frame_id_mask;
+
+    const hasFrameIdConfig = serialConfig?.frame_id_start_byte !== undefined || serialConfig?.frame_id_bytes !== undefined;
+
+    // When frame ID config changes while streaming, clear old frames (they have wrong IDs)
+    // New frames will be processed correctly by handleFrames using the catalog config
+    if (isStreaming && frameIdConfigChanged && hasFrameIdConfig) {
+      console.log('[Decoder] Serial config changed while streaming, clearing frames for re-extraction');
+      clearFrames();
+      clearUnmatchedFrames();
+    }
+  }, [serialConfig, isStreaming, clearFrames, clearUnmatchedFrames]);
 
   // Window close is handled by Rust (lib.rs on_window_event) to prevent crashes
   // on macOS 26.2+ (Tahoe). The Rust handler stops the session and waits for

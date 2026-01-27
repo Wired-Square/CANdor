@@ -9,7 +9,7 @@ import type { IngestOptions as ManagerIngestOptions } from "../../../../hooks/us
 import { isBufferProfileId } from "../../../../hooks/useIOSessionManager";
 import { useBufferSessionHandler } from "../../../../hooks/useBufferSessionHandler";
 import type { BufferMetadata } from "../../../../api/buffer";
-import type { SerialFrameConfig } from "../../../../utils/frameExport";
+import { useDecoderStore } from "../../../../stores/decoderStore";
 
 export interface UseDecoderSessionHandlersParams {
   // Session manager actions
@@ -61,9 +61,6 @@ export interface UseDecoderSessionHandlersParams {
   stopIngest: () => Promise<void>;
   isIngesting: boolean;
 
-  // Serial/CAN config
-  serialConfig: SerialFrameConfig | null;
-
   // Watch state
   isWatching: boolean;
   setIsWatching: (watching: boolean) => void;
@@ -109,7 +106,6 @@ export function useDecoderSessionHandlers({
   startIngest,
   stopIngest,
   isIngesting,
-  serialConfig,
   isWatching,
   setIsWatching,
   resetWatchFrameCount,
@@ -147,8 +143,28 @@ export function useDecoderSessionHandlers({
         resetWatchFrameCount();
 
         try {
+          // Read serialConfig directly from store to avoid stale closure issues
+          // (catalog may have been loaded after this callback was created)
+          const serialConfig = useDecoderStore.getState().serialConfig;
+
+          // Merge catalog serial config with options (catalog config takes precedence for frame ID)
+          const mergedOptions: IngestOptions = {
+            ...options,
+            // Frame ID extraction from catalog
+            frameIdStartByte: serialConfig?.frame_id_start_byte,
+            frameIdBytes: serialConfig?.frame_id_bytes,
+            // Source address extraction from catalog
+            sourceAddressStartByte: serialConfig?.source_address_start_byte,
+            sourceAddressBytes: serialConfig?.source_address_bytes,
+            sourceAddressEndianness: serialConfig?.source_address_byte_order,
+            // Min frame length from catalog
+            minFrameLength: options.minFrameLength ?? serialConfig?.min_frame_length,
+            // Framing encoding from catalog (if not overridden by options)
+            framingEncoding: options.framingEncoding ?? serialConfig?.encoding as IngestOptions["framingEncoding"],
+          };
+
           // Use manager's startMultiBusSession - handles all session creation
-          await startMultiBusSession(profileIds, options);
+          await startMultiBusSession(profileIds, mergedOptions);
 
           setPlaybackSpeed(speed as PlaybackSpeed);
           setIsWatching(true);
@@ -176,6 +192,11 @@ export function useDecoderSessionHandlers({
   const handleDialogStartIngest = useCallback(
     async (profileId: string, closeDialog: boolean, options: IngestOptions) => {
       const { speed, startTime, endTime, maxFrames } = options;
+
+      // Read serialConfig directly from store to avoid stale closure issues
+      // (catalog may have been loaded after this callback was created)
+      const serialConfig = useDecoderStore.getState().serialConfig;
+
       if (closeDialog) {
         // Watch mode - uses decoder session for real-time display
         // Clear frames from previous session before starting new one
@@ -249,7 +270,6 @@ export function useDecoderSessionHandlers({
       closeIoReaderPicker,
       setIngestSpeed,
       startIngest,
-      serialConfig,
       ingestSpeed,
     ]
   );

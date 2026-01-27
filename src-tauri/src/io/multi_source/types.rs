@@ -34,6 +34,24 @@ pub struct SourceConfig {
     /// Whether to emit raw bytes in addition to framed data
     #[serde(default)]
     pub emit_raw_bytes: Option<bool>,
+    /// Frame ID extraction: start byte position (0-indexed)
+    #[serde(default)]
+    pub frame_id_start_byte: Option<i32>,
+    /// Frame ID extraction: number of bytes (1 or 2)
+    #[serde(default)]
+    pub frame_id_bytes: Option<u8>,
+    /// Frame ID extraction: byte order (true = big endian)
+    #[serde(default)]
+    pub frame_id_big_endian: Option<bool>,
+    /// Source address extraction: start byte position (0-indexed)
+    #[serde(default)]
+    pub source_address_start_byte: Option<i32>,
+    /// Source address extraction: number of bytes (1 or 2)
+    #[serde(default)]
+    pub source_address_bytes: Option<u8>,
+    /// Source address extraction: byte order (true = big endian)
+    #[serde(default)]
+    pub source_address_big_endian: Option<bool>,
 }
 
 /// Transmit routing info: maps output bus to source and device bus
