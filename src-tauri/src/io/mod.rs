@@ -22,7 +22,7 @@ pub mod traits;
 mod types;
 
 // Re-export device implementations
-pub use buffer::BufferReader;
+pub use buffer::{step_frame, BufferReader, StepResult};
 pub use csv::{parse_csv_file, CsvReader, CsvReaderOptions};
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 #[allow(unused_imports)]
@@ -86,6 +86,15 @@ pub struct FrameBatchPayload {
     /// List of listener IDs that should receive these frames
     /// Empty list means all listeners should receive (fallback behavior)
     pub active_listeners: Vec<String>,
+}
+
+/// Playback position - emitted with playback-time events during buffer streaming
+#[derive(Clone, Serialize)]
+pub struct PlaybackPosition {
+    /// Current timestamp in microseconds
+    pub timestamp_us: i64,
+    /// Current frame index (0-based)
+    pub frame_index: usize,
 }
 
 /// Get current time in microseconds since UNIX epoch
@@ -200,6 +209,9 @@ pub struct IOCapabilities {
     /// Supports seeking to a specific timestamp (Buffer: true, others: false)
     #[serde(default)]
     pub supports_seek: bool,
+    /// Supports reverse playback (Buffer: true, others: false)
+    #[serde(default)]
+    pub supports_reverse: bool,
     /// Can transmit CAN frames (slcan in normal mode, GVRET: true)
     #[serde(default)]
     pub can_transmit: bool,
@@ -243,6 +255,7 @@ impl IOCapabilities {
             is_realtime: true,
             supports_speed_control: false,
             supports_seek: false,
+            supports_reverse: false,
             can_transmit: false,
             can_transmit_serial: false,
             supports_canfd: false,
@@ -267,6 +280,7 @@ impl IOCapabilities {
             is_realtime: false,
             supports_speed_control: true,
             supports_seek: false,
+            supports_reverse: false,
             can_transmit: false,
             can_transmit_serial: false,
             supports_canfd: false,
@@ -291,6 +305,7 @@ impl IOCapabilities {
             is_realtime: true,
             supports_speed_control: false,
             supports_seek: false,
+            supports_reverse: false,
             can_transmit: false,
             can_transmit_serial: true,
             supports_canfd: false,
@@ -323,6 +338,12 @@ impl IOCapabilities {
     /// Set seek support (for timeline sources)
     pub fn with_seek(mut self, supports_seek: bool) -> Self {
         self.supports_seek = supports_seek;
+        self
+    }
+
+    /// Set reverse playback support (for timeline sources)
+    pub fn with_reverse(mut self, supports_reverse: bool) -> Self {
+        self.supports_reverse = supports_reverse;
         self
     }
 
@@ -440,6 +461,12 @@ pub trait IODevice: Send + Sync {
     /// Default implementation returns an error.
     fn seek(&mut self, _timestamp_us: i64) -> Result<(), String> {
         Err("This device does not support seeking".to_string())
+    }
+
+    /// Set playback direction (forward or reverse).
+    /// Default implementation returns an error.
+    fn set_direction(&mut self, _reverse: bool) -> Result<(), String> {
+        Err("This device does not support reverse playback".to_string())
     }
 
     /// Transmit a CAN frame (if supported by the device).
@@ -1149,6 +1176,16 @@ pub async fn seek_session(session_id: &str, timestamp_us: i64) -> Result<(), Str
         .ok_or_else(|| format!("Session '{}' not found", session_id))?;
 
     session.device.seek(timestamp_us)
+}
+
+/// Set playback direction (reverse = true for backwards playback)
+pub async fn update_session_direction(session_id: &str, reverse: bool) -> Result<(), String> {
+    let mut sessions = IO_SESSIONS.lock().await;
+    let session = sessions
+        .get_mut(session_id)
+        .ok_or_else(|| format!("Session '{}' not found", session_id))?;
+
+    session.device.set_direction(reverse)
 }
 
 /// Destroy a reader session

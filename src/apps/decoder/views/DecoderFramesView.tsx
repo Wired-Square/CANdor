@@ -1,7 +1,8 @@
 // ui/src/apps/decoder/views/DecoderFramesView.tsx
 
 import { useRef, useEffect, useState, useMemo } from "react";
-import { Calculator, Pause, Play, Rewind, FastForward, SkipBack, Square, Star, Clock, Check, X } from "lucide-react";
+import { Calculator, Star, Clock, Check, X } from "lucide-react";
+import { PlaybackControls } from "../../../components/PlaybackControls";
 import { validateChecksum, type ChecksumAlgorithm, type ChecksumValidationResult } from "../../../api/checksums";
 import { badgeDarkPanelInfo, badgeDarkPanelSuccess, badgeDarkPanelDanger, badgeDarkPanelPurple } from "../../../styles/badgeStyles";
 import { bgDarkView, borderDarkView } from "../../../styles";
@@ -91,10 +92,13 @@ type Props = {
   // Playback controls (for buffer replay)
   isReady: boolean;
   playbackState: PlaybackState;
+  playbackDirection?: "forward" | "backward";
   capabilities?: IOCapabilities | null;
   onPlay: () => void;
+  onPlayBackward?: () => void;
   onPause: () => void;
-  onStop: () => void;
+  onStepBackward?: () => void;
+  onStepForward?: () => void;
 
   // Speed control (for buffer replay)
   playbackSpeed?: PlaybackSpeed;
@@ -117,6 +121,8 @@ type Props = {
   minTimeUs?: number | null;
   maxTimeUs?: number | null;
   currentTimeUs?: number | null;
+  currentFrameIndex?: number | null;
+  totalFrames?: number | null;
   onScrub?: (timeUs: number) => void;
 
   signalColours?: {
@@ -706,10 +712,13 @@ export default function DecoderFramesView({
   filteredFrames = [],
   isReady,
   playbackState,
+  playbackDirection = "forward",
   capabilities,
   onPlay,
+  onPlayBackward,
   onPause,
-  onStop,
+  onStepBackward,
+  onStepForward,
   playbackSpeed = 1,
   onSpeedChange,
   hasBufferData = false,
@@ -724,6 +733,8 @@ export default function DecoderFramesView({
   minTimeUs,
   maxTimeUs,
   currentTimeUs,
+  currentFrameIndex,
+  totalFrames,
   onScrub,
   signalColours,
   headerFieldFilters,
@@ -829,19 +840,13 @@ export default function DecoderFramesView({
     return result;
   }, [decoded, headerFieldFilters]);
 
-  const isPlaying = playbackState === "playing";
   const isPaused = playbackState === "paused";
-  const isStopped = playbackState === "stopped";
-  const canPause = capabilities?.can_pause ?? false;
   const supportsTimeRange = capabilities?.supports_time_range ?? false;
   const supportsSeek = capabilities?.supports_seek ?? false;
   const supportsSpeedControl = capabilities?.supports_speed_control ?? false;
+  const supportsReverse = capabilities?.supports_reverse ?? false;
+  const canPause = capabilities?.can_pause ?? false;
   const isBookmarkActive = !!activeBookmarkId;
-  // Show playback controls when we have seek support (buffer replay) OR speed control (CSV, PostgreSQL)
-  const showPlaybackControls = isReady && (supportsSeek || supportsSpeedControl || canPause);
-
-  // Speed options for replay - must match PlaybackSpeed type (no unlimited for Watch mode)
-  const speedOptions: PlaybackSpeed[] = [0.25, 0.5, 1, 2, 10, 30, 60];
 
   // Tab definitions - Signals tab always, plus Unmatched/Filtered tabs always visible
   // Show ">" prefix when buffer is at maximum capacity
@@ -930,112 +935,31 @@ export default function DecoderFramesView({
     </div>
   ) : null;
 
-  // Whether seek controls should be shown (buffer replay with seek support)
-  const showSeekControls = hasBufferData && supportsSeek && onScrub;
-
   // Playback controls for the toolbar center
-  const playbackControls = showPlaybackControls ? (
-    <div className="flex items-center gap-1">
-      {/* Skip to start - only when seeking is supported */}
-      {showSeekControls && (
-        <button
-          type="button"
-          onClick={() => onScrub(minTimeUs!)}
-          className="p-1 rounded text-gray-400 hover:bg-gray-700 hover:text-gray-200"
-          title="Skip to start"
-        >
-          <SkipBack className="w-3.5 h-3.5" />
-        </button>
-      )}
-
-      {/* Skip back 10 seconds - only when seeking is supported */}
-      {showSeekControls && (
-        <button
-          type="button"
-          onClick={() => {
-            const newTime = Math.max(minTimeUs!, (currentTimeUs ?? minTimeUs!) - 10_000_000);
-            onScrub(newTime);
-          }}
-          className="p-1 rounded text-gray-400 hover:bg-gray-700 hover:text-gray-200"
-          title="Skip back 10 seconds"
-        >
-          <Rewind className="w-3.5 h-3.5" />
-        </button>
-      )}
-
-      {/* Play/Pause */}
-      {isPlaying && canPause ? (
-        <button
-          type="button"
-          onClick={onPause}
-          className="p-1 rounded bg-amber-600/30 text-amber-400 hover:bg-amber-600/50"
-          title="Pause"
-        >
-          <Pause className="w-3.5 h-3.5" />
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={onPlay}
-          disabled={isPlaying}
-          className={`p-1 rounded ${
-            isPlaying
-              ? "bg-green-600/30 text-green-400"
-              : "bg-green-600 text-white hover:bg-green-500"
-          }`}
-          title={isPaused ? "Resume" : "Play"}
-        >
-          <Play className="w-3.5 h-3.5" />
-        </button>
-      )}
-
-      {/* Stop */}
-      <button
-        type="button"
-        onClick={onStop}
-        disabled={isStopped}
-        className={`p-1 rounded ${
-          isStopped
-            ? "text-gray-600 cursor-not-allowed"
-            : "text-gray-400 hover:bg-gray-700 hover:text-gray-200"
-        }`}
-        title="Stop"
-      >
-        <Square className="w-3.5 h-3.5" />
-      </button>
-
-      {/* Skip forward 10 seconds - only when seeking is supported */}
-      {showSeekControls && (
-        <button
-          type="button"
-          onClick={() => {
-            const newTime = Math.min(maxTimeUs!, (currentTimeUs ?? minTimeUs!) + 10_000_000);
-            onScrub(newTime);
-          }}
-          className="p-1 rounded text-gray-400 hover:bg-gray-700 hover:text-gray-200"
-          title="Skip forward 10 seconds"
-        >
-          <FastForward className="w-3.5 h-3.5" />
-        </button>
-      )}
-
-      {/* Speed selector - only when speed control is supported */}
-      {supportsSpeedControl && onSpeedChange && (
-        <select
-          value={playbackSpeed}
-          onChange={(e) => onSpeedChange(parseFloat(e.target.value) as PlaybackSpeed)}
-          className="ml-1 px-2 py-0.5 text-xs rounded border border-gray-600 bg-gray-700 text-gray-200"
-          title="Playback speed"
-        >
-          {speedOptions.map((s) => (
-            <option key={s} value={s}>
-              {s === 1 ? "1x (realtime)" : `${s}x`}
-            </option>
-          ))}
-        </select>
-      )}
-    </div>
-  ) : null;
+  const playbackControls = (
+    <PlaybackControls
+      playbackState={playbackState}
+      playbackDirection={playbackDirection}
+      isReady={isReady}
+      canPause={canPause}
+      supportsSeek={supportsSeek}
+      supportsSpeedControl={supportsSpeedControl}
+      supportsReverse={supportsReverse}
+      playbackSpeed={playbackSpeed}
+      minTimeUs={minTimeUs}
+      maxTimeUs={maxTimeUs}
+      currentTimeUs={currentTimeUs}
+      currentFrameIndex={currentFrameIndex}
+      totalFrames={totalFrames}
+      onPlay={onPlay}
+      onPlayBackward={onPlayBackward}
+      onPause={onPause}
+      onStepBackward={onStepBackward}
+      onStepForward={onStepForward}
+      onScrub={onScrub}
+      onSpeedChange={onSpeedChange}
+    />
+  );
 
   return (
     <div className={`flex flex-col flex-1 min-h-0 overflow-hidden rounded-lg border ${borderDarkView}`}>
@@ -1054,7 +978,7 @@ export default function DecoderFramesView({
         tabBarControls={tabBarControls}
 
         // Toolbar - show when we have time range or playback controls
-        showToolbar={showTimeRange || showPlaybackControls}
+        showToolbar={showTimeRange || isReady}
         currentPage={0}
         totalPages={1}
         pageSize={-1}

@@ -19,10 +19,16 @@ export interface UseDecoderTimeHandlersParams {
   setStartTime: (time: string) => void;
   setEndTime: (time: string) => void;
   updateCurrentTime: (time: number) => void;
+  setCurrentFrameIndex?: (index: number) => void;
 
   // Current time range values for setTimeRange calls
   startTime: string;
   endTime: string;
+
+  // Buffer bounds for frame index calculation
+  minTimeUs?: number | null;
+  maxTimeUs?: number | null;
+  totalFrames?: number | null;
 
   // Bookmark state
   setActiveBookmarkId: (id: string | null) => void;
@@ -35,8 +41,12 @@ export function useDecoderTimeHandlers({
   setStartTime,
   setEndTime,
   updateCurrentTime,
+  setCurrentFrameIndex,
   startTime,
   endTime,
+  minTimeUs,
+  maxTimeUs,
+  totalFrames,
   setActiveBookmarkId,
 }: UseDecoderTimeHandlersParams) {
   // Handle time range changes
@@ -64,12 +74,24 @@ export function useDecoderTimeHandlers({
       // Update UI immediately for responsiveness
       updateCurrentTime(timeUs / 1_000_000); // Convert microseconds to seconds
 
+      // Update frame index when seeking to boundaries
+      if (setCurrentFrameIndex && minTimeUs != null && maxTimeUs != null && totalFrames != null && totalFrames > 0) {
+        if (timeUs <= minTimeUs) {
+          // Skip to start - set frame index to 0
+          setCurrentFrameIndex(0);
+        } else if (timeUs >= maxTimeUs) {
+          // Skip to end - set frame index to last frame
+          setCurrentFrameIndex(totalFrames - 1);
+        }
+        // For other positions, frame index will be updated when playback resumes
+      }
+
       // If the reader supports seeking, tell it to jump to this position
       if (capabilities?.supports_seek) {
         await seek(timeUs);
       }
     },
-    [updateCurrentTime, capabilities, seek]
+    [updateCurrentTime, setCurrentFrameIndex, minTimeUs, maxTimeUs, totalFrames, capabilities, seek]
   );
 
   // Handle loading a bookmark (sets time range and marks bookmark as active)

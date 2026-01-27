@@ -14,7 +14,7 @@ import {
 } from "../styles";
 
 export type PlaybackSpeed = 0.25 | 0.5 | 1 | 2 | 10 | 30 | 60;
-export type PlaybackState = "stopped" | "playing" | "paused";
+export type PlaybackState = "playing" | "paused";
 
 export interface TimeControllerProps {
   /** Current playback state */
@@ -114,31 +114,20 @@ export default function TimeController({
 
   const isPlaying = state === "playing";
   const isPaused = state === "paused";
-  const isStopped = state === "stopped";
 
   return (
     <div className={`flex items-center gap-3 ${compact ? "text-sm" : ""}`}>
       {/* Playback controls */}
       <div className="flex items-center gap-2 border-r border-slate-300 dark:border-slate-600 pr-3">
-        {isStopped ? (
+        {isPaused ? (
           <button
             onClick={onPlay}
             disabled={disabled}
             className={compact ? playButtonCompact : playButtonBase}
-            title="Start playback"
+            title="Play"
           >
             <Play className={compact ? "w-3.5 h-3.5" : "w-4 h-4"} />
             {!compact && "Play"}
-          </button>
-        ) : isPaused ? (
-          <button
-            onClick={onPlay}
-            disabled={disabled}
-            className={compact ? playButtonCompact : playButtonBase}
-            title="Resume playback"
-          >
-            <Play className={compact ? "w-3.5 h-3.5" : "w-4 h-4"} />
-            {!compact && "Resume"}
           </button>
         ) : showPauseButton ? (
           <button
@@ -166,12 +155,12 @@ export default function TimeController({
 
         <button
           onClick={onStop}
-          disabled={disabled || isStopped}
+          disabled={disabled || isPaused}
           className={compact ? stopButtonCompact : stopButtonBase}
-          title="Stop playback"
+          title="Pause"
         >
           <Square className={compact ? "w-3.5 h-3.5" : "w-4 h-4"} />
-          {!compact && "Stop"}
+          {!compact && "Pause"}
         </button>
       </div>
 
@@ -227,7 +216,7 @@ export default function TimeController({
             value={localStartTime}
             onChange={(e) => setLocalStartTime(e.target.value)}
             onBlur={handleStartTimeBlur}
-            disabled={disabled || !isStopped}
+            disabled={disabled || !isPaused}
             className={`${
               compact ? "px-2 py-0.5 text-xs" : "px-3 py-1 text-sm"
             } rounded border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-slate-100 disabled:opacity-50 disabled:cursor-not-allowed font-mono`}
@@ -240,7 +229,7 @@ export default function TimeController({
             value={localEndTime}
             onChange={(e) => setLocalEndTime(e.target.value)}
             onBlur={handleEndTimeBlur}
-            disabled={disabled || !isStopped}
+            disabled={disabled || !isPaused}
             className={`${
               compact ? "px-2 py-0.5 text-xs" : "px-3 py-1 text-sm"
             } rounded border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-slate-100 disabled:opacity-50 disabled:cursor-not-allowed font-mono`}

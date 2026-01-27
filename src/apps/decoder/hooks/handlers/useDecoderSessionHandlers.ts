@@ -6,7 +6,9 @@ import { useCallback } from "react";
 import type { PlaybackSpeed } from "../../../../components/TimeController";
 import type { IngestOptions } from "../../../../dialogs/IoReaderPickerDialog";
 import type { IngestOptions as ManagerIngestOptions } from "../../../../hooks/useIOSessionManager";
-import { BUFFER_PROFILE_ID } from "../../../../hooks/useIOSessionManager";
+import { isBufferProfileId } from "../../../../hooks/useIOSessionManager";
+import { useBufferSessionHandler } from "../../../../hooks/useBufferSessionHandler";
+import type { BufferMetadata } from "../../../../api/buffer";
 import type { SerialFrameConfig } from "../../../../utils/frameExport";
 
 export interface UseDecoderSessionHandlersParams {
@@ -86,6 +88,11 @@ export interface UseDecoderSessionHandlersParams {
   // Playback
   playbackSpeed: PlaybackSpeed;
 
+  // Buffer state (for centralized buffer handler)
+  setBufferMetadata: (meta: BufferMetadata | null) => void;
+  updateCurrentTime: (timeSeconds: number) => void;
+  setCurrentFrameIndex: (index: number) => void;
+
   // Settings for default speeds
   ioProfiles?: Array<{ id: string; connection?: { default_speed?: string } }>;
 }
@@ -115,8 +122,18 @@ export function useDecoderSessionHandlers({
   setIngestSpeed,
   closeIoReaderPicker,
   playbackSpeed,
+  setBufferMetadata,
+  updateCurrentTime,
+  setCurrentFrameIndex,
   ioProfiles,
 }: UseDecoderSessionHandlersParams) {
+  // Centralized buffer session handler
+  const { switchToBuffer } = useBufferSessionHandler({
+    setBufferMetadata,
+    updateCurrentTime,
+    setCurrentFrameIndex,
+  });
+
   // Handle Watch for multiple profiles (multi-bus mode)
   // Uses manager's startMultiBusSession which creates a proper Rust-side merged session
   const handleDialogStartMultiIngest = useCallback(
@@ -276,10 +293,12 @@ export function useDecoderSessionHandlers({
     async (profileId: string | null) => {
       setIoProfile(profileId);
 
-      // Handle buffer selection - needs special buffer reader
-      if (profileId === BUFFER_PROFILE_ID) {
-        // Explicitly pass BUFFER_PROFILE_ID to avoid stale closure capturing old profile ID
-        await reinitialize(BUFFER_PROFILE_ID, { useBuffer: true, speed: playbackSpeed });
+      // Handle buffer selection (buffer_1, buffer_2, etc.) - needs special buffer reader
+      if (isBufferProfileId(profileId)) {
+        // Use centralized handler to fetch metadata and reset playback state
+        await switchToBuffer(profileId!);
+        // Create BufferReader session for playback
+        await reinitialize(profileId!, { useBuffer: true, speed: playbackSpeed });
       } else if (profileId && ioProfiles) {
         // Set default speed from the selected profile if it has one
         const profile = ioProfiles.find((p) => p.id === profileId);
@@ -291,7 +310,7 @@ export function useDecoderSessionHandlers({
         // and reinitialize is called from handleDialogStartIngest when Watch is clicked
       }
     },
-    [setIoProfile, reinitialize, playbackSpeed, ioProfiles, setPlaybackSpeed]
+    [setIoProfile, switchToBuffer, reinitialize, playbackSpeed, ioProfiles, setPlaybackSpeed]
   );
 
   // Handle joining an existing session from IO picker dialog

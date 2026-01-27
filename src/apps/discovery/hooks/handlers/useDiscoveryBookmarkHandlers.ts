@@ -5,6 +5,7 @@
 import { useCallback } from "react";
 import { addFavorite, markFavoriteUsed, type TimeRangeFavorite } from "../../../../utils/favorites";
 import { localToUtc, microsToDatetimeLocal } from "../../../../utils/timeFormat";
+import { isBufferProfileId } from "../../../../hooks/useIOSessionManager";
 
 export interface UseDiscoveryBookmarkHandlersParams {
   // State
@@ -29,9 +30,6 @@ export interface UseDiscoveryBookmarkHandlersParams {
 
   // Dialog controls
   openBookmarkDialog: () => void;
-
-  // Constants
-  BUFFER_PROFILE_ID: string;
 }
 
 export function useDiscoveryBookmarkHandlers({
@@ -48,7 +46,6 @@ export function useDiscoveryBookmarkHandlers({
   setTimeRange,
   reinitialize,
   openBookmarkDialog,
-  BUFFER_PROFILE_ID,
 }: UseDiscoveryBookmarkHandlersParams) {
   // Handle bookmark button click from DiscoveryFramesView
   const handleBookmark = useCallback((frameId: number, timestampUs: number) => {
@@ -88,7 +85,7 @@ export function useDiscoveryBookmarkHandlers({
       if (bufferModeEnabled && targetProfile) {
         console.log("[Discovery:handleLoadBookmark] Buffer mode enabled, reinitializing with profile:", targetProfile);
         disableBufferMode();
-        if (ioProfile === BUFFER_PROFILE_ID) {
+        if (isBufferProfileId(ioProfile)) {
           setIoProfile(targetProfile);
         }
         await reinitialize(targetProfile, { startTime: startUtc, endTime: endUtc });
@@ -111,7 +108,6 @@ export function useDiscoveryBookmarkHandlers({
     ioProfile,
     sourceProfileId,
     bufferModeEnabled,
-    BUFFER_PROFILE_ID,
     setStartTime,
     setEndTime,
     setActiveBookmarkId,

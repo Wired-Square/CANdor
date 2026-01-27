@@ -707,6 +707,23 @@ pub fn get_frames() -> Vec<FrameMessage> {
     Vec::new()
 }
 
+/// Get all frames from a specific buffer by ID.
+/// Falls back to get_frames() if buffer not found or not a frame buffer.
+pub fn get_frames_by_id(buffer_id: &str) -> Vec<FrameMessage> {
+    let registry = BUFFER_REGISTRY.read().unwrap();
+
+    if let Some(buffer) = registry.buffers.get(buffer_id) {
+        if let BufferData::Frames(frames) = &buffer.data {
+            eprintln!("[BufferStore] get_frames_by_id('{}') returning {} frames", buffer_id, frames.len());
+            return frames.clone();
+        }
+    }
+
+    eprintln!("[BufferStore] get_frames_by_id('{}') buffer not found, falling back to get_frames()", buffer_id);
+    drop(registry);
+    get_frames()
+}
+
 /// Check if any buffer has frame data (backward compat).
 pub fn has_data() -> bool {
     has_any_data()

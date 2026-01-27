@@ -4,10 +4,10 @@ import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { listen, emit } from "@tauri-apps/api/event";
 import { useSettings, getDisplayFrameIdFormat } from "../../hooks/useSettings";
 import { useDecoderStore } from "../../stores/decoderStore";
-import { useIOSessionManager, BUFFER_PROFILE_ID } from '../../hooks/useIOSessionManager';
+import { useIOSessionManager } from '../../hooks/useIOSessionManager';
 import { listCatalogs, type CatalogMetadata } from "../../api/catalog";
 import { clearBuffer } from "../../api/buffer";
-import type { StreamEndedPayload } from '../../api/io';
+import type { StreamEndedPayload, PlaybackPosition } from '../../api/io';
 import DecoderTopBar from "./views/DecoderTopBar";
 import DecoderFramesView from "./views/DecoderFramesView";
 import FramePickerDialog from "../../dialogs/FramePickerDialog";
@@ -55,6 +55,9 @@ export default function Decoder() {
   // Ingest speed setting (for dialog display)
   const [ingestSpeed, setIngestSpeed] = useState(0); // 0 = no limit
 
+  // Playback direction state (for buffer replay)
+  const [playbackDirection, setPlaybackDirection] = useState<"forward" | "backward">("forward");
+
   // Zustand store selectors
   const catalogPath = useDecoderStore((state) => state.catalogPath);
   const frames = useDecoderStore((state) => state.frames);
@@ -64,6 +67,7 @@ export default function Decoder() {
   const startTime = useDecoderStore((state) => state.startTime);
   const endTime = useDecoderStore((state) => state.endTime);
   const currentTime = useDecoderStore((state) => state.currentTime);
+  const currentFrameIndex = useDecoderStore((state) => state.currentFrameIndex);
   const showRawBytes = useDecoderStore((state) => state.showRawBytes);
   const activeSelectionSetId = useDecoderStore((state) => state.activeSelectionSetId);
   const selectionSetDirty = useDecoderStore((state) => state.selectionSetDirty);
@@ -91,6 +95,7 @@ export default function Decoder() {
   const decodeSignals = useDecoderStore((state) => state.decodeSignals);
   const setIoProfile = useDecoderStore((state) => state.setIoProfile);
   const updateCurrentTime = useDecoderStore((state) => state.updateCurrentTime);
+  const setCurrentFrameIndex = useDecoderStore((state) => state.setCurrentFrameIndex);
   const loadCatalog = useDecoderStore((state) => state.loadCatalog);
   const setStartTime = useDecoderStore((state) => state.setStartTime);
   const setEndTime = useDecoderStore((state) => state.setEndTime);
@@ -264,11 +269,12 @@ export default function Decoder() {
     console.error("Decoder stream error:", error);
   }, []);
 
-  const handleTimeUpdate = useCallback((timeUs: number) => {
+  const handleTimeUpdate = useCallback((position: PlaybackPosition) => {
     // Ignore time updates after stream has completed (prevents overwriting reset position)
     if (streamCompletedRef.current) return;
-    updateCurrentTime(timeUs / 1_000_000); // Convert to seconds
-  }, [updateCurrentTime]);
+    updateCurrentTime(position.timestamp_us / 1_000_000); // Convert to seconds
+    setCurrentFrameIndex(position.frame_index);
+  }, [updateCurrentTime, setCurrentFrameIndex]);
 
   // Handle speed changes from other windows sharing this session
   const handleSessionSpeedChange = useCallback((speed: number) => {
@@ -396,6 +402,7 @@ export default function Decoder() {
 
   // Session controls from the underlying session
   const {
+    sessionId,
     state: readerState,
     isReady,
     bufferAvailable,
@@ -431,8 +438,13 @@ export default function Decoder() {
     seek,
 
     // Reader state
+    sessionId,
     isPaused,
+    isStreaming,
+    sessionReady: isReady,
     capabilities,
+    currentFrameIndex,
+    currentTimestampUs: currentTime !== null ? currentTime * 1_000_000 : null,
 
     // Store actions (decoder)
     setIoProfile,
@@ -441,6 +453,7 @@ export default function Decoder() {
     setStartTime,
     setEndTime,
     updateCurrentTime,
+    setCurrentFrameIndex,
     loadCatalog,
     clearDecoded,
     clearUnmatchedFrames,
@@ -496,6 +509,14 @@ export default function Decoder() {
     // Bookmark state
     setActiveBookmarkId,
 
+    // Buffer state
+    setBufferMetadata,
+
+    // Buffer bounds for frame index calculation during scrub
+    minTimeUs: bufferMetadata?.start_time_us,
+    maxTimeUs: bufferMetadata?.end_time_us,
+    totalFrames: bufferMetadata?.count,
+
     // Settings for default speeds
     ioProfiles: settings?.io_profiles,
   });
@@ -513,18 +534,21 @@ export default function Decoder() {
       setPendingBufferTransition(false);
       // Transition to buffer replay mode
       switchToBufferReplay(playbackSpeed).then(async () => {
-        // Update ioProfile to buffer so UI knows we're in buffer mode
-        setIoProfile(BUFFER_PROFILE_ID);
         // Refresh buffer metadata after transition
         const meta = await getBufferMetadata();
         setBufferMetadata(meta);
-        // Reset time slider to start of buffer
+        // Use the actual buffer ID for unique session naming
+        if (meta) {
+          setIoProfile(meta.id);
+        }
+        // Reset time slider and frame index to start of buffer
         if (meta?.start_time_us != null) {
           updateCurrentTime(meta.start_time_us / 1_000_000);
         }
+        setCurrentFrameIndex(0);
       }).catch((e) => console.error("Failed to switch to buffer replay:", e));
     }
-  }, [pendingBufferTransition, isDecoding, switchToBufferReplay, playbackSpeed, setIoProfile, updateCurrentTime]);
+  }, [pendingBufferTransition, isDecoding, switchToBufferReplay, playbackSpeed, setIoProfile, updateCurrentTime, setCurrentFrameIndex]);
 
   // Flush any pending frames when decoding stops to ensure nothing is lost
   useEffect(() => {
@@ -672,8 +696,7 @@ export default function Decoder() {
   // Convert reader state to TimeController state
   const getPlaybackState = (): PlaybackState => {
     if (readerState === "running") return "playing";
-    if (readerState === "paused") return "paused";
-    return "stopped";
+    return "paused";
   };
 
   return (
@@ -748,10 +771,13 @@ export default function Decoder() {
           filteredFrames={filteredFrames}
           isReady={isReady}
           playbackState={getPlaybackState()}
+          playbackDirection={playbackDirection}
           capabilities={capabilities}
-          onPlay={handlers.handlePlay}
+          onPlay={() => { setPlaybackDirection("forward"); handlers.handlePlay(); }}
+          onPlayBackward={() => { setPlaybackDirection("backward"); handlers.handlePlayBackward(); }}
           onPause={handlers.handlePause}
-          onStop={handlers.handleStop}
+          onStepBackward={handlers.handleStepBackward}
+          onStepForward={handlers.handleStepForward}
           playbackSpeed={playbackSpeed}
           onSpeedChange={handlers.handleSpeedChange}
           hasBufferData={hasBufferData}
@@ -766,6 +792,8 @@ export default function Decoder() {
           minTimeUs={bufferMetadata?.start_time_us}
           maxTimeUs={bufferMetadata?.end_time_us}
           currentTimeUs={currentTime !== null ? currentTime * 1_000_000 : null}
+          currentFrameIndex={currentFrameIndex}
+          totalFrames={bufferMetadata?.count}
           onScrub={handlers.handleScrub}
           signalColours={{
             none: settings?.signal_colour_none,

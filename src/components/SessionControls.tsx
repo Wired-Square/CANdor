@@ -6,7 +6,7 @@
 import { Star, FileText, Square, Unplug, Plug, Play, GitMerge, Bookmark } from "lucide-react";
 import type { IOProfile } from "../types/common";
 import type { BufferMetadata } from "../api/buffer";
-import { BUFFER_PROFILE_ID } from "../dialogs/io-reader-picker/utils";
+import { isBufferProfileId } from "../hooks/useIOSessionManager";
 import {
   buttonBase,
   dangerButtonBase,
@@ -48,7 +48,7 @@ export function ReaderButton({
   onClick,
   disabled = false,
 }: ReaderButtonProps) {
-  const isBufferProfile = ioProfile === BUFFER_PROFILE_ID;
+  const isBufferProfile = isBufferProfileId(ioProfile);
   const selectedProfile = ioProfiles.find((p) => p.id === ioProfile);
 
   // Show as multi-bus if either:
@@ -238,6 +238,8 @@ export interface IOSessionControlsProps {
   onRejoin?: () => void;
   /** Open bookmark picker (for time range sources) */
   onOpenBookmarkPicker?: () => void;
+  /** Hide session action buttons (for buffer mode where playback controls are elsewhere) */
+  hideSessionControls?: boolean;
 }
 
 /**
@@ -269,7 +271,12 @@ export function IOSessionControls({
   onDetach,
   onRejoin,
   onOpenBookmarkPicker,
+  hideSessionControls = false,
 }: IOSessionControlsProps) {
+  // Auto-hide session controls when in buffer mode (playback controls are in the toolbar instead)
+  const isBufferMode = isBufferProfileId(ioProfile);
+  const shouldHideControls = hideSessionControls || isBufferMode;
+
   return (
     <>
       {/* IO Reader Selection */}
@@ -281,11 +288,11 @@ export function IOSessionControls({
         bufferMetadata={bufferMetadata}
         defaultReadProfileId={defaultReadProfileId}
         onClick={onOpenIoReaderPicker}
-        disabled={isStreaming}
+        disabled={isStreaming && !isBufferMode}
       />
 
-      {/* Speed button - only show if reader supports speed */}
-      {supportsSpeed && onOpenSpeedPicker && (
+      {/* Speed button - only show if reader supports speed and not in buffer mode */}
+      {supportsSpeed && onOpenSpeedPicker && !shouldHideControls && (
         <button
           onClick={onOpenSpeedPicker}
           className={buttonBase}
@@ -295,19 +302,21 @@ export function IOSessionControls({
         </button>
       )}
 
-      {/* Session control buttons (bookmark, stop, resume, detach, rejoin) */}
-      <SessionActionButtons
-        isStreaming={isStreaming}
-        isStopped={isStopped}
-        isDetached={isDetached}
-        joinerCount={joinerCount}
-        supportsTimeRange={supportsTimeRange}
-        onStop={onStop}
-        onResume={onResume}
-        onDetach={onDetach}
-        onRejoin={onRejoin}
-        onOpenBookmarkPicker={onOpenBookmarkPicker}
-      />
+      {/* Session control buttons (bookmark, stop, resume, detach, rejoin) - hidden in buffer mode */}
+      {!shouldHideControls && (
+        <SessionActionButtons
+          isStreaming={isStreaming}
+          isStopped={isStopped}
+          isDetached={isDetached}
+          joinerCount={joinerCount}
+          supportsTimeRange={supportsTimeRange}
+          onStop={onStop}
+          onResume={onResume}
+          onDetach={onDetach}
+          onRejoin={onRejoin}
+          onOpenBookmarkPicker={onOpenBookmarkPicker}
+        />
+      )}
     </>
   );
 }

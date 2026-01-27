@@ -227,6 +227,7 @@ impl MultiSourceReader {
             is_realtime: self.session_traits.temporal_mode == TemporalMode::Realtime,
             supports_speed_control: false,
             supports_seek: false,
+            supports_reverse: false,
             // Can transmit CAN frames if we have any CAN-capable transmit routes
             can_transmit: self.session_traits.can_transmit && has_can_transmit_routes,
             can_transmit_serial: self.session_traits.protocols.contains(&Protocol::Serial),

@@ -5,13 +5,24 @@
 import { useCallback } from "react";
 import type { PlaybackSpeed } from "../../../../stores/discoveryStore";
 import type { IngestOptions } from "../../../../dialogs/IoReaderPickerDialog";
-import type { BufferMetadata } from "../../../../api/buffer";
+import { getBufferFrameInfo, setActiveBuffer, type BufferMetadata } from "../../../../api/buffer";
+import { stepBufferFrame, updateReaderDirection } from "../../../../api/io";
+import { isBufferProfileId } from "../../../../hooks/useIOSessionManager";
+import { useBufferSessionHandler } from "../../../../hooks/useBufferSessionHandler";
 
 export interface UseDiscoverySessionHandlersParams {
   // Session manager state
+  sessionId: string;
   isStreaming: boolean;
   isPaused: boolean;
   sessionReady: boolean;
+
+  // Current position (for step operations)
+  currentFrameIndex?: number | null;
+  currentTimestampUs?: number | null;
+
+  // Selected frame IDs for filtering step operations
+  selectedFrameIds?: Set<number>;
 
   // Session manager actions
   setMultiBusMode: (mode: boolean) => void;
@@ -27,6 +38,9 @@ export interface UseDiscoverySessionHandlersParams {
 
   // Store actions
   setPlaybackSpeed: (speed: PlaybackSpeed) => void;
+  updateCurrentTime?: (timeSeconds: number) => void;
+  setCurrentFrameIndex?: (index: number) => void;
+  setMaxBuffer?: (count: number) => void;
   clearBuffer: () => void;
   clearFramePicker: () => void;
   clearAnalysisResults: () => void;
@@ -51,24 +65,21 @@ export interface UseDiscoverySessionHandlersParams {
   startMultiBusSession: (profileIds: string[], options: any) => Promise<void>;
   joinExistingSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
 
-  // API functions
-  getBufferMetadata: () => Promise<BufferMetadata | null>;
-  getBufferFrameInfo: () => Promise<any[]>;
-  getBufferBytesById: (id: string) => Promise<any[]>;
-  setActiveBuffer: (id: string) => Promise<void>;
+  // Buffer state
   setBufferMetadata: (meta: BufferMetadata | null) => void;
 
   // Dialog controls
   closeIoReaderPicker: () => void;
-
-  // Constants
-  BUFFER_PROFILE_ID: string;
 }
 
 export function useDiscoverySessionHandlers({
+  sessionId,
   isStreaming,
   isPaused,
   sessionReady,
+  currentFrameIndex,
+  currentTimestampUs,
+  selectedFrameIds,
   setMultiBusMode,
   setMultiBusProfiles,
   setIoProfile,
@@ -80,6 +91,9 @@ export function useDiscoverySessionHandlers({
   resume,
   reinitialize,
   setPlaybackSpeed,
+  updateCurrentTime,
+  setCurrentFrameIndex,
+  setMaxBuffer,
   clearBuffer,
   clearFramePicker,
   clearAnalysisResults,
@@ -90,7 +104,7 @@ export function useDiscoverySessionHandlers({
   resetFraming,
   setBackendByteCount,
   setBackendFrameCount,
-  addSerialBytes,
+  addSerialBytes: _addSerialBytes,
   setSerialConfig,
   setFramingConfig,
   resetWatchFrameCount,
@@ -99,90 +113,74 @@ export function useDiscoverySessionHandlers({
   handleRejoin,
   startMultiBusSession,
   joinExistingSession,
-  getBufferMetadata,
-  getBufferFrameInfo,
-  getBufferBytesById,
-  setActiveBuffer,
   setBufferMetadata,
   closeIoReaderPicker,
-  BUFFER_PROFILE_ID,
 }: UseDiscoverySessionHandlersParams) {
+  void _addSerialBytes; // Reserved for future bytes mode support
+
+  // Centralized buffer session handler with Discovery-specific callbacks
+  const { switchToBuffer } = useBufferSessionHandler({
+    setBufferMetadata,
+    updateCurrentTime: updateCurrentTime ?? (() => {}),
+    setCurrentFrameIndex: setCurrentFrameIndex ?? (() => {}),
+    // Clear previous state before switching
+    onBeforeSwitch: () => {
+      clearBuffer();
+      clearFramePicker();
+      clearAnalysisResults();
+      disableBufferMode();
+      clearSerialBytes();
+      resetFraming();
+      setBackendByteCount(0);
+    },
+    // Load frame info after metadata is loaded
+    onAfterSwitch: async (meta) => {
+      if (!meta || meta.count === 0) return;
+
+      const isFramesMode = meta.buffer_type === "frames";
+      const isBytesMode = meta.buffer_type === "bytes";
+
+      if (isBytesMode) {
+        // Bytes mode is handled elsewhere for Discovery
+        return;
+      }
+
+      if (isFramesMode) {
+        // Set active buffer so getBufferFrameInfo reads from the correct buffer
+        await setActiveBuffer(meta.id);
+        enableBufferMode(meta.count);
+        setMaxBuffer?.(meta.count);
+        try {
+          const frameInfoList = await getBufferFrameInfo();
+          setFrameInfoFromBuffer(frameInfoList);
+        } catch (e) {
+          console.error("[DiscoverySessionHandlers] Failed to load frame info:", e);
+        }
+      }
+    },
+  });
+
   // Handle IO profile change
   const handleIoProfileChange = useCallback(async (profileId: string | null) => {
     console.log(`[DiscoverySessionHandlers] handleIoProfileChange called - profileId=${profileId}`);
     setIoProfile(profileId);
 
-    // Clear analysis results when switching readers
-    clearAnalysisResults();
-
-    // Clear ALL data when switching readers
-    clearBuffer();
-    clearFramePicker();
-    disableBufferMode();
-    clearSerialBytes();
-    resetFraming();
-    setBackendByteCount(0);
-
-    // Check if switching to the buffer reader
-    if (profileId === BUFFER_PROFILE_ID) {
-      console.log(`[DiscoverySessionHandlers] Switching to buffer mode`);
-      const meta = await getBufferMetadata();
-      setBufferMetadata(meta);
-
-      if (meta && meta.count > 0) {
-        console.log(`[DiscoverySessionHandlers] Buffer has ${meta.count} items, type=${meta.buffer_type}`);
-        if (meta.buffer_type === "bytes") {
-          console.log(`[DiscoverySessionHandlers] Bytes mode - loading bytes`);
-          await setActiveBuffer(meta.id);
-          try {
-            const bytes = await getBufferBytesById(meta.id);
-            const entries = bytes.map((b: any) => ({
-              byte: b.byte,
-              timestampUs: b.timestamp_us,
-            }));
-            addSerialBytes(entries);
-            setBackendByteCount(meta.count);
-          } catch (e) {
-            console.error("Failed to load bytes from buffer:", e);
-          }
-          console.log(`[DiscoverySessionHandlers] Bytes mode - calling reinitialize(${BUFFER_PROFILE_ID})`);
-          // Explicitly pass BUFFER_PROFILE_ID to leave the old session and switch properly
-          await reinitialize(BUFFER_PROFILE_ID, { useBuffer: true });
-          console.log(`[DiscoverySessionHandlers] Bytes mode - reinitialize complete`);
-          // Stop the session immediately - bytes are already loaded into the store, no streaming needed
-          console.log(`[DiscoverySessionHandlers] Bytes mode - stopping session (data already loaded)`);
-          await stop();
-          console.log(`[DiscoverySessionHandlers] Bytes mode - session stopped`);
-        } else {
-          console.log(`[DiscoverySessionHandlers] Frames mode - calling reinitialize(${BUFFER_PROFILE_ID})`);
-          // Explicitly pass BUFFER_PROFILE_ID to avoid stale closure capturing old profile ID
-          await reinitialize(BUFFER_PROFILE_ID, { useBuffer: true });
-          console.log(`[DiscoverySessionHandlers] Frames mode - reinitialize complete`);
-
-          const BUFFER_MODE_THRESHOLD = 100000;
-
-          if (meta.count > BUFFER_MODE_THRESHOLD) {
-            enableBufferMode(meta.count);
-            try {
-              const frameInfoList = await getBufferFrameInfo();
-              setFrameInfoFromBuffer(frameInfoList);
-            } catch (e) {
-              console.error("Failed to load frame info from buffer:", e);
-            }
-          } else {
-            enableBufferMode(meta.count);
-            try {
-              const frameInfoList = await getBufferFrameInfo();
-              setFrameInfoFromBuffer(frameInfoList);
-            } catch (e) {
-              console.error("Failed to load frame info from buffer:", e);
-            }
-          }
-        }
-      }
+    // Check if switching to a buffer session (buffer_1, buffer_2, etc. or legacy __imported_buffer__)
+    if (isBufferProfileId(profileId)) {
+      await switchToBuffer(profileId!);
+    } else {
+      // Clear state when switching to non-buffer profile
+      clearAnalysisResults();
+      clearBuffer();
+      clearFramePicker();
+      disableBufferMode();
+      clearSerialBytes();
+      resetFraming();
+      setBackendByteCount(0);
     }
   }, [
     setIoProfile,
+    switchToBuffer,
     clearAnalysisResults,
     clearBuffer,
     clearFramePicker,
@@ -190,17 +188,6 @@ export function useDiscoverySessionHandlers({
     clearSerialBytes,
     resetFraming,
     setBackendByteCount,
-    BUFFER_PROFILE_ID,
-    getBufferMetadata,
-    setBufferMetadata,
-    setActiveBuffer,
-    getBufferBytesById,
-    addSerialBytes,
-    reinitialize,
-    stop,
-    enableBufferMode,
-    getBufferFrameInfo,
-    setFrameInfoFromBuffer,
   ]);
 
   // Handle Watch/Ingest from IoReaderPickerDialog
@@ -400,6 +387,57 @@ export function useDiscoverySessionHandlers({
     }
   }, [isPaused, isStreaming, sessionReady, resume, start, resetWatchFrameCount]);
 
+  // Handle play backwards button click
+  const handlePlayBackward = useCallback(async () => {
+    console.log(`[DiscoverySessionHandlers] handlePlayBackward - isPaused=${isPaused}, isStreaming=${isStreaming}, sessionReady=${sessionReady}`);
+
+    // Set direction to reverse before starting/resuming
+    try {
+      await updateReaderDirection(sessionId, true);
+      console.log(`[DiscoverySessionHandlers] handlePlayBackward - direction set to reverse`);
+    } catch (e) {
+      console.error(`[DiscoverySessionHandlers] handlePlayBackward - failed to set direction:`, e);
+      return;
+    }
+
+    if (isPaused) {
+      console.log(`[DiscoverySessionHandlers] handlePlayBackward - resuming...`);
+      await resume();
+      console.log(`[DiscoverySessionHandlers] handlePlayBackward - resume complete`);
+    } else if (isStreaming) {
+      console.log("[DiscoverySessionHandlers] Already streaming in reverse direction");
+    } else if (!sessionReady) {
+      console.log("[DiscoverySessionHandlers] Ignoring play backward request - session not ready");
+    } else {
+      console.log(`[DiscoverySessionHandlers] handlePlayBackward - starting...`);
+      resetWatchFrameCount();
+      await start();
+      console.log(`[DiscoverySessionHandlers] handlePlayBackward - start complete`);
+    }
+  }, [sessionId, isPaused, isStreaming, sessionReady, resume, start, resetWatchFrameCount]);
+
+  // Handle play forward button click (reset direction to forward)
+  const handlePlayForward = useCallback(async () => {
+    console.log(`[DiscoverySessionHandlers] handlePlayForward - setting direction to forward`);
+
+    // Set direction to forward
+    try {
+      await updateReaderDirection(sessionId, false);
+      console.log(`[DiscoverySessionHandlers] handlePlayForward - direction set to forward`);
+    } catch (e) {
+      console.error(`[DiscoverySessionHandlers] handlePlayForward - failed to set direction:`, e);
+      // Continue anyway - forward is the default
+    }
+
+    // Then call the regular handlePlay logic
+    if (isPaused) {
+      await resume();
+    } else if (!isStreaming && sessionReady) {
+      resetWatchFrameCount();
+      await start();
+    }
+  }, [sessionId, isPaused, isStreaming, sessionReady, resume, start, resetWatchFrameCount]);
+
   // Handle stop button click
   const handleStop = useCallback(async () => {
     console.log(`[DiscoverySessionHandlers] handleStop - calling stop...`);
@@ -414,6 +452,50 @@ export function useDiscoverySessionHandlers({
   const handlePause = useCallback(async () => {
     await pause();
   }, [pause]);
+
+  // Handle step backward (one frame earlier, respecting filter)
+  const handleStepBackward = useCallback(async () => {
+    // Need to be not actively playing and have some position info (frame index or timestamp)
+    // Allow stepping when paused OR when not streaming (e.g., buffer loaded but not started)
+    const isPlaying = isStreaming && !isPaused;
+    if (isPlaying || (currentFrameIndex == null && currentTimestampUs == null)) return;
+    try {
+      // Convert Set to array for the API call, only if we have a selection
+      const filter = selectedFrameIds && selectedFrameIds.size > 0
+        ? Array.from(selectedFrameIds)
+        : undefined;
+      const result = await stepBufferFrame(sessionId, currentFrameIndex ?? null, currentTimestampUs ?? null, true, filter);
+      // Update the store immediately with the new frame index and timestamp
+      if (result != null) {
+        setCurrentFrameIndex?.(result.frame_index);
+        updateCurrentTime?.(result.timestamp_us / 1_000_000);
+      }
+    } catch (e) {
+      console.error("[DiscoverySessionHandlers] Failed to step backward:", e);
+    }
+  }, [sessionId, isStreaming, isPaused, currentFrameIndex, currentTimestampUs, selectedFrameIds, setCurrentFrameIndex, updateCurrentTime]);
+
+  // Handle step forward (one frame later, respecting filter)
+  const handleStepForward = useCallback(async () => {
+    // Need to be not actively playing and have some position info (frame index or timestamp)
+    // Allow stepping when paused OR when not streaming (e.g., buffer loaded but not started)
+    const isPlaying = isStreaming && !isPaused;
+    if (isPlaying || (currentFrameIndex == null && currentTimestampUs == null)) return;
+    try {
+      // Convert Set to array for the API call, only if we have a selection
+      const filter = selectedFrameIds && selectedFrameIds.size > 0
+        ? Array.from(selectedFrameIds)
+        : undefined;
+      const result = await stepBufferFrame(sessionId, currentFrameIndex ?? null, currentTimestampUs ?? null, false, filter);
+      // Update the store immediately with the new frame index and timestamp
+      if (result != null) {
+        setCurrentFrameIndex?.(result.frame_index);
+        updateCurrentTime?.(result.timestamp_us / 1_000_000);
+      }
+    } catch (e) {
+      console.error("[DiscoverySessionHandlers] Failed to step forward:", e);
+    }
+  }, [sessionId, isStreaming, isPaused, currentFrameIndex, currentTimestampUs, selectedFrameIds, setCurrentFrameIndex, updateCurrentTime]);
 
   // Handle joining an existing session from the IO picker dialog
   const handleJoinSession = useCallback(async (
@@ -436,10 +518,14 @@ export function useDiscoverySessionHandlers({
     handleDialogStartMultiIngest,
     handleSelectMultiple,
     handlePlay,
+    handlePlayBackward,
+    handlePlayForward,
     handleStop,
     handleDetach,
     handleRejoin,
     handlePause,
+    handleStepBackward,
+    handleStepForward,
     handleJoinSession,
   };
 }

@@ -55,12 +55,12 @@ import SingleBusConfig from "./io-reader-picker/SingleBusConfig";
 import {
   localToIsoWithOffset,
   getLocalTimezoneAbbr,
-  BUFFER_PROFILE_ID,
   CSV_EXTERNAL_ID,
   INGEST_SESSION_ID,
   isRealtimeProfile,
   validateProfileSelection,
 } from "./io-reader-picker";
+import { isBufferProfileId } from "../hooks/useIOSessionManager";
 import type { FramingConfig, InterfaceFramingConfig } from "./io-reader-picker";
 
 // Re-export constants for backward compatibility
@@ -305,12 +305,18 @@ export default function IoReaderPickerDialog({
       // Load all buffers from the registry and initialize selected buffer
       listBuffers().then((loadedBuffers) => {
         setBuffers(loadedBuffers);
-        // If a buffer is currently selected, try to find which one
-        // Default to the most recent buffer (last in list) if buffer source is active
-        if (selectedId === BUFFER_PROFILE_ID && loadedBuffers.length > 0) {
-          // Sort by created_at descending and pick the most recent
-          const sorted = [...loadedBuffers].sort((a, b) => b.created_at - a.created_at);
-          setSelectedBufferId(sorted[0].id);
+        // If a specific buffer is selected (e.g., "buffer_1"), use that
+        // Otherwise if legacy buffer ID is selected, use the most recent buffer
+        if (isBufferProfileId(selectedId) && loadedBuffers.length > 0) {
+          // Check if selectedId matches a specific buffer (e.g., "buffer_1")
+          const matchingBuffer = loadedBuffers.find(b => b.id === selectedId);
+          if (matchingBuffer) {
+            setSelectedBufferId(matchingBuffer.id);
+          } else {
+            // Legacy buffer ID - fall back to most recent buffer
+            const sorted = [...loadedBuffers].sort((a, b) => b.created_at - a.created_at);
+            setSelectedBufferId(sorted[0].id);
+          }
         } else {
           setSelectedBufferId(null);
         }
@@ -324,7 +330,7 @@ export default function IoReaderPickerDialog({
       setFramingConfig(null);
       // If currently ingesting, pre-select that profile; otherwise use currently selected profile
       // But don't pre-select buffer profile as checkedReaderId (it's shown separately)
-      const initialReaderId = ingestProfileId ?? (selectedId === BUFFER_PROFILE_ID ? null : selectedId);
+      const initialReaderId = ingestProfileId ?? (isBufferProfileId(selectedId) ? null : selectedId);
       setCheckedReaderId(initialReaderId);
       setImportError(null);
 
@@ -1028,8 +1034,8 @@ export default function IoReaderPickerDialog({
       };
       await emit(WINDOW_EVENTS.BUFFER_CHANGED, payload);
 
-      // Auto-select the buffer
-      onSelect(BUFFER_PROFILE_ID);
+      // Auto-select the buffer using its actual ID
+      onSelect(metadata.id);
       onClose();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -1049,7 +1055,7 @@ export default function IoReaderPickerDialog({
       setBuffers(allBuffers);
 
       // If no buffers left and buffer was selected, clear selection
-      if (allBuffers.length === 0 && selectedId === BUFFER_PROFILE_ID) {
+      if (allBuffers.length === 0 && isBufferProfileId(selectedId)) {
         onSelect(null);
       }
 
@@ -1079,7 +1085,7 @@ export default function IoReaderPickerDialog({
 
       // If buffer was selected and it was deleted, clear selection
       const deletedIds = new Set(nonStreamingBuffers.map(b => b.id));
-      if (selectedId === BUFFER_PROFILE_ID) {
+      if (isBufferProfileId(selectedId)) {
         // Check if the selected buffer was deleted
         const selectedBuffer = buffers.find(b => b.id === selectedId);
         if (selectedBuffer && deletedIds.has(selectedBuffer.id)) {
@@ -1119,13 +1125,15 @@ export default function IoReaderPickerDialog({
       await setActiveBuffer(bufferId);
       setCheckedReaderId(null);
       setSelectedBufferId(bufferId);
-      onSelect(BUFFER_PROFILE_ID);
+      // Pass the actual buffer ID as the profile ID (e.g., "buffer_1")
+      // This allows unique session naming per buffer
+      onSelect(bufferId);
     } catch (e) {
       console.error("Failed to set active buffer:", e);
     }
   };
 
-  const isBufferSelected = selectedId === BUFFER_PROFILE_ID;
+  const isBufferSelected = isBufferProfileId(selectedId);
 
   // Check if a bytes buffer is selected (for framing options)
   const selectedBuffer = selectedBufferId ? buffers.find((b) => b.id === selectedBufferId) : null;

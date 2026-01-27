@@ -11,8 +11,8 @@ use crate::{
         get_session_listeners, join_session, leave_session, list_sessions, pause_session,
         register_listener, reinitialize_session_if_safe, resume_session,
         seek_session, set_listener_active, start_session, stop_session, transmit_frame, unregister_listener,
-        update_session_speed, update_session_time_range, ActiveSessionInfo, IOCapabilities, IODevice, IOState,
-        JoinSessionResult, ListenerInfo, RegisterListenerResult, ReinitializeResult, BufferReader,
+        update_session_direction, update_session_speed, update_session_time_range, ActiveSessionInfo, IOCapabilities, IODevice, IOState,
+        JoinSessionResult, ListenerInfo, RegisterListenerResult, ReinitializeResult, BufferReader, step_frame, StepResult,
         BusMapping, InterfaceTraits, Protocol, TemporalMode,
         CsvReader, CsvReaderOptions,
         GvretDeviceInfo, probe_gvret_tcp, probe_gvret_usb,
@@ -744,6 +744,12 @@ pub async fn seek_reader_session(session_id: String, timestamp_us: i64) -> Resul
     seek_session(&session_id, timestamp_us).await
 }
 
+/// Set playback direction for a reader session (reverse = true for backwards playback)
+#[tauri::command(rename_all = "snake_case")]
+pub async fn update_reader_direction(session_id: String, reverse: bool) -> Result<(), String> {
+    update_session_direction(&session_id, reverse).await
+}
+
 /// Destroy a reader session
 #[tauri::command(rename_all = "snake_case")]
 pub async fn destroy_reader_session(session_id: String) -> Result<(), String> {
@@ -803,6 +809,23 @@ pub async fn transition_to_buffer_reader(
 
     let result = create_session(app, session_id, Box::new(reader), None, None).await;
     Ok(result.capabilities)
+}
+
+/// Step one frame forward or backward in the buffer.
+/// Returns the new frame index and timestamp after stepping, or None if at the boundary.
+/// Only works when the session is paused.
+/// Requires either current_frame_index or current_timestamp_us to determine position.
+/// If filter_frame_ids is provided, skips frames that don't match the filter.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn step_buffer_frame(
+    app: tauri::AppHandle,
+    session_id: String,
+    current_frame_index: Option<usize>,
+    current_timestamp_us: Option<i64>,
+    backward: bool,
+    filter_frame_ids: Option<Vec<u32>>,
+) -> Result<Option<StepResult>, String> {
+    step_frame(&app, &session_id, current_frame_index, current_timestamp_us, backward, filter_frame_ids.as_deref())
 }
 
 // Legacy heartbeat commands removed - use register_session_listener/unregister_session_listener instead

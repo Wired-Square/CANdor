@@ -74,6 +74,16 @@ export interface FrameDataTableProps {
   showId?: boolean;
   /** Auto-scroll to bottom when new frames arrive (default: true) */
   autoScroll?: boolean;
+  /** Index of the row to highlight within the visible frames (0-based) */
+  highlightedRowIndex?: number | null;
+  /** Called when a row is clicked (receives row index within visible frames) */
+  onRowClick?: (rowIndex: number) => void;
+  /** Starting frame index for the current page (for tooltip display) */
+  pageStartIndex?: number;
+  /** Whether frames were reversed for display (affects frame index calculation) */
+  framesReversed?: boolean;
+  /** Total frames on this page (needed when reversed to calculate correct index) */
+  pageFrameCount?: number;
 }
 
 // ============================================================================
@@ -96,11 +106,17 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
   showBus = false,
   showId = true,
   autoScroll = true,
+  highlightedRowIndex,
+  onRowClick,
+  pageStartIndex = 0,
+  framesReversed = false,
+  pageFrameCount = 0,
 }, ref) => {
   // Internal ref for scrolling (use forwarded ref if provided, otherwise internal)
   const internalRef = useRef<HTMLDivElement>(null);
   const containerRef = (ref as React.RefObject<HTMLDivElement>) || internalRef;
   const wasAtBottom = useRef(true);
+  const highlightedRowRef = useRef<HTMLTableRowElement>(null);
 
   // Track if user has scrolled up
   const handleScroll = () => {
@@ -110,13 +126,23 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
     wasAtBottom.current = scrollTop + clientHeight >= scrollHeight - 10;
   };
 
-  // Auto-scroll to bottom when new frames arrive
+  // Auto-scroll to bottom when new frames arrive (streaming mode)
   useEffect(() => {
     const container = containerRef.current;
     if (autoScroll && wasAtBottom.current && container) {
       container.scrollTop = container.scrollHeight;
     }
   }, [frames, autoScroll, containerRef]);
+
+  // Scroll to keep highlighted row visible when stepping
+  useEffect(() => {
+    if (highlightedRowIndex != null && highlightedRowRef.current) {
+      highlightedRowRef.current.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+      });
+    }
+  }, [highlightedRowIndex]);
 
   // Check if any frame has source_address
   const hasSourceAddress = useMemo(() => {
@@ -180,12 +206,19 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
           {frames.map((frame, idx, arr) => {
             const prevFrame = idx > 0 ? arr[idx - 1] : null;
             const srcPadding = sourceByteCount * 2;
+            const isCurrentFrame = highlightedRowIndex != null && idx === highlightedRowIndex;
+            // Calculate actual frame index - if reversed, count down from end of page
+            const frameIndex = framesReversed
+              ? pageStartIndex + pageFrameCount - 1 - idx
+              : pageStartIndex + idx;
 
             return (
               <tr
+                ref={isCurrentFrame ? highlightedRowRef : undefined}
                 key={`${frame.timestamp_us}-${frame.frame_id}-${idx}`}
-                className={`${hoverDarkRow} ${frame.incomplete ? 'opacity-60' : ''}`}
-                title={frame.incomplete ? 'Incomplete frame (no delimiter found)' : undefined}
+                className={`${hoverDarkRow} ${frame.incomplete ? 'opacity-60' : ''} ${isCurrentFrame ? 'bg-cyan-900/40 ring-1 ring-cyan-500/50' : ''} ${onRowClick ? 'cursor-pointer' : ''}`}
+                title={`Frame ${frameIndex}${frame.incomplete ? ' - Incomplete (no delimiter found)' : ''}`}
+                onClick={onRowClick ? () => onRowClick(idx) : undefined}
               >
                 {onBookmark && (
                   <td className="px-1 py-0.5">

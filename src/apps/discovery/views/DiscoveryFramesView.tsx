@@ -6,10 +6,13 @@ import { useDiscoveryStore } from "../../../stores/discoveryStore";
 import { useDiscoveryUIStore } from "../../../stores/discoveryUIStore";
 import { getBufferFramesPaginatedFiltered, findBufferOffsetForTimestamp, type BufferMetadata } from "../../../api/buffer";
 import { DiscoveryViewController, FrameDataTable, type TabDefinition, FRAME_PAGE_SIZE_OPTIONS } from "../components";
+import { PlaybackControls, type PlaybackState } from "../../../components/PlaybackControls";
+import type { PlaybackSpeed } from "../../../components/TimeController";
 import ChangesResultView from "./tools/ChangesResultView";
 import MessageOrderResultView from "./tools/MessageOrderResultView";
 import { bgDarkView, borderDarkView, textDarkMuted } from "../../../styles";
 import type { FrameMessage } from "../../../types/frame";
+import type { IOCapabilities } from "../../../api/io";
 
 type Props = {
   frames: FrameMessage[];
@@ -47,6 +50,20 @@ type Props = {
 
   // Whether the data source is recorded (e.g., PostgreSQL, CSV) vs live
   isRecorded?: boolean;
+
+  // Playback controls (for buffer replay)
+  playbackState?: PlaybackState;
+  playbackDirection?: "forward" | "backward";
+  capabilities?: IOCapabilities | null;
+  playbackSpeed?: PlaybackSpeed;
+  currentFrameIndex?: number | null;
+  onFrameSelect?: (frameIndex: number, timestampUs: number) => void;
+  onPlay?: () => void;
+  onPlayBackward?: () => void;
+  onPause?: () => void;
+  onStepBackward?: () => void;
+  onStepForward?: () => void;
+  onSpeedChange?: (speed: PlaybackSpeed) => void;
 };
 
 function DiscoveryFramesView({
@@ -70,6 +87,18 @@ function DiscoveryFramesView({
   onScrub,
   bufferMetadata,
   isRecorded = false,
+  playbackState = "paused",
+  playbackDirection = "forward",
+  capabilities,
+  playbackSpeed = 1,
+  currentFrameIndex,
+  onFrameSelect,
+  onPlay,
+  onPlayBackward,
+  onPause,
+  onStepBackward,
+  onStepForward,
+  onSpeedChange,
 }: Props) {
 
   const renderBuffer = useDiscoveryStore((s) => s.renderBuffer);
@@ -383,6 +412,19 @@ function DiscoveryFramesView({
     filteredCount = result.filteredCount;
   }
 
+  // Ensure frames are always sorted by timestamp ascending (oldest at top)
+  // regardless of playback direction. Track if we reversed for index mapping.
+  let framesWereReversed = false;
+  if (visibleFrames.length > 1) {
+    const firstTs = visibleFrames[0].timestamp_us;
+    const lastTs = visibleFrames[visibleFrames.length - 1].timestamp_us;
+    if (firstTs > lastTs) {
+      // Frames are in descending order, reverse to get ascending
+      visibleFrames = [...visibleFrames].reverse();
+      framesWereReversed = true;
+    }
+  }
+
   // Calculate pagination values (only meaningful when not streaming)
   const pageSize = renderBuffer === -1 ? Math.max(1, filteredCount) : renderBuffer;
   const totalPages = filteredCount > 0 && pageSize > 0 ? Math.ceil(filteredCount / pageSize) : 1;
@@ -437,11 +479,12 @@ function DiscoveryFramesView({
 
   // Compute timeline props based on mode
   const timelineProps = useMemo(() => {
-    // Buffer mode: use buffer metadata for time range
-    if (bufferMode.enabled && !isStreaming && bufferMetadata?.start_time_us != null && bufferMetadata?.end_time_us != null) {
-      const currentPos = bufferModeFrames.length > 0
-        ? bufferModeFrames[0].timestamp_us
-        : bufferMetadata.start_time_us;
+    // Buffer mode: use buffer metadata for time range (both stopped and streaming)
+    if (bufferMode.enabled && bufferMetadata?.start_time_us != null && bufferMetadata?.end_time_us != null) {
+      // When streaming, use the live currentTimeUs; when stopped, use first visible frame or start
+      const currentPos = isStreaming
+        ? (currentTimeUs ?? bufferMetadata.start_time_us)
+        : (bufferModeFrames.length > 0 ? bufferModeFrames[0].timestamp_us : bufferMetadata.start_time_us);
       return {
         show: true,
         minTimeUs: bufferMetadata.start_time_us,
@@ -464,6 +507,53 @@ function DiscoveryFramesView({
     }
     return { show: false, minTimeUs: 0, maxTimeUs: 0, currentTimeUs: 0, onScrub: () => {}, disabled: true };
   }, [bufferMode.enabled, isStreaming, bufferMetadata, bufferModeFrames, frames, currentTimeUs, handleBufferScrub, handleNormalScrub]);
+
+  // Auto-navigate to the page containing the current frame during playback
+  useEffect(() => {
+    if (currentFrameIndex == null || isStreaming || renderBuffer === -1) return;
+
+    const effectivePageSize = renderBuffer;
+    const pageStart = currentPage * effectivePageSize;
+    const pageEnd = pageStart + effectivePageSize - 1;
+
+    // If current frame is not on this page, navigate to the correct page
+    if (currentFrameIndex < pageStart || currentFrameIndex > pageEnd) {
+      const targetPage = Math.floor(currentFrameIndex / effectivePageSize);
+      setCurrentPage(targetPage);
+    }
+  }, [currentFrameIndex, currentPage, renderBuffer, isStreaming]);
+
+  // Calculate which row to highlight based on current frame index
+  // Returns the index within visibleFrames, or null if current frame is not visible
+  const highlightedRowIndex = useMemo(() => {
+    if (currentFrameIndex == null || visibleFrames.length === 0) return null;
+
+    const effectivePageSize = renderBuffer === -1 ? visibleFrames.length : renderBuffer;
+    const pageStart = currentPage * effectivePageSize;
+    const pageEnd = pageStart + visibleFrames.length - 1;
+
+    // Check if current frame is on this page
+    if (currentFrameIndex >= pageStart && currentFrameIndex <= pageEnd) {
+      let rowIndex = currentFrameIndex - pageStart;
+      // If frames were reversed for display, flip the index
+      if (framesWereReversed) {
+        rowIndex = visibleFrames.length - 1 - rowIndex;
+      }
+      return rowIndex;
+    }
+    return null;
+  }, [currentFrameIndex, currentPage, renderBuffer, visibleFrames.length, framesWereReversed]);
+
+  // Handle row click - convert row index to global frame index and get timestamp
+  const handleRowClick = useCallback((rowIndex: number) => {
+    if (!onFrameSelect || rowIndex >= visibleFrames.length) return;
+    const effectivePageSize = renderBuffer === -1 ? visibleFrames.length : renderBuffer;
+    // If frames were reversed for display, convert the visual row index back to the original index
+    const originalRowIndex = framesWereReversed ? visibleFrames.length - 1 - rowIndex : rowIndex;
+    const globalFrameIndex = currentPage * effectivePageSize + originalRowIndex;
+    const timestampUs = visibleFrames[rowIndex].timestamp_us;
+    onFrameSelect(globalFrameIndex, timestampUs);
+  }, [onFrameSelect, currentPage, renderBuffer, visibleFrames, framesWereReversed]);
 
   // Time range inputs for toolbar (optional feature)
   const timeRangeInputs = showTimeRange && onStartTimeChange && onEndTimeChange ? (
@@ -553,6 +643,32 @@ function DiscoveryFramesView({
               toolbarLoading={isFiltering || bufferModeLoading}
               toolbarDisabled={isStreaming}
               toolbarLeftContent={timeRangeInputs}
+              toolbarCenterContent={
+                onPlay && onPause ? (
+                  <PlaybackControls
+                    playbackState={playbackState}
+                    playbackDirection={playbackDirection}
+                    isReady={bufferMode.enabled}
+                    canPause={capabilities?.can_pause ?? false}
+                    supportsSeek={capabilities?.supports_seek ?? false}
+                    supportsSpeedControl={capabilities?.supports_speed_control ?? false}
+                    supportsReverse={capabilities?.supports_reverse ?? false}
+                    playbackSpeed={playbackSpeed}
+                    minTimeUs={timelineProps.minTimeUs}
+                    maxTimeUs={timelineProps.maxTimeUs}
+                    currentTimeUs={timelineProps.currentTimeUs}
+                    currentFrameIndex={currentFrameIndex}
+                    totalFrames={bufferMode.totalFrames}
+                    onPlay={onPlay}
+                    onPlayBackward={onPlayBackward}
+                    onPause={onPause}
+                    onStepBackward={onStepBackward}
+                    onStepForward={onStepForward}
+                    onScrub={timelineProps.onScrub}
+                    onSpeedChange={onSpeedChange}
+                  />
+                ) : null
+              }
               hidePagination={isStreaming || isFiltering || bufferModeLoading}
 
               // Timeline
@@ -576,6 +692,11 @@ function DiscoveryFramesView({
               emptyMessage={isStreaming ? 'Waiting for frames...' : 'No frames to display'}
               showAscii={showAsciiColumn}
               showBus={showBusColumn}
+              highlightedRowIndex={highlightedRowIndex}
+              onRowClick={onFrameSelect ? handleRowClick : undefined}
+              pageStartIndex={currentPage * (renderBuffer === -1 ? visibleFrames.length : renderBuffer)}
+              framesReversed={framesWereReversed}
+              pageFrameCount={visibleFrames.length}
             />
           </>
         )}

@@ -76,6 +76,7 @@ type CombinedDiscoveryState = {
   ioProfile: string | null;
   playbackSpeed: PlaybackSpeed;
   currentTime: number | null;
+  currentFrameIndex: number | null;
   startTime: string;
   endTime: string;
   showErrorDialog: boolean;
@@ -125,6 +126,7 @@ type CombinedDiscoveryState = {
   setIoProfile: (profile: string | null) => void;
   setPlaybackSpeed: (speed: PlaybackSpeed) => void;
   updateCurrentTime: (time: number) => void;
+  setCurrentFrameIndex: (index: number) => void;
   rebuildFramePickerFromBuffer: () => void;
   setStartTime: (time: string) => void;
   setEndTime: (time: string) => void;
@@ -221,6 +223,7 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     ioProfile: uiStore.ioProfile,
     playbackSpeed: uiStore.playbackSpeed,
     currentTime: uiStore.currentTime,
+    currentFrameIndex: uiStore.currentFrameIndex,
     startTime: uiStore.startTime,
     endTime: uiStore.endTime,
     showErrorDialog: uiStore.showErrorDialog,
@@ -292,6 +295,7 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     setIoProfile: uiStore.setIoProfile,
     setPlaybackSpeed: uiStore.setPlaybackSpeed,
     updateCurrentTime: uiStore.updateCurrentTime,
+    setCurrentFrameIndex: uiStore.setCurrentFrameIndex,
     setStartTime: uiStore.setStartTime,
     setEndTime: uiStore.setEndTime,
     openSaveDialog: () => {

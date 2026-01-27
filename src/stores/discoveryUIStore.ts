@@ -33,6 +33,7 @@ interface DiscoveryUIState {
   // Playback control
   playbackSpeed: PlaybackSpeed;
   currentTime: number | null;
+  currentFrameIndex: number | null;
 
   // Time range
   startTime: string;
@@ -73,6 +74,7 @@ interface DiscoveryUIState {
   // Actions - Playback control
   setPlaybackSpeed: (speed: PlaybackSpeed) => void;
   updateCurrentTime: (time: number) => void;
+  setCurrentFrameIndex: (index: number) => void;
 
   // Actions - Time range
   setStartTime: (time: string) => void;
@@ -111,6 +113,7 @@ export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
   ioProfile: null,
   playbackSpeed: 1,
   currentTime: null,
+  currentFrameIndex: null,
   startTime: '',
   endTime: '',
   showErrorDialog: false,
@@ -172,6 +175,7 @@ export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
   },
 
   updateCurrentTime: (time) => set({ currentTime: time }),
+  setCurrentFrameIndex: (index) => set({ currentFrameIndex: index }),
 
   // Time range
   setStartTime: (time) => set({ startTime: time }),

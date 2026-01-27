@@ -275,6 +275,7 @@ interface DecoderState {
   // Playback control (for PostgreSQL profiles)
   playbackSpeed: PlaybackSpeed;
   currentTime: number | null;
+  currentFrameIndex: number | null;
 
   // Time range (for PostgreSQL profiles)
   startTime: string;
@@ -329,6 +330,7 @@ interface DecoderState {
   // Actions - Playback control
   setPlaybackSpeed: (speed: PlaybackSpeed) => void;
   updateCurrentTime: (time: number) => void;
+  setCurrentFrameIndex: (index: number) => void;
 
   // Actions - Time range
   setStartTime: (time: string) => void;
@@ -371,6 +373,7 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
   streamStartTimeSeconds: null,
   playbackSpeed: 1,
   currentTime: null,
+  currentFrameIndex: null,
   startTime: '',
   endTime: '',
   showSaveDialog: false,
@@ -1236,6 +1239,7 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
   },
 
   updateCurrentTime: (time) => set({ currentTime: time }),
+  setCurrentFrameIndex: (index) => set({ currentFrameIndex: index }),
 
   // Time range actions
   setStartTime: (time) => set({ startTime: time }),

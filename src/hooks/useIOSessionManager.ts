@@ -18,7 +18,7 @@ import {
   type CreateMultiSourceOptions,
   type PerInterfaceFramingConfig,
 } from "../stores/sessionStore";
-import type { BusMapping } from "../api/io";
+import type { BusMapping, PlaybackPosition } from "../api/io";
 import type { IOProfile } from "./useSettings";
 import type { FrameMessage } from "../stores/discoveryStore";
 import type { StreamEndedPayload, IOCapabilities } from "../api/io";
@@ -73,8 +73,8 @@ export interface UseIOSessionManagerOptions {
   onFrames?: (frames: FrameMessage[]) => void;
   /** Callback on error */
   onError?: (error: string) => void;
-  /** Callback when current time updates */
-  onTimeUpdate?: (timeUs: number) => void;
+  /** Callback when playback position updates (timestamp and frame index) */
+  onTimeUpdate?: (position: PlaybackPosition) => void;
   /** Callback when stream ends */
   onStreamEnded?: (payload: StreamEndedPayload) => void;
   /** Callback when buffer playback completes */
@@ -192,8 +192,21 @@ export interface UseIOSessionManagerResult {
   ) => Promise<void>;
 }
 
-/** Buffer profile ID constant */
+/**
+ * Buffer profile ID constant (legacy).
+ * DEPRECATED: Use isBufferProfileId() to detect buffer IDs.
+ */
 export const BUFFER_PROFILE_ID = "__imported_buffer__";
+
+/**
+ * Check if a profile ID represents a buffer session.
+ * Buffer IDs follow the pattern "buffer_N" (e.g., "buffer_1", "buffer_2")
+ * or the legacy "__imported_buffer__".
+ */
+export function isBufferProfileId(profileId: string | null): boolean {
+  if (!profileId) return false;
+  return profileId === BUFFER_PROFILE_ID || /^buffer_\d+$/.test(profileId);
+}
 
 /**
  * Generate a unique multi-source session ID.
@@ -367,9 +380,9 @@ export function useIOSessionManager(
   const readerState = session.state;
   const isStreaming = !isDetached && (readerState === "running" || readerState === "paused");
   const isPaused = readerState === "paused";
-  const isStopped = !isDetached && readerState === "stopped" && ioProfile !== null && ioProfile !== BUFFER_PROFILE_ID;
+  const isStopped = !isDetached && readerState === "stopped" && ioProfile !== null && !isBufferProfileId(ioProfile);
   const isRealtime = session.capabilities?.is_realtime === true;
-  const isBufferMode = ioProfile === BUFFER_PROFILE_ID;
+  const isBufferMode = isBufferProfileId(ioProfile);
   const sessionReady = session.isReady;
   const capabilities = session.capabilities;
   const joinerCount = session.joinerCount;

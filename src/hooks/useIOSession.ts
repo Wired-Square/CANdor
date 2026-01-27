@@ -28,6 +28,7 @@ import {
   type StreamEndedPayload,
   type CanTransmitFrame,
   type TransmitResult,
+  type PlaybackPosition,
 } from "../api/io";
 import type { FrameMessage } from "../stores/discoveryStore";
 
@@ -64,8 +65,8 @@ export interface UseIOSessionOptions {
   onFrames?: (frames: FrameMessage[]) => void;
   /** Callback on error */
   onError?: (error: string) => void;
-  /** Callback when current time updates (from frame timestamps) */
-  onTimeUpdate?: (timeUs: number) => void;
+  /** Callback when playback position updates (timestamp and frame index) */
+  onTimeUpdate?: (position: PlaybackPosition) => void;
   /** Callback when stream ends (GVRET disconnect, PostgreSQL complete, etc.) */
   onStreamEnded?: (payload: StreamEndedPayload) => void;
   /** Callback when buffer playback completes naturally (reached end of buffer) */
@@ -295,7 +296,7 @@ export function useIOSession(
         registerCallbacks(effectiveSessionId, listenerIdRef.current, {
           onFrames: (frames) => callbacksRef.current.onFrames?.(frames),
           onError: (error) => callbacksRef.current.onError?.(error),
-          onTimeUpdate: (timeUs) => callbacksRef.current.onTimeUpdate?.(timeUs),
+          onTimeUpdate: (position) => callbacksRef.current.onTimeUpdate?.(position),
           onStreamEnded: (payload) => callbacksRef.current.onStreamEnded?.(payload),
           onStreamComplete: () => callbacksRef.current.onStreamComplete?.(),
           onSpeedChange: (speed) => callbacksRef.current.onSpeedChange?.(speed),
@@ -590,7 +591,7 @@ export function useIOSession(
         registerCallbacks(targetProfileId, listenerIdRef.current, {
           onFrames: (frames) => callbacksRef.current.onFrames?.(frames),
           onError: (error) => callbacksRef.current.onError?.(error),
-          onTimeUpdate: (timeUs) => callbacksRef.current.onTimeUpdate?.(timeUs),
+          onTimeUpdate: (position) => callbacksRef.current.onTimeUpdate?.(position),
           onStreamEnded: (payload) => callbacksRef.current.onStreamEnded?.(payload),
           onStreamComplete: () => callbacksRef.current.onStreamComplete?.(),
           onSpeedChange: (speed) => callbacksRef.current.onSpeedChange?.(speed),
@@ -640,7 +641,7 @@ export function useIOSession(
       registerCallbacks(targetSessionId, listenerIdRef.current, {
         onFrames: (frames) => callbacksRef.current.onFrames?.(frames),
         onError: (error) => callbacksRef.current.onError?.(error),
-        onTimeUpdate: (timeUs) => callbacksRef.current.onTimeUpdate?.(timeUs),
+        onTimeUpdate: (position) => callbacksRef.current.onTimeUpdate?.(position),
         onStreamEnded: (payload) => callbacksRef.current.onStreamEnded?.(payload),
         onStreamComplete: () => callbacksRef.current.onStreamComplete?.(),
         onSpeedChange: (speed) => callbacksRef.current.onSpeedChange?.(speed),

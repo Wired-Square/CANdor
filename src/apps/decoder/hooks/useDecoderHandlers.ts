@@ -24,6 +24,7 @@ import {
 } from "./handlers/useDecoderCatalogHandlers";
 import type { PlaybackSpeed } from "../../../components/TimeController";
 import type { IOCapabilities } from "../../../api/io";
+import type { BufferMetadata } from "../../../api/buffer";
 import type { FrameDetail } from "../../../types/decoder";
 import type { SerialFrameConfig } from "../../../utils/frameExport";
 import type { SelectionSet } from "../../../utils/selectionSets";
@@ -59,8 +60,13 @@ export interface UseDecoderHandlersParams {
   seek: (timeUs: number) => Promise<void>;
 
   // Reader state
+  sessionId: string;
   isPaused: boolean;
+  isStreaming: boolean;
+  sessionReady: boolean;
   capabilities: IOCapabilities | null;
+  currentFrameIndex?: number | null;
+  currentTimestampUs?: number | null;
 
   // Store actions (decoder)
   setIoProfile: (profileId: string | null) => void;
@@ -69,6 +75,7 @@ export interface UseDecoderHandlersParams {
   setStartTime: (time: string) => void;
   setEndTime: (time: string) => void;
   updateCurrentTime: (time: number) => void;
+  setCurrentFrameIndex: (index: number) => void;
   loadCatalog: (path: string) => Promise<void>;
   clearDecoded: () => void;
   clearUnmatchedFrames: () => void;
@@ -136,6 +143,14 @@ export interface UseDecoderHandlersParams {
   // Bookmark state
   setActiveBookmarkId: (id: string | null) => void;
 
+  // Buffer state
+  setBufferMetadata: (meta: BufferMetadata | null) => void;
+
+  // Buffer bounds for frame index calculation during scrub
+  minTimeUs?: number | null;
+  maxTimeUs?: number | null;
+  totalFrames?: number | null;
+
   // Settings for default speeds
   ioProfiles?: Array<{ id: string; connection?: { default_speed?: string } }>;
 }
@@ -173,18 +188,29 @@ export function useDecoderHandlers(params: UseDecoderHandlersParams): DecoderHan
     setIngestSpeed: params.setIngestSpeed,
     closeIoReaderPicker: params.closeIoReaderPicker,
     playbackSpeed: params.playbackSpeed,
+    setBufferMetadata: params.setBufferMetadata,
+    updateCurrentTime: params.updateCurrentTime,
+    setCurrentFrameIndex: params.setCurrentFrameIndex,
     ioProfiles: params.ioProfiles,
   });
 
   // Playback handlers (play, pause, stop, speed change)
   const playbackHandlers = useDecoderPlaybackHandlers({
+    sessionId: params.sessionId,
     start: params.start,
     stop: params.stop,
     pause: params.pause,
     resume: params.resume,
     setSpeed: params.setSpeed,
     isPaused: params.isPaused,
+    isStreaming: params.isStreaming,
+    sessionReady: params.sessionReady,
+    currentFrameIndex: params.currentFrameIndex,
+    currentTimestampUs: params.currentTimestampUs,
+    selectedFrameIds: params.selectedFrames,
     setPlaybackSpeed: params.setPlaybackSpeed,
+    updateCurrentTime: params.updateCurrentTime,
+    setCurrentFrameIndex: params.setCurrentFrameIndex,
     streamCompletedRef: params.streamCompletedRef,
   });
 
@@ -196,8 +222,12 @@ export function useDecoderHandlers(params: UseDecoderHandlersParams): DecoderHan
     setStartTime: params.setStartTime,
     setEndTime: params.setEndTime,
     updateCurrentTime: params.updateCurrentTime,
+    setCurrentFrameIndex: params.setCurrentFrameIndex,
     startTime: params.startTime,
     endTime: params.endTime,
+    minTimeUs: params.minTimeUs,
+    maxTimeUs: params.maxTimeUs,
+    totalFrames: params.totalFrames,
     setActiveBookmarkId: params.setActiveBookmarkId,
   });
 

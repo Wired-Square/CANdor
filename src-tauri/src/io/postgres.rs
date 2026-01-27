@@ -9,10 +9,10 @@ use std::time::Duration;
 use tauri::AppHandle;
 use tokio_postgres::{NoTls, Row};
 
-use super::timeline_base::TimelineControl;
+use super::timeline_base::{TimelineControl, TimelineReaderState};
 use super::{
     emit_frames, emit_to_session, FrameMessage, IOCapabilities, IODevice, IOState,
-    StreamEndedPayload,
+    PlaybackPosition, StreamEndedPayload,
 };
 use crate::buffer_store::{self, BufferType};
 
@@ -97,13 +97,10 @@ impl Default for PostgresReaderOptions {
 /// PostgreSQL Reader - streams historical CAN data from a PostgreSQL database
 pub struct PostgresReader {
     app: AppHandle,
-    session_id: String,
     config: PostgresConfig,
     options: PostgresReaderOptions,
-    state: IOState,
-    /// Shared timeline control (pause, speed, cancel)
-    control: TimelineControl,
-    task_handle: Option<tauri::async_runtime::JoinHandle<()>>,
+    /// Common timeline reader state (control, state, session_id, task_handle)
+    reader_state: TimelineReaderState,
 }
 
 impl PostgresReader {
@@ -113,14 +110,12 @@ impl PostgresReader {
         config: PostgresConfig,
         options: PostgresReaderOptions,
     ) -> Self {
+        let speed = options.speed;
         Self {
             app,
-            session_id,
             config,
-            control: TimelineControl::new(options.speed),
             options,
-            state: IOState::Stopped,
-            task_handle: None,
+            reader_state: TimelineReaderState::new(session_id, speed),
         }
     }
 }
@@ -132,65 +127,36 @@ impl IODevice for PostgresReader {
     }
 
     async fn start(&mut self) -> Result<(), String> {
-        if self.state == IOState::Running || self.state == IOState::Paused {
-            return Err("Reader is already running".to_string());
-        }
-
-        self.state = IOState::Starting;
-        self.control.reset();
+        self.reader_state.check_can_start()?;
+        self.reader_state.prepare_start();
 
         let app = self.app.clone();
-        let session_id = self.session_id.clone();
+        let session_id = self.reader_state.session_id.clone();
         let config = self.config.clone();
         let options = self.options.clone();
-        let control = self.control.clone();
+        let control = self.reader_state.control.clone();
 
         let handle = spawn_postgres_stream(app, session_id, config, options, control);
-        self.task_handle = Some(handle);
-        self.state = IOState::Running;
+        self.reader_state.mark_running(handle);
 
         Ok(())
     }
 
     async fn stop(&mut self) -> Result<(), String> {
-        self.control.cancel();
-
-        if let Some(handle) = self.task_handle.take() {
-            let _ = handle.await;
-        }
-
-        self.state = IOState::Stopped;
+        self.reader_state.stop().await;
         Ok(())
     }
 
     async fn pause(&mut self) -> Result<(), String> {
-        if self.state != IOState::Running {
-            return Err("Reader is not running".to_string());
-        }
-
-        self.control.pause();
-        self.state = IOState::Paused;
-        Ok(())
+        self.reader_state.pause()
     }
 
     async fn resume(&mut self) -> Result<(), String> {
-        if self.state != IOState::Paused {
-            return Err("Reader is not paused".to_string());
-        }
-
-        self.control.resume();
-        self.state = IOState::Running;
-        Ok(())
+        self.reader_state.resume()
     }
 
     fn set_speed(&mut self, speed: f64) -> Result<(), String> {
-        // 0 means no pacing (unlimited speed)
-        if speed == 0.0 {
-            eprintln!("[PostgreSQL:{}] set_speed: disabling pacing (speed=0)", self.session_id);
-        } else {
-            eprintln!("[PostgreSQL:{}] set_speed: enabling pacing at {}x", self.session_id, speed);
-        }
-        self.control.set_speed(speed)
+        self.reader_state.set_speed(speed, "PostgreSQL")
     }
 
     fn set_time_range(
@@ -198,18 +164,20 @@ impl IODevice for PostgresReader {
         start: Option<String>,
         end: Option<String>,
     ) -> Result<(), String> {
+        let state = self.reader_state.state();
+        let session_id = self.reader_state.session_id();
         eprintln!(
             "[PostgreSQL:{}] set_time_range called - state: {:?}, start: {:?}, end: {:?}",
-            self.session_id,
-            self.state,
+            session_id,
+            state,
             start,
             end
         );
-        if self.state == IOState::Running || self.state == IOState::Paused {
+        if state == IOState::Running || state == IOState::Paused {
             eprintln!(
                 "[PostgreSQL:{}] Cannot change time range while streaming (state: {:?})",
-                self.session_id,
-                self.state
+                session_id,
+                state
             );
             return Err("Cannot change time range while streaming".to_string());
         }
@@ -217,7 +185,7 @@ impl IODevice for PostgresReader {
         self.options.end = end.clone();
         eprintln!(
             "[PostgreSQL:{}] Time range updated - start: {:?}, end: {:?}",
-            self.session_id,
+            session_id,
             start,
             end
         );
@@ -225,11 +193,11 @@ impl IODevice for PostgresReader {
     }
 
     fn state(&self) -> IOState {
-        self.state.clone()
+        self.reader_state.state()
     }
 
     fn session_id(&self) -> &str {
-        &self.session_id
+        self.reader_state.session_id()
     }
 
     fn device_type(&self) -> &'static str {
@@ -592,7 +560,10 @@ async fn run_postgres_stream(
                 batch_buffer.clear();
 
                 // Emit playback time with the batch
-                emit_to_session(&app_handle, "playback-time", &session_id, playback_time_us);
+                emit_to_session(&app_handle, "playback-time", &session_id, PlaybackPosition {
+                    timestamp_us: playback_time_us,
+                    frame_index: (total_emitted - 1) as usize, // Index of last emitted frame
+                });
 
                 // Brief delay to allow UI event loop to process button clicks
                 // 2ms per 1000 frames = 2 seconds total for 1M frames
@@ -648,7 +619,10 @@ async fn run_postgres_stream(
                 batch_buffer.clear();
 
                 // Emit playback time with the batch
-                emit_to_session(&app_handle, "playback-time", &session_id, playback_time_us);
+                emit_to_session(&app_handle, "playback-time", &session_id, PlaybackPosition {
+                    timestamp_us: playback_time_us,
+                    frame_index: (total_emitted - 1) as usize,
+                });
 
                 // Yield to allow event processing (prevents app from becoming unresponsive)
                 tokio::task::yield_now().await;
@@ -690,7 +664,10 @@ async fn run_postgres_stream(
             total_emitted += 1;
 
             // Emit playback time
-            emit_to_session(&app_handle, "playback-time", &session_id, playback_time_us);
+            emit_to_session(&app_handle, "playback-time", &session_id, PlaybackPosition {
+                timestamp_us: playback_time_us,
+                frame_index: (total_emitted - 1) as usize,
+            });
         }
     }
 

@@ -7,7 +7,7 @@ import { useIOSessionManager } from '../../hooks/useIOSessionManager';
 import { useDiscoveryStore, type FrameMessage, type PlaybackSpeed, type SerialRawBytesPayload } from "../../stores/discoveryStore";
 import { useDiscoveryUIStore } from "../../stores/discoveryUIStore";
 import { useDiscoveryHandlers } from "./hooks/useDiscoveryHandlers";
-import type { StreamEndedPayload } from '../../api/io';
+import type { StreamEndedPayload, PlaybackPosition } from '../../api/io';
 import DiscoveryTopBar from "./views/DiscoveryTopBar";
 import DiscoveryFramesView from "./views/DiscoveryFramesView";
 import SerialDiscoveryView from "./views/SerialDiscoveryView";
@@ -23,7 +23,7 @@ import BookmarkEditorDialog from "../../dialogs/BookmarkEditorDialog";
 import SaveSelectionSetDialog from "../../dialogs/SaveSelectionSetDialog";
 import SelectionSetPickerDialog from "../../dialogs/SelectionSetPickerDialog";
 import IoReaderPickerDialog from "../../dialogs/IoReaderPickerDialog";
-import { BUFFER_PROFILE_ID } from "../../hooks/useIOSessionManager";
+import { isBufferProfileId } from "../../hooks/useIOSessionManager";
 import { clearBuffer as clearBackendBuffer, getBufferMetadata, getBufferMetadataById, getBufferFramesPaginated, getBufferBytesPaginated, getBufferFrameInfo, getBufferBytesById, getBufferFramesPaginatedById, setActiveBuffer, type BufferMetadata } from "../../api/buffer";
 import { WINDOW_EVENTS, type BufferChangedPayload } from "../../events/registry";
 import FramePickerDialog from "../../dialogs/FramePickerDialog";
@@ -52,6 +52,7 @@ export default function Discovery() {
   const startTime = useDiscoveryStore((state) => state.startTime);
   const endTime = useDiscoveryStore((state) => state.endTime);
   const currentTime = useDiscoveryStore((state) => state.currentTime);
+  const currentFrameIndex = useDiscoveryStore((state) => state.currentFrameIndex);
   const toolboxIsRunning = useDiscoveryStore((state) => state.toolbox.isRunning);
   const toolboxActiveView = useDiscoveryStore((state) => state.toolbox.activeView);
   const showInfoView = useDiscoveryStore((state) => state.showInfoView);
@@ -74,6 +75,7 @@ export default function Discovery() {
   const setIoProfile = useDiscoveryStore((state) => state.setIoProfile);
   const setPlaybackSpeed = useDiscoveryStore((state) => state.setPlaybackSpeed);
   const updateCurrentTime = useDiscoveryStore((state) => state.updateCurrentTime);
+  const setCurrentFrameIndex = useDiscoveryStore((state) => state.setCurrentFrameIndex);
   const openSaveDialog = useDiscoveryStore((state) => state.openSaveDialog);
   const closeSaveDialog = useDiscoveryStore((state) => state.closeSaveDialog);
   const updateSaveMetadata = useDiscoveryStore((state) => state.updateSaveMetadata);
@@ -139,6 +141,9 @@ export default function Discovery() {
   const [pendingSpeed, setPendingSpeed] = useState<PlaybackSpeed | null>(null);
   const [_activeBookmarkId, setActiveBookmarkId] = useState<string | null>(null);
 
+  // Playback direction state (for buffer replay)
+  const [playbackDirection, setPlaybackDirection] = useState<"forward" | "backward">("forward");
+
   // Buffer metadata state (for imported CSV files)
   const [bufferMetadata, setBufferMetadata] = useState<BufferMetadata | null>(null);
 
@@ -153,6 +158,8 @@ export default function Discovery() {
         if (meta && meta.count > 0 && meta.buffer_type === 'frames') {
           setBufferMetadata(meta);
           enableBufferMode(meta.count);
+          // Use the actual buffer ID for unique session naming
+          setIoProfile(meta.id);
           const frameInfoList = await getBufferFrameInfo();
           setFrameInfoFromBuffer(frameInfoList);
         }
@@ -161,7 +168,7 @@ export default function Discovery() {
       }
     };
     loadBufferOnMount();
-  }, [enableBufferMode, setFrameInfoFromBuffer]);
+  }, [enableBufferMode, setFrameInfoFromBuffer, setIoProfile]);
 
   // Listen for buffer changes from other windows
   useEffect(() => {
@@ -180,6 +187,8 @@ export default function Discovery() {
 
           if (meta.count > 0 && meta.buffer_type === 'frames') {
             enableBufferMode(meta.count);
+            // Use the actual buffer ID for unique session naming
+            setIoProfile(meta.id);
             try {
               const frameInfoList = await getBufferFrameInfo();
               setFrameInfoFromBuffer(frameInfoList);
@@ -196,7 +205,7 @@ export default function Discovery() {
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [enableBufferMode, setFrameInfoFromBuffer, clearSerialBytes, resetFraming]);
+  }, [enableBufferMode, setFrameInfoFromBuffer, clearSerialBytes, resetFraming, setIoProfile]);
 
   // Callbacks for reader session
   // Note: Watch frame counting is handled by useIOSessionManager
@@ -213,9 +222,10 @@ export default function Discovery() {
     showError("Stream Error", "An error occurred while streaming CAN data.", error);
   }, [showError]);
 
-  const handleTimeUpdate = useCallback((timeUs: number) => {
-    updateCurrentTime(timeUs / 1_000_000);
-  }, [updateCurrentTime]);
+  const handleTimeUpdate = useCallback((position: PlaybackPosition) => {
+    updateCurrentTime(position.timestamp_us / 1_000_000);
+    setCurrentFrameIndex(position.frame_index);
+  }, [updateCurrentTime, setCurrentFrameIndex]);
 
   const handleSessionSpeedChange = useCallback((speed: number) => {
     setPlaybackSpeed(speed as PlaybackSpeed);
@@ -288,7 +298,10 @@ export default function Discovery() {
         }
       }
 
-      setIoProfile(BUFFER_PROFILE_ID);
+      // Use the actual buffer ID for unique session naming
+      if (meta) {
+        setIoProfile(meta.id);
+      }
     }
   }, [
     dialogs.ioReaderPicker,
@@ -371,6 +384,7 @@ export default function Discovery() {
     resume,
     setSpeed,
     setTimeRange,
+    seek,
     reinitialize,
   } = session;
 
@@ -411,30 +425,40 @@ export default function Discovery() {
             } catch (e) {
               console.error("Failed to load bytes from buffer:", e);
             }
-            console.log(`[Discovery] Bytes mode - calling setIoProfile(${BUFFER_PROFILE_ID})`);
-            setIoProfile(BUFFER_PROFILE_ID);
-            console.log(`[Discovery] Bytes mode - calling reinitialize(${BUFFER_PROFILE_ID})`);
-            // Explicitly pass BUFFER_PROFILE_ID to leave the old session and switch properly
-            await reinitialize(BUFFER_PROFILE_ID, { useBuffer: true });
+            // Use the actual buffer ID for unique session naming
+            console.log(`[Discovery] Bytes mode - calling setIoProfile(${meta.id})`);
+            setIoProfile(meta.id);
+            console.log(`[Discovery] Bytes mode - calling reinitialize(${meta.id})`);
+            await reinitialize(meta.id, { useBuffer: true });
             console.log(`[Discovery] Bytes mode - reinitialize complete`);
             // Stop the session immediately - bytes are already loaded into the store, no streaming needed
             console.log(`[Discovery] Bytes mode - stopping session (data already loaded)`);
             await stop();
             console.log(`[Discovery] Bytes mode - session stopped`);
           } else {
+            // Frames mode - enable buffer mode and load frame info
             console.log(`[Discovery] Frames mode - switching to buffer session`);
-            console.log(`[Discovery] Frames mode - calling setIoProfile(${BUFFER_PROFILE_ID})`);
-            setIoProfile(BUFFER_PROFILE_ID);
-            console.log(`[Discovery] Frames mode - calling reinitialize(${BUFFER_PROFILE_ID})`);
-            // Explicitly pass BUFFER_PROFILE_ID to avoid stale closure capturing old profile ID
-            await reinitialize(BUFFER_PROFILE_ID, { useBuffer: true });
+            await setActiveBuffer(meta.id);
+            enableBufferMode(meta.count);
+            setMaxBuffer(meta.count);
+            try {
+              const frameInfoList = await getBufferFrameInfo();
+              console.log(`[Discovery] Frames mode - got ${frameInfoList.length} frame info entries`);
+              setFrameInfoFromBuffer(frameInfoList);
+            } catch (e) {
+              console.error("[Discovery] Failed to load frame info:", e);
+            }
+            console.log(`[Discovery] Frames mode - calling setIoProfile(${meta.id})`);
+            setIoProfile(meta.id);
+            console.log(`[Discovery] Frames mode - calling reinitialize(${meta.id})`);
+            await reinitialize(meta.id, { useBuffer: true });
             console.log(`[Discovery] Frames mode - reinitialize complete`);
           }
         }
       })();
     }
     prevBufferAvailableRef.current = bufferAvailable;
-  }, [bufferAvailable, bufferId, bufferCount, bufferType, framedBufferId, stoppedExplicitly, setIoProfile, reinitialize, stop, clearSerialBytes, resetFraming, addSerialBytes, triggerBufferReady, setBackendByteCount]);
+  }, [bufferAvailable, bufferId, bufferCount, bufferType, framedBufferId, stoppedExplicitly, setIoProfile, reinitialize, stop, clearSerialBytes, resetFraming, addSerialBytes, triggerBufferReady, setBackendByteCount, enableBufferMode, setMaxBuffer, setFrameInfoFromBuffer]);
 
   // Note: isStreaming, isPaused, isStopped, isRealtime are now provided by useIOSessionManager
 
@@ -478,7 +502,7 @@ export default function Discovery() {
 
     if (!ioProfile) {
       newIsSerialMode = false;
-    } else if (ioProfile === BUFFER_PROFILE_ID) {
+    } else if (isBufferProfileId(ioProfile)) {
       // Buffer mode: check buffer metadata for bytes type
       newIsSerialMode = bufferMetadata?.buffer_type === "bytes" || bufferType === "bytes" || framedBufferId !== null;
     } else {
@@ -537,7 +561,7 @@ export default function Discovery() {
 
   const isRecorded = useMemo(() => {
     if (!ioProfile || !settings?.io_profiles) return false;
-    if (ioProfile === BUFFER_PROFILE_ID) return true;
+    if (isBufferProfileId(ioProfile)) return true;
     const profile = settings.io_profiles.find((p) => p.id === ioProfile);
     return profile?.kind === 'postgres' || profile?.kind === 'csv_file';
   }, [ioProfile, settings?.io_profiles]);
@@ -570,6 +594,7 @@ export default function Discovery() {
   // Use the handlers hook
   const handlers = useDiscoveryHandlers({
     // Session state
+    sessionId,
     multiBusMode,
     isStreaming,
     isPaused,
@@ -596,6 +621,8 @@ export default function Discovery() {
     // Time state
     startTime,
     endTime,
+    currentFrameIndex,
+    currentTimestampUs: currentTime !== null ? currentTime * 1_000_000 : null,
 
     // Selection set state
     activeSelectionSetId,
@@ -642,6 +669,8 @@ export default function Discovery() {
     // Store actions
     setPlaybackSpeed,
     updateCurrentTime,
+    setCurrentFrameIndex,
+    setMaxBuffer,
     setStartTime,
     setEndTime,
     clearBuffer,
@@ -664,14 +693,10 @@ export default function Discovery() {
     setSelectionSetDirty,
     applySelectionSet,
 
-    // API functions
-    getBufferMetadata,
-    getBufferFrameInfo,
-    getBufferBytesById,
+    // API functions (for export/other features)
     getBufferBytesPaginated,
     getBufferFramesPaginated,
     getBufferFramesPaginatedById,
-    setActiveBuffer,
     clearBackendBuffer,
     pickFileToSave,
     saveCatalog,
@@ -682,9 +707,6 @@ export default function Discovery() {
     openSaveSelectionSetDialog: dialogs.saveSelectionSet.open,
     closeExportDialog: dialogs.export.close,
     closeIoReaderPicker: dialogs.ioReaderPicker.close,
-
-    // Constants
-    BUFFER_PROFILE_ID,
   });
 
   // Handle skip for IoReaderPickerDialog
@@ -774,6 +796,25 @@ export default function Discovery() {
             onScrub={handlers.handleScrub}
             bufferMetadata={bufferMetadata}
             isRecorded={isRecorded}
+            // Playback controls
+            playbackState={isStreaming && !isPaused ? "playing" : "paused"}
+            playbackDirection={playbackDirection}
+            capabilities={capabilities}
+            playbackSpeed={playbackSpeed}
+            currentFrameIndex={currentFrameIndex}
+            onFrameSelect={async (frameIndex, timestampUs) => {
+              setCurrentFrameIndex(frameIndex);
+              updateCurrentTime(timestampUs / 1_000_000);
+              if (capabilities?.supports_seek) {
+                await seek(timestampUs);
+              }
+            }}
+            onPlay={() => { setPlaybackDirection("forward"); handlers.handlePlayForward(); }}
+            onPlayBackward={() => { setPlaybackDirection("backward"); handlers.handlePlayBackward(); }}
+            onPause={handlers.handlePause}
+            onStepBackward={handlers.handleStepBackward}
+            onStepForward={handlers.handleStepForward}
+            onSpeedChange={handlers.handleSpeedChange}
           />
         )}
       </div>

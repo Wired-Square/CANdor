@@ -38,11 +38,24 @@ import {
   type FramingEncoding,
   type MultiSourceInput,
   type BusMapping,
+  type PlaybackPosition,
 } from "../api/io";
 import type { FrameMessage } from "./discoveryStore";
 
-/** Special profile ID used for buffer replay (imported CSV, etc.) */
+/**
+ * Special profile ID used for buffer replay (imported CSV, etc.)
+ * DEPRECATED: Use isBufferProfileId() to detect buffer IDs (e.g., "buffer_1", "buffer_2")
+ */
 const BUFFER_PROFILE_ID = "__imported_buffer__";
+
+/**
+ * Check if a profile ID represents a buffer session.
+ * Buffer IDs follow the pattern "buffer_N" (e.g., "buffer_1", "buffer_2")
+ * or the legacy "__imported_buffer__".
+ */
+export function isBufferProfileId(profileId: string): boolean {
+  return profileId === BUFFER_PROFILE_ID || /^buffer_\d+$/.test(profileId);
+}
 
 /** Frame batch payload from Rust - includes active listeners for filtering */
 interface FrameBatchPayload {
@@ -250,7 +263,7 @@ export interface CreateSessionOptions {
 export interface SessionCallbacks {
   onFrames?: (frames: FrameMessage[]) => void;
   onError?: (error: string) => void;
-  onTimeUpdate?: (timeUs: number) => void;
+  onTimeUpdate?: (position: PlaybackPosition) => void;
   onStreamEnded?: (payload: StreamEndedPayload) => void;
   onStreamComplete?: () => void;
   onStateChange?: (state: IOStateType) => void;
@@ -432,8 +445,8 @@ async function setupSessionEventListeners(
   );
   unlistenFunctions.push(unlistenError);
 
-  // Playback time (PostgreSQL reader)
-  const unlistenPlaybackTime = await listen<number>(
+  // Playback time (Buffer reader, PostgreSQL reader)
+  const unlistenPlaybackTime = await listen<PlaybackPosition>(
     `playback-time:${sessionId}`,
     (event) => {
       invokeCallbacks(eventListeners, "onTimeUpdate", event.payload);
@@ -628,8 +641,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     } else {
       // Create new backend session
       console.log(`[sessionStore:openSession] Backend does not exist, creating new session`);
-      // Auto-detect buffer mode from profile ID
-      const isBufferMode = profileId === BUFFER_PROFILE_ID || options.useBuffer;
+      // Auto-detect buffer mode from profile ID (supports both legacy and new buffer ID formats)
+      const isBufferMode = isBufferProfileId(profileId) || options.useBuffer;
       console.log(`[sessionStore:openSession] isBufferMode=${isBufferMode}`);
 
       const createOptions: CreateIOSessionOptions = {
@@ -795,7 +808,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     // Step 5.5: Start the session if it's still stopped (for playback sources like PostgreSQL, CSV)
     // Playback sources don't auto-start on the backend to avoid emitting frames before listeners are ready.
     // Now that event listeners are set up, we can safely start.
-    if (ioState === "stopped") {
+    // EXCEPTION: Buffer mode should NOT auto-start - data is already in the buffer store
+    // and can be accessed via pagination without streaming. User can start playback manually.
+    const isBufferSession = isBufferProfileId(profileId);
+    if (ioState === "stopped" && !isBufferSession) {
       try {
         await startReaderSession(sessionId);
         ioState = "running";
@@ -1058,6 +1074,20 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   stopSession: async (sessionId) => {
+    // Set stoppedExplicitly BEFORE the async call to avoid race condition:
+    // The stream-ended event (which updates buffer state) may fire before
+    // stopReaderSession returns. Effects checking both bufferAvailable and
+    // stoppedExplicitly need both to be true at the same time.
+    set((s) => ({
+      sessions: {
+        ...s.sessions,
+        [sessionId]: {
+          ...s.sessions[sessionId],
+          stoppedExplicitly: true, // User explicitly stopped
+        },
+      },
+    }));
+
     try {
       const confirmedState = await stopReaderSession(sessionId);
       set((s) => ({
@@ -1066,7 +1096,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           [sessionId]: {
             ...s.sessions[sessionId],
             ioState: getStateType(confirmedState),
-            stoppedExplicitly: true, // User explicitly stopped
           },
         },
       }));

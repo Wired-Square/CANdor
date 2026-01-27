@@ -10,8 +10,8 @@ use std::io::{BufRead, BufReader};
 use std::time::Duration;
 use tauri::AppHandle;
 
-use super::timeline_base::TimelineControl;
-use super::{emit_frames, emit_to_session, FrameMessage, IOCapabilities, IODevice, IOState};
+use super::timeline_base::{TimelineControl, TimelineReaderState};
+use super::{emit_frames, emit_to_session, FrameMessage, IOCapabilities, IODevice, IOState, PlaybackPosition};
 
 /// CSV reader options for playback control
 #[derive(Clone, Debug)]
@@ -32,23 +32,18 @@ impl Default for CsvReaderOptions {
 /// CSV File Reader - streams historical CAN data from a CSV file
 pub struct CsvReader {
     app: AppHandle,
-    session_id: String,
     options: CsvReaderOptions,
-    state: IOState,
-    /// Shared timeline control (pause, speed, cancel)
-    control: TimelineControl,
-    task_handle: Option<tauri::async_runtime::JoinHandle<()>>,
+    /// Common timeline reader state (control, state, session_id, task_handle)
+    reader_state: TimelineReaderState,
 }
 
 impl CsvReader {
     pub fn new(app: AppHandle, session_id: String, options: CsvReaderOptions) -> Self {
+        let speed = options.speed;
         Self {
             app,
-            session_id,
-            control: TimelineControl::new(options.speed),
             options,
-            state: IOState::Stopped,
-            task_handle: None,
+            reader_state: TimelineReaderState::new(session_id, speed),
         }
     }
 }
@@ -60,69 +55,35 @@ impl IODevice for CsvReader {
     }
 
     async fn start(&mut self) -> Result<(), String> {
-        if self.state == IOState::Running || self.state == IOState::Paused {
-            return Err("Reader is already running".to_string());
-        }
-
-        self.state = IOState::Starting;
-        self.control.reset();
+        self.reader_state.check_can_start()?;
+        self.reader_state.prepare_start();
 
         let app = self.app.clone();
-        let session_id = self.session_id.clone();
+        let session_id = self.reader_state.session_id.clone();
         let options = self.options.clone();
-        let control = self.control.clone();
+        let control = self.reader_state.control.clone();
 
         let handle = spawn_csv_stream(app, session_id, options, control);
-        self.task_handle = Some(handle);
-        self.state = IOState::Running;
+        self.reader_state.mark_running(handle);
 
         Ok(())
     }
 
     async fn stop(&mut self) -> Result<(), String> {
-        self.control.cancel();
-
-        if let Some(handle) = self.task_handle.take() {
-            let _ = handle.await;
-        }
-
-        self.state = IOState::Stopped;
+        self.reader_state.stop().await;
         Ok(())
     }
 
     async fn pause(&mut self) -> Result<(), String> {
-        if self.state != IOState::Running {
-            return Err("Reader is not running".to_string());
-        }
-
-        self.control.pause();
-        self.state = IOState::Paused;
-        Ok(())
+        self.reader_state.pause()
     }
 
     async fn resume(&mut self) -> Result<(), String> {
-        if self.state != IOState::Paused {
-            return Err("Reader is not paused".to_string());
-        }
-
-        self.control.resume();
-        self.state = IOState::Running;
-        Ok(())
+        self.reader_state.resume()
     }
 
     fn set_speed(&mut self, speed: f64) -> Result<(), String> {
-        if speed == 0.0 {
-            eprintln!(
-                "[CSV:{}] set_speed: disabling pacing (speed=0)",
-                self.session_id
-            );
-        } else {
-            eprintln!(
-                "[CSV:{}] set_speed: enabling pacing at {}x",
-                self.session_id, speed
-            );
-        }
-        self.control.set_speed(speed)
+        self.reader_state.set_speed(speed, "CSV")
     }
 
     fn set_time_range(
@@ -135,11 +96,11 @@ impl IODevice for CsvReader {
     }
 
     fn state(&self) -> IOState {
-        self.state.clone()
+        self.reader_state.state()
     }
 
     fn session_id(&self) -> &str {
-        &self.session_id
+        self.reader_state.session_id()
     }
 }
 
@@ -474,15 +435,13 @@ async fn run_csv_stream(
             last_frame_time_secs = Some(frame_time_secs);
 
             if batch_buffer.len() >= NO_LIMIT_BATCH_SIZE {
-                emit_to_session(
-                    &app_handle,
-                    "frame-message",
-                    &session_id,
-                    batch_buffer.clone(),
-                );
+                emit_frames(&app_handle, &session_id, batch_buffer.clone());
                 batch_buffer.clear();
 
-                emit_to_session(&app_handle, "playback-time", &session_id, playback_time_us);
+                emit_to_session(&app_handle, "playback-time", &session_id, PlaybackPosition {
+                    timestamp_us: playback_time_us,
+                    frame_index: (total_emitted - 1) as usize,
+                });
 
                 tokio::time::sleep(Duration::from_millis(NO_LIMIT_YIELD_MS)).await;
             }
@@ -522,27 +481,20 @@ async fn run_csv_stream(
 
                 last_pacing_check = std::time::Instant::now();
 
-                emit_to_session(
-                    &app_handle,
-                    "frame-message",
-                    &session_id,
-                    batch_buffer.clone(),
-                );
+                emit_frames(&app_handle, &session_id, batch_buffer.clone());
                 batch_buffer.clear();
 
-                emit_to_session(&app_handle, "playback-time", &session_id, playback_time_us);
+                emit_to_session(&app_handle, "playback-time", &session_id, PlaybackPosition {
+                    timestamp_us: playback_time_us,
+                    frame_index: (total_emitted - 1) as usize,
+                });
 
                 tokio::task::yield_now().await;
             }
         } else {
             // Normal speed: emit any pending batch first
             if !batch_buffer.is_empty() {
-                emit_to_session(
-                    &app_handle,
-                    "frame-message",
-                    &session_id,
-                    batch_buffer.clone(),
-                );
+                emit_frames(&app_handle, &session_id, batch_buffer.clone());
                 batch_buffer.clear();
             }
 
@@ -562,7 +514,10 @@ async fn run_csv_stream(
             emit_frames(&app_handle, &session_id, vec![frame]);
             total_emitted += 1;
 
-            emit_to_session(&app_handle, "playback-time", &session_id, playback_time_us);
+            emit_to_session(&app_handle, "playback-time", &session_id, PlaybackPosition {
+                timestamp_us: playback_time_us,
+                frame_index: (total_emitted - 1) as usize,
+            });
         }
     }
 

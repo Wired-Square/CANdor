@@ -20,6 +20,8 @@ pub struct TimelineControl {
     pub pacing_enabled: Arc<AtomicBool>,
     /// Playback speed as f64 bits (use read_speed/write_speed)
     pub speed: Arc<AtomicU64>,
+    /// Set to true for reverse playback
+    pub reverse_flag: Arc<AtomicBool>,
 }
 
 impl TimelineControl {
@@ -37,6 +39,7 @@ impl TimelineControl {
             } else {
                 1.0_f64.to_bits()
             })),
+            reverse_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -44,6 +47,7 @@ impl TimelineControl {
     pub fn reset(&self) {
         self.cancel_flag.store(false, Ordering::Relaxed);
         self.pause_flag.store(false, Ordering::Relaxed);
+        self.reverse_flag.store(false, Ordering::Relaxed);
     }
 
     /// Signal cancellation
@@ -69,6 +73,16 @@ impl TimelineControl {
     /// Check if paused
     pub fn is_paused(&self) -> bool {
         self.pause_flag.load(Ordering::Relaxed)
+    }
+
+    /// Set reverse playback
+    pub fn set_reverse(&self, reverse: bool) {
+        self.reverse_flag.store(reverse, Ordering::Relaxed);
+    }
+
+    /// Check if playing in reverse
+    pub fn is_reverse(&self) -> bool {
+        self.reverse_flag.load(Ordering::Relaxed)
     }
 
     /// Read the current playback speed
@@ -101,6 +115,103 @@ impl TimelineControl {
 impl Default for TimelineControl {
     fn default() -> Self {
         Self::new(0.0) // No pacing by default
+    }
+}
+
+/// Reader state management for timeline readers.
+/// Encapsulates the common state machine (Stopped -> Running <-> Paused -> Stopped)
+/// and reduces boilerplate in BufferReader, CsvReader, and PostgresReader.
+pub struct TimelineReaderState {
+    pub control: TimelineControl,
+    pub state: super::IOState,
+    pub session_id: String,
+    pub task_handle: Option<tauri::async_runtime::JoinHandle<()>>,
+}
+
+impl TimelineReaderState {
+    /// Create a new reader state with the given session ID and initial speed.
+    pub fn new(session_id: String, speed: f64) -> Self {
+        Self {
+            control: TimelineControl::new(speed),
+            state: super::IOState::Stopped,
+            session_id,
+            task_handle: None,
+        }
+    }
+
+    /// Check if the reader can start. Returns error if already running.
+    pub fn check_can_start(&self) -> Result<(), String> {
+        if self.state == super::IOState::Running || self.state == super::IOState::Paused {
+            return Err("Reader is already running".to_string());
+        }
+        Ok(())
+    }
+
+    /// Prepare for starting: reset control flags and set state to Starting.
+    pub fn prepare_start(&mut self) {
+        self.state = super::IOState::Starting;
+        self.control.reset();
+    }
+
+    /// Mark as running after task is spawned.
+    pub fn mark_running(&mut self, handle: tauri::async_runtime::JoinHandle<()>) {
+        self.task_handle = Some(handle);
+        self.state = super::IOState::Running;
+    }
+
+    /// Stop the reader: cancel, await task, set state to Stopped.
+    pub async fn stop(&mut self) {
+        self.control.cancel();
+        if let Some(handle) = self.task_handle.take() {
+            let _ = handle.await;
+        }
+        self.state = super::IOState::Stopped;
+    }
+
+    /// Pause playback. Returns error if not running.
+    pub fn pause(&mut self) -> Result<(), String> {
+        if self.state != super::IOState::Running {
+            return Err("Reader is not running".to_string());
+        }
+        self.control.pause();
+        self.state = super::IOState::Paused;
+        Ok(())
+    }
+
+    /// Resume playback. Returns error if not paused.
+    pub fn resume(&mut self) -> Result<(), String> {
+        if self.state != super::IOState::Paused {
+            return Err("Reader is not paused".to_string());
+        }
+        self.control.resume();
+        self.state = super::IOState::Running;
+        Ok(())
+    }
+
+    /// Set playback speed with logging.
+    pub fn set_speed(&mut self, speed: f64, device_name: &str) -> Result<(), String> {
+        if speed == 0.0 {
+            eprintln!(
+                "[{}:{}] set_speed: disabling pacing (speed=0)",
+                device_name, self.session_id
+            );
+        } else {
+            eprintln!(
+                "[{}:{}] set_speed: enabling pacing at {}x",
+                device_name, self.session_id, speed
+            );
+        }
+        self.control.set_speed(speed)
+    }
+
+    /// Get current state.
+    pub fn state(&self) -> super::IOState {
+        self.state.clone()
+    }
+
+    /// Get session ID reference.
+    pub fn session_id(&self) -> &str {
+        &self.session_id
     }
 }
 

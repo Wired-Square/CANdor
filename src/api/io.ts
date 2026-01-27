@@ -74,6 +74,8 @@ export interface IOCapabilities {
   supports_speed_control: boolean;
   /** Supports seeking to a specific timestamp (BufferReader: true, others: false) */
   supports_seek: boolean;
+  /** Supports reverse playback (BufferReader: true, others: false) */
+  supports_reverse?: boolean;
   /** Can transmit CAN frames (slcan in normal mode, GVRET: true) */
   can_transmit: boolean;
   /** Can transmit serial bytes (serial port devices) */
@@ -386,6 +388,65 @@ export async function seekReaderSession(
   timestampUs: number
 ): Promise<void> {
   return invoke("seek_reader_session", { session_id: sessionId, timestamp_us: timestampUs });
+}
+
+/**
+ * Set playback direction for a reader session.
+ * Only works for readers that support reverse playback (e.g., BufferReader).
+ * @param sessionId The session ID
+ * @param reverse true for backwards playback, false for forward
+ */
+export async function updateReaderDirection(
+  sessionId: string,
+  reverse: boolean
+): Promise<void> {
+  return invoke("update_reader_direction", { session_id: sessionId, reverse });
+}
+
+/**
+ * Result of a step operation in the buffer.
+ */
+export interface StepResult {
+  /** The new frame index after stepping */
+  frame_index: number;
+  /** The timestamp of the new frame in microseconds */
+  timestamp_us: number;
+}
+
+/**
+ * Playback position - emitted with playback-time events during buffer streaming.
+ */
+export interface PlaybackPosition {
+  /** Current timestamp in microseconds */
+  timestamp_us: number;
+  /** Current frame index (0-based) */
+  frame_index: number;
+}
+
+/**
+ * Step one frame forward or backward in the buffer.
+ * Only works for buffer readers when paused.
+ * @param sessionId The session ID
+ * @param currentFrameIndex The current frame index (0-based), or null to use timestamp
+ * @param currentTimestampUs The current timestamp in microseconds (used if frame index is null)
+ * @param backward true for backward step, false for forward
+ * @param filterFrameIds Optional filter - if provided, skips frames that don't match
+ * @returns The new frame index and timestamp after stepping, or null if at the boundary
+ */
+export async function stepBufferFrame(
+  sessionId: string,
+  currentFrameIndex: number | null,
+  currentTimestampUs: number | null,
+  backward: boolean,
+  filterFrameIds?: number[]
+): Promise<StepResult | null> {
+  return invoke("step_buffer_frame", {
+    session_id: sessionId,
+    current_frame_index: currentFrameIndex,
+    current_timestamp_us: currentTimestampUs,
+    backward,
+    filter_frame_ids: filterFrameIds,
+  });
 }
 
 /**

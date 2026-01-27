@@ -264,9 +264,11 @@ pub fn run() {
             sessions::update_reader_speed,
             sessions::update_reader_time_range,
             sessions::seek_reader_session,
+            sessions::update_reader_direction,
             sessions::destroy_reader_session,
             sessions::create_buffer_reader_session,
             sessions::transition_to_buffer_reader,
+            sessions::step_buffer_frame,
             sessions::session_transmit_frame,
             // Listener registration API
             sessions::register_session_listener,

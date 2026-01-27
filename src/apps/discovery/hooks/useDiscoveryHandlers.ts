@@ -27,9 +27,11 @@ import type { PlaybackSpeed, FrameMessage } from "../../../stores/discoveryStore
 import type { BufferMetadata, TimestampedByte } from "../../../api/buffer";
 import type { ExportDataMode } from "../../../dialogs/ExportFramesDialog";
 import type { SelectionSet } from "../../../utils/selectionSets";
+import { isBufferProfileId } from "../../../hooks/useIOSessionManager";
 
 export interface UseDiscoveryHandlersParams {
   // Session state
+  sessionId: string;
   multiBusMode: boolean;
   isStreaming: boolean;
   isPaused: boolean;
@@ -56,6 +58,8 @@ export interface UseDiscoveryHandlersParams {
   // Time state
   startTime: string;
   endTime: string;
+  currentFrameIndex?: number | null;
+  currentTimestampUs?: number | null;
 
   // Selection set state
   activeSelectionSetId: string | null;
@@ -102,6 +106,8 @@ export interface UseDiscoveryHandlersParams {
   // Store actions
   setPlaybackSpeed: (speed: PlaybackSpeed) => void;
   updateCurrentTime: (time: number) => void;
+  setCurrentFrameIndex: (index: number) => void;
+  setMaxBuffer: (count: number) => void;
   setStartTime: (time: string) => void;
   setEndTime: (time: string) => void;
   clearBuffer: () => void;
@@ -124,14 +130,10 @@ export interface UseDiscoveryHandlersParams {
   setSelectionSetDirty: (dirty: boolean) => void;
   applySelectionSet: (set: SelectionSet) => void;
 
-  // API functions
-  getBufferMetadata: () => Promise<BufferMetadata | null>;
-  getBufferFrameInfo: () => Promise<any[]>;
-  getBufferBytesById: (id: string) => Promise<any[]>;
+  // API functions (for export/other features)
   getBufferBytesPaginated: (offset: number, limit: number) => Promise<{ bytes: TimestampedByte[] }>;
   getBufferFramesPaginated: (offset: number, limit: number) => Promise<{ frames: any[] }>;
   getBufferFramesPaginatedById: (id: string, offset: number, limit: number) => Promise<{ frames: any[] }>;
-  setActiveBuffer: (id: string) => Promise<void>;
   clearBackendBuffer: () => Promise<void>;
   pickFileToSave: (options: any) => Promise<string | null>;
   saveCatalog: (path: string, content: string) => Promise<void>;
@@ -142,9 +144,6 @@ export interface UseDiscoveryHandlersParams {
   openSaveSelectionSetDialog: () => void;
   closeExportDialog: () => void;
   closeIoReaderPicker: () => void;
-
-  // Constants
-  BUFFER_PROFILE_ID: string;
 }
 
 export type DiscoveryHandlers = DiscoverySessionHandlers &
@@ -159,9 +158,13 @@ export type DiscoveryHandlers = DiscoverySessionHandlers &
 export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): DiscoveryHandlers {
   // Session handlers
   const sessionHandlers = useDiscoverySessionHandlers({
+    sessionId: params.sessionId,
     isStreaming: params.isStreaming,
     isPaused: params.isPaused,
     sessionReady: params.sessionReady,
+    currentFrameIndex: params.currentFrameIndex,
+    currentTimestampUs: params.currentTimestampUs,
+    selectedFrameIds: params.selectedFrames,
     setMultiBusMode: params.setMultiBusMode,
     setMultiBusProfiles: params.setMultiBusProfiles,
     setIoProfile: params.setIoProfile,
@@ -173,6 +176,9 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     resume: params.resume,
     reinitialize: params.reinitialize,
     setPlaybackSpeed: params.setPlaybackSpeed,
+    updateCurrentTime: params.updateCurrentTime,
+    setCurrentFrameIndex: params.setCurrentFrameIndex,
+    setMaxBuffer: params.setMaxBuffer,
     clearBuffer: params.clearBuffer,
     clearFramePicker: params.clearFramePicker,
     clearAnalysisResults: params.clearAnalysisResults,
@@ -192,13 +198,8 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     handleRejoin: params.handleRejoin,
     startMultiBusSession: params.startMultiBusSession,
     joinExistingSession: params.joinExistingSession,
-    getBufferMetadata: params.getBufferMetadata,
-    getBufferFrameInfo: params.getBufferFrameInfo,
-    getBufferBytesById: params.getBufferBytesById,
-    setActiveBuffer: params.setActiveBuffer,
     setBufferMetadata: params.setBufferMetadata,
     closeIoReaderPicker: params.closeIoReaderPicker,
-    BUFFER_PROFILE_ID: params.BUFFER_PROFILE_ID,
   });
 
   // Playback handlers
@@ -260,7 +261,6 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     setTimeRange: params.setTimeRange,
     reinitialize: params.reinitialize,
     openBookmarkDialog: params.openBookmarkDialog,
-    BUFFER_PROFILE_ID: params.BUFFER_PROFILE_ID,
   });
 
   // Selection handlers
@@ -283,7 +283,7 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
       params.clearBuffer();
       params.clearFramePicker();
       await params.clearBackendBuffer();
-      if (params.ioProfile === params.BUFFER_PROFILE_ID && params.sourceProfileId) {
+      if (isBufferProfileId(params.ioProfile) && params.sourceProfileId) {
         params.setIoProfile(params.sourceProfileId);
         await params.reinitialize(params.sourceProfileId);
       }
@@ -291,7 +291,7 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
       params.clearBuffer();
       params.clearFramePicker();
       await params.clearBackendBuffer();
-      if (params.ioProfile === params.BUFFER_PROFILE_ID && params.sourceProfileId) {
+      if (isBufferProfileId(params.ioProfile) && params.sourceProfileId) {
         params.setIoProfile(params.sourceProfileId);
         await params.reinitialize(params.sourceProfileId);
       }
@@ -304,7 +304,6 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     params.clearFramePicker,
     params.clearBackendBuffer,
     params.ioProfile,
-    params.BUFFER_PROFILE_ID,
     params.sourceProfileId,
     params.setIoProfile,
     params.reinitialize,
