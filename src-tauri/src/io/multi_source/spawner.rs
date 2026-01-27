@@ -8,7 +8,7 @@ use tauri::AppHandle;
 use tokio::sync::mpsc;
 
 use crate::io::gvret::{run_gvret_tcp_source, run_gvret_usb_source, BusMapping};
-use crate::io::serial::{run_source as run_serial_source, FrameIdConfig, FramingEncoding, Parity};
+use crate::io::serial::{parse_profile_for_source, run_source as run_serial_source};
 use crate::io::slcan::run_slcan_source;
 use crate::io::types::SourceMessage;
 use crate::settings::IOProfile;
@@ -259,7 +259,6 @@ async fn run_socketcan_reader(
     run_socketcan_source(source_idx, interface, bus_mappings, stop_flag, tx).await;
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_serial_reader(
     source_idx: usize,
     profile: &IOProfile,
@@ -272,8 +271,15 @@ async fn run_serial_reader(
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
 ) {
-    let port = match profile.connection.get("port").and_then(|v| v.as_str()) {
-        Some(p) => p.to_string(),
+    let config = match parse_profile_for_source(
+        profile,
+        framing_encoding_override.as_deref(),
+        delimiter_override,
+        max_frame_length_override,
+        min_frame_length_override,
+        emit_raw_bytes_override,
+    ) {
+        Some(c) => c,
         None => {
             let _ = tx
                 .send(SourceMessage::Error(
@@ -284,182 +290,24 @@ async fn run_serial_reader(
             return;
         }
     };
-    let baud_rate = profile
-        .connection
-        .get("baud_rate")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(115200) as u32;
-    let data_bits = profile
-        .connection
-        .get("data_bits")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(8) as u8;
-    let stop_bits = profile
-        .connection
-        .get("stop_bits")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(1) as u8;
-    let parity_str = profile
-        .connection
-        .get("parity")
-        .and_then(|v| v.as_str())
-        .unwrap_or("none");
-    let parity = match parity_str {
-        "odd" => Parity::Odd,
-        "even" => Parity::Even,
-        _ => Parity::None,
-    };
 
-    // Framing configuration - prefer session override, fall back to profile settings
-    let framing_encoding_str = framing_encoding_override
-        .as_deref()
-        .or_else(|| {
-            profile
-                .connection
-                .get("framing_encoding")
-                .and_then(|v| v.as_str())
-        })
-        .unwrap_or("raw"); // Default to raw if nothing configured
-
-    let framing_encoding = match framing_encoding_str {
-        "slip" => FramingEncoding::Slip,
-        "modbus_rtu" => {
-            let device_address = profile
-                .connection
-                .get("modbus_device_address")
-                .and_then(|v| v.as_i64())
-                .map(|n| n as u8);
-            let validate_crc = profile
-                .connection
-                .get("modbus_validate_crc")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-            FramingEncoding::ModbusRtu {
-                device_address,
-                validate_crc,
-            }
-        }
-        "delimiter" => {
-            // Use session override if provided, else profile settings
-            let delimiter = delimiter_override.clone().or_else(|| {
-                profile
-                    .connection
-                    .get("delimiter")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_i64().map(|n| n as u8))
-                            .collect()
-                    })
-            })
-            .unwrap_or_else(|| vec![0x0A]); // Default to newline
-            let max_length = max_frame_length_override
-                .or_else(|| {
-                    profile
-                        .connection
-                        .get("max_frame_length")
-                        .and_then(|v| v.as_i64())
-                        .map(|n| n as usize)
-                })
-                .unwrap_or(1024);
-            let include_delimiter = profile
-                .connection
-                .get("include_delimiter")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            FramingEncoding::Delimiter {
-                delimiter,
-                max_length,
-                include_delimiter,
-            }
-        }
-        "raw" | _ => {
-            // Raw mode - emit bytes as individual "frames" with length as ID
-            FramingEncoding::Raw
-        }
-    };
-
-    // Log framing config for debugging
     eprintln!(
         "[multi_source] Serial source {} using framing: {:?} (override: {:?})",
-        source_idx, framing_encoding, framing_encoding_override
+        source_idx, config.framing_encoding, framing_encoding_override
     );
-
-    // Frame ID extraction config
-    let frame_id_config = profile.connection.get("frame_id_start_byte").and_then(|_| {
-        Some(FrameIdConfig {
-            start_byte: profile
-                .connection
-                .get("frame_id_start_byte")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0) as i32,
-            num_bytes: profile
-                .connection
-                .get("frame_id_bytes")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(1) as u8,
-            big_endian: profile
-                .connection
-                .get("frame_id_big_endian")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true),
-        })
-    });
-
-    // Source address extraction config
-    let source_address_config = profile
-        .connection
-        .get("source_address_start_byte")
-        .and_then(|_| {
-            Some(FrameIdConfig {
-                start_byte: profile
-                    .connection
-                    .get("source_address_start_byte")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0) as i32,
-                num_bytes: profile
-                    .connection
-                    .get("source_address_bytes")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(1) as u8,
-                big_endian: profile
-                    .connection
-                    .get("source_address_big_endian")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(true),
-            })
-        });
-
-    let min_frame_length = min_frame_length_override
-        .or_else(|| {
-            profile
-                .connection
-                .get("min_frame_length")
-                .and_then(|v| v.as_i64())
-                .map(|n| n as usize)
-        })
-        .unwrap_or(0);
-
-    // Determine if we should emit raw bytes
-    // For "raw" framing mode, raw bytes are the primary output
-    // For other modes, only emit if explicitly requested
-    let emit_raw_bytes = match framing_encoding_str {
-        "raw" => true,
-        _ => emit_raw_bytes_override.unwrap_or(false),
-    };
 
     run_serial_source(
         source_idx,
-        port,
-        baud_rate,
-        data_bits,
-        stop_bits,
-        parity,
-        framing_encoding,
-        frame_id_config,
-        source_address_config,
-        min_frame_length,
-        emit_raw_bytes,
+        config.port,
+        config.baud_rate,
+        config.data_bits,
+        config.stop_bits,
+        config.parity,
+        config.framing_encoding,
+        config.frame_id_config,
+        config.source_address_config,
+        config.min_frame_length,
+        config.emit_raw_bytes,
         bus_mappings,
         stop_flag,
         tx,
