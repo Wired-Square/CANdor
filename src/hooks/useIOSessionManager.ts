@@ -81,6 +81,16 @@ export interface UseIOSessionManagerOptions {
   onStreamComplete?: () => void;
   /** Callback when playback speed changes (from any listener on this session) */
   onSpeedChange?: (speed: number) => void;
+
+  // ---- Session Switching Callbacks ----
+  /** Set playback speed (speed is a session property; manager calls this during watch/profile operations) */
+  setPlaybackSpeed?: (speed: number) => void;
+  /** Called before starting a single-source watch (e.g., clear frames/buffers) */
+  onBeforeWatch?: () => void;
+  /** Called before starting a multi-source watch (e.g., clear frames/buffers) */
+  onBeforeMultiWatch?: () => void;
+  /** Ref to track stream completion (if provided, manager resets it during watch operations) */
+  streamCompletedRef?: React.MutableRefObject<boolean>;
 }
 
 /** Result of the IO session manager hook */
@@ -190,6 +200,24 @@ export interface UseIOSessionManagerResult {
     sessionId: string,
     sourceProfileIds?: string[]
   ) => Promise<void>;
+
+  // ---- Session Switching Methods ----
+  /** Watch a single source (reinitialize, set profile, clear multi-bus, set speed, start watching) */
+  watchSingleSource: (profileId: string, options: IngestOptions, reinitializeOptions?: Record<string, unknown>) => Promise<void>;
+  /** Watch multiple sources (start multi-bus session, set speed, start watching) */
+  watchMultiSource: (profileIds: string[], options: IngestOptions) => Promise<void>;
+  /** Stop watching (stop session, clear watch state) */
+  stopWatch: () => Promise<void>;
+  /** Select a profile (clear multi-bus, set profile, set default speed) */
+  selectProfile: (profileId: string | null) => void;
+  /** Select multiple profiles for multi-bus mode */
+  selectMultipleProfiles: (profileIds: string[]) => void;
+  /** Join an existing session and close the IO picker dialog */
+  joinSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
+  /** Skip IO reader selection (clear state, leave if watching) */
+  skipReader: () => Promise<void>;
+  /** Ref that tracks whether stream has completed (for ignoring stale time updates) */
+  streamCompletedRef: React.MutableRefObject<boolean>;
 }
 
 /**
@@ -280,6 +308,10 @@ export function useIOSessionManager(
     onStreamEnded,
     onStreamComplete,
     onSpeedChange,
+    setPlaybackSpeed: setPlaybackSpeedProp,
+    onBeforeWatch,
+    onBeforeMultiWatch,
+    streamCompletedRef: streamCompletedRefProp,
   } = options;
 
   // ---- Profile State ----
@@ -307,6 +339,11 @@ export function useIOSessionManager(
   // Generated dynamically when starting a multi-source session to avoid collisions
   // between multiple windows of the same app type
   const [multiSessionId, setMultiSessionId] = useState<string | null>(null);
+
+  // ---- Stream Completed Ref ----
+  // Use provided ref (from app) or create a local one
+  const localStreamCompletedRef = useRef(false);
+  const streamCompletedRef = streamCompletedRefProp ?? localStreamCompletedRef;
 
   // ---- Derived Values ----
   // Effective session ID: multi-bus ID or single profile ID
@@ -481,6 +518,125 @@ export function useIOSessionManager(
     await session.rejoin(sessionId);
   }, [appName, session, setIoProfile, setMultiBusProfiles, setMultiBusMode]);
 
+  // ---- Session Switching Methods ----
+
+  // Watch a single source: reinitialize, clear multi-bus, set profile, set speed, start watching
+  const watchSingleSource = useCallback(async (
+    profileId: string,
+    opts: IngestOptions,
+    reinitializeOptions?: Record<string, unknown>
+  ) => {
+    onBeforeWatch?.();
+
+    // Reinitialize with the provided options merged with any extra reinitialize options
+    await session.reinitialize(profileId, {
+      startTime: opts.startTime,
+      endTime: opts.endTime,
+      speed: opts.speed,
+      limit: opts.maxFrames,
+      framingEncoding: opts.framingEncoding,
+      delimiter: opts.delimiter,
+      maxFrameLength: opts.maxFrameLength,
+      frameIdStartByte: opts.frameIdStartByte,
+      frameIdBytes: opts.frameIdBytes,
+      frameIdBigEndian: opts.frameIdStartByte !== undefined ? true : undefined,
+      sourceAddressStartByte: opts.sourceAddressStartByte,
+      sourceAddressBytes: opts.sourceAddressBytes,
+      sourceAddressBigEndian: opts.sourceAddressEndianness === "big",
+      minFrameLength: opts.minFrameLength,
+      emitRawBytes: opts.emitRawBytes,
+      busOverride: opts.busOverride,
+      ...reinitializeOptions,
+    });
+
+    // Clear multi-bus state when switching to a single source
+    setMultiBusMode(false);
+    setMultiBusProfiles([]);
+
+    // Set profile and speed
+    setIoProfile(profileId);
+    if (opts.speed !== undefined) {
+      setPlaybackSpeedProp?.(opts.speed);
+    }
+
+    // Start watching
+    setIsWatching(true);
+    resetWatchFrameCount();
+    streamCompletedRef.current = false;
+  }, [session, onBeforeWatch, setMultiBusMode, setMultiBusProfiles, setIoProfile, setPlaybackSpeedProp, resetWatchFrameCount]);
+
+  // Watch multiple sources: start multi-bus session, set speed, start watching
+  const watchMultiSource = useCallback(async (
+    profileIds: string[],
+    opts: IngestOptions
+  ) => {
+    onBeforeMultiWatch?.();
+
+    // Use existing startMultiBusSession which handles all session creation
+    await startMultiBusSession(profileIds, opts);
+
+    // Set speed
+    if (opts.speed !== undefined) {
+      setPlaybackSpeedProp?.(opts.speed);
+    }
+
+    // Start watching
+    setIsWatching(true);
+    resetWatchFrameCount();
+    streamCompletedRef.current = false;
+  }, [startMultiBusSession, onBeforeMultiWatch, setPlaybackSpeedProp, resetWatchFrameCount]);
+
+  // Stop watching: stop session, clear watch state
+  const stopWatch = useCallback(async () => {
+    await session.stop();
+    setIsWatching(false);
+  }, [session]);
+
+  // Select a profile: clear multi-bus, set profile, set default speed
+  // App handlers call this for common logic, then add buffer-specific or app-specific logic
+  const selectProfile = useCallback((profileId: string | null) => {
+    // Clear multi-bus state when selecting a single profile
+    setMultiBusMode(false);
+    setMultiBusProfiles([]);
+    setIoProfile(profileId);
+
+    // Set default speed from the selected profile if it has one (non-buffer only)
+    if (profileId && !isBufferProfileId(profileId)) {
+      const profile = ioProfiles.find((p) => p.id === profileId);
+      if (profile?.connection?.default_speed) {
+        const defaultSpeed = parseFloat(profile.connection.default_speed);
+        setPlaybackSpeedProp?.(defaultSpeed);
+      }
+    }
+  }, [setMultiBusMode, setMultiBusProfiles, setIoProfile, ioProfiles, setPlaybackSpeedProp]);
+
+  // Select multiple profiles for multi-bus mode
+  const selectMultipleProfiles = useCallback((profileIds: string[]) => {
+    setMultiBusProfiles(profileIds);
+    setIoProfile(null);
+  }, [setMultiBusProfiles, setIoProfile]);
+
+  // Join an existing session from the IO picker dialog
+  const joinSession = useCallback(async (
+    sessionId: string,
+    sourceProfileIds?: string[]
+  ) => {
+    await joinExistingSession(sessionId, sourceProfileIds);
+  }, [joinExistingSession]);
+
+  // Skip IO reader selection: clear state, leave if streaming
+  const skipReader = useCallback(async () => {
+    setMultiBusMode(false);
+    setMultiBusProfiles([]);
+    // Leave session if currently streaming or paused
+    const readerState = session.state;
+    if (readerState === "running" || readerState === "paused") {
+      await session.leave();
+      setIsWatching(false);
+    }
+    setIoProfile(null);
+  }, [setMultiBusMode, setMultiBusProfiles, session, setIoProfile]);
+
   // ---- Clear Watch State on Stream End ----
   useEffect(() => {
     if (!isStreaming && isWatching) {
@@ -540,5 +696,15 @@ export function useIOSessionManager(
     // Multi-Bus Handlers
     startMultiBusSession,
     joinExistingSession,
+
+    // Session Switching Methods
+    watchSingleSource,
+    watchMultiSource,
+    stopWatch,
+    selectProfile,
+    selectMultipleProfiles,
+    joinSession,
+    skipReader,
+    streamCompletedRef,
   };
 }

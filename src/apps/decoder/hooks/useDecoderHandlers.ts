@@ -26,11 +26,12 @@ import type { PlaybackSpeed } from "../../../components/TimeController";
 import type { IOCapabilities } from "../../../api/io";
 import type { BufferMetadata } from "../../../api/buffer";
 import type { FrameDetail } from "../../../types/decoder";
+import type { IngestOptions as ManagerIngestOptions } from "../../../hooks/useIOSessionManager";
 // Note: SerialFrameConfig is read directly from store in session handlers to avoid stale closures
 import type { SelectionSet } from "../../../utils/selectionSets";
 
 export interface UseDecoderHandlersParams {
-  // Session manager actions
+  // Session actions (low-level, for buffer reinitialize and playback)
   reinitialize: (
     profileId?: string,
     options?: {
@@ -54,7 +55,6 @@ export interface UseDecoderHandlersParams {
   stop: () => Promise<void>;
   pause: () => Promise<void>;
   resume: () => Promise<void>;
-  leave: () => Promise<void>;
   setSpeed: (speed: number) => Promise<void>;
   setTimeRange: (start?: string, end?: string) => Promise<void>;
   seek: (timeUs: number) => Promise<void>;
@@ -69,9 +69,7 @@ export interface UseDecoderHandlersParams {
   currentTimestampUs?: number | null;
 
   // Store actions (decoder)
-  setIoProfile: (profileId: string | null) => void;
   setPlaybackSpeed: (speed: PlaybackSpeed) => void;
-  clearFrames: () => void;
   setStartTime: (time: string) => void;
   setEndTime: (time: string) => void;
   updateCurrentTime: (time: number) => void;
@@ -94,10 +92,6 @@ export interface UseDecoderHandlersParams {
   playbackSpeed: PlaybackSpeed;
   // Note: serialConfig is read directly from store via getState() to avoid stale closure issues
 
-  // Multi-bus state
-  setMultiBusMode: (mode: boolean) => void;
-  setMultiBusProfiles: (profiles: string[]) => void;
-
   // Ingest session
   startIngest: (params: {
     profileId: string;
@@ -115,19 +109,24 @@ export interface UseDecoderHandlersParams {
   stopIngest: () => Promise<void>;
   isIngesting: boolean;
 
-  // Watch state
+  // Watch state (read-only, from manager)
   isWatching: boolean;
-  setIsWatching: (watching: boolean) => void;
-  resetWatchFrameCount: () => void;
+
+  // Stream completed ref (from manager, for playback handlers)
   streamCompletedRef: React.MutableRefObject<boolean>;
 
   // Detach/rejoin handlers (from manager)
   handleDetach: () => Promise<void>;
   handleRejoin: () => Promise<void>;
 
-  // Multi-bus handlers (from manager)
-  startMultiBusSession: (profileIds: string[], options: import("../../../hooks/useIOSessionManager").IngestOptions) => Promise<void>;
-  joinExistingSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
+  // Manager session switching methods
+  watchSingleSource: (profileId: string, options: ManagerIngestOptions, reinitializeOptions?: Record<string, unknown>) => Promise<void>;
+  watchMultiSource: (profileIds: string[], options: ManagerIngestOptions) => Promise<void>;
+  stopWatch: () => Promise<void>;
+  selectProfile: (profileId: string | null) => void;
+  selectMultipleProfiles: (profileIds: string[]) => void;
+  joinSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
+  skipReader: () => Promise<void>;
 
   // Ingest speed
   ingestSpeed: number;
@@ -150,9 +149,6 @@ export interface UseDecoderHandlersParams {
   minTimeUs?: number | null;
   maxTimeUs?: number | null;
   totalFrames?: number | null;
-
-  // Settings for default speeds
-  ioProfiles?: Array<{ id: string; connection?: { default_speed?: string } }>;
 }
 
 export type DecoderHandlers = DecoderSessionHandlers &
@@ -163,27 +159,23 @@ export type DecoderHandlers = DecoderSessionHandlers &
 
 export function useDecoderHandlers(params: UseDecoderHandlersParams): DecoderHandlers {
   // Session handlers (start ingest, stop watch, detach, rejoin, multi-bus, IO profile change)
+  // Delegates session orchestration to manager methods; only adds Decoder-specific logic
   const sessionHandlers = useDecoderSessionHandlers({
     reinitialize: params.reinitialize,
-    stop: params.stop,
-    leave: params.leave,
-    setIoProfile: params.setIoProfile,
-    setPlaybackSpeed: params.setPlaybackSpeed,
-    clearFrames: params.clearFrames,
-    setMultiBusMode: params.setMultiBusMode,
-    setMultiBusProfiles: params.setMultiBusProfiles,
     startIngest: params.startIngest,
     stopIngest: params.stopIngest,
     isIngesting: params.isIngesting,
-    // Note: serialConfig is read from store via getState() to avoid stale closure issues
     isWatching: params.isWatching,
-    setIsWatching: params.setIsWatching,
-    resetWatchFrameCount: params.resetWatchFrameCount,
-    streamCompletedRef: params.streamCompletedRef,
     handleDetach: params.handleDetach,
     handleRejoin: params.handleRejoin,
-    startMultiBusSession: params.startMultiBusSession,
-    joinExistingSession: params.joinExistingSession,
+    // Manager session switching methods
+    watchSingleSource: params.watchSingleSource,
+    watchMultiSource: params.watchMultiSource,
+    stopWatch: params.stopWatch,
+    selectProfile: params.selectProfile,
+    selectMultipleProfiles: params.selectMultipleProfiles,
+    joinSession: params.joinSession,
+    skipReader: params.skipReader,
     ingestSpeed: params.ingestSpeed,
     setIngestSpeed: params.setIngestSpeed,
     closeIoReaderPicker: params.closeIoReaderPicker,
@@ -191,7 +183,6 @@ export function useDecoderHandlers(params: UseDecoderHandlersParams): DecoderHan
     setBufferMetadata: params.setBufferMetadata,
     updateCurrentTime: params.updateCurrentTime,
     setCurrentFrameIndex: params.setCurrentFrameIndex,
-    ioProfiles: params.ioProfiles,
   });
 
   // Playback handlers (play, pause, stop, speed change)

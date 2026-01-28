@@ -50,6 +50,7 @@ export default function Decoder() {
   const [activeTab, setActiveTab] = useState<string>('signals');
 
   // Track when stream has completed to ignore stale time updates
+  // Defined locally and passed to manager so it can reset it during watch operations
   const streamCompletedRef = useRef(false);
 
   // Ingest speed setting (for dialog display)
@@ -389,6 +390,11 @@ export default function Decoder() {
     onStreamEnded: handleStreamEnded,
     onStreamComplete: handleStreamComplete,
     onSpeedChange: handleSessionSpeedChange,
+    // Session switching callbacks
+    setPlaybackSpeed: setPlaybackSpeed as (speed: number) => void,
+    onBeforeWatch: clearFrames,
+    onBeforeMultiWatch: clearFrames,
+    streamCompletedRef,
   });
 
   // Destructure everything from the manager
@@ -396,8 +402,6 @@ export default function Decoder() {
     // Multi-bus state
     multiBusMode,
     multiBusProfiles: ioProfiles,
-    setMultiBusMode,
-    setMultiBusProfiles: setIoProfiles,
     // Session
     session,
     // Derived state
@@ -414,9 +418,7 @@ export default function Decoder() {
     handleRejoin,
     // Watch state
     watchFrameCount,
-    resetWatchFrameCount,
     isWatching,
-    setIsWatching,
     // Ingest state
     isIngesting,
     ingestProfileId,
@@ -424,9 +426,15 @@ export default function Decoder() {
     ingestError,
     startIngest,
     stopIngest,
-    // Multi-bus handlers
-    startMultiBusSession,
-    joinExistingSession,
+    // Session switching methods
+    watchSingleSource,
+    watchMultiSource,
+    stopWatch,
+    selectProfile,
+    selectMultipleProfiles,
+    joinSession,
+    skipReader,
+    // Note: streamCompletedRef is created locally and passed to manager via options
   } = manager;
 
   // Session controls from the underlying session
@@ -437,7 +445,6 @@ export default function Decoder() {
     bufferAvailable,
     start,
     stop,
-    leave,
     pause,
     resume,
     setSpeed,
@@ -455,13 +462,12 @@ export default function Decoder() {
 
   // Use the orchestrator hook for all handlers
   const handlers = useDecoderHandlers({
-    // Session manager actions
+    // Session actions (low-level, for buffer reinitialize and playback)
     reinitialize,
     start,
     stop,
     pause,
     resume,
-    leave,
     setSpeed,
     setTimeRange,
     seek,
@@ -476,9 +482,7 @@ export default function Decoder() {
     currentTimestampUs: currentTime !== null ? currentTime * 1_000_000 : null,
 
     // Store actions (decoder)
-    setIoProfile,
     setPlaybackSpeed,
-    clearFrames,
     setStartTime,
     setEndTime,
     updateCurrentTime,
@@ -501,28 +505,29 @@ export default function Decoder() {
     playbackSpeed,
     // Note: serialConfig is read directly from store in session handlers to avoid stale closures
 
-    // Multi-bus state
-    setMultiBusMode,
-    setMultiBusProfiles: setIoProfiles,
-
     // Ingest session
     startIngest,
     stopIngest,
     isIngesting,
 
-    // Watch state
+    // Watch state (read-only, from manager)
     isWatching,
-    setIsWatching,
-    resetWatchFrameCount,
+
+    // Stream completed ref (from manager, for playback handlers)
     streamCompletedRef,
 
     // Detach/rejoin handlers (from manager)
     handleDetach,
     handleRejoin,
 
-    // Multi-bus handlers (from manager)
-    startMultiBusSession,
-    joinExistingSession,
+    // Manager session switching methods
+    watchSingleSource,
+    watchMultiSource,
+    stopWatch,
+    selectProfile,
+    selectMultipleProfiles,
+    joinSession,
+    skipReader,
 
     // Ingest speed
     ingestSpeed,
@@ -545,17 +550,9 @@ export default function Decoder() {
     minTimeUs: bufferMetadata?.start_time_us,
     maxTimeUs: bufferMetadata?.end_time_us,
     totalFrames: bufferMetadata?.count,
-
-    // Settings for default speeds
-    ioProfiles: settings?.io_profiles,
   });
 
-  // Clear watch state when stream ends
-  useEffect(() => {
-    if (!isDecoding && isWatching) {
-      setIsWatching(false);
-    }
-  }, [isDecoding, isWatching]);
+  // Note: Watch state is cleared automatically by useIOSessionManager when streaming stops
 
   // Effect to handle auto-transition to buffer replay after stream ends
   useEffect(() => {

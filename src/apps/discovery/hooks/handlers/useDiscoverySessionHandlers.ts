@@ -1,17 +1,19 @@
 // ui/src/apps/discovery/hooks/handlers/useDiscoverySessionHandlers.ts
 //
 // Session-related handlers for Discovery: start, stop, resume, detach, rejoin, multi-bus, IO profile change.
+// Delegates session orchestration to useIOSessionManager methods; only adds Discovery-specific logic
+// (serial config, framing config, buffer cleanup, playback controls).
 
 import { useCallback } from "react";
-import type { PlaybackSpeed } from "../../../../stores/discoveryStore";
 import type { IngestOptions } from "../../../../dialogs/IoReaderPickerDialog";
+import type { IngestOptions as ManagerIngestOptions } from "../../../../hooks/useIOSessionManager";
 import { getBufferFrameInfo, setActiveBuffer, type BufferMetadata } from "../../../../api/buffer";
 import { stepBufferFrame, updateReaderDirection } from "../../../../api/io";
 import { isBufferProfileId } from "../../../../hooks/useIOSessionManager";
-import { useBufferSessionHandler } from "../../../../hooks/useBufferSessionHandler";
+import { useBufferSession } from "../../../../hooks/useBufferSession";
 
 export interface UseDiscoverySessionHandlersParams {
-  // Session manager state
+  // Session manager state (for playback controls)
   sessionId: string;
   isStreaming: boolean;
   isPaused: boolean;
@@ -24,20 +26,22 @@ export interface UseDiscoverySessionHandlersParams {
   // Selected frame IDs for filtering step operations
   selectedFrameIds?: Set<number>;
 
-  // Session manager actions
-  setMultiBusMode: (mode: boolean) => void;
-  setMultiBusProfiles: (profiles: string[]) => void;
-  setIoProfile: (profileId: string | null) => void;
+  // Session actions (for playback controls)
   setSourceProfileId: (profileId: string | null) => void;
   setShowBusColumn: (show: boolean) => void;
   start: () => Promise<void>;
-  stop: () => Promise<void>;
   pause: () => Promise<void>;
   resume: () => Promise<void>;
-  reinitialize: (profileId?: string, options?: any) => Promise<void>;
+
+  // Manager session switching methods
+  watchSingleSource: (profileId: string, options: ManagerIngestOptions, reinitializeOptions?: Record<string, unknown>) => Promise<void>;
+  watchMultiSource: (profileIds: string[], options: ManagerIngestOptions) => Promise<void>;
+  stopWatch: () => Promise<void>;
+  selectProfile: (profileId: string | null) => void;
+  selectMultipleProfiles: (profileIds: string[]) => void;
+  joinSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
 
   // Store actions
-  setPlaybackSpeed: (speed: PlaybackSpeed) => void;
   updateCurrentTime?: (timeSeconds: number) => void;
   setCurrentFrameIndex?: (index: number) => void;
   setMaxBuffer?: (count: number) => void;
@@ -50,7 +54,6 @@ export interface UseDiscoverySessionHandlersParams {
   clearSerialBytes: (preserveCount?: boolean) => void;
   resetFraming: () => void;
   setBackendByteCount: (count: number) => void;
-  setBackendFrameCount: (count: number) => void;
   addSerialBytes: (entries: { byte: number; timestampUs: number }[]) => void;
   setSerialConfig: (config: any) => void;
   setFramingConfig: (config: any) => void;
@@ -60,10 +63,6 @@ export interface UseDiscoverySessionHandlersParams {
   // Detach/rejoin handlers (from manager)
   handleDetach: () => Promise<void>;
   handleRejoin: () => Promise<void>;
-
-  // Multi-bus handlers (from manager)
-  startMultiBusSession: (profileIds: string[], options: any) => Promise<void>;
-  joinExistingSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
 
   // Buffer state
   setBufferMetadata: (meta: BufferMetadata | null) => void;
@@ -80,17 +79,17 @@ export function useDiscoverySessionHandlers({
   currentFrameIndex,
   currentTimestampUs,
   selectedFrameIds,
-  setMultiBusMode,
-  setMultiBusProfiles,
-  setIoProfile,
   setSourceProfileId,
   setShowBusColumn,
   start,
-  stop,
   pause,
   resume,
-  reinitialize,
-  setPlaybackSpeed,
+  watchSingleSource,
+  watchMultiSource,
+  stopWatch,
+  selectProfile,
+  selectMultipleProfiles,
+  joinSession,
   updateCurrentTime,
   setCurrentFrameIndex,
   setMaxBuffer,
@@ -103,7 +102,6 @@ export function useDiscoverySessionHandlers({
   clearSerialBytes,
   resetFraming,
   setBackendByteCount,
-  setBackendFrameCount,
   addSerialBytes: _addSerialBytes,
   setSerialConfig,
   setFramingConfig,
@@ -111,15 +109,13 @@ export function useDiscoverySessionHandlers({
   showError,
   handleDetach,
   handleRejoin,
-  startMultiBusSession,
-  joinExistingSession,
   setBufferMetadata,
   closeIoReaderPicker,
 }: UseDiscoverySessionHandlersParams) {
   void _addSerialBytes; // Reserved for future bytes mode support
 
   // Centralized buffer session handler with Discovery-specific callbacks
-  const { switchToBuffer } = useBufferSessionHandler({
+  const { switchToBuffer } = useBufferSession({
     setBufferMetadata,
     updateCurrentTime: updateCurrentTime ?? (() => {}),
     setCurrentFrameIndex: setCurrentFrameIndex ?? (() => {}),
@@ -160,10 +156,12 @@ export function useDiscoverySessionHandlers({
     },
   });
 
-  // Handle IO profile change
+  // Handle IO profile change - manager handles common logic, app handles buffer/non-buffer cleanup
   const handleIoProfileChange = useCallback(async (profileId: string | null) => {
     console.log(`[DiscoverySessionHandlers] handleIoProfileChange called - profileId=${profileId}`);
-    setIoProfile(profileId);
+
+    // Manager handles: clear multi-bus, set profile, default speed
+    selectProfile(profileId);
 
     // Check if switching to a buffer session (buffer_1, buffer_2, etc. or legacy __imported_buffer__)
     if (isBufferProfileId(profileId)) {
@@ -179,7 +177,7 @@ export function useDiscoverySessionHandlers({
       setBackendByteCount(0);
     }
   }, [
-    setIoProfile,
+    selectProfile,
     switchToBuffer,
     clearAnalysisResults,
     clearBuffer,
@@ -198,10 +196,6 @@ export function useDiscoverySessionHandlers({
   ) => {
     console.log(`[DiscoverySessionHandlers] handleDialogStartIngest called - profileId=${profileId}, closeDialog=${closeDialog}`);
     const {
-      speed,
-      startTime: optStartTime,
-      endTime: optEndTime,
-      maxFrames,
       frameIdStartByte,
       frameIdBytes,
       sourceAddressStartByte,
@@ -211,8 +205,6 @@ export function useDiscoverySessionHandlers({
       framingEncoding,
       delimiter,
       maxFrameLength,
-      emitRawBytes,
-      busOverride,
     } = options;
 
     // Store serial config for TOML export
@@ -232,18 +224,9 @@ export function useDiscoverySessionHandlers({
 
     if (closeDialog) {
       // Watch mode
-      console.log(`[DiscoverySessionHandlers] Watch mode - calling reinitialize(${profileId})`);
+      console.log(`[DiscoverySessionHandlers] Watch mode - calling watchSingleSource(${profileId})`);
 
-      // Clear ALL data from previous session before starting new one
-      clearBuffer();
-      clearFramePicker();
-      clearAnalysisResults();
-      disableBufferMode();
-      resetWatchFrameCount();
-      clearSerialBytes();
-      resetFraming();
-      setBackendByteCount(0);
-      setBackendFrameCount(0);
+      // Discovery-specific: set source profile ID and sync framing config
       setSourceProfileId(profileId);
 
       // Sync framing config with discovery store
@@ -263,82 +246,36 @@ export function useDiscoverySessionHandlers({
         setFramingConfig(null);
       }
 
-      await reinitialize(profileId, {
-        startTime: optStartTime,
-        endTime: optEndTime,
-        speed,
-        limit: maxFrames,
-        frameIdStartByte,
-        frameIdBytes,
-        sourceAddressStartByte,
-        sourceAddressBytes,
+      // Manager handles: onBeforeWatch cleanup, reinitialize, multi-bus clear, profile set, speed, watch state
+      await watchSingleSource(profileId, options, {
         sourceAddressBigEndian: sourceAddressEndianness === "big",
-        minFrameLength,
-        framingEncoding,
-        delimiter,
-        maxFrameLength,
-        emitRawBytes,
-        busOverride,
       });
-      console.log(`[DiscoverySessionHandlers] Watch mode - reinitialize complete`);
-
-      setIoProfile(profileId);
-      setPlaybackSpeed(speed as PlaybackSpeed);
-      setMultiBusMode(false);
-      setMultiBusProfiles([]);
 
       closeIoReaderPicker();
       console.log(`[DiscoverySessionHandlers] Watch mode - complete`);
     }
     // Ingest mode is handled by useIOSessionManager via startIngest
   }, [
-    clearBuffer,
-    clearFramePicker,
-    clearAnalysisResults,
-    disableBufferMode,
-    resetWatchFrameCount,
-    clearSerialBytes,
-    resetFraming,
-    setBackendByteCount,
-    setBackendFrameCount,
-    setSourceProfileId,
     setSerialConfig,
+    setSourceProfileId,
     setFramingConfig,
-    reinitialize,
-    setIoProfile,
-    setPlaybackSpeed,
-    setMultiBusMode,
-    setMultiBusProfiles,
+    watchSingleSource,
     closeIoReaderPicker,
   ]);
 
   // Handle Watch/Ingest for multiple profiles (multi-bus mode)
-  // Uses manager's startMultiBusSession which creates a proper Rust-side merged session
   const handleDialogStartMultiIngest = useCallback(async (
     profileIds: string[],
     closeDialog: boolean,
     options: IngestOptions
   ) => {
-    const { speed } = options;
-
     if (closeDialog) {
-      // Clear ALL data from previous session before starting new one
-      clearBuffer();
-      clearFramePicker();
-      clearAnalysisResults();
-      disableBufferMode();
-      resetWatchFrameCount();
-      clearSerialBytes();
-      resetFraming();
-      setBackendByteCount(0);
-      setBackendFrameCount(0);
-
+      // Note: cleanup is handled by manager's onBeforeMultiWatch callback
       try {
-        // Use manager's startMultiBusSession - handles all session creation
-        await startMultiBusSession(profileIds, options);
+        // Manager handles: onBeforeMultiWatch cleanup, startMultiBusSession, speed, watch state
+        await watchMultiSource(profileIds, options);
 
         setShowBusColumn(true);
-        setPlaybackSpeed(speed as PlaybackSpeed);
         closeIoReaderPicker();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -346,27 +283,16 @@ export function useDiscoverySessionHandlers({
       }
     }
   }, [
-    clearBuffer,
-    clearFramePicker,
-    clearAnalysisResults,
-    disableBufferMode,
-    resetWatchFrameCount,
-    clearSerialBytes,
-    resetFraming,
-    setBackendByteCount,
-    setBackendFrameCount,
-    startMultiBusSession,
+    watchMultiSource,
     setShowBusColumn,
-    setPlaybackSpeed,
     closeIoReaderPicker,
     showError,
   ]);
 
   // Handle selecting multiple profiles in multi-bus mode
   const handleSelectMultiple = useCallback((profileIds: string[]) => {
-    setMultiBusProfiles(profileIds);
-    setIoProfile(null);
-  }, [setMultiBusProfiles, setIoProfile]);
+    selectMultipleProfiles(profileIds);
+  }, [selectMultipleProfiles]);
 
   // Handle play/resume button click
   const handlePlay = useCallback(async () => {
@@ -440,10 +366,10 @@ export function useDiscoverySessionHandlers({
 
   // Handle stop button click
   const handleStop = useCallback(async () => {
-    console.log(`[DiscoverySessionHandlers] handleStop - calling stop...`);
-    await stop();
+    console.log(`[DiscoverySessionHandlers] handleStop - calling stopWatch...`);
+    await stopWatch();
     console.log(`[DiscoverySessionHandlers] handleStop - stop complete`);
-  }, [stop]);
+  }, [stopWatch]);
 
   // Note: handleDetach and handleRejoin are provided by useIOSessionManager
   // They are passed through from the parent component
@@ -502,15 +428,14 @@ export function useDiscoverySessionHandlers({
     profileId: string,
     sourceProfileIds?: string[]
   ) => {
-    // Use manager's joinExistingSession - handles all session joining
-    await joinExistingSession(profileId, sourceProfileIds);
+    await joinSession(profileId, sourceProfileIds);
 
     if (sourceProfileIds && sourceProfileIds.length > 1) {
       setShowBusColumn(true);
     }
 
     closeIoReaderPicker();
-  }, [joinExistingSession, setShowBusColumn, closeIoReaderPicker]);
+  }, [joinSession, setShowBusColumn, closeIoReaderPicker]);
 
   return {
     handleIoProfileChange,

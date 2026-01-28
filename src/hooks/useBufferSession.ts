@@ -1,4 +1,4 @@
-// ui/src/hooks/useBufferSessionHandler.ts
+// ui/src/hooks/useBufferSession.ts
 //
 // Centralized buffer session handling for all apps (Discovery, Decoder, etc.)
 // Provides a simple, consistent way to switch between buffers.
@@ -7,7 +7,7 @@ import { useCallback } from "react";
 import { getBufferMetadataById, type BufferMetadata } from "../api/buffer";
 import { isBufferProfileId } from "./useIOSessionManager";
 
-export interface BufferSessionHandlerParams {
+export interface BufferSessionParams {
   // Required: buffer metadata setter
   setBufferMetadata: (meta: BufferMetadata | null) => void;
 
@@ -38,13 +38,13 @@ export interface BufferSwitchResult {
  *
  * Apps can provide optional callbacks for additional setup/cleanup.
  */
-export function useBufferSessionHandler({
+export function useBufferSession({
   setBufferMetadata,
   updateCurrentTime,
   setCurrentFrameIndex,
   onBeforeSwitch,
   onAfterSwitch,
-}: BufferSessionHandlerParams) {
+}: BufferSessionParams) {
   /**
    * Switch to a buffer session by ID.
    * Fetches metadata and resets playback position.
@@ -55,7 +55,7 @@ export function useBufferSessionHandler({
         return { success: false, metadata: null };
       }
 
-      console.log(`[BufferSessionHandler] Switching to buffer: ${profileId}`);
+      console.log(`[BufferSession] Switching to buffer: ${profileId}`);
 
       // Run optional pre-switch actions (e.g., clearing previous state)
       onBeforeSwitch?.();
@@ -64,7 +64,7 @@ export function useBufferSessionHandler({
       const meta = await getBufferMetadataById(profileId);
 
       console.log(
-        `[BufferSessionHandler] Got metadata: id=${meta?.id}, count=${meta?.count}, type=${meta?.buffer_type}`
+        `[BufferSession] Got metadata: id=${meta?.id}, count=${meta?.count}, type=${meta?.buffer_type}`
       );
 
       // Update buffer metadata
@@ -81,7 +81,7 @@ export function useBufferSessionHandler({
       // Run optional post-switch actions (e.g., loading frame info)
       onAfterSwitch?.(meta);
 
-      console.log(`[BufferSessionHandler] Buffer switch complete`);
+      console.log(`[BufferSession] Buffer switch complete`);
       return { success: true, metadata: meta };
     },
     [setBufferMetadata, updateCurrentTime, setCurrentFrameIndex, onBeforeSwitch, onAfterSwitch]

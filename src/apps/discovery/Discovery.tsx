@@ -318,6 +318,18 @@ export default function Discovery() {
     setIoProfile,
   ]);
 
+  // Cleanup callback for before starting a new watch session
+  const clearBeforeWatch = useCallback(() => {
+    clearBuffer();
+    clearFramePicker();
+    clearAnalysisResults();
+    disableBufferMode();
+    clearSerialBytes();
+    resetFraming();
+    setBackendByteCount(0);
+    setBackendFrameCount(0);
+  }, [clearBuffer, clearFramePicker, clearAnalysisResults, disableBufferMode, clearSerialBytes, resetFraming, setBackendByteCount, setBackendFrameCount]);
+
   // Use the IO session manager hook - manages session lifecycle, ingest, multi-bus, and derived state
   const manager = useIOSessionManager({
     appName: "discovery",
@@ -330,6 +342,10 @@ export default function Discovery() {
     onError: handleError,
     onTimeUpdate: handleTimeUpdate,
     onSpeedChange: handleSessionSpeedChange,
+    // Session switching callbacks
+    setPlaybackSpeed: (speed: number) => setPlaybackSpeed(speed as PlaybackSpeed),
+    onBeforeWatch: clearBeforeWatch,
+    onBeforeMultiWatch: clearBeforeWatch,
   });
 
   // Destructure everything from the manager
@@ -338,8 +354,6 @@ export default function Discovery() {
     multiBusMode,
     multiBusProfiles: ioProfiles,
     sourceProfileId,
-    setMultiBusMode,
-    setMultiBusProfiles: setIoProfiles,
     setSourceProfileId,
     // Session
     session,
@@ -364,9 +378,14 @@ export default function Discovery() {
     ingestFrameCount,
     ingestError,
     stopIngest,
-    // Multi-bus handlers
-    startMultiBusSession,
-    joinExistingSession,
+    // Session switching methods
+    watchSingleSource,
+    watchMultiSource,
+    stopWatch,
+    selectProfile,
+    selectMultipleProfiles,
+    joinSession,
+    skipReader,
   } = manager;
 
   // Session controls from the underlying session
@@ -379,7 +398,6 @@ export default function Discovery() {
     stoppedExplicitly,
     start,
     stop,
-    leave,
     pause,
     resume,
     setSpeed,
@@ -647,21 +665,21 @@ export default function Discovery() {
     handleDetach,
     handleRejoin,
 
-    // Multi-bus handlers (from manager)
-    startMultiBusSession,
-    joinExistingSession,
+    // Manager session switching methods
+    watchSingleSource,
+    watchMultiSource,
+    stopWatch,
+    selectProfile,
+    selectMultipleProfiles,
+    joinSession,
 
     // Session actions
-    setMultiBusMode,
-    setMultiBusProfiles: setIoProfiles,
     setIoProfile,
     setSourceProfileId,
     setShowBusColumn,
     start,
-    stop,
     pause,
     resume,
-    leave,
     reinitialize,
     setSpeed,
     setTimeRange,
@@ -711,22 +729,9 @@ export default function Discovery() {
 
   // Handle skip for IoReaderPickerDialog
   const handleSkip = useCallback(async () => {
-    console.log(`[Discovery] handleSkip called - ioProfile=${ioProfile}, isStreaming=${isStreaming}, isPaused=${isPaused}, multiBusMode=${multiBusMode}`);
-    if (multiBusMode || ioProfiles.length > 0) {
-      console.log(`[Discovery] handleSkip - clearing multi-bus state`);
-      setMultiBusMode(false);
-      setIoProfiles([]);
-    }
-    if (isStreaming || isPaused) {
-      console.log(`[Discovery] handleSkip - calling leave() because isStreaming=${isStreaming} or isPaused=${isPaused}`);
-      await leave();
-      console.log(`[Discovery] handleSkip - leave() complete`);
-    }
-    console.log(`[Discovery] handleSkip - calling setIoProfile(null)`);
-    setIoProfile(null);
+    await skipReader();
     dialogs.ioReaderPicker.close();
-    console.log(`[Discovery] handleSkip - complete`);
-  }, [multiBusMode, ioProfiles.length, isStreaming, isPaused, setMultiBusMode, setIoProfiles, leave, setIoProfile, dialogs.ioReaderPicker, ioProfile]);
+  }, [skipReader, dialogs.ioReaderPicker]);
 
   return (
     <div className="h-full flex flex-col bg-slate-50 dark:bg-slate-900 overflow-hidden">

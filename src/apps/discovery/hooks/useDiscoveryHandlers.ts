@@ -27,7 +27,7 @@ import type { PlaybackSpeed, FrameMessage } from "../../../stores/discoveryStore
 import type { BufferMetadata, TimestampedByte } from "../../../api/buffer";
 import type { ExportDataMode } from "../../../dialogs/ExportFramesDialog";
 import type { SelectionSet } from "../../../utils/selectionSets";
-import { isBufferProfileId } from "../../../hooks/useIOSessionManager";
+import { isBufferProfileId, type IngestOptions as ManagerIngestOptions } from "../../../hooks/useIOSessionManager";
 
 export interface UseDiscoveryHandlersParams {
   // Session state
@@ -84,21 +84,21 @@ export interface UseDiscoveryHandlersParams {
   handleDetach: () => Promise<void>;
   handleRejoin: () => Promise<void>;
 
-  // Multi-bus handlers (from manager)
-  startMultiBusSession: (profileIds: string[], options: any) => Promise<void>;
-  joinExistingSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
+  // Manager session switching methods
+  watchSingleSource: (profileId: string, options: ManagerIngestOptions, reinitializeOptions?: Record<string, unknown>) => Promise<void>;
+  watchMultiSource: (profileIds: string[], options: ManagerIngestOptions) => Promise<void>;
+  stopWatch: () => Promise<void>;
+  selectProfile: (profileId: string | null) => void;
+  selectMultipleProfiles: (profileIds: string[]) => void;
+  joinSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
 
   // Session actions
-  setMultiBusMode: (mode: boolean) => void;
-  setMultiBusProfiles: (profiles: string[]) => void;
   setIoProfile: (profileId: string | null) => void;
   setSourceProfileId: (profileId: string | null) => void;
   setShowBusColumn: (show: boolean) => void;
   start: () => Promise<void>;
-  stop: () => Promise<void>;
   pause: () => Promise<void>;
   resume: () => Promise<void>;
-  leave: () => Promise<void>;
   reinitialize: (profileId?: string, options?: any) => Promise<void>;
   setSpeed: (speed: number) => Promise<void>;
   setTimeRange: (start: string, end: string) => Promise<void>;
@@ -165,17 +165,17 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     currentFrameIndex: params.currentFrameIndex,
     currentTimestampUs: params.currentTimestampUs,
     selectedFrameIds: params.selectedFrames,
-    setMultiBusMode: params.setMultiBusMode,
-    setMultiBusProfiles: params.setMultiBusProfiles,
-    setIoProfile: params.setIoProfile,
     setSourceProfileId: params.setSourceProfileId,
     setShowBusColumn: params.setShowBusColumn,
     start: params.start,
-    stop: params.stop,
     pause: params.pause,
     resume: params.resume,
-    reinitialize: params.reinitialize,
-    setPlaybackSpeed: params.setPlaybackSpeed,
+    watchSingleSource: params.watchSingleSource,
+    watchMultiSource: params.watchMultiSource,
+    stopWatch: params.stopWatch,
+    selectProfile: params.selectProfile,
+    selectMultipleProfiles: params.selectMultipleProfiles,
+    joinSession: params.joinSession,
     updateCurrentTime: params.updateCurrentTime,
     setCurrentFrameIndex: params.setCurrentFrameIndex,
     setMaxBuffer: params.setMaxBuffer,
@@ -188,7 +188,6 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     clearSerialBytes: params.clearSerialBytes,
     resetFraming: params.resetFraming,
     setBackendByteCount: params.setBackendByteCount,
-    setBackendFrameCount: params.setBackendFrameCount,
     addSerialBytes: params.addSerialBytes,
     setSerialConfig: params.setSerialConfig,
     setFramingConfig: params.setFramingConfig,
@@ -196,8 +195,6 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     showError: params.showError,
     handleDetach: params.handleDetach,
     handleRejoin: params.handleRejoin,
-    startMultiBusSession: params.startMultiBusSession,
-    joinExistingSession: params.joinExistingSession,
     setBufferMetadata: params.setBufferMetadata,
     closeIoReaderPicker: params.closeIoReaderPicker,
   });
