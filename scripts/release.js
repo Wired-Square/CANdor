@@ -8,9 +8,10 @@
 //   node release.js major   # major release: 0.2.10 → 1.0.0
 
 import { execSync } from 'child_process';
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { createInterface } from 'readline';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -37,87 +38,214 @@ function runSilent(cmd) {
   return execSync(cmd, { cwd: rootDir, encoding: 'utf8' }).trim();
 }
 
-// Check for uncommitted changes (allow CHANGELOG.md to be uncommitted)
-const status = runSilent('git status --porcelain');
-const uncommittedFiles = status.split('\n').filter(line => line.trim());
-const nonChangelogChanges = uncommittedFiles.filter(line => !line.endsWith('CHANGELOG.md'));
-const hasUncommittedChangelog = uncommittedFiles.some(line => line.endsWith('CHANGELOG.md'));
+async function askUser(question) {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
 
-if (nonChangelogChanges.length > 0) {
-  console.error('Error: Working directory has uncommitted changes (other than CHANGELOG.md).');
-  console.error('Please commit or stash your changes before releasing.');
-  console.error('Uncommitted files:');
-  nonChangelogChanges.forEach(line => console.error(`  ${line}`));
-  process.exit(1);
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.toLowerCase().trim());
+    });
+  });
 }
 
-// Check that CHANGELOG.md has been updated (either uncommitted or in recent commits)
-if (hasUncommittedChangelog) {
-  console.log('Found uncommitted CHANGELOG.md changes - will include in release commit.');
-} else {
-  const changelogCommits = runSilent('git log --oneline -10 --follow -- CHANGELOG.md');
-  const lastChangelogCommit = changelogCommits.split('\n')[0]?.split(' ')[0];
-
-  if (!lastChangelogCommit) {
-    console.error('Error: CHANGELOG.md has never been committed.');
-    console.error('Please update CHANGELOG.md with release notes before releasing.');
-    process.exit(1);
-  }
-
-  // Check if CHANGELOG.md was updated in the last 5 commits
-  const recentCommits = runSilent('git log --oneline -5').split('\n').map(line => line.split(' ')[0]);
-  if (!recentCommits.includes(lastChangelogCommit)) {
-    console.error('Error: CHANGELOG.md has not been updated recently.');
-    console.error(`Last CHANGELOG.md update was in commit ${lastChangelogCommit}.`);
-    console.error('Please update CHANGELOG.md with release notes before releasing.');
-    process.exit(1);
+/**
+ * Calculate the new version based on current version and bump type
+ */
+function calculateNewVersion(currentVersion, bumpType) {
+  const [major, minor, patch] = currentVersion.split('.').map(Number);
+  switch (bumpType) {
+    case 'major':
+      return `${major + 1}.0.0`;
+    case 'minor':
+      return `${major}.${minor + 1}.0`;
+    case 'patch':
+    default:
+      return `${major}.${minor}.${patch + 1}`;
   }
 }
 
-// Check we're on main branch
-const branch = runSilent('git branch --show-current');
-if (branch !== 'main') {
-  console.error(`Error: Releases should be made from 'main' branch (currently on '${branch}').`);
-  process.exit(1);
+/**
+ * Check and update changelog for the release
+ * Returns true if changelog is valid, false otherwise
+ */
+function checkAndUpdateChangelog(newVersion) {
+  const changelogPath = join(rootDir, 'CHANGELOG.md');
+  let changelog = readFileSync(changelogPath, 'utf8');
+
+  // Check for version-specific section (e.g., ## [0.2.34] or ## [0.2.34] - 2024-01-15)
+  const versionSectionRegex = new RegExp(`^## \\[${newVersion.replace(/\./g, '\\.')}\\]`, 'm');
+  const hasVersionSection = versionSectionRegex.test(changelog);
+
+  // Check for [Unreleased] section
+  const unreleasedRegex = /^## \[Unreleased\]/m;
+  const hasUnreleasedSection = unreleasedRegex.test(changelog);
+
+  if (hasVersionSection) {
+    console.log(`✓ Found changelog section for version ${newVersion}`);
+    return { valid: true, updated: false };
+  }
+
+  if (hasUnreleasedSection) {
+    // Check if there's actual content under [Unreleased]
+    // Split on version headers and get content after [Unreleased]
+    const sections = changelog.split(/^## \[/m);
+    const unreleasedIdx = sections.findIndex(s => s.startsWith('Unreleased]'));
+    if (unreleasedIdx !== -1) {
+      // Get content after the header line
+      const sectionContent = sections[unreleasedIdx].replace(/^Unreleased\][^\n]*\n/, '');
+      const unreleasedContent = sectionContent.trim();
+
+      // Check if there's more than just empty headers (### Added, ### Fixed, etc.)
+      const hasContent = unreleasedContent
+        .split('\n')
+        .some(line => line.trim() && !line.startsWith('###'));
+
+      if (!hasContent) {
+        console.error('Error: [Unreleased] section exists but has no content.');
+        console.error('Please add release notes before releasing.');
+        return { valid: false, updated: false };
+      }
+    }
+
+    // Get today's date in YYYY-MM-DD format
+    const today = new Date().toISOString().split('T')[0];
+
+    // Replace [Unreleased] with the new version and date
+    const newHeader = `## [${newVersion}] - ${today}`;
+    changelog = changelog.replace(unreleasedRegex, newHeader);
+
+    // Write the updated changelog
+    writeFileSync(changelogPath, changelog, 'utf8');
+    console.log(`✓ Updated [Unreleased] → [${newVersion}] - ${today}`);
+    return { valid: true, updated: true };
+  }
+
+  // Neither version section nor unreleased section found
+  console.error(`Error: CHANGELOG.md has no section for version ${newVersion} and no [Unreleased] section.`);
+  console.error('Please add release notes before releasing.');
+  console.error('Expected one of:');
+  console.error(`  ## [${newVersion}]`);
+  console.error(`  ## [Unreleased]`);
+  return { valid: false, updated: false };
 }
 
-// Pull latest changes (stash CHANGELOG.md if uncommitted)
-console.log('\nPulling latest changes...');
-if (hasUncommittedChangelog) {
-  run('git stash push -m "release-script: CHANGELOG.md" -- CHANGELOG.md');
+/**
+ * Extract changelog content for the release version
+ */
+function extractVersionChangelog(version) {
+  const changelogPath = join(rootDir, 'CHANGELOG.md');
+  const changelog = readFileSync(changelogPath, 'utf8');
+
+  // Split on version headers and find the matching section
+  const sections = changelog.split(/^## \[/m);
+  const versionPrefix = `${version}]`;
+  const sectionIdx = sections.findIndex(s => s.startsWith(versionPrefix));
+
+  if (sectionIdx !== -1) {
+    // Get content after the header line
+    const sectionContent = sections[sectionIdx].replace(/^[^\n]*\n/, '');
+    return sectionContent.trim();
+  }
+  return null;
 }
-run('git pull --rebase');
-if (hasUncommittedChangelog) {
-  run('git stash pop');
-}
 
-// Bump version
-console.log(`\nBumping ${bumpType} version...`);
-run(`node scripts/bump-version.js ${bumpType}`);
+async function main() {
+  // Check for uncommitted changes (allow CHANGELOG.md to be uncommitted)
+  const status = runSilent('git status --porcelain');
+  const uncommittedFiles = status.split('\n').filter(line => line.trim());
+  const nonChangelogChanges = uncommittedFiles.filter(line => !line.endsWith('CHANGELOG.md'));
+  const hasUncommittedChangelog = uncommittedFiles.some(line => line.endsWith('CHANGELOG.md'));
 
-// Update Cargo.lock by running cargo check
-console.log('\nUpdating Cargo.lock...');
-run('cargo check --manifest-path src-tauri/Cargo.toml');
+  if (nonChangelogChanges.length > 0) {
+    console.error('Error: Working directory has uncommitted changes (other than CHANGELOG.md).');
+    console.error('Please commit or stash your changes before releasing.');
+    console.error('Uncommitted files:');
+    nonChangelogChanges.forEach(line => console.error(`  ${line}`));
+    process.exit(1);
+  }
 
-// Read the new version
-const packageJson = JSON.parse(readFileSync(join(rootDir, 'package.json'), 'utf8'));
-const newVersion = packageJson.version;
-const tag = `v${newVersion}`;
+  // Check we're on main branch
+  const branch = runSilent('git branch --show-current');
+  if (branch !== 'main') {
+    console.error(`Error: Releases should be made from 'main' branch (currently on '${branch}').`);
+    process.exit(1);
+  }
 
-// Commit version bump (and CHANGELOG.md if it was uncommitted)
-console.log('\nCommitting version bump...');
-run('git add package.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json CHANGELOG.md');
-run(`git commit -m "Bump version to ${newVersion}"`);
+  // Calculate what the new version will be
+  const packageJson = JSON.parse(readFileSync(join(rootDir, 'package.json'), 'utf8'));
+  const currentVersion = packageJson.version;
+  const newVersion = calculateNewVersion(currentVersion, bumpType);
 
-// Create tag
-console.log(`\nCreating tag ${tag}...`);
-run(`git tag ${tag}`);
+  console.log(`\nPreparing ${bumpType} release: ${currentVersion} → ${newVersion}\n`);
 
-// Push commit and tag
-console.log('\nPushing to remote...');
-run('git push origin main --tags');
+  // Check and update changelog
+  const changelogResult = checkAndUpdateChangelog(newVersion);
+  if (!changelogResult.valid) {
+    process.exit(1);
+  }
 
-console.log(`
+  // Extract and display the changelog for this version
+  const versionChangelog = extractVersionChangelog(newVersion);
+  if (versionChangelog) {
+    console.log('\n--- Changelog for this release ---');
+    console.log(versionChangelog);
+    console.log('--- End of changelog ---\n');
+  }
+
+  // Ask for user confirmation
+  const answer = await askUser(`Proceed with release v${newVersion}? [y/N] `);
+  if (answer !== 'y' && answer !== 'yes') {
+    console.log('Release cancelled.');
+    // If we updated the changelog, revert it
+    if (changelogResult.updated) {
+      run('git checkout -- CHANGELOG.md');
+      console.log('Reverted changelog changes.');
+    }
+    process.exit(0);
+  }
+
+  // Pull latest changes (stash CHANGELOG.md if uncommitted or updated)
+  const needsStash = hasUncommittedChangelog || changelogResult.updated;
+  console.log('\nPulling latest changes...');
+  if (needsStash) {
+    run('git stash push -m "release-script: CHANGELOG.md" -- CHANGELOG.md');
+  }
+  run('git pull --rebase');
+  if (needsStash) {
+    run('git stash pop');
+  }
+
+  // Bump version
+  console.log(`\nBumping ${bumpType} version...`);
+  run(`node scripts/bump-version.js ${bumpType}`);
+
+  // Update Cargo.lock by running cargo check
+  console.log('\nUpdating Cargo.lock...');
+  run('cargo check --manifest-path src-tauri/Cargo.toml');
+
+  // Read the new version (verify it matches our calculation)
+  const updatedPackageJson = JSON.parse(readFileSync(join(rootDir, 'package.json'), 'utf8'));
+  const actualNewVersion = updatedPackageJson.version;
+  const tag = `v${actualNewVersion}`;
+
+  // Commit version bump (and CHANGELOG.md)
+  console.log('\nCommitting version bump...');
+  run('git add package.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json CHANGELOG.md');
+  run(`git commit -m "Bump version to ${actualNewVersion}"`);
+
+  // Create tag
+  console.log(`\nCreating tag ${tag}...`);
+  run(`git tag ${tag}`);
+
+  // Push commit and tag
+  console.log('\nPushing to remote...');
+  run('git push origin main --tags');
+
+  console.log(`
 ✅ Release ${tag} created successfully!
 
 GitHub Actions will now:
@@ -130,3 +258,9 @@ Next steps:
 3. Edit release notes if needed
 4. Publish the release
 `);
+}
+
+main().catch((error) => {
+  console.error('Release failed:', error);
+  process.exit(1);
+});
