@@ -269,7 +269,14 @@ async fn run_socketcan_reader(
         }
     };
 
-    run_socketcan_source(source_idx, interface, bus_mappings, stop_flag, tx).await;
+    // Optional bitrate - if set, interface will be configured automatically
+    let bitrate = profile
+        .connection
+        .get("bitrate")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<u32>().ok());
+
+    run_socketcan_source(source_idx, interface, bitrate, bus_mappings, stop_flag, tx).await;
 }
 
 async fn run_serial_reader(

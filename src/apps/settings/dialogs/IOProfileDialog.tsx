@@ -1087,14 +1087,36 @@ export default function IOProfileDialog({
                 />
               </FormField>
 
-              <div className={alertWarning}>
-                <p className="text-sm text-amber-800 dark:text-amber-200">
-                  <strong>Linux only.</strong> Requires CANable Pro with Candlelight firmware
-                  or native CAN hardware. The interface must be configured first:
+              {/* CAN Bitrate - optional */}
+              <FormField label="CAN Bitrate (optional)" variant="default">
+                <Select
+                  variant="default"
+                  value={profileForm.connection.bitrate || ""}
+                  onChange={(e) => onUpdateConnectionField("bitrate", e.target.value)}
+                >
+                  <option value="">Use system configuration</option>
+                  <option value="10000">10 Kbit/s</option>
+                  <option value="20000">20 Kbit/s</option>
+                  <option value="50000">50 Kbit/s</option>
+                  <option value="100000">100 Kbit/s</option>
+                  <option value="125000">125 Kbit/s</option>
+                  <option value="250000">250 Kbit/s</option>
+                  <option value="500000">500 Kbit/s</option>
+                  <option value="750000">750 Kbit/s</option>
+                  <option value="1000000">1 Mbit/s</option>
+                </Select>
+              </FormField>
+
+              <div className={alertInfo}>
+                <p className="text-sm text-blue-800 dark:text-blue-200">
+                  <strong>Linux only.</strong> Works with CANable Pro (Candlelight firmware),
+                  native CAN hardware, or virtual CAN (vcan).
                 </p>
-                <code className="block mt-2 p-2 bg-amber-100 dark:bg-amber-900/40 rounded text-xs">
-                  sudo ip link set can0 up type can bitrate 500000
-                </code>
+                <p className="text-sm text-blue-800 dark:text-blue-200 mt-2">
+                  {profileForm.connection.bitrate
+                    ? "CANdor will configure the interface automatically (requires authentication)."
+                    : "Leave bitrate empty to use the interface as already configured by the system."}
+                </p>
               </div>
             </div>
           )}

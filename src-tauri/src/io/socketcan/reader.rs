@@ -37,6 +37,11 @@ mod linux_impl {
     pub struct SocketCanConfig {
         /// CAN interface name (e.g., "can0", "vcan0")
         pub interface: String,
+        /// CAN bitrate in bits/second (e.g., 500000 for 500 Kbit/s).
+        /// If set, the interface will be configured automatically using pkexec.
+        /// If None, the interface is used as already configured by the system.
+        #[serde(default)]
+        pub bitrate: Option<u32>,
         /// Maximum number of frames to read (None = unlimited)
         pub limit: Option<i64>,
         /// Display name for the reader
@@ -46,6 +51,66 @@ mod linux_impl {
         /// If None, defaults to bus 0.
         #[serde(default)]
         pub bus_override: Option<u8>,
+    }
+
+    // ============================================================================
+    // Interface Configuration
+    // ============================================================================
+
+    /// Configure a SocketCAN interface using pkexec for privilege escalation.
+    /// This brings down the interface, sets the bitrate, and brings it back up.
+    ///
+    /// Returns Ok(()) on success, or an error message on failure.
+    pub fn configure_interface(interface: &str, bitrate: u32) -> Result<(), String> {
+        use std::process::Command;
+
+        eprintln!(
+            "[socketcan] Configuring interface {} with bitrate {} using pkexec",
+            interface, bitrate
+        );
+
+        // Build the shell command to configure the interface
+        // We use a single pkexec call with sh -c to run all commands in sequence
+        let script = format!(
+            "ip link set {iface} down && ip link set {iface} type can bitrate {bitrate} && ip link set {iface} up",
+            iface = interface,
+            bitrate = bitrate
+        );
+
+        let output = Command::new("pkexec")
+            .args(["sh", "-c", &script])
+            .output()
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    "pkexec not found. Install polkit or configure the interface manually.".to_string()
+                } else {
+                    format!("Failed to run pkexec: {}", e)
+                }
+            })?;
+
+        if output.status.success() {
+            eprintln!("[socketcan] Interface {} configured successfully", interface);
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+
+            // Check for common error cases
+            if stderr.contains("dismissed") || stderr.contains("cancelled") {
+                Err("Authentication cancelled by user".to_string())
+            } else if stderr.contains("Not authorized") {
+                Err("Not authorised to configure network interfaces".to_string())
+            } else {
+                let error_detail = if !stderr.is_empty() {
+                    stderr.trim().to_string()
+                } else if !stdout.is_empty() {
+                    stdout.trim().to_string()
+                } else {
+                    format!("Exit code: {:?}", output.status.code())
+                };
+                Err(format!("Failed to configure interface: {}", error_detail))
+            }
+        }
     }
 
     // ============================================================================
@@ -272,14 +337,28 @@ mod linux_impl {
     }
 
     /// Run SocketCAN source and send frames to merge task (supports CAN FD)
+    ///
+    /// If `bitrate` is provided, the interface will be configured automatically
+    /// using pkexec before opening the socket.
     pub async fn run_source(
         source_idx: usize,
         interface: String,
+        bitrate: Option<u32>,
         bus_mappings: Vec<BusMapping>,
         stop_flag: Arc<AtomicBool>,
         tx: mpsc::Sender<SourceMessage>,
     ) {
         let device = format!("socketcan({})", interface);
+
+        // Configure interface if bitrate is specified
+        if let Some(br) = bitrate {
+            if let Err(e) = configure_interface(&interface, br) {
+                let _ = tx
+                    .send(SourceMessage::Error(source_idx, e))
+                    .await;
+                return;
+            }
+        }
 
         // Open FD socket (can read both classic CAN and CAN FD frames)
         let socket = match CanFdSocket::open(&interface) {
@@ -415,7 +494,9 @@ mod linux_impl {
 
 // Re-export for Linux
 #[cfg(target_os = "linux")]
-pub use linux_impl::{encode_frame, run_source, EncodedFrame, SocketCanConfig, SocketCanReader};
+pub use linux_impl::{
+    configure_interface, encode_frame, run_source, EncodedFrame, SocketCanConfig, SocketCanReader,
+};
 
 // ============================================================================
 // Non-Linux Stub
@@ -437,6 +518,8 @@ mod stub {
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct SocketCanConfig {
         pub interface: String,
+        #[serde(default)]
+        pub bitrate: Option<u32>,
         pub limit: Option<i64>,
         pub display_name: Option<String>,
         #[serde(default)]
@@ -447,6 +530,11 @@ mod stub {
     pub enum EncodedFrame {
         Classic([u8; 16]),
         Fd([u8; 72]),
+    }
+
+    /// Stub configure_interface for non-Linux
+    pub fn configure_interface(_interface: &str, _bitrate: u32) -> Result<(), String> {
+        Err("SocketCAN is only available on Linux".to_string())
     }
 
     /// Stub encode_frame for non-Linux (not actually usable)
@@ -462,6 +550,7 @@ mod stub {
     pub async fn run_source(
         source_idx: usize,
         _interface: String,
+        _bitrate: Option<u32>,
         _bus_mappings: Vec<BusMapping>,
         _stop_flag: Arc<AtomicBool>,
         tx: mpsc::Sender<SourceMessage>,
@@ -477,4 +566,6 @@ mod stub {
 
 #[cfg(not(target_os = "linux"))]
 #[allow(unused_imports)]
-pub use stub::{encode_frame, run_source, EncodedFrame, SocketCanConfig};
+pub use stub::{
+    configure_interface, encode_frame, run_source, EncodedFrame, SocketCanConfig,
+};

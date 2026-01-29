@@ -202,10 +202,19 @@ const renderConnectionSummary = (profile: IOProfile) => {
 
   if (profile.kind === "socketcan") {
     const iface = c.interface || "can0";
+    const bitrate = c.bitrate ? parseInt(c.bitrate, 10) : null;
+    const bitrateLabel = bitrate
+      ? (bitrate >= 1000000 ? `${bitrate / 1000000}M` : `${bitrate / 1000}k`)
+      : null;
 
     return (
       <div className="flex flex-wrap gap-2">
         <SummaryBadge label="interface" value={iface} />
+        {bitrateLabel ? (
+          <SummaryBadge label="bitrate" value={bitrateLabel} />
+        ) : (
+          <SummaryBadge label="config" value="system" />
+        )}
       </div>
     );
   }
