@@ -9,6 +9,8 @@
 // - "card": Full card style for standalone dialogs
 
 import { useState, useEffect } from "react";
+import { caption, captionMuted } from "../styles/typography";
+import { bgSurface } from "../styles";
 
 /** Filter configuration */
 export interface FilterConfig {
@@ -72,7 +74,7 @@ export default function FilterOptionsPanel({
   return (
     <div className="space-y-2">
       <div>
-        <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">
+        <label className={`block ${caption} mb-1`}>
           Min frame length
         </label>
         <input
@@ -81,9 +83,9 @@ export default function FilterOptionsPanel({
           value={minLength}
           onChange={(e) => handleMinLengthChange(Number(e.target.value))}
           disabled={disabled}
-          className="w-full px-2 py-1.5 text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 disabled:opacity-50"
+          className={`w-full px-2 py-1.5 text-xs rounded border border-slate-300 dark:border-slate-600 ${bgSurface} text-slate-700 dark:text-slate-200 disabled:opacity-50`}
         />
-        <div className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">
+        <div className={`${captionMuted} mt-0.5`}>
           {minLength === 0 ? "No filter" : `Discard frames < ${minLength} bytes`}
         </div>
       </div>

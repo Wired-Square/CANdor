@@ -1,6 +1,7 @@
 // ui/src/components/Dialog.tsx
 
 import { ReactNode } from 'react';
+import { bgSurface } from "../styles";
 
 export interface DialogProps {
   /** Whether the dialog is open */
@@ -58,7 +59,7 @@ export default function Dialog({
       onClick={handleBackdropClick}
     >
       <div
-        className={`bg-white dark:bg-slate-800 rounded-xl shadow-2xl ${maxWidth} w-full`}
+        className={`${bgSurface} rounded-xl shadow-2xl ${maxWidth} w-full`}
         onClick={(e) => e.stopPropagation()}
       >
         {children}

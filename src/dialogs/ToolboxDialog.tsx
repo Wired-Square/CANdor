@@ -1,6 +1,7 @@
 // ui/src/dialogs/ToolboxDialog.tsx
 
 import { X, ListOrdered, GitCompare, Play, Loader2, Radio, Binary } from "lucide-react";
+import { iconMd, iconLg } from "../styles/spacing";
 import Dialog from "../components/Dialog";
 import { useDiscoveryStore, type ToolboxView } from "../stores/discoveryStore";
 import {
@@ -174,7 +175,7 @@ export default function ToolboxDialog({
             onClick={onClose}
             className={`p-1 ${roundedDefault} ${hoverLight} transition-colors`}
           >
-            <X className="w-5 h-5" />
+            <X className={iconLg} />
           </button>
         </div>
 
@@ -203,7 +204,7 @@ export default function ToolboxDialog({
                   }`}
                   title={disabledReason ?? tool.label}
                 >
-                  <Icon className={`w-5 h-5 mt-0.5 flex-shrink-0 ${isActive ? "text-purple-600 dark:text-purple-400" : ""}`} />
+                  <Icon className={`${iconLg} mt-0.5 flex-shrink-0 ${isActive ? "text-purple-600 dark:text-purple-400" : ""}`} />
                   <div>
                     <div className="font-medium text-sm">{tool.label}</div>
                     <div className={`text-xs mt-0.5 ${isActive ? "text-purple-600/70 dark:text-purple-400/70" : "text-slate-500 dark:text-slate-400"}`}>
@@ -244,9 +245,9 @@ export default function ToolboxDialog({
                 }`}
               >
                 {isRunning ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className={`${iconMd} animate-spin`} />
                 ) : (
-                  <Play className="w-4 h-4" />
+                  <Play className={iconMd} />
                 )}
                 {isRunning ? "Running..." : "Run Analysis"}
               </button>

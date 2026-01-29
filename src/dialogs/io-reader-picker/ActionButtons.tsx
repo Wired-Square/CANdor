@@ -4,6 +4,7 @@ import { Download, Eye, Loader2, Upload, Check, Plug, Play, GitMerge, Unplug, Ro
 import type { IOProfile } from "../../hooks/useSettings";
 import { CSV_EXTERNAL_ID, isRealtimeProfile } from "./utils";
 import { primaryButtonBase, successButtonBase, panelFooter, errorBoxCompact, dangerButtonBase } from "../../styles";
+import { iconMd, iconSm } from "../../styles/spacing";
 
 type Props = {
   isIngesting: boolean;
@@ -85,7 +86,7 @@ export default function ActionButtons({
       className={`${dangerButtonBase} gap-1.5`}
       title="Leave session and reset selection"
     >
-      <Unplug className="w-3.5 h-3.5" />
+      <Unplug className={iconSm} />
       <span>Leave</span>
     </button>
   ) : null;
@@ -94,7 +95,7 @@ export default function ActionButtons({
     <div className={panelFooter}>
       {isIngesting ? (
         <div className="flex items-center justify-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-          <Loader2 className="w-4 h-4 animate-spin" />
+          <Loader2 className={`${iconMd} animate-spin`} />
           <span>Ingesting from {ingestProfileId}...</span>
         </div>
       ) : multiSelectMode ? (
@@ -105,7 +106,7 @@ export default function ActionButtons({
               onClick={onMultiWatchClick}
               className={`flex-1 ${successButtonBase}`}
             >
-              <GitMerge className="w-4 h-4" />
+              <GitMerge className={iconMd} />
               <span>Watch</span>
             </button>
             {isMultiSourceLive && onMultiRestartClick && (
@@ -114,7 +115,7 @@ export default function ActionButtons({
                 className={`flex-1 ${primaryButtonBase}`}
                 title="Restart session with updated configuration"
               >
-                <RotateCcw className="w-4 h-4" />
+                <RotateCcw className={iconMd} />
                 <span>Restart</span>
               </button>
             )}
@@ -135,12 +136,12 @@ export default function ActionButtons({
             >
               {isImporting ? (
                 <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className={`${iconMd} animate-spin`} />
                   <span>Importing...</span>
                 </>
               ) : (
                 <>
-                  <Upload className="w-4 h-4" />
+                  <Upload className={iconMd} />
                   <span>Import</span>
                 </>
               )}
@@ -162,7 +163,7 @@ export default function ActionButtons({
               onClick={onJoinClick}
               className={`flex-1 ${successButtonBase}`}
             >
-              <Plug className="w-4 h-4" />
+              <Plug className={iconMd} />
               <span>Join</span>
             </button>
             {onRestartClick && (
@@ -171,7 +172,7 @@ export default function ActionButtons({
                 className={`flex-1 ${primaryButtonBase}`}
                 title="Restart session with updated configuration"
               >
-                <RotateCcw className="w-4 h-4" />
+                <RotateCcw className={iconMd} />
                 <span>Restart</span>
               </button>
             )}
@@ -185,7 +186,7 @@ export default function ActionButtons({
                 onClick={onStartClick}
                 className={`flex-1 ${successButtonBase}`}
               >
-                <Play className="w-4 h-4" />
+                <Play className={iconMd} />
                 <span>Resume and Join</span>
               </button>
               {releaseButton}
@@ -197,7 +198,7 @@ export default function ActionButtons({
                   onClick={onIngestClick}
                   className={`flex-1 ${primaryButtonBase}`}
                 >
-                  <Download className="w-4 h-4" />
+                  <Download className={iconMd} />
                   <span>Ingest</span>
                 </button>
               )}
@@ -205,7 +206,7 @@ export default function ActionButtons({
                 onClick={onWatchClick}
                 className={`flex-1 ${primaryButtonBase}`}
               >
-                <Eye className="w-4 h-4" />
+                <Eye className={iconMd} />
                 <span>Watch</span>
               </button>
             </div>
@@ -218,7 +219,7 @@ export default function ActionButtons({
                 onClick={onIngestClick}
                 className={`flex-1 ${successButtonBase}`}
               >
-                <Download className="w-4 h-4" />
+                <Download className={iconMd} />
                 <span>Ingest</span>
               </button>
             )}
@@ -226,7 +227,7 @@ export default function ActionButtons({
               onClick={onWatchClick}
               className={`flex-1 ${primaryButtonBase}`}
             >
-              <Eye className="w-4 h-4" />
+              <Eye className={iconMd} />
               <span>Watch</span>
             </button>
             {releaseButton}
@@ -239,7 +240,7 @@ export default function ActionButtons({
             onClick={onClose}
             className={`flex-1 ${primaryButtonBase}`}
           >
-            <Check className="w-4 h-4" />
+            <Check className={iconMd} />
             <span>OK</span>
           </button>
           {releaseButton}

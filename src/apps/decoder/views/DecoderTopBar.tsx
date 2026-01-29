@@ -1,6 +1,8 @@
 // ui/src/apps/decoder/views/DecoderTopBar.tsx
 
 import { Activity, ChevronRight, ListFilter, Star, Glasses, Trash2, Users, User, Filter, Eye, EyeOff, Type } from "lucide-react";
+import { iconSm, iconMd, iconLg } from "../../../styles/spacing";
+import { borderDivider, bgSurface } from "../../../styles";
 import type { CatalogMetadata } from "../../../api/catalog";
 import type { IOProfile } from "../../../types/common";
 import type { PlaybackSpeed } from "../../../components/TimeController";
@@ -135,10 +137,10 @@ export default function DecoderTopBar({
   const isDefaultCatalog = selectedCatalog?.filename === defaultCatalogFilename;
 
   return (
-    <div className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 px-4 py-2">
+    <div className={`${bgSurface} ${borderDivider} px-4 py-2`}>
       <div className="flex flex-wrap items-center gap-2">
         {/* Decoder icon */}
-        <Activity className="w-5 h-5 text-green-600 dark:text-green-400 shrink-0" />
+        <Activity className={`${iconLg} text-green-600 dark:text-green-400 shrink-0`} />
 
         <FlexSeparator />
 
@@ -167,7 +169,7 @@ export default function DecoderTopBar({
         />
 
         {/* Right arrow icon */}
-        <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+        <ChevronRight className={`${iconSm} text-slate-400 shrink-0`} />
 
         {/* Frames Button - icon with count */}
         <button
@@ -175,14 +177,14 @@ export default function DecoderTopBar({
           className={buttonBase}
           title="Select frames to decode"
         >
-          <ListFilter className="w-3.5 h-3.5 flex-shrink-0" />
+          <ListFilter className={`${iconSm} flex-shrink-0`} />
           <span className="text-slate-500 dark:text-slate-400">
             {selectedFrameCount}/{frameCount}
           </span>
         </button>
 
         {/* Right arrow icon */}
-        <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+        <ChevronRight className={`${iconSm} text-slate-400 shrink-0`} />
 
         {/* Catalog Selection */}
         {hasCatalog ? (
@@ -192,7 +194,7 @@ export default function DecoderTopBar({
             title="Select Decoder Catalog"
           >
             {isDefaultCatalog && (
-              <Star className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" fill="currentColor" />
+              <Star className={`${iconSm} text-amber-500 flex-shrink-0`} fill="currentColor" />
             )}
             <span className="max-w-32 truncate">{catalogName}</span>
           </button>
@@ -213,7 +215,7 @@ export default function DecoderTopBar({
             className={toggleButtonClass(showRawBytes, "purple")}
             title={showRawBytes ? "Hide raw bytes" : "Show raw bytes"}
           >
-            <Glasses className="w-3.5 h-3.5" />
+            <Glasses className={iconSm} />
           </button>
         )}
 
@@ -224,7 +226,7 @@ export default function DecoderTopBar({
             className={buttonBase}
             title="Clear decoded values"
           >
-            <Trash2 className="w-3.5 h-3.5" />
+            <Trash2 className={iconSm} />
           </button>
         )}
 
@@ -236,9 +238,9 @@ export default function DecoderTopBar({
             title={viewMode === 'single' ? 'Show per source address' : 'Show single (most recent)'}
           >
             {viewMode === 'per-source' ? (
-              <Users className="w-3.5 h-3.5" />
+              <Users className={iconSm} />
             ) : (
-              <User className="w-3.5 h-3.5" />
+              <User className={iconSm} />
             )}
           </button>
         )}
@@ -255,7 +257,7 @@ export default function DecoderTopBar({
               className={toggleButtonClass(hasFilters, 'yellow')}
               title={hasFilters ? `Filters: ${filterParts.join(', ')}` : 'Set frame filters'}
             >
-              <Filter className="w-3.5 h-3.5" />
+              <Filter className={iconSm} />
             </button>
           );
         })()}
@@ -268,9 +270,9 @@ export default function DecoderTopBar({
             title={hideUnseen ? 'Showing only seen frames' : 'Showing all frames'}
           >
             {hideUnseen ? (
-              <EyeOff className="w-3.5 h-3.5" />
+              <EyeOff className={iconSm} />
             ) : (
-              <Eye className="w-3.5 h-3.5" />
+              <Eye className={iconSm} />
             )}
           </button>
         )}
@@ -286,7 +288,7 @@ export default function DecoderTopBar({
             }`}
             title={showAsciiGutter ? "Hide ASCII column" : "Show ASCII column"}
           >
-            <Type className="w-4 h-4" />
+            <Type className={iconMd} />
           </button>
         )}
       </div>

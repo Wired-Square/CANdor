@@ -2,6 +2,8 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { Pencil, Trash2 } from "lucide-react";
+import { iconMd } from "../../../styles/spacing";
+import { caption, labelSmall, labelSmallMuted, monoBody, iconButtonHover, iconButtonHoverDanger, bgSecondary, hoverLight } from "../../../styles";
 import BitPreview, { BitRange } from "../../../components/BitPreview";
 import type { TomlNode } from "../types";
 import { tomlParse } from "../toml";
@@ -88,19 +90,19 @@ export default function CANFrameView({
           <div className="flex gap-2">
             <button
               onClick={() => onEditFrame(selectedNode)}
-              className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+              className={iconButtonHover}
               title="Edit frame"
             >
-              <Pencil className="w-4 h-4 text-slate-700 dark:text-slate-200" />
+              <Pencil className={`${iconMd} text-slate-700 dark:text-slate-200`} />
             </button>
 
             {/* Pattern A delete */}
             <button
               onClick={() => onRequestDeleteFrame(idKey)}
-              className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+              className={iconButtonHoverDanger}
               title="Delete frame"
             >
-              <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+              <Trash2 className={`${iconMd} text-red-600 dark:text-red-400`} />
             </button>
           </div>
         )}
@@ -109,9 +111,9 @@ export default function CANFrameView({
       {/* Summary cards (non-edit only) */}
       {!editingId && (
         <div className="grid grid-cols-2 gap-4">
-          <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-            <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">ID</div>
-            <div className="font-mono text-sm text-slate-900 dark:text-white flex items-center gap-2">
+          <div className={`p-4 ${bgSecondary} rounded-lg`}>
+            <div className={labelSmallMuted}>ID</div>
+            <div className={`${monoBody} flex items-center gap-2`}>
               <span>{formattedId.primary}</span>
               {formattedId.secondary && (
                 <span className="text-slate-500 dark:text-slate-400 text-xs">({formattedId.secondary})</span>
@@ -119,8 +121,8 @@ export default function CANFrameView({
             </div>
           </div>
 
-          <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-            <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+          <div className={`p-4 ${bgSecondary} rounded-lg`}>
+            <div className={labelSmallMuted}>
               Length (DLC) <span className="text-red-500">*</span>
               {selectedNode.metadata?.lengthInherited && (
                 <span className="ml-1 text-blue-500 dark:text-blue-400" title="Inherited from copied ID">
@@ -128,13 +130,13 @@ export default function CANFrameView({
                 </span>
               )}
             </div>
-            <div className="font-mono text-sm text-slate-900 dark:text-white">
+            <div className={monoBody}>
               {selectedNode.metadata?.length || <span className="text-orange-500">Not set</span>}
             </div>
           </div>
 
-          <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-            <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+          <div className={`p-4 ${bgSecondary} rounded-lg`}>
+            <div className={labelSmallMuted}>
               Transmitter
               {selectedNode.metadata?.transmitterInherited && (
                 <span className="ml-1 text-blue-500 dark:text-blue-400" title="Inherited from copied ID">
@@ -142,13 +144,13 @@ export default function CANFrameView({
                 </span>
               )}
             </div>
-            <div className="font-mono text-sm text-slate-900 dark:text-white">
+            <div className={monoBody}>
               {selectedNode.metadata?.transmitter || <span className="text-slate-400">None</span>}
             </div>
           </div>
 
-          <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-            <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+          <div className={`p-4 ${bgSecondary} rounded-lg`}>
+            <div className={labelSmallMuted}>
               Interval
               {selectedNode.metadata?.intervalInherited && (
                 <span
@@ -159,7 +161,7 @@ export default function CANFrameView({
                 </span>
               )}
             </div>
-            <div className="font-mono text-sm text-slate-900 dark:text-white">
+            <div className={monoBody}>
               {selectedNode.metadata?.interval !== undefined ? (
                 `${selectedNode.metadata.interval} ms`
               ) : (
@@ -172,8 +174,8 @@ export default function CANFrameView({
 
       {/* Notes card */}
       {!editingId && selectedNode.metadata?.notes && (
-        <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">
+        <div className={`p-4 ${bgSecondary} rounded-lg`}>
+          <div className={`${labelSmall} mb-2`}>
             Notes
           </div>
           <div className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap">
@@ -199,7 +201,7 @@ export default function CANFrameView({
             </h3>
 
             <div className="flex items-center gap-3">
-              <span className="text-xs text-slate-500 dark:text-slate-400">
+              <span className={caption}>
                 {selectedNode.metadata?.length ? `${selectedNode.metadata.length} bytes total` : ""}
               </span>
 
@@ -276,7 +278,7 @@ export default function CANFrameView({
                     {signals.map((signal: any, idx: number) => (
                       <div
                         key={idx}
-                        className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                        className={`p-3 ${bgSecondary} rounded-lg ${hoverLight} transition-colors`}
                       >
                         <div className="flex items-start justify-between">
                           <div className="flex-1 flex gap-3">
@@ -291,7 +293,7 @@ export default function CANFrameView({
                                 {signal.name}
                               </div>
 
-                              <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 space-y-0.5">
+                              <div className={`${caption} mt-1 space-y-0.5`}>
                                 <div>
                                   Bits {signal.start_bit ?? 0} - {(signal.start_bit ?? 0) + (signal.bit_length ?? 0) - 1} ({signal.bit_length ?? 0} bits)
                                 </div>
@@ -313,16 +315,16 @@ export default function CANFrameView({
                               className="p-2 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg transition-colors"
                               title="Edit signal"
                             >
-                              <Pencil className="w-4 h-4 text-slate-700 dark:text-slate-200" />
+                              <Pencil className={`${iconMd} text-slate-700 dark:text-slate-200`} />
                             </button>
 
                             {/* Pattern A delete */}
                             <button
                               onClick={() => onRequestDeleteSignal(idKey, idx, signal.name)}
-                              className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                              className={iconButtonHoverDanger}
                               title="Delete signal"
                             >
-                              <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+                              <Trash2 className={`${iconMd} text-red-600 dark:text-red-400`} />
                             </button>
                           </div>
                         </div>

@@ -3,6 +3,9 @@
 
 import type { ReactNode, ComponentType } from "react";
 import type { LucideProps } from "lucide-react";
+import { iconSm } from "../../styles/spacing";
+import { hoverLight } from "../../styles";
+import { labelSmall } from "../../styles/typography";
 
 /**
  * Sidebar section with optional label header.
@@ -17,7 +20,7 @@ export function SidebarSection({
   return (
     <div className="space-y-2">
       {label && (
-        <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
+        <div className={labelSmall}>
           {label}
         </div>
       )}
@@ -45,7 +48,7 @@ type SidebarIconButtonProps = {
 
 const variantStyles: Record<IconButtonVariant, { enabled: string; disabled: string }> = {
   default: {
-    enabled: "text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700",
+    enabled: `text-slate-700 dark:text-slate-200 ${hoverLight}`,
     disabled: "text-slate-400 cursor-not-allowed",
   },
   primary: {
@@ -79,7 +82,7 @@ export function SidebarIconButton({
       className={className}
       title={title}
     >
-      <Icon className="w-3.5 h-3.5" />
+      <Icon className={iconSm} />
     </button>
   );
 }

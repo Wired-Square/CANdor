@@ -1,6 +1,7 @@
 // ui/src/apps/discovery/views/tools/MessageOrderToolPanel.tsx
 
 import { useDiscoveryStore } from "../../../../stores/discoveryStore";
+import { bgSurface } from "../../../../styles";
 
 export default function MessageOrderToolPanel() {
   const options = useDiscoveryStore((s) => s.toolbox.messageOrder);
@@ -27,7 +28,7 @@ export default function MessageOrderToolPanel() {
               }
             }
           }}
-          className="w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 font-mono"
+          className={`w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-600 ${bgSurface} text-slate-800 dark:text-slate-100 font-mono`}
         />
         <p className="text-slate-400 dark:text-slate-500 text-[10px]">
           Leave empty to auto-detect from gap analysis

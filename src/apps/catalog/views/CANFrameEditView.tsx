@@ -1,6 +1,7 @@
 // ui/src/apps/catalog/views/CANFrameEditView.tsx
 
 import type { CanidFields } from "../types";
+import { textMedium, focusRing, secondaryButton } from "../../../styles";
 
 export type CANFrameEditViewProps = {
   title?: string;
@@ -39,21 +40,21 @@ export default function CANFrameEditView({
       <div className="space-y-4">
         {/* ID - Required */}
         <div>
-          <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+          <label className={`block ${textMedium} mb-2`}>
             ID <span className="text-red-500">*</span>
           </label>
           <input
             type="text"
             value={idFields.id}
             onChange={(e) => setIdFields({ ...idFields, id: e.target.value })}
-            className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+            className={`w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white font-mono ${focusRing}`}
             placeholder="0x123"
           />
         </div>
 
         {/* Length (DLC) - Required */}
         <div>
-          <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+          <label className={`block ${textMedium} mb-2`}>
             Length (DLC) <span className="text-red-500">*</span>
           </label>
           <input
@@ -62,19 +63,19 @@ export default function CANFrameEditView({
             max="64"
             value={idFields.length}
             onChange={(e) => setIdFields({ ...idFields, length: parseInt(e.target.value) || 0 })}
-            className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className={`w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white ${focusRing}`}
           />
         </div>
 
         {/* Transmitter (Peer) - Optional */}
         <div>
-          <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+          <label className={`block ${textMedium} mb-2`}>
             Transmitter (Peer)
           </label>
           <select
             value={idFields.transmitter || ""}
             onChange={(e) => setIdFields({ ...idFields, transmitter: e.target.value || undefined })}
-            className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className={`w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white ${focusRing}`}
           >
             <option value="">None</option>
             {availablePeers.map((peer) => (
@@ -87,7 +88,7 @@ export default function CANFrameEditView({
 
         {/* Interval (ms) - Optional */}
         <div>
-          <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+          <label className={`block ${textMedium} mb-2`}>
             Interval (ms)
           </label>
           <input
@@ -100,14 +101,14 @@ export default function CANFrameEditView({
                 interval: e.target.value ? parseInt(e.target.value) : undefined,
               })
             }
-            className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className={`w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white ${focusRing}`}
             placeholder="1000"
           />
         </div>
 
         {/* Notes - Optional */}
         <div>
-          <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+          <label className={`block ${textMedium} mb-2`}>
             Notes
           </label>
           <textarea
@@ -129,7 +130,7 @@ export default function CANFrameEditView({
                 });
               }
             }}
-            className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm"
+            className={`w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white font-mono text-sm ${focusRing}`}
             placeholder="Add notes about this frame (one per line)"
           />
         </div>
@@ -137,7 +138,7 @@ export default function CANFrameEditView({
         <div className="flex justify-end gap-3 pt-4">
           <button
             onClick={onCancel}
-            className="px-6 py-2 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors"
+            className={secondaryButton}
           >
             Cancel
           </button>

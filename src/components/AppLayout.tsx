@@ -1,6 +1,7 @@
 // ui/src/components/AppLayout.tsx
 
 import { ReactNode } from "react";
+import { bgSurface } from "../styles";
 
 type AppLayoutProps = {
   topBar: ReactNode;
@@ -31,7 +32,7 @@ export default function AppLayout({
         {/* Sidebar - scrolls independently */}
         {sidebar && (
           <aside
-            className={`${sidebarWidth} bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 flex flex-col overflow-hidden`}
+            className={`${sidebarWidth} ${bgSurface} border-r border-slate-200 dark:border-slate-700 flex flex-col overflow-hidden`}
           >
             <div className="flex-1 overflow-y-auto overscroll-none">{sidebar}</div>
           </aside>

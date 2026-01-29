@@ -3,6 +3,8 @@
 
 import { useMemo } from "react";
 import { X } from "lucide-react";
+import { iconSm } from "../styles/spacing";
+import { labelSmall } from "../styles/typography";
 
 export type HeaderFieldOption = {
   /** Raw numeric value */
@@ -60,7 +62,7 @@ export default function HeaderFieldFilter({
 
   return (
     <div className={`flex items-center gap-2 ${compact ? "" : "flex-wrap"}`}>
-      <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+      <span className={labelSmall}>
         {fieldName}:
       </span>
 
@@ -97,7 +99,7 @@ export default function HeaderFieldFilter({
             className="p-0.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
             title={`Clear ${fieldName} filter`}
           >
-            <X className="w-3.5 h-3.5" />
+            <X className={iconSm} />
           </button>
         )}
       </div>

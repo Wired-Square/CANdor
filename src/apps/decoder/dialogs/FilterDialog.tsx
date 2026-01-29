@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import Dialog from "../../../components/Dialog";
 import { DialogFooter } from "../../../components/forms/DialogFooter";
+import { caption, sectionHeaderText, focusRing, bgSurface } from "../../../styles";
 
 type Props = {
   isOpen: boolean;
@@ -51,7 +52,7 @@ export default function FilterDialog({
 
         {/* Frame ID Filter */}
         <div className="space-y-2">
-          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+          <label className={`block ${sectionHeaderText}`}>
             Frame IDs (hex)
           </label>
           <input
@@ -59,9 +60,9 @@ export default function FilterDialog({
             value={idFilter}
             onChange={(e) => setIdFilter(e.target.value)}
             placeholder="e.g., 0x100-0x109, 0x151"
-            className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+            className={`w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 ${bgSurface} text-slate-900 dark:text-white font-mono ${focusRing}`}
           />
-          <p className="text-xs text-slate-500 dark:text-slate-400">
+          <p className={caption}>
             Frames with matching IDs will be moved to the Filtered tab.
             Supports comma-separated values and ranges (e.g., 0x100-0x109, 0x151).
           </p>
@@ -69,7 +70,7 @@ export default function FilterDialog({
 
         {/* Minimum Frame Length */}
         <div className="space-y-2">
-          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+          <label className={`block ${sectionHeaderText}`}>
             Minimum frame length (bytes)
           </label>
           <input
@@ -78,9 +79,9 @@ export default function FilterDialog({
             max={255}
             value={lengthValue}
             onChange={(e) => setLengthValue(Math.max(0, parseInt(e.target.value) || 0))}
-            className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className={`w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 ${bgSurface} text-slate-900 dark:text-white ${focusRing}`}
           />
-          <p className="text-xs text-slate-500 dark:text-slate-400">
+          <p className={caption}>
             Frames shorter than this will be filtered out and shown in the Filtered tab.
             Set to 0 to disable length filtering.
           </p>

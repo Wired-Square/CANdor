@@ -2,6 +2,8 @@
 
 import React from "react";
 import { Pencil, Trash2 } from "lucide-react";
+import { iconMd, flexRowGap2 } from "../../../styles/spacing";
+import { labelSmall, labelSmallMuted, monoBody, iconButtonHover, iconButtonHoverDanger, bgSecondary } from "../../../styles";
 import BitPreview, { BitRange } from "../../../components/BitPreview";
 import { tomlParse } from "../toml";
 import { extractMuxRangesFromPath, getFrameByteLengthFromPath } from "../utils";
@@ -73,7 +75,7 @@ export default function SignalView({
       {/* Action Buttons */}
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Signal Details</h3>
-        <div className="flex items-center gap-2">
+        <div className={flexRowGap2}>
           <button
             onClick={() => {
               try {
@@ -85,10 +87,10 @@ export default function SignalView({
                 onSetValidation([{ field: "signal", message: "Failed to locate signal for editing" }]);
               }
             }}
-            className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+            className={iconButtonHover}
             title="Edit signal"
           >
-            <Pencil className="w-4 h-4 text-slate-700 dark:text-slate-200" />
+            <Pencil className={`${iconMd} text-slate-700 dark:text-slate-200`} />
           </button>
 
           {/* Pattern A delete */}
@@ -103,10 +105,10 @@ export default function SignalView({
                 onSetValidation([{ field: "signal", message: "Failed to locate signal for deletion" }]);
               }
             }}
-            className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+            className={iconButtonHoverDanger}
             title="Delete signal"
           >
-            <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+            <Trash2 className={`${iconMd} text-red-600 dark:text-red-400`} />
           </button>
         </div>
       </div>
@@ -176,9 +178,9 @@ export default function SignalView({
           Object.entries(selectedNode.metadata.properties)
             .filter(([key]) => key !== "endianness" && key !== "byte_order")
             .map(([key, value]) => (
-            <div key={key} className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-              <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{key}</div>
-              <div className="font-mono text-sm text-slate-900 dark:text-white">
+            <div key={key} className={`p-3 ${bgSecondary} rounded-lg`}>
+              <div className={labelSmallMuted}>{key}</div>
+              <div className={monoBody}>
                 {typeof value === "boolean"
                   ? value
                     ? "true"
@@ -202,16 +204,16 @@ export default function SignalView({
           if (!effectiveByteOrder) return null;
 
           return (
-            <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-xs font-medium text-slate-500 dark:text-slate-400">byte_order</span>
+            <div className={`p-3 ${bgSecondary} rounded-lg`}>
+              <div className={`${flexRowGap2} mb-1`}>
+                <span className={labelSmall}>byte_order</span>
                 {isInherited && (
                   <span className="px-1.5 py-0.5 text-[10px] font-medium bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded">
                     Inherited
                   </span>
                 )}
               </div>
-              <div className="font-mono text-sm text-slate-900 dark:text-white">
+              <div className={monoBody}>
                 "{effectiveByteOrder}"
               </div>
             </div>

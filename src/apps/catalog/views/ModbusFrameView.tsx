@@ -1,6 +1,8 @@
 // ui/src/apps/catalog/views/ModbusFrameView.tsx
 
 import { Pencil, Trash2 } from "lucide-react";
+import { iconMd } from "../../../styles/spacing";
+import { labelSmall, labelSmallMuted, monoBody, iconButtonHover, iconButtonHoverDanger, bgSecondary } from "../../../styles";
 import type { TomlNode } from "../types";
 
 export type ModbusFrameViewProps = {
@@ -39,19 +41,19 @@ export default function ModbusFrameView({
             {onEditFrame && (
               <button
                 onClick={() => onEditFrame(selectedNode)}
-                className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                className={iconButtonHover}
                 title="Edit frame"
               >
-                <Pencil className="w-4 h-4 text-slate-700 dark:text-slate-200" />
+                <Pencil className={`${iconMd} text-slate-700 dark:text-slate-200`} />
               </button>
             )}
             {onDeleteFrame && (
               <button
                 onClick={() => onDeleteFrame(selectedNode.key)}
-                className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                className={iconButtonHoverDanger}
                 title="Delete frame"
               >
-                <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+                <Trash2 className={`${iconMd} text-red-600 dark:text-red-400`} />
               </button>
             )}
           </div>
@@ -60,17 +62,17 @@ export default function ModbusFrameView({
 
       {/* Property cards */}
       <div className="grid grid-cols-2 gap-4">
-        <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+        <div className={`p-4 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>
             Register Number
           </div>
-          <div className="font-mono text-sm text-slate-900 dark:text-white">
+          <div className={monoBody}>
             {registerNumber ?? <span className="text-orange-500">Not set</span>}
           </div>
         </div>
 
-        <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+        <div className={`p-4 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>
             Device Address
             {deviceAddressInherited && (
               <span className="ml-1 text-blue-500 dark:text-blue-400" title="Inherited from default_modbus_device_address">
@@ -78,43 +80,43 @@ export default function ModbusFrameView({
               </span>
             )}
           </div>
-          <div className="font-mono text-sm text-slate-900 dark:text-white">
+          <div className={monoBody}>
             {deviceAddress ?? <span className="text-orange-500">Not set</span>}
           </div>
         </div>
 
-        <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+        <div className={`p-4 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>
             Register Type
           </div>
-          <div className="font-mono text-sm text-slate-900 dark:text-white capitalize">
+          <div className={`${monoBody} capitalize`}>
             {registerType}
           </div>
         </div>
 
-        <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+        <div className={`p-4 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>
             Length (Registers)
           </div>
-          <div className="font-mono text-sm text-slate-900 dark:text-white">
+          <div className={monoBody}>
             {length ?? 1}
           </div>
         </div>
 
         {transmitter && (
-          <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-            <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+          <div className={`p-4 ${bgSecondary} rounded-lg`}>
+            <div className={labelSmallMuted}>
               Transmitter
             </div>
-            <div className="font-mono text-sm text-slate-900 dark:text-white">
+            <div className={monoBody}>
               {transmitter}
             </div>
           </div>
         )}
 
         {interval !== undefined && (
-          <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-            <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+          <div className={`p-4 ${bgSecondary} rounded-lg`}>
+            <div className={labelSmallMuted}>
               Interval
               {intervalInherited && (
                 <span className="ml-1 text-blue-500 dark:text-blue-400" title="Inherited from default_interval">
@@ -122,7 +124,7 @@ export default function ModbusFrameView({
                 </span>
               )}
             </div>
-            <div className="font-mono text-sm text-slate-900 dark:text-white">
+            <div className={monoBody}>
               {interval} ms
             </div>
           </div>
@@ -131,8 +133,8 @@ export default function ModbusFrameView({
 
       {/* Notes */}
       {notes && (
-        <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">
+        <div className={`p-4 ${bgSecondary} rounded-lg`}>
+          <div className={`${labelSmall} mb-2`}>
             Notes
           </div>
           <div className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap">

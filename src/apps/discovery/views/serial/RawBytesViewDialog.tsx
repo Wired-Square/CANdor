@@ -4,9 +4,10 @@
 
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
+import { iconLg, flexRowGap2 } from '../../../../styles/spacing';
 import Dialog from '../../../../components/Dialog';
 import { Input, Select, SecondaryButton, PrimaryButton } from '../../../../components/forms';
-import { h2, labelSmall, helpText, borderDefault } from '../../../../styles';
+import { h2, labelSmall, helpText, borderDefault, hoverLight } from '../../../../styles';
 import { selectionButtonClass } from '../../../../styles/buttonStyles';
 import type { RawBytesViewConfig, RawBytesDisplayMode } from '../../../../stores/discoveryStore';
 
@@ -54,8 +55,8 @@ export default function RawBytesViewDialog({ isOpen, onClose, config, onApply }:
       <div className="p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className={h2}>Raw Bytes Display</h2>
-          <button onClick={onClose} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded">
-            <X className="w-5 h-5 text-slate-400" />
+          <button onClick={onClose} className={`p-1 ${hoverLight} rounded`}>
+            <X className={`${iconLg} text-slate-400`} />
           </button>
         </div>
 
@@ -91,7 +92,7 @@ export default function RawBytesViewDialog({ isOpen, onClose, config, onApply }:
               {/* Baud rate calculator */}
               <div className="bg-slate-100 dark:bg-slate-900 rounded-lg p-3 space-y-2">
                 <span className={labelSmall}>Calculate from baud rate</span>
-                <div className="flex items-center gap-2">
+                <div className={flexRowGap2}>
                   <Select
                     variant="simple"
                     value={baudRate}

@@ -1,5 +1,9 @@
 // ui/src/apps/settings/views/CatalogsView.tsx
 import { BookOpen, Star, Copy, Edit2, Trash2 } from "lucide-react";
+import { iconMd, flexRowGap2 } from "../../../styles/spacing";
+import { cardDefault } from "../../../styles/cardStyles";
+import { iconButtonHover, iconButtonHoverDanger, iconButtonHoverCompact } from "../../../styles/buttonStyles";
+import { badgeMetadata } from "../../../styles/badgeStyles";
 import type { CatalogFile } from "../stores/settingsStore";
 
 type CatalogsViewProps = {
@@ -38,22 +42,22 @@ export default function CatalogsView({
           {catalogs.map((catalog) => (
             <div
               key={catalog.path}
-              className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700"
+              className={`flex items-center justify-between p-4 ${cardDefault}`}
             >
               <div className="flex-1">
                 <div className="flex items-center gap-3">
                   <h3 className="font-medium text-slate-900 dark:text-white">{catalog.name}</h3>
-                  <span className="px-2 py-1 text-xs font-medium bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-400 rounded">
+                  <span className={badgeMetadata}>
                     {catalog.filename}
                   </span>
 
                   <button
                     onClick={() => onSetDefaultCatalog(catalog.filename)}
-                    className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded transition-colors"
+                    className={iconButtonHoverCompact}
                     title={defaultCatalog === catalog.filename ? "Unset as default" : "Set as default"}
                   >
                     <Star
-                      className={`w-4 h-4 ${
+                      className={`${iconMd} ${
                         defaultCatalog === catalog.filename
                           ? "fill-yellow-500 text-yellow-500"
                           : "text-slate-400 dark:text-slate-500"
@@ -62,27 +66,27 @@ export default function CatalogsView({
                   </button>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className={flexRowGap2}>
                 <button
                   onClick={() => onDuplicateCatalog(catalog)}
-                  className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                  className={iconButtonHover}
                   title="Duplicate catalog"
                 >
-                  <Copy className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+                  <Copy className={`${iconMd} text-slate-600 dark:text-slate-400`} />
                 </button>
                 <button
                   onClick={() => onEditCatalog(catalog)}
-                  className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                  className={iconButtonHover}
                   title="Edit catalog name/filename"
                 >
-                  <Edit2 className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+                  <Edit2 className={`${iconMd} text-slate-600 dark:text-slate-400`} />
                 </button>
                 <button
                   onClick={() => onDeleteCatalog(catalog)}
-                  className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                  className={iconButtonHoverDanger}
                   title="Delete catalog"
                 >
-                  <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+                  <Trash2 className={`${iconMd} text-red-600 dark:text-red-400`} />
                 </button>
               </div>
             </div>

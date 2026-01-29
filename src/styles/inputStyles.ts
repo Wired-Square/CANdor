@@ -37,12 +37,6 @@ export const labelDefault = "block text-sm font-medium text-slate-900 dark:text-
 export const labelSimple = "text-sm text-slate-700 dark:text-slate-200";
 
 /**
- * Small label style - tiny text for field groups
- * Use for: Field groups, secondary labels
- */
-export const labelSmall = "text-xs font-medium text-slate-600 dark:text-slate-400";
-
-/**
  * Help text style - description text below inputs
  */
 export const helpText = "text-xs text-slate-500 dark:text-slate-400";

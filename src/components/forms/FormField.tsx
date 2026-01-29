@@ -1,6 +1,7 @@
 // ui/src/components/forms/FormField.tsx
 
 import { ReactNode } from 'react';
+import { textMedium } from '../../styles';
 
 export interface FormFieldProps {
   label: string;
@@ -30,7 +31,7 @@ export default function FormField({ label, required, variant = 'default', childr
   // default variant
   return (
     <div>
-      <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+      <label className={`block ${textMedium} mb-2`}>
         {label}
         {required && <span className="text-red-500 ml-1">*</span>}
       </label>

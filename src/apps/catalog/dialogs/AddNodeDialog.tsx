@@ -2,7 +2,7 @@
 
 import Dialog from "../../../components/Dialog";
 import { Input, Textarea, FormField, SecondaryButton, PrimaryButton } from "../../../components/forms";
-import { h2 } from "../../../styles";
+import { h2, caption } from "../../../styles";
 
 export type AddNodeDialogProps = {
   open: boolean;
@@ -44,7 +44,7 @@ export default function AddNodeDialog({
                 }
               }}
             />
-            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            <p className={`mt-2 ${caption}`}>
               Enter a descriptive name for this node (e.g., "inverter", "battery", "motor")
             </p>
           </FormField>

@@ -3,6 +3,8 @@
 
 import { useState, useCallback, useMemo } from "react";
 import { Cable, Plus, Trash2, ChevronDown, ChevronRight, AlertTriangle, Check } from "lucide-react";
+import { iconMd, iconXs, flexRowGap2 } from "../../../../styles/spacing";
+import { disabledState, caption, textMedium, focusRing, bgSurface, expandableRowContainer } from "../../../../styles";
 import type { SerialHeaderFieldEntry } from "../../../../stores/catalogEditorStore";
 import type { SerialEncoding, HeaderFieldFormat, SerialChecksumConfig, ChecksumAlgorithm } from "../../types";
 import MaskBitPicker from "../../../../components/MaskBitPicker";
@@ -215,32 +217,32 @@ export default function SerialConfigSection({
         tabIndex={0}
         onClick={onToggleExpanded}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onToggleExpanded(); }}
-        className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors cursor-pointer"
+        className={expandableRowContainer}
       >
         <div className="flex items-center gap-3">
           {isExpanded ? (
-            <ChevronDown className="w-4 h-4 text-slate-500" />
+            <ChevronDown className={`${iconMd} text-slate-500`} />
           ) : (
-            <ChevronRight className="w-4 h-4 text-slate-500" />
+            <ChevronRight className={`${iconMd} text-slate-500`} />
           )}
           <div className="p-1.5 bg-purple-100 dark:bg-purple-900/30 rounded">
-            <Cable className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+            <Cable className={`${iconMd} text-purple-600 dark:text-purple-400`} />
           </div>
           <span className="font-medium text-slate-900 dark:text-white">Serial</span>
           {isConfigured && (
             <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
-              <Check className="w-3 h-3" />
+              <Check className={iconXs} />
               configured
             </span>
           )}
           {showWarning && (
             <span className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
-              <AlertTriangle className="w-3 h-3" />
+              <AlertTriangle className={iconXs} />
               frames exist, no config
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+        <div className={flexRowGap2} onClick={(e) => e.stopPropagation()}>
           {isConfigured ? (
             <button
               type="button"
@@ -268,13 +270,13 @@ export default function SerialConfigSection({
           <div className="grid grid-cols-2 gap-4">
             {/* Encoding */}
             <div>
-              <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+              <label className={`block ${textMedium} mb-2`}>
                 Encoding <span className="text-red-500">*</span>
               </label>
               <select
                 value={encoding}
                 onChange={(e) => setEncoding(e.target.value as SerialEncoding)}
-                className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className={`w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white ${focusRing}`}
               >
                 {encodingOptions.map((opt) => (
                   <option key={opt.value} value={opt.value}>
@@ -282,25 +284,25 @@ export default function SerialConfigSection({
                   </option>
                 ))}
               </select>
-              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              <p className={`mt-1 ${caption}`}>
                 {encodingOptions.find((o) => o.value === encoding)?.description}
               </p>
             </div>
 
             {/* Byte Order */}
             <div>
-              <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+              <label className={`block ${textMedium} mb-2`}>
                 Byte Order <span className="text-red-500">*</span>
               </label>
               <select
                 value={byteOrder}
                 onChange={(e) => setByteOrder(e.target.value as "little" | "big")}
-                className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className={`w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white ${focusRing}`}
               >
                 <option value="big">Big Endian (MSB first)</option>
                 <option value="little">Little Endian (LSB first)</option>
               </select>
-              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              <p className={`mt-1 ${caption}`}>
                 Default byte order for signal decoding
               </p>
             </div>
@@ -308,7 +310,7 @@ export default function SerialConfigSection({
 
           {/* Header Section */}
           <div className="border-t border-slate-200 dark:border-slate-700 pt-4 mt-4">
-            <h3 className="text-sm font-medium text-slate-900 dark:text-white mb-3">
+            <h3 className={`${textMedium} mb-3`}>
               Header
             </h3>
 
@@ -326,10 +328,10 @@ export default function SerialConfigSection({
                   const val = e.target.value;
                   setHeaderLength(val === "" ? undefined : Math.max(1, Math.min(8, parseInt(val) || 1)));
                 }}
-                className="w-24 px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className={`w-24 px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white ${focusRing}`}
                 placeholder="2"
               />
-              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              <p className={`mt-1 ${caption}`}>
                 Fixed header size for all frames. Required when defining header fields.
               </p>
             </div>
@@ -339,10 +341,10 @@ export default function SerialConfigSection({
           <div className="border-t border-slate-200 dark:border-slate-700 pt-4 mt-4">
             <div className="flex items-center justify-between mb-3">
               <div>
-                <h3 className="text-sm font-medium text-slate-900 dark:text-white">
+                <h3 className={textMedium}>
                   Header Fields
                 </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
+                <p className={caption}>
                   Define named masks over the header bytes. The "ID" field is used for frame matching.
                 </p>
               </div>
@@ -352,7 +354,7 @@ export default function SerialConfigSection({
                   onClick={() => setIsAddingField(true)}
                   className="flex items-center gap-1 px-3 py-1.5 text-sm bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 rounded-lg hover:bg-purple-200 dark:hover:bg-purple-900/50 transition-colors"
                 >
-                  <Plus className="w-4 h-4" />
+                  <Plus className={iconMd} />
                   Add Field
                 </button>
               )}
@@ -372,9 +374,9 @@ export default function SerialConfigSection({
                         title={expandedFieldPickers[index] ? "Hide bit picker" : "Show bit picker"}
                       >
                         {expandedFieldPickers[index] ? (
-                          <ChevronDown className="w-4 h-4" />
+                          <ChevronDown className={iconMd} />
                         ) : (
-                          <ChevronRight className="w-4 h-4" />
+                          <ChevronRight className={iconMd} />
                         )}
                       </button>
 
@@ -389,7 +391,7 @@ export default function SerialConfigSection({
                       </code>
 
                       {/* Byte info */}
-                      <span className="text-xs text-slate-500 dark:text-slate-400">
+                      <span className={caption}>
                         ({computeByteInfo(field.mask, effectiveHeaderLength)})
                       </span>
 
@@ -400,7 +402,7 @@ export default function SerialConfigSection({
                       <select
                         value={field.endianness}
                         onChange={(e) => handleUpdateField(index, { endianness: e.target.value as "big" | "little" })}
-                        className="w-16 px-1 py-1 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className={`w-16 px-1 py-1 ${bgSurface} border border-slate-300 dark:border-slate-600 rounded text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500`}
                         title="Byte order"
                       >
                         <option value="big">BE</option>
@@ -411,7 +413,7 @@ export default function SerialConfigSection({
                       <select
                         value={field.format}
                         onChange={(e) => handleUpdateField(index, { format: e.target.value as HeaderFieldFormat })}
-                        className="w-16 px-1 py-1 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className={`w-16 px-1 py-1 ${bgSurface} border border-slate-300 dark:border-slate-600 rounded text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500`}
                       >
                         <option value="hex">Hex</option>
                         <option value="decimal">Dec</option>
@@ -424,7 +426,7 @@ export default function SerialConfigSection({
                         className="p-1 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 rounded transition-colors"
                         title="Remove field"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 className={iconMd} />
                       </button>
                     </div>
 
@@ -452,7 +454,7 @@ export default function SerialConfigSection({
                   <select
                     value={newFieldType}
                     onChange={(e) => setNewFieldType(e.target.value as FieldType)}
-                    className="w-40 px-2 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className={`w-40 px-2 py-1.5 ${bgSurface} border border-slate-300 dark:border-slate-600 rounded text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500`}
                   >
                     {availableFieldTypes.map((opt) => (
                       <option key={opt.value} value={opt.value} disabled={opt.disabled}>
@@ -467,7 +469,7 @@ export default function SerialConfigSection({
                       type="text"
                       value={newFieldCustomName}
                       onChange={(e) => setNewFieldCustomName(e.target.value)}
-                      className="flex-1 px-2 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      className={`flex-1 px-2 py-1.5 ${bgSurface} border border-slate-300 dark:border-slate-600 rounded text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500`}
                       placeholder="Field name"
                       autoFocus
                     />
@@ -477,7 +479,7 @@ export default function SerialConfigSection({
                   <select
                     value={newFieldEndianness}
                     onChange={(e) => setNewFieldEndianness(e.target.value as "big" | "little")}
-                    className="w-16 px-1 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className={`w-16 px-1 py-1.5 ${bgSurface} border border-slate-300 dark:border-slate-600 rounded text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500`}
                     title="Byte order"
                   >
                     <option value="big">BE</option>
@@ -488,7 +490,7 @@ export default function SerialConfigSection({
                   <select
                     value={newFieldFormat}
                     onChange={(e) => setNewFieldFormat(e.target.value as HeaderFieldFormat)}
-                    className="w-16 px-1 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className={`w-16 px-1 py-1.5 ${bgSurface} border border-slate-300 dark:border-slate-600 rounded text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500`}
                   >
                     <option value="hex">Hex</option>
                     <option value="decimal">Dec</option>
@@ -496,7 +498,7 @@ export default function SerialConfigSection({
                 </div>
 
                 <div className="flex items-center justify-between">
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                  <p className={caption}>
                     Use the bit picker to select which header bytes this field covers.
                   </p>
                   <div className="flex gap-2">
@@ -511,7 +513,7 @@ export default function SerialConfigSection({
                       type="button"
                       onClick={handleAddField}
                       disabled={newFieldType === "custom" && !newFieldCustomName.trim()}
-                      className="px-3 py-1 text-sm bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      className={`px-3 py-1 text-sm bg-purple-600 text-white rounded hover:bg-purple-700 ${disabledState} transition-colors`}
                     >
                       Add
                     </button>
@@ -521,7 +523,7 @@ export default function SerialConfigSection({
             )}
 
             {headerFields.length === 0 && !isAddingField && (
-              <p className="text-xs text-slate-500 dark:text-slate-400 italic">
+              <p className={`${caption} italic`}>
                 No header fields defined. Add an "ID" field to enable frame matching.
               </p>
             )}
@@ -531,10 +533,10 @@ export default function SerialConfigSection({
           <div className="border-t border-slate-200 dark:border-slate-700 pt-4 mt-4">
             <div className="flex items-center justify-between mb-3">
               <div>
-                <h3 className="text-sm font-medium text-slate-900 dark:text-white">
+                <h3 className={textMedium}>
                   Protocol Checksum
                 </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
+                <p className={caption}>
                   Default checksum settings for all frames
                 </p>
               </div>
@@ -544,7 +546,7 @@ export default function SerialConfigSection({
                   onClick={handleAddChecksum}
                   className="flex items-center gap-1 px-3 py-1.5 text-sm bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 rounded-lg hover:bg-purple-200 dark:hover:bg-purple-900/50 transition-colors"
                 >
-                  <Plus className="w-4 h-4" />
+                  <Plus className={iconMd} />
                   Add Checksum
                 </button>
               ) : (
@@ -553,7 +555,7 @@ export default function SerialConfigSection({
                   onClick={handleRemoveChecksum}
                   className="flex items-center gap-1 px-3 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
                 >
-                  <Trash2 className="w-4 h-4" />
+                  <Trash2 className={iconMd} />
                   Remove
                 </button>
               )}
@@ -569,7 +571,7 @@ export default function SerialConfigSection({
                   <select
                     value={checksum.algorithm}
                     onChange={(e) => handleUpdateChecksum({ algorithm: e.target.value as ChecksumAlgorithm })}
-                    className="w-full px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className={`w-full px-3 py-1.5 ${bgSurface} border border-slate-300 dark:border-slate-600 rounded text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500`}
                   >
                     {CHECKSUM_ALGORITHMS.map((alg) => (
                       <option key={alg.id} value={alg.id}>
@@ -577,7 +579,7 @@ export default function SerialConfigSection({
                       </option>
                     ))}
                   </select>
-                  <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                  <p className={`mt-0.5 ${caption}`}>
                     {CHECKSUM_ALGORITHMS.find((a) => a.id === checksum.algorithm)?.description}
                   </p>
                 </div>
@@ -592,10 +594,10 @@ export default function SerialConfigSection({
                       type="number"
                       value={checksum.start_byte}
                       onChange={(e) => handleUpdateChecksum({ start_byte: parseInt(e.target.value) || 0 })}
-                      className="w-full px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      className={`w-full px-3 py-1.5 ${bgSurface} border border-slate-300 dark:border-slate-600 rounded text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500`}
                       title="Byte position where checksum is stored (-1 = last byte)"
                     />
-                    <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                    <p className={`mt-0.5 ${caption}`}>
                       -1 = last byte
                     </p>
                   </div>
@@ -606,7 +608,7 @@ export default function SerialConfigSection({
                     <select
                       value={checksum.byte_length}
                       onChange={(e) => handleUpdateChecksum({ byte_length: parseInt(e.target.value) })}
-                      className="w-full px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      className={`w-full px-3 py-1.5 ${bgSurface} border border-slate-300 dark:border-slate-600 rounded text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500`}
                     >
                       <option value={1}>1 byte</option>
                       <option value={2}>2 bytes</option>
@@ -624,7 +626,7 @@ export default function SerialConfigSection({
                       type="number"
                       value={checksum.calc_start_byte}
                       onChange={(e) => handleUpdateChecksum({ calc_start_byte: parseInt(e.target.value) || 0 })}
-                      className="w-full px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      className={`w-full px-3 py-1.5 ${bgSurface} border border-slate-300 dark:border-slate-600 rounded text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500`}
                       title="First byte included in calculation"
                     />
                   </div>
@@ -636,10 +638,10 @@ export default function SerialConfigSection({
                       type="number"
                       value={checksum.calc_end_byte}
                       onChange={(e) => handleUpdateChecksum({ calc_end_byte: parseInt(e.target.value) || 0 })}
-                      className="w-full px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      className={`w-full px-3 py-1.5 ${bgSurface} border border-slate-300 dark:border-slate-600 rounded text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500`}
                       title="Last byte (exclusive) included in calculation (-1 = up to checksum)"
                     />
-                    <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                    <p className={`mt-0.5 ${caption}`}>
                       -1 = up to checksum
                     </p>
                   </div>
@@ -647,7 +649,7 @@ export default function SerialConfigSection({
 
                 {/* Big endian checkbox (only show for 2-byte checksums) */}
                 {checksum.byte_length === 2 && (
-                  <div className="flex items-center gap-2">
+                  <div className={flexRowGap2}>
                     <input
                       type="checkbox"
                       id="checksum-big-endian"
@@ -664,7 +666,7 @@ export default function SerialConfigSection({
             )}
 
             {!checksum && (
-              <p className="text-xs text-slate-500 dark:text-slate-400 italic">
+              <p className={`${caption} italic`}>
                 No protocol-level checksum configured. Click "Add Checksum" to define defaults.
               </p>
             )}
@@ -674,7 +676,7 @@ export default function SerialConfigSection({
 
       {/* Collapsed preview when configured but not expanded */}
       {!isExpanded && isConfigured && (
-        <div className="px-4 py-2 text-xs text-slate-500 dark:text-slate-400 border-t border-slate-200 dark:border-slate-700">
+        <div className={`px-4 py-2 ${caption} border-t border-slate-200 dark:border-slate-700`}>
           Encoding: {encoding.toUpperCase()} • {byteOrder === 'big' ? 'BE' : 'LE'}
           {headerLength !== undefined && headerLength > 0 && ` • Header: ${headerLength}B`}
           {headerFields.length > 0 && ` • ${headerFields.length} field(s)`}

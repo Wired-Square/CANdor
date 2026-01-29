@@ -3,7 +3,7 @@
 import Dialog from "../../../components/Dialog";
 import BitPreview, { BitRange } from "../../../components/BitPreview";
 import { Input, Textarea, FormField, SecondaryButton, PrimaryButton } from "../../../components/forms";
-import { h2 } from "../../../styles";
+import { h2, textMedium } from "../../../styles";
 import { tomlParse } from "../toml";
 import { getFrameByteLengthFromPath } from "../utils";
 
@@ -85,7 +85,7 @@ export default function MuxEditDialog({
 
       return (
         <div className="p-4 bg-slate-50 dark:bg-slate-900 rounded-lg">
-          <div className="text-sm font-medium text-slate-900 dark:text-white mb-3">
+          <div className={`${textMedium} mb-3`}>
             Bit Layout Preview ({frameLength} bytes)
           </div>
           <BitPreview

@@ -76,3 +76,17 @@ export const errorBoxCompact = "p-2 text-xs text-red-600 dark:text-red-400 bg-re
  * Use for: Bottom section of dialogs/panels with action buttons
  */
 export const panelFooter = "p-3 bg-slate-50 dark:bg-slate-900/50 border-t border-slate-200 dark:border-slate-700";
+
+/**
+ * Expandable row container - for collapsible config sections
+ * Use for: Config dialog expandable section headers
+ */
+export const expandableRowContainer =
+  "w-full flex items-center justify-between px-4 py-3 bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors cursor-pointer";
+
+/**
+ * Selectable option box - for radio/checkbox option containers
+ * Use for: Export dialogs with radio button options
+ */
+export const selectableOptionBox =
+  "flex items-start gap-3 p-3 rounded-lg border border-slate-200 dark:border-slate-600 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors";

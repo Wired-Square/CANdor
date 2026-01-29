@@ -1,6 +1,7 @@
 // ui/src/components/forms/Textarea.tsx
 
 import { TextareaHTMLAttributes, forwardRef } from 'react';
+import { focusRing } from '../../styles';
 
 export interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
   variant?: 'default' | 'simple';
@@ -16,7 +17,7 @@ const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
     const baseClasses = 'w-full border transition-colors text-slate-900 dark:text-white resize-none';
 
     const variantClasses = {
-      default: 'px-4 py-2 bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500',
+      default: `px-4 py-2 bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 rounded-lg ${focusRing}`,
       simple: 'px-3 py-2 bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-600 rounded',
     };
 

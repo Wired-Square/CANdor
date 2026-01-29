@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { AlertCircle } from 'lucide-react';
+import { iconXs, flexRowGap2 } from '../styles/spacing';
 import Dialog from '../components/Dialog';
 import { Input, Select, FormField } from '../components/forms';
 import { SecondaryButton } from '../components/forms/DialogButtons';
@@ -97,7 +98,7 @@ export default function SaveFramesDialog({ open, meta, decoderDir, knowledgeInte
           </FormField>
 
           <FormField label="Default byte order" variant="simple">
-            <div className="flex items-center gap-2">
+            <div className={flexRowGap2}>
               <Select
                 variant="simple"
                 value={knowledgeEndianness ?? meta.default_byte_order}
@@ -123,7 +124,7 @@ export default function SaveFramesDialog({ open, meta, decoderDir, knowledgeInte
           </FormField>
 
           <FormField label="Default interval (ms)" variant="simple">
-            <div className="flex items-center gap-2">
+            <div className={flexRowGap2}>
               <Input
                 variant="simple"
                 type="number"
@@ -153,7 +154,7 @@ export default function SaveFramesDialog({ open, meta, decoderDir, knowledgeInte
               />
               {filenameError && (
                 <div className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
-                  <AlertCircle className="w-3 h-3" />
+                  <AlertCircle className={iconXs} />
                   {filenameError}
                 </div>
               )}

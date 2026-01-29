@@ -5,6 +5,7 @@ import { List, X } from "lucide-react";
 import Dialog from "../../../components/Dialog";
 import { Input, Select, Textarea, FormField, SecondaryButton, PrimaryButton } from "../../../components/forms";
 import { h2, h3, labelSmall, badgeInfo } from "../../../styles";
+import { iconMd, flexRowGap2 } from "../../../styles/spacing";
 import { buttonBase } from "../../../styles/buttonStyles";
 import BitPreview, { BitRange } from "../../../components/BitPreview";
 import type { TomlNode } from "../types";
@@ -222,13 +223,13 @@ export default function SignalEditDialog({
             {fields.format === "enum" && (
               <div>
                 <label className={`${labelSmall} mb-2`}>Enum Values *</label>
-                <div className="flex items-center gap-2">
+                <div className={flexRowGap2}>
                   <button
                     type="button"
                     onClick={() => setShowEnumEditor(true)}
                     className={`${buttonBase} text-sm`}
                   >
-                    <List className="w-4 h-4" />
+                    <List className={iconMd} />
                     {fields.enum && Object.keys(fields.enum).length > 0
                       ? `Edit Enum (${Object.keys(fields.enum).length} values)`
                       : "Add Enum Values"}
@@ -240,7 +241,7 @@ export default function SignalEditDialog({
                       className="flex items-center gap-1 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
                       title="Clear enum values"
                     >
-                      <X className="w-4 h-4" />
+                      <X className={iconMd} />
                       Clear
                     </button>
                   )}

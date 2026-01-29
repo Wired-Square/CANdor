@@ -1,6 +1,7 @@
 // ui/src/apps/discovery/views/DiscoveryFramesView.tsx
 import React, { useEffect, useRef, useMemo, memo, useState, useCallback } from "react";
 import { FileText, Network } from "lucide-react";
+import { iconSm, flexRowGap2 } from "../../../styles/spacing";
 import { formatIsoUs, formatHumanUs, renderDeltaNode } from "../../../utils/timeFormat";
 import { useDiscoveryStore } from "../../../stores/discoveryStore";
 import { useDiscoveryUIStore } from "../../../stores/discoveryUIStore";
@@ -557,7 +558,7 @@ function DiscoveryFramesView({
 
   // Time range inputs for toolbar (optional feature)
   const timeRangeInputs = showTimeRange && onStartTimeChange && onEndTimeChange ? (
-    <div className="flex items-center gap-2">
+    <div className={flexRowGap2}>
       <label className="text-xs text-gray-400">Start</label>
       <input
         type="datetime-local"
@@ -616,7 +617,7 @@ function DiscoveryFramesView({
                     }`}
                     title={showBusColumn ? 'Hide Bus column' : 'Show Bus column'}
                   >
-                    <Network className="w-3.5 h-3.5" />
+                    <Network className={iconSm} />
                   </button>
                   <button
                     onClick={toggleShowAsciiColumn}
@@ -627,7 +628,7 @@ function DiscoveryFramesView({
                     }`}
                     title={showAsciiColumn ? 'Hide ASCII column' : 'Show ASCII column'}
                   >
-                    <FileText className="w-3.5 h-3.5" />
+                    <FileText className={iconSm} />
                   </button>
                 </div>
               }

@@ -10,6 +10,8 @@ import {
   FORMAT_OPTIONS,
   getFullFilename,
 } from "../utils/reportExport";
+import { caption } from "../styles/typography";
+import { secondaryButton } from "../styles";
 
 export type ExportReportDialogProps = {
   open: boolean;
@@ -64,7 +66,7 @@ export default function ExportReportDialog({
             </Select>
           </FormField>
 
-          <div className="text-xs text-slate-500 dark:text-slate-400 -mt-1">
+          <div className={`${caption} -mt-1`}>
             {FORMAT_DESCRIPTIONS[format]}
           </div>
         </div>
@@ -72,7 +74,7 @@ export default function ExportReportDialog({
         <div className="flex justify-end gap-2 pt-2">
           <button
             onClick={onCancel}
-            className="px-4 py-2 rounded-lg text-sm bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors"
+            className={`${secondaryButton} text-sm`}
           >
             Cancel
           </button>

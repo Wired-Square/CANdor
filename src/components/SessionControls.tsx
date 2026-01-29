@@ -4,6 +4,7 @@
 // Handles reader display, stop/resume/detach/rejoin controls.
 
 import { Star, FileText, Square, Unplug, Plug, Play, GitMerge, Bookmark } from "lucide-react";
+import { iconSm } from "../styles/spacing";
 import type { IOProfile } from "../types/common";
 import type { BufferMetadata } from "../api/buffer";
 import { isBufferProfileId } from "../hooks/useIOSessionManager";
@@ -76,11 +77,11 @@ export function ReaderButton({
       title="Select IO Reader"
     >
       {showAsMultiBus ? (
-        <GitMerge className="w-3.5 h-3.5 text-purple-500 flex-shrink-0" />
+        <GitMerge className={`${iconSm} text-purple-500 flex-shrink-0`} />
       ) : isBufferProfile ? (
-        <FileText className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
+        <FileText className={`${iconSm} text-blue-500 flex-shrink-0`} />
       ) : isDefaultReader ? (
-        <Star className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" fill="currentColor" />
+        <Star className={`${iconSm} text-amber-500 flex-shrink-0`} fill="currentColor" />
       ) : null}
       <span className="max-w-40 truncate">{displayName}</span>
     </button>
@@ -136,7 +137,7 @@ export function SessionActionButtons({
           className={buttonBase}
           title={isStreaming ? "Stop streaming to change time range" : "Load saved time bookmark"}
         >
-          <Bookmark className="w-3.5 h-3.5" />
+          <Bookmark className={iconSm} />
         </button>
       )}
 
@@ -147,7 +148,7 @@ export function SessionActionButtons({
           className={dangerButtonBase}
           title="Stop IO Stream"
         >
-          <Square className="w-3.5 h-3.5" />
+          <Square className={iconSm} />
         </button>
       )}
 
@@ -158,7 +159,7 @@ export function SessionActionButtons({
           className={successIconButton}
           title="Resume IO Stream"
         >
-          <Play className="w-3.5 h-3.5" />
+          <Play className={iconSm} />
         </button>
       )}
 
@@ -169,7 +170,7 @@ export function SessionActionButtons({
           className={warningButtonBase}
           title="Detach from shared session (keeps streaming for other apps)"
         >
-          <Unplug className="w-3.5 h-3.5" />
+          <Unplug className={iconSm} />
         </button>
       )}
 
@@ -180,7 +181,7 @@ export function SessionActionButtons({
           className={successButtonBase}
           title="Rejoin Session"
         >
-          <Plug className="w-3.5 h-3.5" />
+          <Plug className={iconSm} />
           <span>Rejoin</span>
         </button>
       )}

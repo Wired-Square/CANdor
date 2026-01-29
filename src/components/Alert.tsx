@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { AlertTriangle, Info, CheckCircle, XCircle } from 'lucide-react';
+import { iconLg } from '../styles/spacing';
 import {
   alertInfo,
   alertWarning,
@@ -75,7 +76,7 @@ export default function Alert({
     <div className={`${variantStyles[variant]} ${className}`}>
       <div className="flex gap-3">
         {showIcon && (
-          <Icon className={`w-5 h-5 flex-shrink-0 ${iconColors[variant]}`} />
+          <Icon className={`${iconLg} flex-shrink-0 ${iconColors[variant]}`} />
         )}
         <div className="flex-1">
           {title && (

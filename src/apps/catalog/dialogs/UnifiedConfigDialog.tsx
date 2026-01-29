@@ -3,6 +3,8 @@
 
 import { useState, useEffect } from "react";
 import { Settings } from "lucide-react";
+import { iconLg } from "../../../styles/spacing";
+import { disabledState, bgSurface, secondaryButton } from "../../../styles";
 import { useCatalogEditorStore } from "../../../stores/catalogEditorStore";
 import {
   MetadataSection,
@@ -154,11 +156,11 @@ export default function UnifiedConfigDialog({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+      <div className={`${bgSurface} rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto`}>
         {/* Header */}
         <div className="flex items-center gap-3 mb-6">
           <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-            <Settings className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+            <Settings className={`${iconLg} text-blue-600 dark:text-blue-400`} />
           </div>
           <div>
             <h2 className="text-xl font-bold text-slate-900 dark:text-white">
@@ -248,14 +250,14 @@ export default function UnifiedConfigDialog({
         <div className="flex justify-end gap-3 mt-6">
           <button
             onClick={onCancel}
-            className="px-6 py-2 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors"
+            className={secondaryButton}
           >
             Cancel
           </button>
           <button
             onClick={() => onSave({ can: canEnabled, serial: serialEnabled, modbus: modbusEnabled })}
             disabled={!isValid}
-            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className={`px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors ${disabledState}`}
           >
             Save Changes
           </button>

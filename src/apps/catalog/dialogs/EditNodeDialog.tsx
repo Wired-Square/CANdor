@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import Dialog from "../../../components/Dialog";
 import { Input, Textarea, FormField, SecondaryButton, PrimaryButton } from "../../../components/forms";
-import { h2 } from "../../../styles";
+import { h2, caption } from "../../../styles";
 import type { ValidationError } from "../types";
 
 export type EditNodeDialogProps = {
@@ -59,7 +59,7 @@ export default function EditNodeDialog({
             {nodeError && (
               <p className="mt-2 text-sm text-red-600 dark:text-red-400">{nodeError.message}</p>
             )}
-            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            <p className={`mt-2 ${caption}`}>
               Changing the name will update all frames that reference this node as transmitter.
             </p>
           </FormField>

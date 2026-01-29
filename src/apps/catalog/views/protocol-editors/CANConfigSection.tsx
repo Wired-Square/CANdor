@@ -1,6 +1,8 @@
 // ui/src/apps/catalog/views/protocol-editors/CANConfigSection.tsx
 
 import type { CANConfig } from "../../types";
+import { flexRowGap2 } from "../../../../styles/spacing";
+import { caption, textMedium, focusRing } from "../../../../styles";
 
 export type CANConfigSectionProps = {
   config: CANConfig;
@@ -17,23 +19,23 @@ export default function CANConfigSection({
     <div className="space-y-4">
       {/* ID - Required */}
       <div>
-        <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+        <label className={`block ${textMedium} mb-2`}>
           ID <span className="text-red-500">*</span>
         </label>
         <input
           type="text"
           value={config.id}
           onChange={(e) => onChange({ ...config, id: e.target.value })}
-          className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+          className={`w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white font-mono ${focusRing}`}
           placeholder="0x123"
         />
-        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        <p className={`${caption} mt-1`}>
           Hex (0x123) or decimal (291) format
         </p>
       </div>
 
       {/* Extended ID checkbox */}
-      <div className="flex items-center gap-2">
+      <div className={flexRowGap2}>
         <input
           type="checkbox"
           id="extended"
@@ -48,7 +50,7 @@ export default function CANConfigSection({
 
       {/* Bus - Optional */}
       <div>
-        <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+        <label className={`block ${textMedium} mb-2`}>
           Bus
         </label>
         <input
@@ -61,17 +63,17 @@ export default function CANConfigSection({
               bus: e.target.value ? parseInt(e.target.value) : undefined,
             })
           }
-          className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className={`w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white ${focusRing}`}
           placeholder="0"
         />
-        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        <p className={`${caption} mt-1`}>
           CAN bus index (optional, for multi-bus systems)
         </p>
       </div>
 
       {/* Copy from - Optional */}
       <div>
-        <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+        <label className={`block ${textMedium} mb-2`}>
           Copy From
         </label>
         <input
@@ -83,10 +85,10 @@ export default function CANConfigSection({
               copy: e.target.value || undefined,
             })
           }
-          className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+          className={`w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white font-mono ${focusRing}`}
           placeholder="0x456"
         />
-        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        <p className={`${caption} mt-1`}>
           Inherit properties from another CAN frame (optional)
         </p>
       </div>

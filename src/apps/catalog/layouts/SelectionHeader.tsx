@@ -1,6 +1,7 @@
 // ui/src/apps/catalog/layout/SelectionHeader.tsx
 
 import { Link2 } from "lucide-react";
+import { iconXl, flexRowGap2 } from "../../../styles/spacing";
 import type { TomlNode } from "../types";
 
 export type SelectionHeaderProps = {
@@ -48,11 +49,11 @@ export default function SelectionHeader({ selectedNode, formatFrameId }: Selecti
       <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2 flex items-center gap-3">
         {selectedNode.metadata?.isCopy && (
           <span title={`Copied from ${selectedNode.metadata?.copyFrom}`}>
-            <Link2 className="w-6 h-6 text-blue-500 dark:text-blue-400" />
+            <Link2 className={`${iconXl} text-blue-500 dark:text-blue-400`} />
           </span>
         )}
         {idLabel ? (
-          <span className="flex items-center gap-2">
+          <span className={flexRowGap2}>
             <span>{idLabel.primary}</span>
             {idLabel.secondary && (
               <span className="text-slate-500 dark:text-slate-400 text-lg">({idLabel.secondary})</span>
@@ -63,7 +64,7 @@ export default function SelectionHeader({ selectedNode, formatFrameId }: Selecti
         )}
       </h2>
 
-      <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+      <div className={`${flexRowGap2} text-sm text-slate-600 dark:text-slate-400`}>
         <span className="px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded">{labelForNodeType(selectedNode.type)}</span>
         <span className="font-mono text-xs">{selectedNode.path.join(".")}</span>
         {selectedNode.metadata?.isCopy && (

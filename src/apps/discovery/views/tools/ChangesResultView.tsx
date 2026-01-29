@@ -2,6 +2,9 @@
 
 import { useState, useMemo } from "react";
 import { GitCompare, RefreshCw, Minus, Activity, ChevronDown, ChevronRight, Layers, Thermometer, Type, Ruler, Copy, GitMerge, Download } from "lucide-react";
+import { iconSm, iconXs, iconLg, flexRowGap2, paddingCardSm } from "../../../../styles/spacing";
+import { cardDefault } from "../../../../styles/cardStyles";
+import { caption, captionMuted, borderDivider, bgSurface, sectionHeaderText } from "../../../../styles";
 import { useDiscoveryStore } from "../../../../stores/discoveryStore";
 import type { PayloadAnalysisResult, ByteStats, MuxCaseAnalysis, MultiBytePattern, MirrorGroup } from "../../../../utils/analysis/payloadAnalysis";
 import { formatMuxValue } from "../../../../utils/analysis/muxDetection";
@@ -108,7 +111,7 @@ export default function ChangesResultView({ embedded = false }: Props) {
     }
 
     return (
-      <div className="h-full flex flex-col bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
+      <div className={`h-full flex flex-col ${bgSurface} rounded-lg border border-slate-200 dark:border-slate-700`}>
         <Header onExport={() => {}} hasResults={false} />
         {content}
       </div>
@@ -118,7 +121,7 @@ export default function ChangesResultView({ embedded = false }: Props) {
   const mainContent = (
     <>
       {/* Summary Section */}
-      <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
+      <div className={`px-4 py-3 ${borderDivider} bg-slate-50 dark:bg-slate-900`}>
         <div className="flex flex-wrap gap-4 text-xs mb-2">
           <span className="text-slate-500 dark:text-slate-400">
             <span className="font-medium text-slate-700 dark:text-slate-200">{results.frameCount.toLocaleString()}</span> frames
@@ -133,25 +136,25 @@ export default function ChangesResultView({ embedded = false }: Props) {
           <div className="flex flex-wrap gap-2 text-[10px]">
             {summary.mirrorGroupCount > 0 && (
               <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-pink-100 dark:bg-pink-900/30 text-pink-700 dark:text-pink-300">
-                <GitMerge className="w-3 h-3" />
+                <GitMerge className={iconXs} />
                 {summary.mirrorGroupCount} mirror group{summary.mirrorGroupCount > 1 ? 's' : ''}
               </span>
             )}
             {summary.identicalCount > 0 && (
               <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
-                <Copy className="w-3 h-3" />
+                <Copy className={iconXs} />
                 {summary.identicalCount} identical
               </span>
             )}
             {summary.varyingLengthCount > 0 && (
               <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300">
-                <Ruler className="w-3 h-3" />
+                <Ruler className={iconXs} />
                 {summary.varyingLengthCount} varying length
               </span>
             )}
             {summary.muxCount > 0 && (
               <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300">
-                <Layers className="w-3 h-3" />
+                <Layers className={iconXs} />
                 {summary.muxCount} multiplexed
               </span>
             )}
@@ -170,7 +173,7 @@ export default function ChangesResultView({ embedded = false }: Props) {
         {mirrorGroups.length > 0 && (
           <div className="space-y-2">
             <div className="text-xs font-medium text-pink-600 dark:text-pink-400 flex items-center gap-1.5">
-              <GitMerge className="w-3.5 h-3.5" />
+              <GitMerge className={iconSm} />
               Mirror Frames
             </div>
             {mirrorGroups.map((group, idx) => (
@@ -200,7 +203,7 @@ export default function ChangesResultView({ embedded = false }: Props) {
   }
 
   return (
-    <div className="h-full flex flex-col bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
+    <div className={`h-full flex flex-col ${bgSurface} rounded-lg border border-slate-200 dark:border-slate-700`}>
       <Header onExport={() => setShowExportDialog(true)} hasResults={true} />
       {mainContent}
     </div>
@@ -218,13 +221,13 @@ type HeaderProps = {
 
 function Header({ onExport, hasResults = false }: HeaderProps) {
   return (
-    <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-200 dark:border-slate-700">
-      <GitCompare className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+    <div className={`flex items-center gap-3 px-4 py-3 ${borderDivider}`}>
+      <GitCompare className={`${iconLg} text-purple-600 dark:text-purple-400`} />
       <div className="flex-1">
-        <h2 className="text-sm font-medium text-slate-700 dark:text-slate-200">
+        <h2 className={sectionHeaderText}>
           Payload Changes Analysis
         </h2>
-        <p className="text-xs text-slate-500 dark:text-slate-400">
+        <p className={caption}>
           Detected byte patterns and characteristics
         </p>
       </div>
@@ -235,7 +238,7 @@ function Header({ onExport, hasResults = false }: HeaderProps) {
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-900/50 transition-colors"
           title="Export analysis results"
         >
-          <Download className="w-3.5 h-3.5" />
+          <Download className={iconSm} />
           Export
         </button>
       )}
@@ -306,14 +309,14 @@ function FrameAnalysisCard({ result }: FrameAnalysisCardProps) {
   const counts = countByteRoles(result.byteStats, result.multiBytePatterns);
 
   return (
-    <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700">
+    <div className={`${paddingCardSm} ${cardDefault}`}>
       {/* Header */}
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-mono font-semibold text-sm text-slate-700 dark:text-slate-200">
             {formatFrameId(result.frameId)}
           </span>
-          <span className="text-xs text-slate-400 dark:text-slate-500">
+          <span className={captionMuted}>
             {result.sampleCount} samples
           </span>
           {result.isBurstFrame && (
@@ -323,7 +326,7 @@ function FrameAnalysisCard({ result }: FrameAnalysisCardProps) {
           )}
           {result.isMuxFrame && (
             <span className="px-1.5 py-0.5 text-[10px] bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 rounded flex items-center gap-0.5">
-              <Layers className="w-3 h-3" />
+              <Layers className={iconXs} />
               Mux
             </span>
           )}
@@ -332,7 +335,7 @@ function FrameAnalysisCard({ result }: FrameAnalysisCardProps) {
               className="px-1.5 py-0.5 text-[10px] bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 rounded flex items-center gap-0.5"
               title={`Frame length varies from ${result.lengthRange.min} to ${result.lengthRange.max} bytes`}
             >
-              <Ruler className="w-3 h-3" />
+              <Ruler className={iconXs} />
               {result.lengthRange.min}–{result.lengthRange.max} bytes
             </span>
           )}
@@ -341,7 +344,7 @@ function FrameAnalysisCard({ result }: FrameAnalysisCardProps) {
               className="px-1.5 py-0.5 text-[10px] bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded flex items-center gap-0.5"
               title="All payloads in this frame are identical"
             >
-              <Copy className="w-3 h-3" />
+              <Copy className={iconXs} />
               Identical
             </span>
           )}
@@ -349,31 +352,31 @@ function FrameAnalysisCard({ result }: FrameAnalysisCardProps) {
         <div className="flex items-center gap-2 text-[10px]">
           {counts.staticCount > 0 && (
             <span className="flex items-center gap-1 text-slate-500 dark:text-slate-400">
-              <Minus className="w-3 h-3" />
+              <Minus className={iconXs} />
               {counts.staticCount} static
             </span>
           )}
           {(counts.counterCount > 0 || counts.counter16Count > 0 || counts.counter32Count > 0) && (
             <span className="flex items-center gap-1 text-green-600 dark:text-green-400">
-              <RefreshCw className="w-3 h-3" />
+              <RefreshCw className={iconXs} />
               {counts.counterCount + counts.counter16Count + counts.counter32Count} counter
             </span>
           )}
           {(counts.sensorCount > 0 || counts.sensor16Count > 0) && (
             <span className="flex items-center gap-1 text-purple-600 dark:text-purple-400">
-              <Thermometer className="w-3 h-3" />
+              <Thermometer className={iconXs} />
               {counts.sensorCount + counts.sensor16Count} sensor
             </span>
           )}
           {counts.valueCount > 0 && (
             <span className="flex items-center gap-1 text-blue-600 dark:text-blue-400">
-              <Activity className="w-3 h-3" />
+              <Activity className={iconXs} />
               {counts.valueCount} value
             </span>
           )}
           {counts.textCount > 0 && (
             <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
-              <Type className="w-3 h-3" />
+              <Type className={iconXs} />
               {counts.textCount} text
             </span>
           )}
@@ -453,18 +456,18 @@ function MuxCaseSection({ caseAnalysis, isTwoByte, analyzedFromByte, analyzedToB
   const counts = countByteRoles(caseAnalysis.byteStats, caseAnalysis.multiBytePatterns);
 
   return (
-    <div className="bg-white dark:bg-slate-800 rounded border border-slate-200 dark:border-slate-700">
+    <div className={`${bgSurface} rounded border border-slate-200 dark:border-slate-700`}>
       {/* Collapsible header */}
       <button
         type="button"
         onClick={() => setIsExpanded(!isExpanded)}
         className="w-full flex items-center justify-between px-2 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
       >
-        <div className="flex items-center gap-2">
+        <div className={flexRowGap2}>
           {isExpanded ? (
-            <ChevronDown className="w-3 h-3 text-slate-400" />
+            <ChevronDown className={`${iconXs} text-slate-400`} />
           ) : (
-            <ChevronRight className="w-3 h-3 text-slate-400" />
+            <ChevronRight className={`${iconXs} text-slate-400`} />
           )}
           <span className="text-[10px] font-medium text-orange-600 dark:text-orange-400">
             Case {formatMuxValue(caseAnalysis.muxValue, isTwoByte)}

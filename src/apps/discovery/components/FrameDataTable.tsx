@@ -5,6 +5,7 @@
 
 import { ReactNode, useMemo, forwardRef, useRef, useEffect } from 'react';
 import { Calculator, Bookmark } from 'lucide-react';
+import { iconXs } from '../../../styles/spacing';
 import { formatFrameId as formatId } from '../../../utils/frameIds';
 import { sendHexDataToCalculator } from '../../../utils/windowCommunication';
 import { bytesToHex, bytesToAscii } from '../../../utils/byteUtils';
@@ -227,7 +228,7 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
                       className={tableIconButtonDark}
                       title="Add bookmark at this frame's time"
                     >
-                      <Bookmark className={`w-3 h-3 ${textDataAmber}`} />
+                      <Bookmark className={`${iconXs} ${textDataAmber}`} />
                     </button>
                   </td>
                 )}
@@ -264,7 +265,7 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
                       className={tableIconButtonDark}
                       title="Send to Frame Calculator"
                     >
-                      <Calculator className={`w-3 h-3 ${textDataOrange}`} />
+                      <Calculator className={`${iconXs} ${textDataOrange}`} />
                     </button>
                   </td>
                 )}

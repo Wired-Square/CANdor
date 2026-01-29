@@ -2,9 +2,10 @@
 
 import { useState, useEffect } from "react";
 import { Network, Server, Cable } from "lucide-react";
+import { iconLg } from "../../../styles/spacing";
 import Dialog from "../../../components/Dialog";
 import { Input, Select, FormField, SecondaryButton, SuccessButton } from "../../../components/forms";
-import { h2, alertDanger } from "../../../styles";
+import { h2, alertDanger, caption } from "../../../styles";
 import { selectionButtonClass } from "../../../styles/buttonStyles";
 import type { MetaFields, ValidationError, ProtocolType, SerialEncoding } from "../types";
 
@@ -108,7 +109,7 @@ export default function NewCatalogDialog({
                     className={selectionButtonClass(isSelected)}
                   >
                     <Icon
-                      className={`w-5 h-5 ${
+                      className={`${iconLg} ${
                         isSelected ? "text-blue-600 dark:text-blue-400" : "text-slate-500 dark:text-slate-400"
                       }`}
                     />
@@ -193,7 +194,7 @@ export default function NewCatalogDialog({
                   onChange={(e) => setModbusDeviceAddress(parseInt(e.target.value) || 1)}
                   placeholder="1"
                 />
-                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                <p className={`mt-1 ${caption}`}>
                   Slave address (1-247) for all Modbus frames
                 </p>
               </FormField>
@@ -225,7 +226,7 @@ export default function NewCatalogDialog({
                 <option value="raw">Raw (delimiter-based)</option>
                 <option value="length_prefixed">Length Prefixed</option>
               </Select>
-              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              <p className={`mt-1 ${caption}`}>
                 Framing method used to delimit messages on the serial bus
               </p>
             </FormField>

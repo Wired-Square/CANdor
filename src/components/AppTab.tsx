@@ -4,6 +4,7 @@
 import { useState, useEffect } from "react";
 import { type IDockviewPanelHeaderProps } from "dockview-react";
 import { Search, Activity, FileText, Calculator, GitCompare, ListOrdered, Scan, Send, Settings, X } from "lucide-react";
+import { iconMd, iconXs } from "../styles/spacing";
 
 type PanelId = "discovery" | "decoder" | "catalog-editor" | "frame-calculator" | "payload-analysis" | "frame-order-analysis" | "serial-frame-analysis" | "transmit" | "settings";
 
@@ -44,7 +45,7 @@ export default function AppTab(props: IDockviewPanelHeaderProps) {
       data-testid="dockview-tab"
     >
       <div className="dv-default-tab-content">
-        {Icon && <Icon className={`w-4 h-4 flex-shrink-0 ${config.color}`} />}
+        {Icon && <Icon className={`${iconMd} flex-shrink-0 ${config.color}`} />}
         <span className="truncate">{title}</span>
       </div>
       <div className="dv-default-tab-action">
@@ -55,7 +56,7 @@ export default function AppTab(props: IDockviewPanelHeaderProps) {
             api.close();
           }}
         >
-          <X className="w-3 h-3" />
+          <X className={iconXs} />
         </button>
       </div>
     </div>

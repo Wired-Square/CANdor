@@ -1,6 +1,8 @@
 // ui/src/apps/settings/dialogs/IOProfileDialog.tsx
 import { useState, useEffect, useCallback } from "react";
 import { ArrowLeft, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
+import { iconMd, iconXs, iconLg, flexRowGap2 } from "../../../styles/spacing";
+import { iconButtonHover } from "../../../styles/buttonStyles";
 import Dialog from "../../../components/Dialog";
 import type { IOProfile } from "../stores/settingsStore";
 import SerialPortPicker from "../components/SerialPortPicker";
@@ -17,6 +19,8 @@ import {
   spaceYDefault,
   alertInfo,
   alertWarning,
+  caption,
+  textMedium,
 } from "../../../styles";
 import { probeSlcanDevice } from "../../../api/serial";
 import { probeGsUsbDevice } from "../../../api/gs_usb";
@@ -326,10 +330,10 @@ export default function IOProfileDialog({
           </h2>
           <button
             onClick={onCancel}
-            className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+            className={iconButtonHover}
             title="Go back without saving"
           >
-            <ArrowLeft className="w-5 h-5 text-slate-600 dark:text-slate-400" />
+            <ArrowLeft className={`${iconLg} text-slate-600 dark:text-slate-400`} />
           </button>
         </div>
 
@@ -427,7 +431,7 @@ export default function IOProfileDialog({
                     />
                     <label
                       htmlFor="format-json"
-                      className="text-sm font-medium text-slate-900 dark:text-white"
+                      className={textMedium}
                     >
                       JSON Format
                     </label>
@@ -456,7 +460,7 @@ export default function IOProfileDialog({
                     />
                     <label
                       htmlFor="format-savvycan"
-                      className="text-sm font-medium text-slate-900 dark:text-white"
+                      className={textMedium}
                     >
                       SavvyCAN Format
                     </label>
@@ -487,7 +491,7 @@ export default function IOProfileDialog({
                     />
                     <label
                       htmlFor="format-decode"
-                      className="text-sm font-medium text-slate-900 dark:text-white"
+                      className={textMedium}
                     >
                       Decode Format
                     </label>
@@ -639,7 +643,7 @@ export default function IOProfileDialog({
                 />
               </FormField>
 
-              <div className="flex items-center gap-2">
+              <div className={flexRowGap2}>
                 <input
                   type="checkbox"
                   id="tcp-keepalive"
@@ -651,7 +655,7 @@ export default function IOProfileDialog({
                 />
                 <label
                   htmlFor="tcp-keepalive"
-                  className="text-sm font-medium text-slate-900 dark:text-white"
+                  className={textMedium}
                 >
                   TCP Keepalive
                 </label>
@@ -660,7 +664,7 @@ export default function IOProfileDialog({
               {/* Interface Configuration */}
               <div className={`border-t ${borderDefault} pt-4 mt-4`}>
                 <div className="flex items-center justify-between mb-3">
-                  <h4 className="text-sm font-medium text-slate-900 dark:text-white">
+                  <h4 className={textMedium}>
                     CAN Interfaces
                     {gvretProbeState === "success" && (
                       <span className="ml-2 text-xs text-green-600 dark:text-green-400">
@@ -673,7 +677,7 @@ export default function IOProfileDialog({
                     disabled={gvretProbeState === "probing"}
                     className="text-xs py-1 px-2"
                   >
-                    <RefreshCw className={`w-3 h-3 mr-1 ${gvretProbeState === "probing" ? "animate-spin" : ""}`} />
+                    <RefreshCw className={`${iconXs} mr-1 ${gvretProbeState === "probing" ? "animate-spin" : ""}`} />
                     {gvretProbeState === "probing" ? "Probing..." : "Probe Device"}
                   </SecondaryButton>
                 </div>
@@ -753,7 +757,7 @@ export default function IOProfileDialog({
               {/* Interface Configuration */}
               <div className={`border-t ${borderDefault} pt-4 mt-4`}>
                 <div className="flex items-center justify-between mb-3">
-                  <h4 className="text-sm font-medium text-slate-900 dark:text-white">
+                  <h4 className={textMedium}>
                     CAN Interfaces
                     {gvretProbeState === "success" && (
                       <span className="ml-2 text-xs text-green-600 dark:text-green-400">
@@ -766,7 +770,7 @@ export default function IOProfileDialog({
                     disabled={gvretProbeState === "probing"}
                     className="text-xs py-1 px-2"
                   >
-                    <RefreshCw className={`w-3 h-3 mr-1 ${gvretProbeState === "probing" ? "animate-spin" : ""}`} />
+                    <RefreshCw className={`${iconXs} mr-1 ${gvretProbeState === "probing" ? "animate-spin" : ""}`} />
                     {gvretProbeState === "probing" ? "Probing..." : "Probe Device"}
                   </SecondaryButton>
                 </div>
@@ -986,7 +990,7 @@ export default function IOProfileDialog({
               </FormField>
 
               {/* Silent mode */}
-              <div className="flex items-center gap-2">
+              <div className={flexRowGap2}>
                 <input
                   type="checkbox"
                   id="silent-mode"
@@ -996,12 +1000,12 @@ export default function IOProfileDialog({
                 />
                 <label
                   htmlFor="silent-mode"
-                  className="text-sm font-medium text-slate-900 dark:text-white"
+                  className={textMedium}
                 >
                   Silent mode (no ACK, no transmit)
                 </label>
               </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400 -mt-2">
+              <p className={`${caption} -mt-2`}>
                 Does not participate in bus arbitration. Ideal for passive monitoring.
               </p>
 
@@ -1013,16 +1017,16 @@ export default function IOProfileDialog({
                   className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors"
                 >
                   {slcanAdvancedOpen ? (
-                    <ChevronDown className="w-4 h-4" />
+                    <ChevronDown className={iconMd} />
                   ) : (
-                    <ChevronRight className="w-4 h-4" />
+                    <ChevronRight className={iconMd} />
                   )}
                   Advanced Serial Options
                 </button>
 
                 {slcanAdvancedOpen && (
                   <div className="mt-3 space-y-3 pl-6">
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                    <p className={caption}>
                       Most slcan devices use 8N1 (8 data bits, no parity, 1 stop bit). Only change these if your device requires different settings.
                     </p>
                     <div className="grid grid-cols-3 gap-4">
@@ -1167,7 +1171,7 @@ export default function IOProfileDialog({
               </FormField>
 
               {/* Listen-only mode */}
-              <div className="flex items-center gap-2">
+              <div className={flexRowGap2}>
                 <input
                   type="checkbox"
                   id="gs_usb_listen_only"

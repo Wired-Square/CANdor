@@ -1,5 +1,8 @@
 // ui/src/apps/settings/views/BookmarksView.tsx
 import { Bookmark, Edit2, Trash2 } from "lucide-react";
+import { iconMd, flexRowGap2 } from "../../../styles/spacing";
+import { cardDefault } from "../../../styles/cardStyles";
+import { iconButtonHover, iconButtonHoverDanger } from "../../../styles/buttonStyles";
 import type { TimeRangeFavorite } from "../../../utils/favorites";
 import type { IOProfile } from "../stores/settingsStore";
 
@@ -63,7 +66,7 @@ export default function BookmarksView({
                 {profileBookmarks.map((bookmark) => (
                   <div
                     key={bookmark.id}
-                    className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700"
+                    className={`flex items-center justify-between p-4 ${cardDefault}`}
                   >
                     <div className="flex-1">
                       <div className="flex items-center gap-3">
@@ -73,20 +76,20 @@ export default function BookmarksView({
                         {formatTimeRange(bookmark)}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className={flexRowGap2}>
                       <button
                         onClick={() => onEditBookmark(bookmark)}
-                        className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                        className={iconButtonHover}
                         title="Edit bookmark"
                       >
-                        <Edit2 className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+                        <Edit2 className={`${iconMd} text-slate-600 dark:text-slate-400`} />
                       </button>
                       <button
                         onClick={() => onDeleteBookmark(bookmark)}
-                        className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                        className={iconButtonHoverDanger}
                         title="Delete bookmark"
                       >
-                        <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+                        <Trash2 className={`${iconMd} text-red-600 dark:text-red-400`} />
                       </button>
                     </div>
                   </div>

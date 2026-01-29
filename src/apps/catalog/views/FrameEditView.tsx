@@ -3,6 +3,8 @@
 
 import { useMemo, useCallback } from "react";
 import { Network, Server, Cable } from "lucide-react";
+import { iconMd, iconLg } from "../../../styles/spacing";
+import { caption, disabledState, textMedium, focusRing, secondaryButton } from "../../../styles";
 import type {
   ProtocolType,
   ProtocolConfig,
@@ -194,7 +196,7 @@ export default function FrameEditView({
         {/* Protocol Selector (only for new frames) */}
         {allowProtocolChange && (
           <div>
-            <label className="block text-sm font-medium text-slate-900 dark:text-white mb-3">
+            <label className={`block ${textMedium} mb-3`}>
               Protocol
             </label>
             <div className="grid grid-cols-3 gap-3">
@@ -213,7 +215,7 @@ export default function FrameEditView({
                     }`}
                   >
                     <Icon
-                      className={`w-5 h-5 ${
+                      className={`${iconLg} ${
                         isSelected ? "text-blue-600 dark:text-blue-400" : "text-slate-500 dark:text-slate-400"
                       }`}
                     />
@@ -238,7 +240,7 @@ export default function FrameEditView({
               <>
                 {(() => {
                   const Icon = protocolIcons[currentHandler.type];
-                  return <Icon className="w-4 h-4" />;
+                  return <Icon className={iconMd} />;
                 })()}
                 {currentHandler.displayName} Configuration
               </>
@@ -256,7 +258,7 @@ export default function FrameEditView({
           <div className="space-y-4">
             {/* Length (DLC) */}
             <div>
-              <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+              <label className={`block ${textMedium} mb-2`}>
                 Length {fields.protocol === "can" && "(DLC)"}{" "}
                 {fields.protocol === "modbus" && "(Registers)"}
               </label>
@@ -266,19 +268,19 @@ export default function FrameEditView({
                 max={fields.protocol === "can" ? 64 : 256}
                 value={fields.base.length}
                 onChange={(e) => handleBaseChange({ length: parseInt(e.target.value) || 0 })}
-                className="w-full px-4 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className={`w-full px-4 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white ${focusRing}`}
               />
             </div>
 
             {/* Transmitter (Peer) */}
             <div>
-              <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+              <label className={`block ${textMedium} mb-2`}>
                 Transmitter (Peer)
               </label>
               <select
                 value={fields.base.transmitter || ""}
                 onChange={(e) => handleBaseChange({ transmitter: e.target.value || undefined })}
-                className="w-full px-4 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className={`w-full px-4 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white ${focusRing}`}
               >
                 <option value="">None</option>
                 {availablePeers.map((peer) => (
@@ -292,11 +294,11 @@ export default function FrameEditView({
             {/* Interval (ms) */}
             <div>
               <div className="flex items-center justify-between mb-2">
-                <label className="block text-sm font-medium text-slate-900 dark:text-white">
+                <label className={`block ${textMedium}`}>
                   Interval (ms)
                 </label>
                 {defaults?.interval !== undefined && (
-                  <label className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                  <label className={`flex items-center gap-2 ${caption}`}>
                     <input
                       type="checkbox"
                       checked={fields.isIntervalInherited ?? false}
@@ -317,7 +319,7 @@ export default function FrameEditView({
                   })
                 }
                 disabled={fields.isIntervalInherited}
-                className={`w-full px-4 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                className={`w-full px-4 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white ${focusRing} ${
                   fields.isIntervalInherited ? "opacity-50 cursor-not-allowed" : ""
                 }`}
                 placeholder="1000"
@@ -326,7 +328,7 @@ export default function FrameEditView({
 
             {/* Notes */}
             <div>
-              <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+              <label className={`block ${textMedium} mb-2`}>
                 Notes
               </label>
               <textarea
@@ -347,7 +349,7 @@ export default function FrameEditView({
                     });
                   }
                 }}
-                className="w-full px-4 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm"
+                className={`w-full px-4 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white font-mono text-sm ${focusRing}`}
                 placeholder="Add notes about this frame (one per line)"
               />
             </div>
@@ -358,13 +360,13 @@ export default function FrameEditView({
         <div className="flex justify-end gap-3 pt-4">
           <button
             onClick={onCancel}
-            className="px-6 py-2 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors"
+            className={secondaryButton}
           >
             Cancel
           </button>
           <button
             onClick={onSave}
-            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className={`px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors ${disabledState}`}
             disabled={disableSave}
           >
             {primaryActionLabel}

@@ -1,6 +1,7 @@
 // ui/src/dialogs/io-reader-picker/IngestStatus.tsx
 
 import { Loader2, Square } from "lucide-react";
+import { iconMd, iconXs } from "../../styles/spacing";
 import {
   bgSuccess,
   borderSuccess,
@@ -31,7 +32,7 @@ export default function IngestStatus({
       {isIngesting && (
         <div className={`px-4 py-2 ${bgSuccess} border-b ${borderSuccess} flex items-center justify-between`}>
           <div className={`flex items-center ${gapSmall}`}>
-            <Loader2 className={`w-4 h-4 animate-spin ${textSuccess}`} />
+            <Loader2 className={`${iconMd} animate-spin ${textSuccess}`} />
             <span className={`text-sm ${textSuccess}`}>
               Ingesting: {ingestFrameCount.toLocaleString()} frames
             </span>
@@ -40,7 +41,7 @@ export default function IngestStatus({
             onClick={onStopIngest}
             className={`px-2 py-1 flex items-center ${gapTight} text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors`}
           >
-            <Square className="w-3 h-3" />
+            <Square className={iconXs} />
             <span>Stop</span>
           </button>
         </div>

@@ -2,6 +2,9 @@
 
 import { useMemo, memo, useState } from "react";
 import { ChevronDown, ChevronRight, AlertTriangle, Save, Star, CheckCheck, SquareSlash } from "lucide-react";
+import { iconSm } from "../styles/spacing";
+import { labelSmall, caption, captionMuted } from "../styles/typography";
+import { hoverLight } from "../styles";
 import { formatFrameId } from "../utils/frameIds";
 import type { FrameInfo } from "../types/common";
 
@@ -114,20 +117,20 @@ function FramePicker({
         className="flex items-center gap-1 w-full text-left"
       >
         {isExpanded ? (
-          <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+          <ChevronDown className={`${iconSm} text-slate-500`} />
         ) : (
-          <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
+          <ChevronRight className={`${iconSm} text-slate-500`} />
         )}
-        <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+        <span className={labelSmall}>
           Frames
         </span>
-        <span className="text-xs text-slate-400 dark:text-slate-500 ml-1">
+        <span className={`${captionMuted} ml-1`}>
           ({selectedCount}/{sortedFrames.length})
         </span>
         <div className="flex items-center gap-1 ml-auto">
           {hasWarnings && (
             <span title={warningTooltip} className="text-orange-500 dark:text-orange-400">
-              <AlertTriangle className="w-3.5 h-3.5" />
+              <AlertTriangle className={iconSm} />
             </span>
           )}
           {actions}
@@ -148,11 +151,11 @@ function FramePicker({
                     className={`p-1 rounded ${
                       !anyFrames
                         ? "text-slate-400 cursor-not-allowed"
-                        : "text-green-600 hover:bg-slate-100 dark:hover:bg-slate-700"
+                        : `text-green-600 ${hoverLight}`
                     }`}
                     title="Select all frames"
                   >
-                    <CheckCheck className="w-3.5 h-3.5" />
+                    <CheckCheck className={iconSm} />
                   </button>
                 )}
                 {onDeselectAll && (
@@ -163,11 +166,11 @@ function FramePicker({
                     className={`p-1 rounded ${
                       !anyFrames
                         ? "text-slate-400 cursor-not-allowed"
-                        : "text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
+                        : `text-slate-500 dark:text-slate-400 ${hoverLight}`
                     }`}
                     title="Deselect all frames"
                   >
-                    <SquareSlash className="w-3.5 h-3.5" />
+                    <SquareSlash className={iconSm} />
                   </button>
                 )}
                 {/* Save Selection Set Icon */}
@@ -179,12 +182,12 @@ function FramePicker({
                     className={`p-1 rounded ${
                       !anyFrames && !activeSelectionSetId
                         ? "text-slate-400 cursor-not-allowed"
-                        : "hover:bg-slate-100 dark:hover:bg-slate-700"
+                        : hoverLight
                     }`}
                     style={{ color: getSaveIconColor() }}
                     title={getSaveIconTitle()}
                   >
-                    <Save className="w-3.5 h-3.5" />
+                    <Save className={iconSm} />
                   </button>
                 )}
                 {/* Selection Set Picker Icon */}
@@ -192,12 +195,12 @@ function FramePicker({
                   <button
                     type="button"
                     onClick={onOpenSelectionSetPicker}
-                    className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700"
+                    className={`p-1 rounded ${hoverLight}`}
                     style={{ color: activeSelectionSetId ? "#eab308" : undefined }}
                     title={activeSelectionSetId ? "Selection set loaded" : "Load selection set"}
                   >
                     <Star
-                      className="w-3.5 h-3.5"
+                      className={iconSm}
                       fill={activeSelectionSetId ? "currentColor" : "none"}
                     />
                   </button>
@@ -238,7 +241,7 @@ function FramePicker({
               {sortedFrames.map((f) => (
                 <label
                   key={f.id}
-                  className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer"
+                  className={`flex items-center gap-2 px-3 py-1.5 text-xs ${hoverLight} cursor-pointer`}
                   style={{
                     color: f.lenMismatch ? "#f97316" : undefined,
                   }}
@@ -260,7 +263,7 @@ function FramePicker({
                 </label>
               ))}
               {!anyFrames && (
-                <div className="px-3 py-4 text-xs text-slate-500 dark:text-slate-400">
+                <div className={`px-3 py-4 ${caption}`}>
                   No frames discovered yet.
                 </div>
               )}

@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Search, Activity, FileText, Calculator, Settings, Send, ArrowUpCircle } from "lucide-react";
+import { iconMd } from "../styles/spacing";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import logo from "../assets/logo.png";
 import { useUpdateStore } from "../stores/updateStore";
@@ -131,7 +132,7 @@ export default function LogoMenu({ onPanelClick }: LogoMenuProps) {
           className="flex items-center gap-1 px-2 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 transition-colors"
           title={`Update available: ${availableUpdate.version}`}
         >
-          <ArrowUpCircle className="w-4 h-4" />
+          <ArrowUpCircle className={iconMd} />
           <span className="text-xs font-medium">Update</span>
         </button>
       )}
@@ -154,7 +155,7 @@ export default function LogoMenu({ onPanelClick }: LogoMenuProps) {
                     ${item.bgColor} transition-colors
                   `}
                 >
-                  <Icon className={`w-4 h-4 ${item.color}`} />
+                  <Icon className={`${iconMd} ${item.color}`} />
                   <span className="text-sm text-white">{item.label}</span>
                 </button>
               </div>

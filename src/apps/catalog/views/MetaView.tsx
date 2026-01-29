@@ -1,6 +1,8 @@
 // ui/src/apps/catalog/views/MetaView.tsx
 
 import { FileText, Pencil, Network, Cable, Check } from "lucide-react";
+import { iconMd, iconXs, iconLg, flexRowGap2 } from "../../../styles/spacing";
+import { labelSmallMuted, monoBody, iconButtonHover, bgSecondary, captionMuted, sectionHeaderText } from "../../../styles";
 import type { MetaFields, CanProtocolConfig, SerialProtocolConfig, ModbusProtocolConfig } from "../types";
 
 export type MetaViewProps = {
@@ -30,7 +32,7 @@ export default function MetaView({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-            <FileText className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+            <FileText className={`${iconLg} text-blue-600 dark:text-blue-400`} />
           </div>
           <div>
             <div className="text-lg font-bold text-slate-900 dark:text-white">
@@ -43,29 +45,29 @@ export default function MetaView({
         </div>
         <button
           onClick={onEditMeta}
-          className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+          className={iconButtonHover}
           title="Edit metadata and config"
         >
-          <Pencil className="w-4 h-4 text-slate-700 dark:text-slate-200" />
+          <Pencil className={`${iconMd} text-slate-700 dark:text-slate-200`} />
         </button>
       </div>
 
       {/* Property cards */}
       <div className="grid grid-cols-2 gap-4">
-        <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+        <div className={`p-4 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>
             Name <span className="text-red-500">*</span>
           </div>
-          <div className="font-mono text-sm text-slate-900 dark:text-white">
+          <div className={monoBody}>
             {metaFields.name || <span className="text-red-500">Not set</span>}
           </div>
         </div>
 
-        <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+        <div className={`p-4 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>
             Version <span className="text-red-500">*</span>
           </div>
-          <div className="font-mono text-sm text-slate-900 dark:text-white">
+          <div className={monoBody}>
             {metaFields.version}
           </div>
         </div>
@@ -73,13 +75,13 @@ export default function MetaView({
 
       {/* Protocol Configurations */}
       <div className="space-y-3">
-        <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300">
+        <h3 className={sectionHeaderText}>
           Protocol Configurations
         </h3>
 
         {/* CAN Config */}
         <ProtocolConfigCard
-          icon={<Network className="w-4 h-4 text-green-600 dark:text-green-400" />}
+          icon={<Network className={`${iconMd} text-green-600 dark:text-green-400`} />}
           iconBg="bg-green-100 dark:bg-green-900/30"
           name="CAN"
           isConfigured={!!canConfig}
@@ -103,7 +105,7 @@ export default function MetaView({
 
         {/* Serial Config */}
         <ProtocolConfigCard
-          icon={<Cable className="w-4 h-4 text-purple-600 dark:text-purple-400" />}
+          icon={<Cable className={`${iconMd} text-purple-600 dark:text-purple-400`} />}
           iconBg="bg-purple-100 dark:bg-purple-900/30"
           name="Serial"
           isConfigured={!!serialConfig}
@@ -130,7 +132,7 @@ export default function MetaView({
 
         {/* Modbus Config */}
         <ProtocolConfigCard
-          icon={<Network className="w-4 h-4 text-amber-600 dark:text-amber-400" />}
+          icon={<Network className={`${iconMd} text-amber-600 dark:text-amber-400`} />}
           iconBg="bg-amber-100 dark:bg-amber-900/30"
           name="Modbus"
           isConfigured={!!modbusConfig}
@@ -167,16 +169,16 @@ function ProtocolConfigCard({
   const showWarning = hasFrames && !isConfigured;
 
   return (
-    <div className="flex items-start gap-3 p-3 bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
+    <div className={`flex items-start gap-3 p-3 ${bgSecondary} rounded-lg border border-slate-200 dark:border-slate-700`}>
       <div className={`p-1.5 ${iconBg} rounded`}>
         {icon}
       </div>
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
+        <div className={flexRowGap2}>
           <span className="font-medium text-sm text-slate-900 dark:text-white">{name}</span>
           {isConfigured && (
             <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
-              <Check className="w-3 h-3" />
+              <Check className={iconXs} />
               configured
             </span>
           )}
@@ -186,7 +188,7 @@ function ProtocolConfigCard({
             </span>
           )}
           {!isConfigured && !hasFrames && (
-            <span className="text-xs text-slate-400 dark:text-slate-500">
+            <span className={captionMuted}>
               not configured
             </span>
           )}

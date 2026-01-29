@@ -1,9 +1,10 @@
 // ui/src/dialogs/SpeedPickerDialog.tsx
 
 import { Check, X } from "lucide-react";
+import { iconMd, iconLg } from "../styles/spacing";
 import Dialog from "../components/Dialog";
 import type { PlaybackSpeed } from "../components/TimeController";
-import { h2, cardElevated, paddingCard, borderDefault, hoverLight, roundedDefault, textSuccess } from "../styles";
+import { h2, cardElevated, paddingCard, borderDefault, hoverLight, roundedDefault, textSuccess, textMedium } from "../styles";
 import { SPEED_OPTIONS } from "./io-reader-picker/utils";
 
 type Props = {
@@ -35,7 +36,7 @@ export default function SpeedPickerDialog({
             onClick={onClose}
             className={`p-1 ${roundedDefault} ${hoverLight} transition-colors`}
           >
-            <X className="w-5 h-5" />
+            <X className={iconLg} />
           </button>
         </div>
         <div className="max-h-[50vh] overflow-y-auto">
@@ -50,11 +51,11 @@ export default function SpeedPickerDialog({
                     isSelected ? "bg-slate-100 dark:bg-slate-700" : ""
                   }`}
                 >
-                  <span className="flex-1 text-sm font-medium text-slate-900 dark:text-white">
+                  <span className={`flex-1 ${textMedium}`}>
                     {opt.label}
                   </span>
                   {isSelected && (
-                    <Check className={`w-4 h-4 ${textSuccess} flex-shrink-0`} />
+                    <Check className={`${iconMd} ${textSuccess} flex-shrink-0`} />
                   )}
                 </button>
               );

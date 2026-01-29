@@ -1,12 +1,17 @@
 // ui/src/dialogs/io-reader-picker/BufferList.tsx
 
 import { Check, FileText, Trash2, Radio, Plug } from "lucide-react";
+import { iconMd, iconSm } from "../../styles/spacing";
+import { sectionHeader, caption, textMedium } from "../../styles/typography";
+import { borderDivider, bgSurface } from "../../styles";
 import type { BufferMetadata } from "../../api/buffer";
 
 type Props = {
   buffers: BufferMetadata[];
   selectedBufferId: string | null;
   checkedReaderId: string | null;
+  /** Reader IDs selected in multi-bus mode */
+  checkedReaderIds?: string[];
   onSelectBuffer: (bufferId: string) => void;
   onDeleteBuffer: (bufferId: string) => void;
   onClearAllBuffers: () => void;
@@ -18,6 +23,7 @@ export default function BufferList({
   buffers,
   selectedBufferId,
   checkedReaderId,
+  checkedReaderIds = [],
   onSelectBuffer,
   onDeleteBuffer,
   onClearAllBuffers,
@@ -31,9 +37,9 @@ export default function BufferList({
   const hasNonStreamingBuffers = buffers.some(b => !b.is_streaming);
 
   return (
-    <div className="border-b border-slate-200 dark:border-slate-700">
+    <div className={borderDivider}>
       <div className="px-4 py-2 bg-slate-50 dark:bg-slate-900/50 flex items-center justify-between">
-        <span className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+        <span className={sectionHeader}>
           Buffers ({buffers.length})
         </span>
         {buffers.length > 1 && hasNonStreamingBuffers && (
@@ -47,7 +53,7 @@ export default function BufferList({
       </div>
       <div className="p-3 space-y-2">
         {buffers.map((buffer) => {
-          const isThisBufferSelected = selectedBufferId === buffer.id && !checkedReaderId;
+          const isThisBufferSelected = selectedBufferId === buffer.id && !checkedReaderId && checkedReaderIds.length === 0;
           const isStreaming = buffer.is_streaming;
           return (
             <div
@@ -61,14 +67,14 @@ export default function BufferList({
                   ? "bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700"
                   : isStreaming
                   ? "bg-green-50 dark:bg-green-900/20 border border-green-300 dark:border-green-700"
-                  : "bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-300 dark:hover:border-blue-600"
+                  : `${bgSurface} border border-slate-200 dark:border-slate-700 hover:border-blue-300 dark:hover:border-blue-600`
               }`}
             >
               {isStreaming ? (
-                <Radio className="w-4 h-4 flex-shrink-0 text-green-600 dark:text-green-400 animate-pulse" />
+                <Radio className={`${iconMd} flex-shrink-0 text-green-600 dark:text-green-400 animate-pulse`} />
               ) : (
                 <FileText
-                  className={`w-4 h-4 flex-shrink-0 ${
+                  className={`${iconMd} flex-shrink-0 ${
                     buffer.buffer_type === "bytes"
                       ? "text-purple-600 dark:text-purple-400"
                       : "text-blue-600 dark:text-blue-400"
@@ -76,10 +82,10 @@ export default function BufferList({
                 />
               )}
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-slate-900 dark:text-white truncate">
+                <div className={`${textMedium} truncate`}>
                   {buffer.buffer_type === "bytes" ? "Bytes" : "Frames"}: {buffer.name}
                 </div>
-                <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2">
+                <div className={`${caption} flex items-center gap-2`}>
                   {isStreaming && (
                     <span className="px-1.5 py-0.5 rounded text-[10px] bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300 font-medium">
                       Live
@@ -98,7 +104,7 @@ export default function BufferList({
                 </div>
               </div>
               {isThisBufferSelected && (
-                <Check className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                <Check className={`${iconMd} text-blue-600 dark:text-blue-400 flex-shrink-0`} />
               )}
               {isStreaming && onJoinStreamingBuffer ? (
                 <button
@@ -109,7 +115,7 @@ export default function BufferList({
                   className="p-1 rounded transition-colors hover:bg-green-100 dark:hover:bg-green-900/30 text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300"
                   title="Join streaming session"
                 >
-                  <Plug className="w-3.5 h-3.5" />
+                  <Plug className={iconSm} />
                 </button>
               ) : (
                 <button
@@ -127,7 +133,7 @@ export default function BufferList({
                   }`}
                   title={isStreaming ? "Cannot delete streaming buffer" : "Delete buffer"}
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
+                  <Trash2 className={iconSm} />
                 </button>
               )}
             </div>

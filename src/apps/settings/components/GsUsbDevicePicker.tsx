@@ -4,6 +4,7 @@
 
 import { useState, useEffect } from "react";
 import { RefreshCw } from "lucide-react";
+import { iconLg } from "../../../styles/spacing";
 import {
   listGsUsbDevices,
   createDeviceId,
@@ -84,7 +85,7 @@ export default function GsUsbDevicePicker({ value, onChange }: Props) {
           title="Refresh device list"
         >
           <RefreshCw
-            className={`w-5 h-5 ${isRefreshing ? "animate-spin" : ""}`}
+            className={`${iconLg} ${isRefreshing ? "animate-spin" : ""}`}
           />
         </button>
       </div>

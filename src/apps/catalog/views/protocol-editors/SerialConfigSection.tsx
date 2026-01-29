@@ -1,6 +1,7 @@
 // ui/src/apps/catalog/views/protocol-editors/SerialConfigSection.tsx
 
 import type { SerialConfig, SerialEncoding } from "../../types";
+import { caption, textMedium, focusRing } from "../../../../styles";
 
 export type SerialConfigSectionProps = {
   config: SerialConfig;
@@ -50,30 +51,30 @@ export default function SerialConfigSection({
     <div className="space-y-4">
       {/* Frame ID - Required */}
       <div>
-        <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+        <label className={`block ${textMedium} mb-2`}>
           Frame Identifier <span className="text-red-500">*</span>
         </label>
         <input
           type="text"
           value={config.frame_id ?? ""}
           onChange={(e) => onChange({ ...config, frame_id: e.target.value || undefined })}
-          className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className={`w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white ${focusRing}`}
           placeholder="status_frame"
         />
-        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        <p className={`${caption} mt-1`}>
           A unique identifier for this serial frame
         </p>
       </div>
 
       {/* Encoding - Read-only, from catalog config */}
       <div>
-        <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+        <label className={`block ${textMedium} mb-2`}>
           Encoding
         </label>
         <div className="w-full px-4 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-700 dark:text-slate-300">
           {encodingDisplayName(catalogEncoding)}
         </div>
-        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        <p className={`${caption} mt-1`}>
           Encoding is set at catalog level in [frame.serial.config]
         </p>
       </div>
@@ -81,7 +82,7 @@ export default function SerialConfigSection({
       {/* Delimiter - Only for raw encoding */}
       {catalogEncoding === "raw" && (
         <div>
-          <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+          <label className={`block ${textMedium} mb-2`}>
             Delimiter
           </label>
           <input
@@ -91,10 +92,10 @@ export default function SerialConfigSection({
               const delimiter = parseDelimiter(e.target.value);
               onChange({ ...config, delimiter });
             }}
-            className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+            className={`w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white font-mono ${focusRing}`}
             placeholder="0x0D, 0x0A"
           />
-          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          <p className={`${caption} mt-1`}>
             Byte sequence marking frame boundaries (comma-separated hex or decimal)
           </p>
         </div>
@@ -102,7 +103,7 @@ export default function SerialConfigSection({
 
       {/* Max Length - Optional */}
       <div>
-        <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+        <label className={`block ${textMedium} mb-2`}>
           Max Length
         </label>
         <input
@@ -115,10 +116,10 @@ export default function SerialConfigSection({
               max_length: e.target.value ? parseInt(e.target.value) : undefined,
             })
           }
-          className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className={`w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white ${focusRing}`}
           placeholder="256"
         />
-        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        <p className={`${caption} mt-1`}>
           Maximum frame length in bytes (optional)
         </p>
       </div>

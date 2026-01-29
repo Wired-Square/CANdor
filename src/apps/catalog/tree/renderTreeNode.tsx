@@ -2,6 +2,8 @@
 
 import React from "react";
 import { ChevronDown, ChevronRight, Link2 } from "lucide-react";
+import { iconMd, iconSm } from "../../../styles/spacing";
+import { hoverLight } from "../../../styles";
 import type { TomlNode } from "../types";
 import { shouldShowNode } from "./treeUtils";
 
@@ -39,7 +41,7 @@ export function createRenderTreeNode({
     return (
       <div key={nodePath}>
         <div
-          className={`flex items-center gap-1 px-2 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer rounded ${
+          className={`flex items-center gap-1 px-2 py-1.5 ${hoverLight} cursor-pointer rounded ${
             isSelected ? "bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300" : ""
           }`}
           style={{ paddingLeft: `${depth * 12 + 8}px` }}
@@ -55,9 +57,9 @@ export function createRenderTreeNode({
               }}
             >
               {isExpanded ? (
-                <ChevronDown className="w-4 h-4 flex-shrink-0" />
+                <ChevronDown className={`${iconMd} flex-shrink-0`} />
               ) : (
-                <ChevronRight className="w-4 h-4 flex-shrink-0" />
+                <ChevronRight className={`${iconMd} flex-shrink-0`} />
               )}
             </button>
           ) : (
@@ -67,7 +69,7 @@ export function createRenderTreeNode({
           <span className="text-sm truncate flex items-center gap-1.5">
             {isCopy && (
               <span title={`Copied from ${node.metadata?.copyFrom}`}>
-                <Link2 className="w-3.5 h-3.5 text-blue-500 dark:text-blue-400 flex-shrink-0" />
+                <Link2 className={`${iconSm} text-blue-500 dark:text-blue-400 flex-shrink-0`} />
               </span>
             )}
             {node.type === "signal" && "⚡ "}

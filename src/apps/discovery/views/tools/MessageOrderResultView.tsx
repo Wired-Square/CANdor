@@ -2,6 +2,10 @@
 
 import { useState } from "react";
 import { ListOrdered, Clock, Layers, Play, Shuffle, Zap, GitBranch, Download } from "lucide-react";
+import { iconMd, iconSm, iconLg, flexRowGap2, paddingCardSm } from "../../../../styles/spacing";
+import { cardDefault } from "../../../../styles/cardStyles";
+import { labelSmall, caption, captionMuted, sectionHeaderText } from "../../../../styles/typography";
+import { borderDivider, hoverLight, bgSurface } from "../../../../styles";
 import { useDiscoveryStore } from "../../../../stores/discoveryStore";
 import type { DetectedPattern, IntervalGroup, StartIdCandidate, MultiplexedFrame, BurstFrame, MultiBusFrame } from "../../../../utils/analysis/messageOrderAnalysis";
 import { useSettings } from "../../../../hooks/useSettings";
@@ -48,7 +52,7 @@ export default function MessageOrderResultView({ embedded = false }: Props) {
 
   if (!results) {
     return (
-      <div className={`h-full flex flex-col ${embedded ? "" : "bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700"}`}>
+      <div className={`h-full flex flex-col ${embedded ? "" : `${bgSurface} rounded-lg border border-slate-200 dark:border-slate-700`}`}>
         {!embedded && <Header onExport={() => {}} hasResults={false} />}
         <div className="flex-1 flex flex-col items-center justify-center text-center p-4">
           <ListOrdered className="w-12 h-12 text-slate-300 dark:text-slate-600 mb-4" />
@@ -64,11 +68,11 @@ export default function MessageOrderResultView({ embedded = false }: Props) {
   }
 
   return (
-    <div className={`h-full flex flex-col ${embedded ? "" : "bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700"}`}>
+    <div className={`h-full flex flex-col ${embedded ? "" : `${bgSurface} rounded-lg border border-slate-200 dark:border-slate-700`}`}>
       {!embedded && <Header onExport={() => setShowExportDialog(true)} hasResults={true} />}
 
       {/* Stats Summary */}
-      <div className="px-4 py-2 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
+      <div className={`px-4 py-2 ${borderDivider} bg-slate-50 dark:bg-slate-900`}>
         <div className="flex flex-wrap gap-4 text-xs">
           <span className="text-slate-500 dark:text-slate-400">
             <span className="font-medium text-slate-700 dark:text-slate-200">{results.totalFramesAnalyzed.toLocaleString()}</span> frames
@@ -134,13 +138,13 @@ type HeaderProps = {
 
 function Header({ onExport, hasResults }: HeaderProps) {
   return (
-    <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-200 dark:border-slate-700">
-      <ListOrdered className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+    <div className={`flex items-center gap-3 px-4 py-3 ${borderDivider}`}>
+      <ListOrdered className={`${iconLg} text-purple-600 dark:text-purple-400`} />
       <div className="flex-1">
-        <h2 className="text-sm font-medium text-slate-700 dark:text-slate-200">
+        <h2 className={sectionHeaderText}>
           Frame Order Analysis
         </h2>
-        <p className="text-xs text-slate-500 dark:text-slate-400">
+        <p className={caption}>
           Detected transmission patterns and timing
         </p>
       </div>
@@ -148,10 +152,10 @@ function Header({ onExport, hasResults }: HeaderProps) {
         <button
           type="button"
           onClick={onExport}
-          className="flex items-center gap-1.5 px-2 py-1 rounded text-xs text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+          className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs text-slate-600 dark:text-slate-400 ${hoverLight} transition-colors`}
           title="Export report"
         >
-          <Download className="w-3.5 h-3.5" />
+          <Download className={iconSm} />
           <span>Export</span>
         </button>
       )}
@@ -172,10 +176,10 @@ function PatternSection({ patterns }: PatternSectionProps) {
     return (
       <section>
         <div className="flex items-center gap-2 mb-2">
-          <Play className="w-4 h-4 text-slate-400" />
+          <Play className={`${iconMd} text-slate-400`} />
           <h3 className="text-xs font-medium text-slate-600 dark:text-slate-300">Detected Patterns</h3>
         </div>
-        <p className="text-xs text-slate-400 dark:text-slate-500">
+        <p className={captionMuted}>
           No patterns detected. Try selecting a Start Message ID from the candidates below.
         </p>
       </section>
@@ -185,7 +189,7 @@ function PatternSection({ patterns }: PatternSectionProps) {
   return (
     <section>
       <div className="flex items-center gap-2 mb-3">
-        <Play className="w-4 h-4 text-purple-500" />
+        <Play className={`${iconMd} text-purple-500`} />
         <h3 className="text-xs font-medium text-slate-600 dark:text-slate-300">
           Detected Patterns ({patterns.length})
         </h3>
@@ -209,13 +213,13 @@ function PatternCard({ pattern, rank }: PatternCardProps) {
   const isHighConfidence = pattern.confidence >= 0.8;
 
   return (
-    <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700">
+    <div className={`${paddingCardSm} ${cardDefault}`}>
       <div className="flex items-start justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+        <div className={flexRowGap2}>
+          <span className={labelSmall}>
             Pattern #{rank}
           </span>
-          <span className="text-xs text-slate-400 dark:text-slate-500">
+          <span className={captionMuted}>
             starts with <span className="font-mono text-purple-600 dark:text-purple-400">{formatFrameId(pattern.startId)}</span>
           </span>
         </div>
@@ -251,7 +255,7 @@ function PatternCard({ pattern, rank }: PatternCardProps) {
         ))}
       </div>
 
-      <div className="text-xs text-slate-400 dark:text-slate-500">
+      <div className={captionMuted}>
         {pattern.sequence.length} frames • avg cycle: {formatMs(pattern.avgCycleTimeMs)}
       </div>
     </div>
@@ -275,18 +279,18 @@ function CandidatesSection({ candidates, onSelect }: CandidatesSectionProps) {
   return (
     <section>
       <div className="flex items-center gap-2 mb-3">
-        <Clock className="w-4 h-4 text-blue-500" />
+        <Clock className={`${iconMd} text-blue-500`} />
         <h3 className="text-xs font-medium text-slate-600 dark:text-slate-300">
           Start ID Candidates
         </h3>
-        <span className="text-xs text-slate-400 dark:text-slate-500">
+        <span className={captionMuted}>
           (sorted by max gap before)
         </span>
       </div>
-      <div className="bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
+      <div className={`${cardDefault} overflow-hidden`}>
         <table className="w-full text-xs">
           <thead>
-            <tr className="border-b border-slate-200 dark:border-slate-700">
+            <tr className={borderDivider}>
               <th className="text-left px-3 py-2 font-medium text-slate-500 dark:text-slate-400">Frame ID</th>
               <th className="text-right px-3 py-2 font-medium text-slate-500 dark:text-slate-400">Max Gap</th>
               <th className="text-right px-3 py-2 font-medium text-slate-500 dark:text-slate-400">Avg Gap</th>
@@ -350,18 +354,18 @@ function MultiplexedSection({ multiplexed }: MultiplexedSectionProps) {
   return (
     <section>
       <div className="flex items-center gap-2 mb-3">
-        <Shuffle className="w-4 h-4 text-orange-500" />
+        <Shuffle className={`${iconMd} text-orange-500`} />
         <h3 className="text-xs font-medium text-slate-600 dark:text-slate-300">
           Potential Multiplexed Frames ({multiplexed.length})
         </h3>
-        <span className="text-xs text-slate-400 dark:text-slate-500">
+        <span className={captionMuted}>
           (same ID, byte[0] increments)
         </span>
       </div>
-      <div className="bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
+      <div className={`${cardDefault} overflow-hidden`}>
         <table className="w-full text-xs">
           <thead>
-            <tr className="border-b border-slate-200 dark:border-slate-700">
+            <tr className={borderDivider}>
               <th className="text-left px-3 py-2 font-medium text-slate-500 dark:text-slate-400">Frame ID</th>
               <th className="text-left px-3 py-2 font-medium text-slate-500 dark:text-slate-400">Selector</th>
               <th className="text-left px-3 py-2 font-medium text-slate-500 dark:text-slate-400">Cases</th>
@@ -441,18 +445,18 @@ function BurstSection({ bursts }: BurstSectionProps) {
   return (
     <section>
       <div className="flex items-center gap-2 mb-3">
-        <Zap className="w-4 h-4 text-cyan-500" />
+        <Zap className={`${iconMd} text-cyan-500`} />
         <h3 className="text-xs font-medium text-slate-600 dark:text-slate-300">
           Burst/Transaction Frames ({bursts.length})
         </h3>
-        <span className="text-xs text-slate-400 dark:text-slate-500">
+        <span className={captionMuted}>
           (variable DLC, request-response patterns)
         </span>
       </div>
-      <div className="bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
+      <div className={`${cardDefault} overflow-hidden`}>
         <table className="w-full text-xs">
           <thead>
-            <tr className="border-b border-slate-200 dark:border-slate-700">
+            <tr className={borderDivider}>
               <th className="text-left px-3 py-2 font-medium text-slate-500 dark:text-slate-400">Frame ID</th>
               <th className="text-left px-3 py-2 font-medium text-slate-500 dark:text-slate-400">DLCs</th>
               <th className="text-right px-3 py-2 font-medium text-slate-500 dark:text-slate-400">Burst Size</th>
@@ -528,18 +532,18 @@ function MultiBusSection({ multiBus }: MultiBusSectionProps) {
   return (
     <section>
       <div className="flex items-center gap-2 mb-3">
-        <GitBranch className="w-4 h-4 text-rose-500" />
+        <GitBranch className={`${iconMd} text-rose-500`} />
         <h3 className="text-xs font-medium text-slate-600 dark:text-slate-300">
           Multi-Bus Frames ({multiBus.length})
         </h3>
-        <span className="text-xs text-slate-400 dark:text-slate-500">
+        <span className={captionMuted}>
           (same ID seen on multiple buses)
         </span>
       </div>
-      <div className="bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
+      <div className={`${cardDefault} overflow-hidden`}>
         <table className="w-full text-xs">
           <thead>
-            <tr className="border-b border-slate-200 dark:border-slate-700">
+            <tr className={borderDivider}>
               <th className="text-left px-3 py-2 font-medium text-slate-500 dark:text-slate-400">Frame ID</th>
               <th className="text-left px-3 py-2 font-medium text-slate-500 dark:text-slate-400">Buses</th>
               <th className="text-left px-3 py-2 font-medium text-slate-500 dark:text-slate-400">Count per Bus</th>
@@ -605,11 +609,11 @@ function IntervalSection({ groups, multiplexedIds, burstIds }: IntervalSectionPr
   return (
     <section>
       <div className="flex items-center gap-2 mb-3">
-        <Layers className="w-4 h-4 text-emerald-500" />
+        <Layers className={`${iconMd} text-emerald-500`} />
         <h3 className="text-xs font-medium text-slate-600 dark:text-slate-300">
           Repetition Period Groups
         </h3>
-        <span className="text-xs text-slate-400 dark:text-slate-500">
+        <span className={captionMuted}>
           (frames grouped by how often they repeat)
         </span>
       </div>
@@ -623,7 +627,7 @@ function IntervalSection({ groups, multiplexedIds, burstIds }: IntervalSectionPr
               <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
                 ~{formatMs(group.intervalMs)}
               </span>
-              <span className="text-xs text-slate-400 dark:text-slate-500">
+              <span className={captionMuted}>
                 ({group.frameIds.length} frame{group.frameIds.length !== 1 ? "s" : ""})
               </span>
             </div>

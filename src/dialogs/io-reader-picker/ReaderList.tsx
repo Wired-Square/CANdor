@@ -6,6 +6,9 @@ import type { Session } from "../../stores/sessionStore";
 import type { ActiveSessionInfo } from "../../api/io";
 import { CSV_EXTERNAL_ID, isRealtimeProfile, isMultiSourceCapable } from "./utils";
 import { badgeSmallNeutral, badgeSmallSuccess, badgeSmallWarning, badgeSmallPurple } from "../../styles/badgeStyles";
+import { iconMd, iconSm, iconXs, flexRowGap2 } from "../../styles/spacing";
+import { sectionHeader, caption, captionMuted, textMedium } from "../../styles/typography";
+import { borderDivider, bgSurface } from "../../styles";
 import type { ReactNode } from "react";
 import { AlertCircle } from "lucide-react";
 
@@ -109,7 +112,7 @@ export default function ReaderList({
       const sourceCount = checkedMultiSourceSession.multiSourceConfigs?.length || 0;
       displayName = `Multi-Bus Session (${sourceCount} sources)`;
       subtitle = checkedMultiSourceSession.sessionId;
-      icon = <GitMerge className="w-4 h-4 text-purple-500" />;
+      icon = <GitMerge className={`${iconMd} text-purple-500`} />;
     } else if (checkedProfile) {
       displayName = checkedProfile.name;
       subtitle = checkedProfile.kind;
@@ -119,8 +122,8 @@ export default function ReaderList({
     }
 
     return (
-      <div className="border-b border-slate-200 dark:border-slate-700">
-        <div className="px-4 py-2 bg-slate-50 dark:bg-slate-900/50 text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+      <div className={borderDivider}>
+        <div className={`px-4 py-2 bg-slate-50 dark:bg-slate-900/50 ${sectionHeader}`}>
           IO Reader
         </div>
         <div className="px-3 py-2">
@@ -134,10 +137,10 @@ export default function ReaderList({
               </div>
             )}
             <div className="flex-1 min-w-0">
-              <span className="text-sm font-medium text-slate-900 dark:text-white truncate">
+              <span className={`${textMedium} truncate`}>
                 {displayName}
               </span>
-              <div className="text-xs text-slate-500 dark:text-slate-400">
+              <div className={caption}>
                 {subtitle}
               </div>
             </div>
@@ -167,16 +170,16 @@ export default function ReaderList({
   };
 
   return (
-    <div className="border-b border-slate-200 dark:border-slate-700">
-      <div className="px-4 py-2 bg-slate-50 dark:bg-slate-900/50 text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+    <div className={borderDivider}>
+      <div className={`px-4 py-2 bg-slate-50 dark:bg-slate-900/50 ${sectionHeader}`}>
         IO Reader
       </div>
 
       {/* Active Multi-Bus Sessions (shareable) */}
       {runningMultiSourceSessions.length > 0 && onSelectMultiSourceSession && (
         <div className="border-b border-slate-100 dark:border-slate-700/50">
-          <div className="px-4 py-1.5 text-xs text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
-            <GitMerge className="w-3 h-3" />
+          <div className={`px-4 py-1.5 ${captionMuted} flex items-center gap-1.5`}>
+            <GitMerge className={iconXs} />
             <span>Active Multi-Bus Sessions</span>
           </div>
           <div className="px-3 pb-2 space-y-1">
@@ -193,7 +196,7 @@ export default function ReaderList({
                   className={`w-full px-3 py-2 flex items-center gap-3 text-left rounded-lg transition-colors ${
                     isSelected
                       ? "bg-purple-50 dark:bg-purple-900/20 border border-purple-300 dark:border-purple-700"
-                      : "bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-purple-300 dark:hover:border-purple-600"
+                      : `${bgSurface} border border-slate-200 dark:border-slate-700 hover:border-purple-300 dark:hover:border-purple-600`
                   }`}
                 >
                   <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
@@ -205,13 +208,13 @@ export default function ReaderList({
                       <div className="w-2 h-2 rounded-full bg-purple-600 dark:bg-purple-400" />
                     )}
                   </div>
-                  <GitMerge className="w-4 h-4 flex-shrink-0 text-purple-600 dark:text-purple-400" />
+                  <GitMerge className={`${iconMd} flex-shrink-0 text-purple-600 dark:text-purple-400`} />
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-slate-900 dark:text-white truncate flex items-center gap-2">
+                    <div className={`${textMedium} truncate flex items-center gap-2`}>
                       <span>{sourceNames}</span>
-                      <Radio className="w-3 h-3 text-green-500 animate-pulse" />
+                      <Radio className={`${iconXs} text-green-500 animate-pulse`} />
                     </div>
-                    <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2">
+                    <div className={`${caption} flex items-center gap-2`}>
                       <span className={badgeSmallSuccess}>Live</span>
                       <span>{session.listenerCount} listener{session.listenerCount !== 1 ? "s" : ""}</span>
                     </div>
@@ -226,8 +229,8 @@ export default function ReaderList({
       {/* Active Recorded Sessions (PostgreSQL, etc.) */}
       {runningRecordedSessions.length > 0 && onSelectMultiSourceSession && (
         <div className="border-b border-slate-100 dark:border-slate-700/50">
-          <div className="px-4 py-1.5 text-xs text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
-            <Play className="w-3 h-3" />
+          <div className={`px-4 py-1.5 ${captionMuted} flex items-center gap-1.5`}>
+            <Play className={iconXs} />
             <span>Active Sessions</span>
           </div>
           <div className="px-3 pb-2 space-y-1">
@@ -244,7 +247,7 @@ export default function ReaderList({
                   className={`w-full px-3 py-2 flex items-center gap-3 text-left rounded-lg transition-colors ${
                     isSelected
                       ? "bg-green-50 dark:bg-green-900/20 border border-green-300 dark:border-green-700"
-                      : "bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-green-300 dark:hover:border-green-600"
+                      : `${bgSurface} border border-slate-200 dark:border-slate-700 hover:border-green-300 dark:hover:border-green-600`
                   }`}
                 >
                   <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
@@ -256,13 +259,13 @@ export default function ReaderList({
                       <div className="w-2 h-2 rounded-full bg-green-600 dark:bg-green-400" />
                     )}
                   </div>
-                  <Database className="w-4 h-4 flex-shrink-0 text-green-600 dark:text-green-400" />
+                  <Database className={`${iconMd} flex-shrink-0 text-green-600 dark:text-green-400`} />
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-slate-900 dark:text-white truncate flex items-center gap-2">
+                    <div className={`${textMedium} truncate flex items-center gap-2`}>
                       <span>{displayName}</span>
-                      <Radio className="w-3 h-3 text-green-500 animate-pulse" />
+                      <Radio className={`${iconXs} text-green-500 animate-pulse`} />
                     </div>
-                    <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2">
+                    <div className={`${caption} flex items-center gap-2`}>
                       <span className={badgeSmallSuccess}>Live</span>
                       <span>{deviceKind}</span>
                       <span>· {session.listenerCount} listener{session.listenerCount !== 1 ? "s" : ""}</span>
@@ -278,13 +281,13 @@ export default function ReaderList({
       {/* Real-time Sources */}
       {realtimeProfiles.length > 0 && (
         <div className="border-b border-slate-100 dark:border-slate-700/50">
-          <div className="px-4 py-1.5 text-xs text-slate-400 dark:text-slate-500 flex items-center justify-between">
+          <div className={`px-4 py-1.5 ${captionMuted} flex items-center justify-between`}>
             <div className="flex items-center gap-1.5">
-              <Wifi className="w-3 h-3" />
+              <Wifi className={iconXs} />
               <span>Real-time</span>
               {isMultiBusMode && (
                 <span className={badgeSmallPurple}>
-                  <GitMerge className="w-3 h-3 inline mr-1" />
+                  <GitMerge className={`${iconXs} inline mr-1`} />
                   {checkedReaderIds.length} buses
                 </span>
               )}
@@ -293,7 +296,7 @@ export default function ReaderList({
           {/* Validation error */}
           {validationError && (
             <div className="mx-3 mb-2 px-3 py-2 text-xs text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <AlertCircle className={`${iconMd} flex-shrink-0`} />
               <span>{validationError}</span>
             </div>
           )}
@@ -340,8 +343,8 @@ export default function ReaderList({
       {/* Recorded Sources */}
       {!hideRecorded && recordedProfiles.length > 0 && (
         <div className="border-b border-slate-100 dark:border-slate-700/50">
-          <div className="px-4 py-1.5 text-xs text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
-            <Database className="w-3 h-3" />
+          <div className={`px-4 py-1.5 ${captionMuted} flex items-center gap-1.5`}>
+            <Database className={iconXs} />
             <span>Recorded</span>
           </div>
           <div className="px-3 pb-2 space-y-1">
@@ -364,8 +367,8 @@ export default function ReaderList({
       {/* External Sources */}
       {!hideExternal && (
         <div>
-          <div className="px-4 py-1.5 text-xs text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
-            <FolderOpen className="w-3 h-3" />
+          <div className={`px-4 py-1.5 ${captionMuted} flex items-center gap-1.5`}>
+            <FolderOpen className={iconXs} />
             <span>External</span>
           </div>
           <div className="px-3 pb-2 space-y-1">
@@ -388,8 +391,8 @@ export default function ReaderList({
                 {isCsvSelected && <div className="w-2 h-2 rounded-full bg-blue-600 dark:bg-blue-400" />}
               </div>
               <div className="flex-1 min-w-0">
-                <span className="text-sm font-medium text-slate-900 dark:text-white">CSV</span>
-                <div className="text-xs text-slate-500 dark:text-slate-400">Import from file</div>
+                <span className={textMedium}>CSV</span>
+                <div className={caption}>Import from file</div>
               </div>
             </button>
           </div>
@@ -502,9 +505,9 @@ function ReaderButton({
         ) : null}
       </div>
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          {isDefault && <Bookmark className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" fill="currentColor" />}
-          <span className={`text-sm font-medium truncate ${isDisabled ? "text-slate-400 dark:text-slate-500" : "text-slate-900 dark:text-white"}`}>
+        <div className={flexRowGap2}>
+          {isDefault && <Bookmark className={`${iconSm} text-amber-500 flex-shrink-0`} fill="currentColor" />}
+          <span className={`${textMedium} truncate ${isDisabled ? "!text-slate-400 dark:!text-slate-500" : ""}`}>
             {profile.name}
           </span>
           {busNumber !== undefined && (

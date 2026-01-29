@@ -15,6 +15,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { Settings as SettingsIcon, Search, Activity, FileText, Calculator, Send } from "lucide-react";
+import { icon2xl } from "../styles/spacing";
 import "dockview-react/dist/styles/dockview.css";
 import LogoMenu, { type PanelId } from "./LogoMenu";
 import AppTab from "./AppTab";
@@ -227,7 +228,7 @@ function WatermarkAppButton({ icon: Icon, label, color, bgColor, onClick }: Wate
       onClick={onClick}
       className={`flex flex-col items-center gap-2 p-4 rounded-xl ${bgColor} transition-colors`}
     >
-      <Icon className={`w-8 h-8 ${color}`} />
+      <Icon className={`${icon2xl} ${color}`} />
       <span className="text-sm text-slate-300 font-ubuntu">{label}</span>
     </button>
   );

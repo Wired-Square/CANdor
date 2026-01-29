@@ -1,6 +1,7 @@
 // ui/src/apps/settings/components/SecurePasswordField.tsx
 import { useState } from "react";
 import { Shield, ShieldAlert, Eye, EyeOff } from "lucide-react";
+import { iconMd, iconXs, flexRowGap2 } from "../../../styles/spacing";
 import { Input } from "../../../components/forms";
 import { labelDefault, helpText, alertWarning, hoverLight, roundedDefault } from "../../../styles";
 
@@ -40,7 +41,7 @@ export default function SecurePasswordField({
         {label} {optional && <span className="text-slate-500">(optional)</span>}
         {isSecurelyStored && (
           <span className="ml-2 inline-flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
-            <Shield className="w-3 h-3" />
+            <Shield className={iconXs} />
             Secure
           </span>
         )}
@@ -48,8 +49,8 @@ export default function SecurePasswordField({
 
       {showMigrationWarning && (
         <div className={`${alertWarning} mb-2 flex items-center justify-between gap-2`}>
-          <div className="flex items-center gap-2">
-            <ShieldAlert className="w-4 h-4 flex-shrink-0" />
+          <div className={flexRowGap2}>
+            <ShieldAlert className={`${iconMd} flex-shrink-0`} />
             <span className="text-xs">
               Password stored in plain text. Migrate to secure storage.
             </span>
@@ -86,9 +87,9 @@ export default function SecurePasswordField({
           title={showPassword ? "Hide password" : "Show password"}
         >
           {showPassword ? (
-            <EyeOff className="w-4 h-4" />
+            <EyeOff className={iconMd} />
           ) : (
-            <Eye className="w-4 h-4" />
+            <Eye className={iconMd} />
           )}
         </button>
       </div>

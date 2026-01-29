@@ -1,6 +1,10 @@
 // ui/src/dialogs/DecoderInfoDialog.tsx
 
 import { X, FileText, Shuffle, Zap, GitBranch, Clock, Layers } from "lucide-react";
+import { iconMd, iconXs, iconLg, flexRowGap2, paddingCardSm } from "../styles/spacing";
+import { cardDefault } from "../styles/cardStyles";
+import { caption, captionMuted, sectionHeaderText } from "../styles/typography";
+import { borderDivider, hoverLight, bgSurface } from "../styles";
 import Dialog from "../components/Dialog";
 import { useDiscoveryStore } from "../stores/discoveryStore";
 import type { DecoderKnowledge, FrameKnowledge, MuxKnowledge } from "../utils/decoderKnowledge";
@@ -23,23 +27,23 @@ export default function DecoderInfoDialog({ isOpen, onClose }: Props) {
 
   return (
     <Dialog isOpen={isOpen} onBackdropClick={onClose} maxWidth="max-w-2xl">
-      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl overflow-hidden max-h-[80vh] flex flex-col">
+      <div className={`${bgSurface} rounded-xl shadow-xl overflow-hidden max-h-[80vh] flex flex-col`}>
         {/* Header */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-200 dark:border-slate-700 flex-shrink-0">
-          <FileText className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+        <div className={`flex items-center gap-3 px-4 py-3 ${borderDivider} flex-shrink-0`}>
+          <FileText className={`${iconLg} text-blue-600 dark:text-blue-400`} />
           <div className="flex-1">
-            <h2 className="text-sm font-medium text-slate-700 dark:text-slate-200">
+            <h2 className={sectionHeaderText}>
               Decoder Knowledge
             </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
+            <p className={caption}>
               Accumulated information about discovered frames
             </p>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+            className={`p-1 rounded ${hoverLight} transition-colors`}
           >
-            <X className="w-5 h-5" />
+            <X className={iconLg} />
           </button>
         </div>
 
@@ -102,12 +106,12 @@ function MetaSection({ knowledge }: MetaSectionProps) {
   return (
     <section>
       <div className="flex items-center gap-2 mb-3">
-        <Layers className="w-4 h-4 text-purple-500" />
+        <Layers className={`${iconMd} text-purple-500`} />
         <h3 className="text-xs font-medium text-slate-600 dark:text-slate-300">
           Meta (for [meta] section)
         </h3>
       </div>
-      <div className="bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 p-3 space-y-2">
+      <div className={`${cardDefault} ${paddingCardSm} space-y-2`}>
         <div className="flex items-center justify-between text-xs">
           <span className="text-slate-500 dark:text-slate-400">default_frame</span>
           <span className="font-mono text-slate-700 dark:text-slate-200">"{meta.defaultFrame}"</span>
@@ -149,12 +153,12 @@ function FramesSection({ knowledge }: FramesSectionProps) {
     return (
       <section>
         <div className="flex items-center gap-2 mb-3">
-          <Clock className="w-4 h-4 text-slate-400" />
+          <Clock className={`${iconMd} text-slate-400`} />
           <h3 className="text-xs font-medium text-slate-600 dark:text-slate-300">
             Frames
           </h3>
         </div>
-        <p className="text-xs text-slate-400 dark:text-slate-500">
+        <p className={captionMuted}>
           No frames discovered yet.
         </p>
       </section>
@@ -164,7 +168,7 @@ function FramesSection({ knowledge }: FramesSectionProps) {
   return (
     <section>
       <div className="flex items-center gap-2 mb-3">
-        <Clock className="w-4 h-4 text-emerald-500" />
+        <Clock className={`${iconMd} text-emerald-500`} />
         <h3 className="text-xs font-medium text-slate-600 dark:text-slate-300">
           Frames ({frames.length})
         </h3>
@@ -191,14 +195,14 @@ function FrameCard({ frame }: FrameCardProps) {
   const allSignals = [...frame.signals, ...defaultSignals];
 
   return (
-    <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700">
+    <div className={`${paddingCardSm} ${cardDefault}`}>
       {/* Header */}
       <div className="flex items-start justify-between mb-2">
-        <div className="flex items-center gap-2">
+        <div className={flexRowGap2}>
           <span className="font-mono font-semibold text-sm text-slate-700 dark:text-slate-200">
             {formatFrameId(frame.frameId)}
           </span>
-          <span className="text-xs text-slate-400 dark:text-slate-500">
+          <span className={captionMuted}>
             {frame.length} bytes
           </span>
           {frame.isExtended && (
@@ -207,14 +211,14 @@ function FrameCard({ frame }: FrameCardProps) {
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className={flexRowGap2}>
           {frame.intervalMs !== undefined && (
             <span className="text-xs text-emerald-600 dark:text-emerald-400">
               {formatMs(frame.intervalMs)}
             </span>
           )}
           {frame.bus !== undefined && (
-            <span className="text-xs text-slate-400 dark:text-slate-500">
+            <span className={captionMuted}>
               Bus {frame.bus}
             </span>
           )}
@@ -225,19 +229,19 @@ function FrameCard({ frame }: FrameCardProps) {
       <div className="flex flex-wrap gap-1 mb-2">
         {frame.mux && (
           <span className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 rounded">
-            <Shuffle className="w-3 h-3" />
+            <Shuffle className={iconXs} />
             {frame.mux.isTwoByte ? "2D Mux" : "Mux"}
           </span>
         )}
         {frame.isBurst && (
           <span className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-cyan-100 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300 rounded">
-            <Zap className="w-3 h-3" />
+            <Zap className={iconXs} />
             Burst
           </span>
         )}
         {frame.isMultiBus && (
           <span className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300 rounded">
-            <GitBranch className="w-3 h-3" />
+            <GitBranch className={iconXs} />
             Multi-bus
           </span>
         )}

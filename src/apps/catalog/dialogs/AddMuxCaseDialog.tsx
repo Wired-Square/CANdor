@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import Dialog from "../../../components/Dialog";
 import { Input, Textarea, FormField, SecondaryButton, SuccessButton } from "../../../components/forms";
-import { h2 } from "../../../styles";
+import { h2, caption } from "../../../styles";
 import type { ValidationError } from "../types";
 
 export type AddMuxCaseDialogProps = {
@@ -59,7 +59,7 @@ export default function AddMuxCaseDialog({
             {caseError && (
               <p className="mt-2 text-sm text-red-600 dark:text-red-400">{caseError.message}</p>
             )}
-            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            <p className={`mt-2 ${caption}`}>
               Enter the case value (e.g., "0", "1", "2" for numeric cases or any string)
             </p>
           </FormField>

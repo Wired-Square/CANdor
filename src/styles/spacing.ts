@@ -97,3 +97,41 @@ export const roundedLarge = "rounded-xl";
 
 /** Full/pill radius */
 export const roundedFull = "rounded-full";
+
+// =============================================================================
+// Icon Sizes
+// =============================================================================
+
+/** Extra small icon (inline compact indicators, checksum marks, tab close) */
+export const iconXs = "w-3 h-3";
+
+/** Small icon (toolbar buttons, session controls) */
+export const iconSm = "w-3.5 h-3.5";
+
+/** Medium/default icon (standard buttons, general purpose) */
+export const iconMd = "w-4 h-4";
+
+/** Large icon (app identity in top bars, dialog close buttons) */
+export const iconLg = "w-5 h-5";
+
+/** Extra large icon (alert dialogs, loading spinners) */
+export const iconXl = "w-6 h-6";
+
+/** Jumbo icon (launcher icons, large decorative elements) */
+export const icon2xl = "w-8 h-8";
+
+// =============================================================================
+// Flex Row Layouts
+// =============================================================================
+
+/** Flex row base (centered items) */
+export const flexRow = "flex items-center";
+
+/** Flex row with tight gap */
+export const flexRowGap1 = "flex items-center gap-1";
+
+/** Flex row with small gap (most common) */
+export const flexRowGap2 = "flex items-center gap-2";
+
+/** Flex row with default gap */
+export const flexRowGap3 = "flex items-center gap-3";

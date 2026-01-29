@@ -5,6 +5,8 @@
 // Can be used for slcan, GVRET USB, and other serial-connected devices.
 
 import { CircleCheck, CircleX, Loader2, RefreshCw } from "lucide-react";
+import { iconMd, iconLg } from "../../../styles/spacing";
+import { caption, iconButtonHoverSmall } from "../../../styles";
 
 export type DeviceProbeState = "idle" | "probing" | "success" | "error";
 
@@ -56,13 +58,13 @@ export default function IODeviceStatus({
       {/* Status indicator */}
       <div className="flex-shrink-0">
         {state === "probing" && (
-          <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
+          <Loader2 className={`${iconLg} text-blue-500 animate-spin`} />
         )}
         {state === "success" && (
-          <CircleCheck className="w-5 h-5 text-green-500" />
+          <CircleCheck className={`${iconLg} text-green-500`} />
         )}
         {state === "error" && (
-          <CircleX className="w-5 h-5 text-red-500" />
+          <CircleX className={`${iconLg} text-red-500`} />
         )}
         {state === "idle" && (
           <div className="w-5 h-5 rounded-full border-2 border-slate-300 dark:border-slate-600" />
@@ -99,7 +101,7 @@ export default function IODeviceStatus({
               {errorText}
             </span>
             {result.error && (
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">
+              <p className={`${caption} mt-0.5 truncate`}>
                 {result.error}
               </p>
             )}
@@ -117,10 +119,10 @@ export default function IODeviceStatus({
         <button
           type="button"
           onClick={onRefresh}
-          className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+          className={iconButtonHoverSmall}
           title="Probe device again"
         >
-          <RefreshCw className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+          <RefreshCw className={`${iconMd} text-slate-500 dark:text-slate-400`} />
         </button>
       )}
     </div>

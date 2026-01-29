@@ -5,6 +5,8 @@
 
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
+import { iconLg } from '../../../../styles/spacing';
+import { hoverLight } from '../../../../styles';
 import Dialog from '../../../../components/Dialog';
 import FilterOptionsPanel, { type FilterConfig } from '../../../../components/FilterOptionsPanel';
 import { DialogFooter } from '../../../../components/forms/DialogFooter';
@@ -35,8 +37,8 @@ export default function FilterDialog({ isOpen, onClose, minLength: initialMinLen
       <div className="p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Filter Settings</h2>
-          <button onClick={onClose} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
-            <X className="w-5 h-5" />
+          <button onClick={onClose} className={`p-1 ${hoverLight} rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-300`}>
+            <X className={iconLg} />
           </button>
         </div>
 

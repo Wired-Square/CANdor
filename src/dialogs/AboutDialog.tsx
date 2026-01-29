@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { X } from 'lucide-react';
+import { iconLg } from "../styles/spacing";
 import { getAppVersion } from "../api";
 import Dialog from "../components/Dialog";
 import { PrimaryButton } from "../components/forms";
@@ -31,7 +32,7 @@ export default function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
             onClick={onClose}
             className={`p-1 ${hoverLight} ${roundedDefault} transition-colors`}
           >
-            <X className="w-5 h-5 text-slate-500" />
+            <X className={`${iconLg} text-slate-500`} />
           </button>
         </div>
 

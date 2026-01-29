@@ -4,6 +4,7 @@
 
 import { useState, useEffect } from "react";
 import { RefreshCw } from "lucide-react";
+import { iconLg } from "../../../styles/spacing";
 import { listSerialPorts, SerialPortInfo } from "../../../api/serial";
 import { Input, Select } from "../../../components/forms";
 import { iconButtonBase } from "../../../styles/buttonStyles";
@@ -72,7 +73,7 @@ export default function SerialPortPicker({ value, onChange }: Props) {
           title="Refresh port list"
         >
           <RefreshCw
-            className={`w-5 h-5 ${isRefreshing ? "animate-spin" : ""}`}
+            className={`${iconLg} ${isRefreshing ? "animate-spin" : ""}`}
           />
         </button>
       </div>

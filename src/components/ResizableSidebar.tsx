@@ -2,6 +2,8 @@
 
 import { useState, useRef, useCallback, useEffect, type ReactNode } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { iconMd } from "../styles/spacing";
+import { hoverLight, bgSurface } from "../styles";
 
 type Props = {
   children: ReactNode;
@@ -95,16 +97,16 @@ export default function ResizableSidebar({
     <aside
       ref={sidebarRef}
       style={{ width: isCollapsed ? collapsedWidth : width }}
-      className={`relative flex flex-col bg-white dark:bg-slate-800 ${borderClass} border-slate-200 dark:border-slate-700 transition-[width] duration-200 ${className}`}
+      className={`relative flex flex-col ${bgSurface} ${borderClass} border-slate-200 dark:border-slate-700 transition-[width] duration-200 ${className}`}
     >
       {/* Collapsed state - just show expand button */}
       {isCollapsed ? (
         <button
           onClick={handleToggleCollapse}
-          className="flex-1 flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+          className={`flex-1 flex items-center justify-center ${hoverLight} transition-colors`}
           title="Expand sidebar"
         >
-          <CollapseIcon className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+          <CollapseIcon className={`${iconMd} text-slate-500 dark:text-slate-400`} />
         </button>
       ) : (
         <>
@@ -114,10 +116,10 @@ export default function ResizableSidebar({
           {collapsible && (
             <button
               onClick={handleToggleCollapse}
-              className="absolute top-2 right-2 p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors z-20"
+              className={`absolute top-2 right-2 p-1 rounded ${hoverLight} transition-colors z-20`}
               title="Collapse sidebar"
             >
-              <CollapseIcon className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+              <CollapseIcon className={`${iconMd} text-slate-500 dark:text-slate-400`} />
             </button>
           )}
 

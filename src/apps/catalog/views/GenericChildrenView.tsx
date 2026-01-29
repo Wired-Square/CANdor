@@ -1,6 +1,8 @@
 // ui/src/apps/catalog/views/GenericChildrenView.tsx
 
 import { Trash2 } from "lucide-react";
+import { iconMd } from "../../../styles/spacing";
+import { caption, iconButtonHoverDanger, bgSecondary, sectionHeaderText, hoverLight } from "../../../styles";
 import type { TomlNode } from "../types";
 
 export type GenericChildrenViewProps = {
@@ -16,17 +18,17 @@ export default function GenericChildrenView({ selectedNode, onSelectNode, onRequ
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <div className="text-sm font-medium text-slate-700 dark:text-slate-300">
+        <div className={sectionHeaderText}>
           {title} ({selectedNode.children?.length ?? 0})
         </div>
 
         {onRequestDelete && (
           <button
             onClick={() => onRequestDelete(selectedNode.path, selectedNode.key)}
-            className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+            className={iconButtonHoverDanger}
             title="Delete"
           >
-            <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+            <Trash2 className={`${iconMd} text-red-600 dark:text-red-400`} />
           </button>
         )}
       </div>
@@ -36,7 +38,7 @@ export default function GenericChildrenView({ selectedNode, onSelectNode, onRequ
           {selectedNode.children!.map((child, idx) => (
             <div
               key={idx}
-              className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer transition-colors"
+              className={`p-3 ${bgSecondary} rounded-lg ${hoverLight} cursor-pointer transition-colors`}
               onClick={() => onSelectNode(child)}
             >
               <div className="flex items-start justify-between gap-4">
@@ -53,14 +55,14 @@ export default function GenericChildrenView({ selectedNode, onSelectNode, onRequ
                   )}
 
                   {child.type === "signal" && child.metadata?.properties && (
-                    <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 space-y-0.5">
+                    <div className={`${caption} mt-1 space-y-0.5`}>
                       {child.metadata.properties.unit && <div>Unit: {child.metadata.properties.unit}</div>}
                       {child.metadata.properties.factor !== undefined && <div>Factor: {child.metadata.properties.factor}</div>}
                     </div>
                   )}
 
                   {child.type !== "value" && child.type !== "signal" && child.children && (
-                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                    <div className={caption}>
                       {child.children.length} items
                     </div>
                   )}

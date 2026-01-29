@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { useSettings } from '../hooks/useSettings';
+import { flexRowGap2 } from '../styles/spacing';
 
 interface ByteBitsProps {
   hexValue: string;
@@ -103,7 +104,7 @@ export default function ByteBits({
         const globalStartBit = displayByteIndex * 8;
 
         return (
-          <div key={byteIdx} className="flex items-center gap-2">
+          <div key={byteIdx} className={flexRowGap2}>
             <div className="text-xs font-mono text-slate-500 dark:text-slate-400 w-8 flex items-center shrink-0">
               [{displayByteIndex}]
             </div>

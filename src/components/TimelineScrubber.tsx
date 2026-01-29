@@ -2,6 +2,7 @@
 
 import { useRef, useState, useCallback, useEffect, useMemo } from "react";
 import { formatHumanUs, formatDeltaUs } from "../utils/timeFormat";
+import { caption } from "../styles/typography";
 
 type TimeDisplayFormat = "delta-last" | "delta-start" | "timestamp" | "human";
 
@@ -153,7 +154,7 @@ export default function TimelineScrubber({
     >
       {/* Start time label */}
       {showLabels && (
-        <span className="text-xs text-slate-500 dark:text-slate-400 font-mono shrink-0">
+        <span className={`${caption} font-mono shrink-0`}>
           {formatLabelTime(minTimeUs)}
         </span>
       )}
@@ -205,7 +206,7 @@ export default function TimelineScrubber({
 
       {/* End time label */}
       {showLabels && (
-        <span className="text-xs text-slate-500 dark:text-slate-400 font-mono shrink-0">
+        <span className={`${caption} font-mono shrink-0`}>
           {formatLabelTime(maxTimeUs)}
         </span>
       )}

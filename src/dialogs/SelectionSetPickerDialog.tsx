@@ -3,6 +3,9 @@
 
 import { useState, useEffect } from "react";
 import { Trash2, X } from "lucide-react";
+import { iconMd, iconLg, flexRowGap2 } from "../styles/spacing";
+import { labelSmall, captionMuted, sectionHeaderText } from "../styles/typography";
+import { borderDivider, bgSecondary, hoverLight } from "../styles";
 import Dialog from "../components/Dialog";
 import {
   getAllSelectionSets,
@@ -126,16 +129,16 @@ export default function SelectionSetPickerDialog({
     <Dialog isOpen={isOpen} maxWidth="max-w-2xl">
       <div className="flex flex-col h-[500px]">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-700">
+        <div className={`flex items-center justify-between px-4 py-3 ${borderDivider}`}>
           <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100">
             Selection Sets
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+            className={`p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 ${hoverLight}`}
           >
-            <X className="w-5 h-5" />
+            <X className={iconLg} />
           </button>
         </div>
 
@@ -162,10 +165,10 @@ export default function SelectionSetPickerDialog({
                         : ""
                     }`}
                   >
-                    <div className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                    <div className={sectionHeaderText}>
                       {set.name}
                     </div>
-                    <div className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">
+                    <div className={`${captionMuted} mt-0.5`}>
                       {set.selectedIds?.length ?? set.frameIds.length}/{set.frameIds.length} selected
                     </div>
                   </button>
@@ -179,7 +182,7 @@ export default function SelectionSetPickerDialog({
             {selectedSet ? (
               <div className="space-y-4">
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                  <label className={labelSmall}>
                     Name
                   </label>
                   <input
@@ -193,29 +196,29 @@ export default function SelectionSetPickerDialog({
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                  <label className={labelSmall}>
                     Frames
                   </label>
-                  <div className="px-3 py-2 text-sm rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                  <div className={`px-3 py-2 text-sm rounded border border-slate-200 dark:border-slate-700 ${bgSecondary} text-slate-600 dark:text-slate-300`}>
                     {selectedSet.selectedIds?.length ?? selectedSet.frameIds.length}/{selectedSet.frameIds.length} selected
                   </div>
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                  <label className={labelSmall}>
                     Created
                   </label>
-                  <div className="px-3 py-2 text-sm rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                  <div className={`px-3 py-2 text-sm rounded border border-slate-200 dark:border-slate-700 ${bgSecondary} text-slate-600 dark:text-slate-300`}>
                     {formatDate(selectedSet.createdAt)}
                   </div>
                 </div>
 
                 {selectedSet.lastUsedAt && (
                   <div className="space-y-1">
-                    <label className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                    <label className={labelSmall}>
                       Last Used
                     </label>
-                    <div className="px-3 py-2 text-sm rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                    <div className={`px-3 py-2 text-sm rounded border border-slate-200 dark:border-slate-700 ${bgSecondary} text-slate-600 dark:text-slate-300`}>
                       {formatDate(selectedSet.lastUsedAt)}
                     </div>
                   </div>
@@ -227,15 +230,15 @@ export default function SelectionSetPickerDialog({
                     onClick={handleDelete}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
                   >
-                    <Trash2 className="w-4 h-4" />
+                    <Trash2 className={iconMd} />
                     Delete
                   </button>
-                  <div className="flex items-center gap-2">
+                  <div className={flexRowGap2}>
                     <button
                       type="button"
                       onClick={handleSave}
                       disabled={isSaving}
-                      className="px-4 py-1.5 text-sm font-medium rounded border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50"
+                      className={`px-4 py-1.5 text-sm font-medium rounded border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 ${hoverLight} disabled:opacity-50`}
                     >
                       {isSaving ? "Saving..." : "Save"}
                     </button>
@@ -263,7 +266,7 @@ export default function SelectionSetPickerDialog({
             <button
               type="button"
               onClick={handleClear}
-              className="px-4 py-1.5 text-sm font-medium rounded border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700"
+              className={`px-4 py-1.5 text-sm font-medium rounded border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 ${hoverLight}`}
             >
               Clear Selection Set
             </button>

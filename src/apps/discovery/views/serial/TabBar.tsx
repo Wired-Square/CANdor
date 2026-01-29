@@ -5,6 +5,7 @@
 
 import { useMemo } from 'react';
 import { Layers, Filter, Settings, Network, FileText } from 'lucide-react';
+import { iconSm, iconXs } from '../../../../styles/spacing';
 import { DiscoveryTabBar, type TabDefinition } from '../../components';
 import type { FramingConfig } from '../../../../stores/discoveryStore';
 import { useDiscoveryUIStore } from '../../../../stores/discoveryUIStore';
@@ -102,7 +103,7 @@ export default function TabBar({
         }`}
         title={showBusColumn ? 'Hide Bus column' : 'Show Bus column'}
       >
-        <Network className="w-3.5 h-3.5" />
+        <Network className={iconSm} />
       </button>
       <button
         onClick={toggleShowAsciiColumn}
@@ -113,7 +114,7 @@ export default function TabBar({
         }`}
         title={showAsciiColumn ? 'Hide ASCII column' : 'Show ASCII column'}
       >
-        <FileText className="w-3.5 h-3.5" />
+        <FileText className={iconSm} />
       </button>
 
       {/* View settings - only on raw bytes tab */}
@@ -123,7 +124,7 @@ export default function TabBar({
           className="flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-colors bg-gray-700 text-gray-300 hover:bg-gray-600"
           title="Configure raw bytes display"
         >
-          <Settings className="w-3 h-3" />
+          <Settings className={iconXs} />
           View
         </button>
       )}
@@ -139,7 +140,7 @@ export default function TabBar({
           }`}
           title="Configure framing mode"
         >
-          <Layers className="w-3 h-3" />
+          <Layers className={iconXs} />
           {getFramingLabel()}
         </button>
       )}
@@ -155,7 +156,7 @@ export default function TabBar({
           }`}
           title="Configure frame filters"
         >
-          <Filter className="w-3 h-3" />
+          <Filter className={iconXs} />
           {minFrameLength > 0 ? `${minFrameLength}+` : 'All'}
         </button>
       )}

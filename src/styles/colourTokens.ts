@@ -10,6 +10,9 @@
 /** Primary surface (main app background) */
 export const bgPrimary = "bg-white dark:bg-slate-900";
 
+/** Surface background (dialogs, panels, elevated cards) */
+export const bgSurface = "bg-white dark:bg-slate-800";
+
 /** Secondary surface (cards, panels) */
 export const bgSecondary = "bg-slate-50 dark:bg-slate-800";
 
@@ -47,6 +50,9 @@ export const borderStrong = "border-slate-300 dark:border-slate-600";
 
 /** Subtle border (dividers) */
 export const borderSubtle = "border-slate-100 dark:border-slate-800";
+
+/** Bottom border divider (for section separators) */
+export const borderDivider = "border-b border-slate-200 dark:border-slate-700";
 
 // =============================================================================
 // Status Colors (backgrounds)
@@ -155,10 +161,16 @@ export const bgDarkInput = "bg-gray-700";
 export const textDarkInput = "text-gray-200";
 
 /** Dark view muted text */
-export const textDarkMuted = "text-gray-400";
+export const textDarkMuted = "text-gray-300";
 
 /** Dark view subtle text */
-export const textDarkSubtle = "text-gray-500";
+export const textDarkSubtle = "text-gray-400";
+
+/** Dark view decorative elements (arrows, dividers) */
+export const textDarkDecorative = "text-gray-500";
+
+/** Dark view placeholder text */
+export const textDarkPlaceholder = "text-gray-500 italic";
 
 /** Dark view hover */
 export const hoverDark = "hover:bg-gray-700";

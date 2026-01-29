@@ -2,6 +2,8 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { Pencil, Settings, Trash2 } from "lucide-react";
+import { iconMd, iconXs } from "../../../styles/spacing";
+import { caption, labelSmall, labelSmallMuted, monoBody, iconButtonHover, iconButtonHoverDanger, bgSecondary, hoverLight } from "../../../styles";
 import BitPreview, { BitRange } from "../../../components/BitPreview";
 import type { TomlNode } from "../types";
 import { tomlParse } from "../toml";
@@ -94,19 +96,19 @@ export default function SerialFrameView({
             {onEditFrame && (
               <button
                 onClick={() => onEditFrame(selectedNode)}
-                className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                className={iconButtonHover}
                 title="Edit frame"
               >
-                <Pencil className="w-4 h-4 text-slate-700 dark:text-slate-200" />
+                <Pencil className={`${iconMd} text-slate-700 dark:text-slate-200`} />
               </button>
             )}
             {onDeleteFrame && (
               <button
                 onClick={() => onDeleteFrame(selectedNode.key)}
-                className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                className={iconButtonHoverDanger}
                 title="Delete frame"
               >
-                <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+                <Trash2 className={`${iconMd} text-red-600 dark:text-red-400`} />
               </button>
             )}
           </div>
@@ -115,63 +117,63 @@ export default function SerialFrameView({
 
       {/* Property cards */}
       <div className="grid grid-cols-2 gap-4">
-        <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+        <div className={`p-4 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>
             Frame ID
           </div>
-          <div className="font-mono text-sm text-slate-900 dark:text-white">
+          <div className={monoBody}>
             {frameId}
           </div>
         </div>
 
         <button
           onClick={onEditSerialConfig}
-          className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg text-left hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors group"
+          className={`p-4 ${bgSecondary} rounded-lg text-left ${hoverLight} transition-colors group`}
           title="Edit serial encoding configuration"
         >
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 flex items-center gap-1">
+          <div className={`${labelSmallMuted} flex items-center gap-1`}>
             Encoding
-            <Settings className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+            <Settings className={`${iconXs} opacity-0 group-hover:opacity-100 transition-opacity`} />
           </div>
-          <div className="font-mono text-sm text-slate-900 dark:text-white uppercase">
+          <div className={`${monoBody} uppercase`}>
             {encoding ?? <span className="text-orange-500">Not set - click to configure</span>}
           </div>
         </button>
 
-        <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+        <div className={`p-4 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>
             Length
           </div>
-          <div className="font-mono text-sm text-slate-900 dark:text-white">
+          <div className={monoBody}>
             {length ?? <span className="text-slate-400">Not set</span>}
           </div>
         </div>
 
         {maxLength !== undefined && (
-          <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-            <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+          <div className={`p-4 ${bgSecondary} rounded-lg`}>
+            <div className={labelSmallMuted}>
               Max Length
             </div>
-            <div className="font-mono text-sm text-slate-900 dark:text-white">
+            <div className={monoBody}>
               {maxLength}
             </div>
           </div>
         )}
 
         {transmitter && (
-          <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-            <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+          <div className={`p-4 ${bgSecondary} rounded-lg`}>
+            <div className={labelSmallMuted}>
               Transmitter
             </div>
-            <div className="font-mono text-sm text-slate-900 dark:text-white">
+            <div className={monoBody}>
               {transmitter}
             </div>
           </div>
         )}
 
         {interval !== undefined && (
-          <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-            <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+          <div className={`p-4 ${bgSecondary} rounded-lg`}>
+            <div className={labelSmallMuted}>
               Interval
               {intervalInherited && (
                 <span className="ml-1 text-blue-500 dark:text-blue-400" title="Inherited from default_interval">
@@ -179,7 +181,7 @@ export default function SerialFrameView({
                 </span>
               )}
             </div>
-            <div className="font-mono text-sm text-slate-900 dark:text-white">
+            <div className={monoBody}>
               {interval} ms
             </div>
           </div>
@@ -188,11 +190,11 @@ export default function SerialFrameView({
 
       {/* Delimiter (for raw encoding) */}
       {delimiter && delimiter.length > 0 && (
-        <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+        <div className={`p-4 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>
             Delimiter
           </div>
-          <div className="font-mono text-sm text-slate-900 dark:text-white">
+          <div className={monoBody}>
             [{delimiter.map((b: number) => `0x${b.toString(16).padStart(2, "0").toUpperCase()}`).join(", ")}]
           </div>
         </div>
@@ -200,8 +202,8 @@ export default function SerialFrameView({
 
       {/* Notes */}
       {notes && (
-        <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">
+        <div className={`p-4 ${bgSecondary} rounded-lg`}>
+          <div className={`${labelSmall} mb-2`}>
             Notes
           </div>
           <div className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap">
@@ -225,7 +227,7 @@ export default function SerialFrameView({
             </h3>
 
             <div className="flex items-center gap-3">
-              <span className="text-xs text-slate-500 dark:text-slate-400">
+              <span className={caption}>
                 {length ? `${length} bytes total` : ""}
               </span>
 
@@ -304,7 +306,7 @@ export default function SerialFrameView({
                     {signals.map((signal: any, idx: number) => (
                       <div
                         key={idx}
-                        className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                        className={`p-3 ${bgSecondary} rounded-lg ${hoverLight} transition-colors`}
                       >
                         <div className="flex items-start justify-between">
                           <div className="flex-1 flex gap-3">
@@ -319,7 +321,7 @@ export default function SerialFrameView({
                                 {signal.name}
                               </div>
 
-                              <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 space-y-0.5">
+                              <div className={`${caption} mt-1 space-y-0.5`}>
                                 <div>
                                   Bits {signal.start_bit ?? 0} - {(signal.start_bit ?? 0) + (signal.bit_length ?? 0) - 1} ({signal.bit_length ?? 0} bits)
                                 </div>
@@ -343,17 +345,17 @@ export default function SerialFrameView({
                                   className="p-2 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg transition-colors"
                                   title="Edit signal"
                                 >
-                                  <Pencil className="w-4 h-4 text-slate-700 dark:text-slate-200" />
+                                  <Pencil className={`${iconMd} text-slate-700 dark:text-slate-200`} />
                                 </button>
                               )}
 
                               {onRequestDeleteSignal && (
                                 <button
                                   onClick={() => onRequestDeleteSignal(idKey, idx, ["frame", "serial", idKey], signal.name)}
-                                  className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                                  className={iconButtonHoverDanger}
                                   title="Delete signal"
                                 >
-                                  <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+                                  <Trash2 className={`${iconMd} text-red-600 dark:text-red-400`} />
                                 </button>
                               )}
                             </div>
@@ -367,7 +369,7 @@ export default function SerialFrameView({
             })()}
 
           {(!selectedNode.metadata?.signals || selectedNode.metadata.signals.length === 0) && (
-            <div className="text-sm text-slate-500 dark:text-slate-400 p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+            <div className={`text-sm text-slate-500 dark:text-slate-400 p-4 ${bgSecondary} rounded-lg`}>
               No signals defined. Click "+ Add Signal" to create one.
             </div>
           )}

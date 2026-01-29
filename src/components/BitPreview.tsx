@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useSettings } from '../hooks/useSettings';
+import { flexRowGap2 } from '../styles/spacing';
 
 export interface BitRange {
   name: string;
@@ -428,14 +429,14 @@ export default function BitPreview({
 
       <div className="mt-4 space-y-2 text-xs">
         {hasOverlap && (
-          <div className="flex items-center gap-2">
+          <div className={flexRowGap2}>
             <div className="w-4 h-4 bg-red-500 rounded" />
             <span className="text-slate-700 dark:text-slate-300">Overlap (error!)</span>
           </div>
         )}
 
         {interactive && (
-          <div className="flex items-center gap-2">
+          <div className={flexRowGap2}>
             <div className="w-4 h-4 bg-yellow-400 dark:bg-yellow-600 rounded" />
             <span className="text-slate-700 dark:text-slate-300">Click and drag to select</span>
           </div>

@@ -6,6 +6,8 @@
 
 import type { IOProfile } from "../../hooks/useSettings";
 import FilterOptionsPanel, { type FilterConfig } from "../../components/FilterOptionsPanel";
+import { sectionHeader } from "../../styles/typography";
+import { borderDivider } from "../../styles";
 
 type Props = {
   /** Currently checked IO profile (single-select mode) */
@@ -69,8 +71,8 @@ export default function FilterOptions({
   };
 
   return (
-    <div className="border-b border-slate-200 dark:border-slate-700">
-      <div className="px-4 py-2 bg-slate-50 dark:bg-slate-900/50 text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+    <div className={borderDivider}>
+      <div className={`px-4 py-2 bg-slate-50 dark:bg-slate-900/50 ${sectionHeader}`}>
         Filter
       </div>
       <div className="p-3">

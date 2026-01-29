@@ -4,6 +4,7 @@
 // Uses shared SessionControls components for consistency with Discovery/Decoder.
 
 import { Send, Link2, GitMerge } from "lucide-react";
+import { iconLg, flexRowGap2 } from "../../../styles/spacing";
 import type { IOProfile } from "../../../types/common";
 import { IOSessionControls } from "../../../components/SessionControls";
 import FlexSeparator from "../../../components/FlexSeparator";
@@ -78,7 +79,7 @@ export default function TransmitTopBar({
       className={`flex items-center gap-2 px-4 py-2 ${bgDarkToolbar} border-b ${borderDarkView}`}
     >
       {/* Transmit icon */}
-      <Send className="w-5 h-5 text-red-500 shrink-0" />
+      <Send className={`${iconLg} text-red-500 shrink-0`} />
 
       <FlexSeparator />
 
@@ -102,7 +103,7 @@ export default function TransmitTopBar({
 
       {/* Capability badges */}
       {capabilities && (
-        <div className="flex items-center gap-2">
+        <div className={flexRowGap2}>
           {showAsMultiBus && (
             <span className="text-xs px-2 py-0.5 rounded bg-purple-600/30 text-purple-400 flex items-center gap-1">
               <GitMerge size={10} />

@@ -2,6 +2,10 @@
 
 import { useState } from "react";
 import { Download, FileText, Database, FileCode, BookOpen } from "lucide-react";
+import { iconMd, iconLg } from "../../../styles/spacing";
+import { caption, sectionHeaderText } from "../../../styles/typography";
+import { selectableOptionBox } from "../../../styles/cardStyles";
+import { secondaryButton, disabledState } from "../../../styles";
 import Dialog from "../../../components/Dialog";
 import { pickFileToSave, CATALOG_FILTERS, DBC_FILTERS, HTML_FILTERS, MARKDOWN_FILTERS, TEXT_FILTERS, type DialogFilter } from "../../../api/dialogs";
 import { exportCatalog, saveCatalog, type DbcMuxMode } from "../../../api/catalog";
@@ -157,7 +161,7 @@ export default function ExportCatalogDialog({
       <div className="p-6">
         <div className="flex items-center gap-3 mb-4">
           <div className="p-2 bg-orange-100 dark:bg-orange-900/30 rounded-lg">
-            <Download className="w-5 h-5 text-orange-600 dark:text-orange-400" />
+            <Download className={`${iconLg} text-orange-600 dark:text-orange-400`} />
           </div>
           <h2 className="text-xl font-bold text-slate-900 dark:text-white">
             Export Catalog
@@ -166,7 +170,7 @@ export default function ExportCatalogDialog({
 
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+            <label className={`block ${sectionHeaderText} mb-2`}>
               Export Format
             </label>
             <select
@@ -192,7 +196,7 @@ export default function ExportCatalogDialog({
 
           <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
             <div className="flex items-start gap-3">
-              <FormatIcon className="w-5 h-5 text-slate-500 dark:text-slate-400 mt-0.5" />
+              <FormatIcon className={`${iconLg} text-slate-500 dark:text-slate-400 mt-0.5`} />
               <div>
                 <div className="font-medium text-slate-900 dark:text-white">
                   {formatInfo.name}
@@ -206,11 +210,11 @@ export default function ExportCatalogDialog({
 
           {format === "dbc" && (
             <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+              <label className={`block ${sectionHeaderText} mb-2`}>
                 Multiplexing Mode
               </label>
               <div className="space-y-2">
-                <label className="flex items-start gap-3 p-3 rounded-lg border border-slate-200 dark:border-slate-600 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                <label className={selectableOptionBox}>
                   <input
                     type="radio"
                     name="dbcMuxMode"
@@ -223,12 +227,12 @@ export default function ExportCatalogDialog({
                     <div className="font-medium text-slate-900 dark:text-white text-sm">
                       Extended (SG_MUL_VAL_)
                     </div>
-                    <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    <div className={`${caption} mt-0.5`}>
                       Uses SG_MUL_VAL_ section with mNM notation for nested multiplexors. Best for modern tools.
                     </div>
                   </div>
                 </label>
-                <label className="flex items-start gap-3 p-3 rounded-lg border border-slate-200 dark:border-slate-600 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                <label className={selectableOptionBox}>
                   <input
                     type="radio"
                     name="dbcMuxMode"
@@ -241,7 +245,7 @@ export default function ExportCatalogDialog({
                     <div className="font-medium text-slate-900 dark:text-white text-sm">
                       Flattened (Legacy)
                     </div>
-                    <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    <div className={`${caption} mt-0.5`}>
                       Flattens nested mux into composite values. Compatible with older tools.
                     </div>
                   </div>
@@ -261,7 +265,7 @@ export default function ExportCatalogDialog({
           <button
             onClick={onCancel}
             disabled={isExporting}
-            className="px-6 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors disabled:opacity-50"
+            className={`${secondaryButton} ${disabledState}`}
           >
             Cancel
           </button>
@@ -277,7 +281,7 @@ export default function ExportCatalogDialog({
               </>
             ) : (
               <>
-                <Download className="w-4 h-4" />
+                <Download className={iconMd} />
                 Save As...
               </>
             )}

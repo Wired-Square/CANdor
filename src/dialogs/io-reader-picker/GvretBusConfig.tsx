@@ -5,6 +5,8 @@
 // Also supports protocol selection when used in profile settings.
 
 import { Loader2, AlertCircle, Bus } from "lucide-react";
+import { iconMd, iconXs } from "../../styles/spacing";
+import { caption, sectionHeaderText } from "../../styles/typography";
 import type { GvretDeviceInfo, BusMapping } from "../../api/io";
 
 // Generic bus names - actual meaning varies by device
@@ -96,8 +98,8 @@ export default function GvretBusConfig({
   if (isLoading) {
     return (
       <div className={wrapperClass}>
-        <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-          <Loader2 className="w-3 h-3 animate-spin" />
+        <div className={`flex items-center gap-2 ${caption}`}>
+          <Loader2 className={`${iconXs} animate-spin`} />
           <span>Probing{profileName ? ` ${profileName}` : ""}...</span>
         </div>
       </div>
@@ -109,7 +111,7 @@ export default function GvretBusConfig({
     return (
       <div className={wrapperClass}>
         <div className="flex items-center gap-2 text-xs text-red-600 dark:text-red-400">
-          <AlertCircle className="w-3 h-3 flex-shrink-0" />
+          <AlertCircle className={`${iconXs} flex-shrink-0`} />
           <span className="truncate">{error}</span>
         </div>
       </div>
@@ -120,8 +122,8 @@ export default function GvretBusConfig({
   if (!deviceInfo) {
     return (
       <div className={wrapperClass}>
-        <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-          <Loader2 className="w-3 h-3 animate-spin" />
+        <div className={`flex items-center gap-2 ${caption}`}>
+          <Loader2 className={`${iconXs} animate-spin`} />
           <span>Probing{profileName ? ` ${profileName}` : ""}...</span>
         </div>
       </div>
@@ -218,7 +220,7 @@ export default function GvretBusConfig({
   return (
     <div className="border-t border-slate-200 dark:border-slate-700 px-4 py-3">
       <div className="flex items-center gap-2 mb-2">
-        <Bus className="w-4 h-4 text-cyan-500" />
+        <Bus className={`${iconMd} text-cyan-500`} />
         <span className="text-xs font-medium text-slate-700 dark:text-slate-300 uppercase tracking-wide">
           {profileName ? `${profileName} - ` : ""}CAN Buses ({enabledCount}/{deviceInfo.bus_count} enabled)
         </span>
@@ -244,7 +246,7 @@ export default function GvretBusConfig({
                   onChange={() => toggleBus(mapping.deviceBus)}
                   className="w-4 h-4 rounded border-slate-300 dark:border-slate-600 text-cyan-600 focus:ring-cyan-500 dark:bg-slate-700"
                 />
-                <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span className={sectionHeaderText}>
                   {BUS_NAMES[mapping.deviceBus] || `Bus ${mapping.deviceBus}`}
                 </span>
               </label>

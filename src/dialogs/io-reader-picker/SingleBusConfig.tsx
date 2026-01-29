@@ -5,6 +5,8 @@
 // For serial devices, also shows framing configuration.
 
 import { Loader2, AlertCircle, CheckCircle2, Bus, Layers } from "lucide-react";
+import { iconMd, iconXs, flexRowGap2 } from "../../styles/spacing";
+import { caption, sectionHeaderText } from "../../styles/typography";
 import type { DeviceProbeResult, FramingEncoding } from "../../api/io";
 
 /** Simplified framing config for per-interface display */
@@ -81,8 +83,8 @@ export default function SingleBusConfig({
   if (isLoading) {
     return (
       <div className={wrapperClass}>
-        <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-          <Loader2 className="w-3 h-3 animate-spin" />
+        <div className={`flex items-center gap-2 ${caption}`}>
+          <Loader2 className={`${iconXs} animate-spin`} />
           <span>Probing{profileName ? ` ${profileName}` : ""}...</span>
         </div>
       </div>
@@ -95,7 +97,7 @@ export default function SingleBusConfig({
     return (
       <div className={wrapperClass}>
         <div className="flex items-center gap-2 text-xs text-red-600 dark:text-red-400">
-          <AlertCircle className="w-3 h-3 flex-shrink-0" />
+          <AlertCircle className={`${iconXs} flex-shrink-0`} />
           <span className="truncate">{errorMsg}</span>
         </div>
       </div>
@@ -106,8 +108,8 @@ export default function SingleBusConfig({
   if (!probeResult) {
     return (
       <div className={wrapperClass}>
-        <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-          <Loader2 className="w-3 h-3 animate-spin" />
+        <div className={`flex items-center gap-2 ${caption}`}>
+          <Loader2 className={`${iconXs} animate-spin`} />
           <span>Probing{profileName ? ` ${profileName}` : ""}...</span>
         </div>
       </div>
@@ -123,7 +125,7 @@ export default function SingleBusConfig({
     return (
       <div className={wrapperClass}>
         <div className="flex items-center gap-2 text-xs">
-          <CheckCircle2 className="w-3 h-3 text-green-500 flex-shrink-0" />
+          <CheckCircle2 className={`${iconXs} text-green-500 flex-shrink-0`} />
           <span className="text-slate-600 dark:text-slate-400">
             {probeResult.primaryInfo || "Online"}
           </span>
@@ -134,7 +136,7 @@ export default function SingleBusConfig({
           )}
         </div>
         <div className="flex items-center gap-2 mt-1 text-xs">
-          <Bus className="w-3 h-3 text-slate-400 flex-shrink-0" />
+          <Bus className={`${iconXs} text-slate-400 flex-shrink-0`} />
           <span className="text-slate-500 dark:text-slate-400">Bus:</span>
           <select
             value={effectiveBus}
@@ -162,7 +164,7 @@ export default function SingleBusConfig({
           {isSerial && onFramingChange && (
             <>
               <span className="text-slate-300 dark:text-slate-600">|</span>
-              <Layers className="w-3 h-3 text-slate-400 flex-shrink-0" />
+              <Layers className={`${iconXs} text-slate-400 flex-shrink-0`} />
               <select
                 value={effectiveFraming}
                 onChange={(e) => {
@@ -247,13 +249,13 @@ export default function SingleBusConfig({
   return (
     <div className="border-t border-slate-200 dark:border-slate-700 px-4 py-3">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4 text-green-500" />
-          <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+        <div className={flexRowGap2}>
+          <CheckCircle2 className={`${iconMd} text-green-500`} />
+          <span className={sectionHeaderText}>
             {probeResult.primaryInfo || "Device Online"}
           </span>
           {probeResult.secondaryInfo && (
-            <span className="text-xs text-slate-500 dark:text-slate-400">
+            <span className={caption}>
               ({probeResult.secondaryInfo})
             </span>
           )}
@@ -261,7 +263,7 @@ export default function SingleBusConfig({
       </div>
 
       <div className="flex items-center gap-2 mt-2 text-sm">
-        <Bus className="w-4 h-4 text-slate-400" />
+        <Bus className={`${iconMd} text-slate-400`} />
         <span className="text-slate-600 dark:text-slate-400">Output Bus:</span>
         <select
           value={effectiveBus}
@@ -292,7 +294,7 @@ export default function SingleBusConfig({
       {isSerial && onFramingChange && (
         <>
           <div className="flex items-center gap-2 mt-2 text-sm">
-            <Layers className="w-4 h-4 text-slate-400" />
+            <Layers className={`${iconMd} text-slate-400`} />
             <span className="text-slate-600 dark:text-slate-400">Framing:</span>
             <select
               value={effectiveFraming}
@@ -367,7 +369,7 @@ export default function SingleBusConfig({
         </>
       )}
 
-      <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">
+      <p className={`${caption} mt-2`}>
         {isSerial
           ? "Configure bus number and framing for this serial device."
           : "Frames from this device will be tagged with the selected bus number."}

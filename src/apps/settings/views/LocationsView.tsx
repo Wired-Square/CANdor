@@ -1,5 +1,7 @@
 // ui/src/apps/settings/views/LocationsView.tsx
 import { FolderOpen, AlertCircle } from "lucide-react";
+import { iconMd, iconLg } from "../../../styles/spacing";
+import { caption, textMedium, focusRing, folderPickerButton } from "../../../styles";
 import type { DirectoryValidation } from "../stores/settingsStore";
 
 type LocationsViewProps = {
@@ -42,7 +44,7 @@ export default function LocationsView({
 
         {/* Decoder Directory */}
         <div className="mb-6">
-          <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+          <label className={`block ${textMedium} mb-2`}>
             Decoder Directory
           </label>
           <div className="flex gap-2">
@@ -50,20 +52,20 @@ export default function LocationsView({
               type="text"
               value={decoderDir}
               onChange={(e) => onChangeDecoderDir(e.target.value)}
-              className="flex-1 px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className={`flex-1 px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white ${focusRing}`}
               placeholder="Click folder icon to select..."
             />
             <button
               onClick={onPickDecoderDir}
-              className="px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 rounded-lg transition-colors"
+              className={folderPickerButton}
               title="Browse for directory"
             >
-              <FolderOpen className="w-5 h-5 text-slate-600 dark:text-slate-400" />
+              <FolderOpen className={`${iconLg} text-slate-600 dark:text-slate-400`} />
             </button>
           </div>
           {decoderValidation?.error && (
             <div className="mt-2 flex items-center gap-2 text-sm text-amber-600 dark:text-amber-400">
-              <AlertCircle className="w-4 h-4" />
+              <AlertCircle className={iconMd} />
               <span>{decoderValidation.error}</span>
             </div>
           )}
@@ -74,7 +76,7 @@ export default function LocationsView({
 
         {/* Dump Directory */}
         <div className="mb-6">
-          <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+          <label className={`block ${textMedium} mb-2`}>
             Dump Directory
           </label>
           <div className="flex gap-2">
@@ -82,20 +84,20 @@ export default function LocationsView({
               type="text"
               value={dumpDir}
               onChange={(e) => onChangeDumpDir(e.target.value)}
-              className="flex-1 px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className={`flex-1 px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white ${focusRing}`}
               placeholder="Click folder icon to select..."
             />
             <button
               onClick={onPickDumpDir}
-              className="px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 rounded-lg transition-colors"
+              className={folderPickerButton}
               title="Browse for directory"
             >
-              <FolderOpen className="w-5 h-5 text-slate-600 dark:text-slate-400" />
+              <FolderOpen className={`${iconLg} text-slate-600 dark:text-slate-400`} />
             </button>
           </div>
           {dumpValidation?.error && (
             <div className="mt-2 flex items-center gap-2 text-sm text-amber-600 dark:text-amber-400">
-              <AlertCircle className="w-4 h-4" />
+              <AlertCircle className={iconMd} />
               <span>{dumpValidation.error}</span>
             </div>
           )}
@@ -106,7 +108,7 @@ export default function LocationsView({
 
         {/* Report Directory */}
         <div className="mb-6">
-          <label className="block text-sm font-medium text-slate-900 dark:text-white mb-2">
+          <label className={`block ${textMedium} mb-2`}>
             Report Directory
           </label>
           <div className="flex gap-2">
@@ -114,20 +116,20 @@ export default function LocationsView({
               type="text"
               value={reportDir}
               onChange={(e) => onChangeReportDir(e.target.value)}
-              className="flex-1 px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className={`flex-1 px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white ${focusRing}`}
               placeholder="Click folder icon to select..."
             />
             <button
               onClick={onPickReportDir}
-              className="px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 rounded-lg transition-colors"
+              className={folderPickerButton}
               title="Browse for directory"
             >
-              <FolderOpen className="w-5 h-5 text-slate-600 dark:text-slate-400" />
+              <FolderOpen className={`${iconLg} text-slate-600 dark:text-slate-400`} />
             </button>
           </div>
           {reportValidation?.error && (
             <div className="mt-2 flex items-center gap-2 text-sm text-amber-600 dark:text-amber-400">
-              <AlertCircle className="w-4 h-4" />
+              <AlertCircle className={iconMd} />
               <span>{reportValidation.error}</span>
             </div>
           )}
@@ -140,7 +142,7 @@ export default function LocationsView({
         <div>
           <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-3">Files</h2>
           <div className="space-y-2">
-            <div className="text-sm font-medium text-slate-900 dark:text-white">Save frame ID format</div>
+            <div className={textMedium}>Save frame ID format</div>
             <div className="flex items-center gap-4">
               <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
                 <input
@@ -165,7 +167,7 @@ export default function LocationsView({
                 Decimal
               </label>
             </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
+            <p className={caption}>
               Controls default decoder file names when saving/creating catalogs.
             </p>
           </div>

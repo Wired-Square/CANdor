@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { X } from "lucide-react";
+import { iconLg } from "../styles/spacing";
 import { emit, listen } from "@tauri-apps/api/event";
 import Dialog from "../components/Dialog";
 import {
@@ -1157,7 +1158,7 @@ export default function IoReaderPickerDialog({
             onClick={onClose}
             className={`p-1 ${roundedDefault} ${hoverLight} transition-colors`}
           >
-            <X className="w-5 h-5" />
+            <X className={iconLg} />
           </button>
         </div>
 
@@ -1174,6 +1175,7 @@ export default function IoReaderPickerDialog({
               buffers={buffers}
               selectedBufferId={selectedBufferId}
               checkedReaderId={checkedReaderId}
+              checkedReaderIds={checkedReaderIds}
               onSelectBuffer={handleSelectBuffer}
               onDeleteBuffer={handleDeleteBuffer}
               onClearAllBuffers={handleClearAllBuffers}

@@ -6,6 +6,8 @@ import type { BufferMetadata } from "../../../api/buffer";
 import FlexSeparator from "../../../components/FlexSeparator";
 import { IOSessionControls } from "../../../components/SessionControls";
 import { buttonBase, iconButtonBase } from "../../../styles/buttonStyles";
+import { iconMd, iconSm, iconLg } from "../../../styles/spacing";
+import { borderDivider, bgSurface } from "../../../styles";
 
 type Props = {
   // IO profile selection
@@ -112,10 +114,10 @@ export default function DiscoveryTopBar({
   const hasFrames = isSerialMode ? (frameCount > 0 || serialBytesCount > 0) : frameCount > 0;
 
   return (
-    <div className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 px-4 py-2">
+    <div className={`${bgSurface} ${borderDivider} px-4 py-2`}>
       <div className="flex flex-wrap items-center gap-2">
         {/* Discovery icon */}
-        <Search className="w-5 h-5 text-purple-600 dark:text-purple-400 shrink-0" />
+        <Search className={`${iconLg} text-purple-600 dark:text-purple-400 shrink-0`} />
 
         <FlexSeparator />
 
@@ -144,7 +146,7 @@ export default function DiscoveryTopBar({
         />
 
         {/* Right arrow icon */}
-        <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+        <ChevronRight className={`${iconSm} text-slate-400 shrink-0`} />
 
         {/* Frames Button - icon with count. In serial mode, disabled until framing is accepted */}
         <button
@@ -153,7 +155,7 @@ export default function DiscoveryTopBar({
           className={buttonBase}
           title={isSerialMode && !framingAccepted ? "Accept framing first to select frames" : "Select frames"}
         >
-          <ListFilter className="w-3.5 h-3.5 flex-shrink-0" />
+          <ListFilter className={`${iconSm} flex-shrink-0`} />
           <span className="text-slate-500 dark:text-slate-400">
             {selectedFrameCount}/{frameCount}
           </span>
@@ -166,12 +168,12 @@ export default function DiscoveryTopBar({
             className={iconButtonBase}
             title="Undo framing acceptance"
           >
-            <Undo2 className="w-4 h-4" />
+            <Undo2 className={iconMd} />
           </button>
         )}
 
         {/* Right arrow icon */}
-        <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+        <ChevronRight className={`${iconSm} text-slate-400 shrink-0`} />
 
         {/* Toolbox button */}
         <button
@@ -180,7 +182,7 @@ export default function DiscoveryTopBar({
           className={buttonBase}
           title="Analysis tools"
         >
-          <Wrench className="w-3.5 h-3.5 flex-shrink-0" />
+          <Wrench className={`${iconSm} flex-shrink-0`} />
           <span>Tools</span>
         </button>
 
@@ -194,7 +196,7 @@ export default function DiscoveryTopBar({
           className={iconButtonBase}
           title={isSerialMode ? "Save bytes to decoder" : "Save frames to decoder"}
         >
-          <Save className="w-4 h-4" />
+          <Save className={iconMd} />
         </button>
 
         <button
@@ -203,7 +205,7 @@ export default function DiscoveryTopBar({
           className={iconButtonBase}
           title={isSerialMode && serialActiveTab === 'raw' ? "Export bytes to file" : "Export frames to file"}
         >
-          <Download className="w-4 h-4" />
+          <Download className={iconMd} />
         </button>
 
         <button
@@ -212,7 +214,7 @@ export default function DiscoveryTopBar({
           className={`${iconButtonBase} hover:!bg-red-600 hover:!text-white`}
           title={isSerialMode ? "Clear all bytes" : "Clear all frames"}
         >
-          <Trash2 className="w-4 h-4" />
+          <Trash2 className={iconMd} />
         </button>
 
         <button
@@ -221,7 +223,7 @@ export default function DiscoveryTopBar({
           className={`${iconButtonBase} ${hasFrames ? "text-purple-600 dark:text-purple-400" : ""}`}
           title="View decoder knowledge"
         >
-          <Info className="w-4 h-4" />
+          <Info className={iconMd} />
         </button>
 
       </div>

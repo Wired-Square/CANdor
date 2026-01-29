@@ -1,6 +1,8 @@
 // ui/src/apps/catalog/layout/CatalogToolbar.tsx
 
 import { Check, ChevronDown, Download, FileText, Glasses, RotateCcw, Save, Settings, Star, X } from "lucide-react";
+import { iconMd, iconSm, iconLg, flexRowGap2 } from "../../../styles/spacing";
+import { disabledState, borderDivider, bgSurface } from "../../../styles";
 import type { EditMode } from "../types";
 import type { CatalogMetadata } from "../../../api/catalog";
 
@@ -40,11 +42,11 @@ export default function CatalogToolbar({
 }: CatalogToolbarProps) {
   // Button style matching Discovery/Decoder
   const buttonBase =
-    "flex items-center gap-1 px-2 py-1.5 text-sm rounded transition-colors bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed";
+    `flex items-center gap-1 px-2 py-1.5 text-sm rounded transition-colors bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-600 ${disabledState}`;
 
   // Icon button style
   const iconButtonBase =
-    "p-1.5 rounded transition-colors bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed";
+    `p-1.5 rounded transition-colors bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-600 ${disabledState}`;
 
   // Get catalog display info
   const selectedCatalog = catalogs.find((c) => c.path === catalogPath);
@@ -52,10 +54,10 @@ export default function CatalogToolbar({
   const isDefaultCatalog = selectedCatalog?.filename === defaultCatalogFilename;
 
   return (
-    <div className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 px-4 py-2">
-      <div className="flex items-center gap-2">
+    <div className={`${bgSurface} ${borderDivider} px-4 py-2`}>
+      <div className={flexRowGap2}>
         {/* Catalog Editor icon */}
-        <FileText className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+        <FileText className={`${iconLg} text-blue-600 dark:text-blue-400`} />
 
         <div className="w-px h-5 bg-slate-300 dark:bg-slate-600 mx-1" />
 
@@ -66,10 +68,10 @@ export default function CatalogToolbar({
           title="Select catalog"
         >
           {isDefaultCatalog && (
-            <Star className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" fill="currentColor" />
+            <Star className={`${iconSm} text-amber-500 flex-shrink-0`} fill="currentColor" />
           )}
           <span className="max-w-40 truncate">{catalogName}</span>
-          <ChevronDown className="w-3.5 h-3.5 flex-shrink-0 text-slate-400" />
+          <ChevronDown className={`${iconSm} flex-shrink-0 text-slate-400`} />
         </button>
 
         {/* Save */}
@@ -79,11 +81,11 @@ export default function CatalogToolbar({
           title={hasUnsavedChanges ? "Save changes (unsaved)" : "Save"}
           className={
             hasUnsavedChanges
-              ? "p-1.5 rounded transition-colors bg-red-600 text-white hover:bg-red-700 shadow-md shadow-red-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+              ? `p-1.5 rounded transition-colors bg-red-600 text-white hover:bg-red-700 shadow-md shadow-red-500/30 ${disabledState}`
               : iconButtonBase
           }
         >
-          <Save className={`w-4 h-4 ${hasUnsavedChanges ? "animate-pulse" : ""}`} />
+          <Save className={`${iconMd} ${hasUnsavedChanges ? "animate-pulse" : ""}`} />
         </button>
 
         {/* Reload */}
@@ -93,7 +95,7 @@ export default function CatalogToolbar({
           title="Reload from disk"
           className={iconButtonBase}
         >
-          <RotateCcw className="w-4 h-4" />
+          <RotateCcw className={iconMd} />
         </button>
 
         {/* Validate */}
@@ -109,16 +111,16 @@ export default function CatalogToolbar({
           }
           className={
             validationState === true
-              ? "p-1.5 rounded transition-colors bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              ? `p-1.5 rounded transition-colors bg-green-600 text-white hover:bg-green-700 ${disabledState}`
               : validationState === false
-                ? "p-1.5 rounded transition-colors bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                ? `p-1.5 rounded transition-colors bg-red-600 text-white hover:bg-red-700 ${disabledState}`
                 : iconButtonBase
           }
         >
           {validationState === false ? (
-            <X className="w-4 h-4" />
+            <X className={iconMd} />
           ) : (
-            <Check className="w-4 h-4" />
+            <Check className={iconMd} />
           )}
         </button>
 
@@ -129,7 +131,7 @@ export default function CatalogToolbar({
           title="Export catalog"
           className={iconButtonBase}
         >
-          <Download className="w-4 h-4" />
+          <Download className={iconMd} />
         </button>
 
         <div className="w-px h-5 bg-slate-300 dark:bg-slate-600 mx-1" />
@@ -141,11 +143,11 @@ export default function CatalogToolbar({
           title={editMode === "ui" ? "Switch to Text Mode" : "Switch to GUI Mode"}
           className={
             editMode === "text"
-              ? "p-1.5 rounded transition-colors bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              ? `p-1.5 rounded transition-colors bg-purple-600 text-white hover:bg-purple-700 ${disabledState}`
               : iconButtonBase
           }
         >
-          <Glasses className="w-4 h-4" fill={editMode === "text" ? "currentColor" : "none"} />
+          <Glasses className={iconMd} fill={editMode === "text" ? "currentColor" : "none"} />
         </button>
 
         <div className="w-px h-5 bg-slate-300 dark:bg-slate-600 mx-1" />
@@ -157,7 +159,7 @@ export default function CatalogToolbar({
           title="Catalog configuration"
           className={iconButtonBase}
         >
-          <Settings className="w-4 h-4" />
+          <Settings className={iconMd} />
         </button>
       </div>
     </div>

@@ -12,6 +12,7 @@ import {
   textDarkMuted,
   hoverDarkRow,
 } from "../../../styles/colourTokens";
+import { flexRowGap2 } from "../../../styles/spacing";
 import { buttonBase } from "../../../styles/buttonStyles";
 import { byteToHex } from "../../../utils/byteUtils";
 import { formatIsoUs, formatHumanUs, renderDeltaNode } from "../../../utils/timeFormat";
@@ -274,7 +275,7 @@ export default function TransmitHistoryView() {
 
                   {/* Frame / Data */}
                   <td className="px-4 py-2">
-                    <div className="flex items-center gap-2">
+                    <div className={flexRowGap2}>
                       {formatted.id && (
                         <code className="font-mono text-green-400">
                           {formatted.id}

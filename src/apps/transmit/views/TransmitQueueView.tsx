@@ -22,6 +22,7 @@ import {
   stopButtonCompact,
   paginationButtonDark,
 } from "../../../styles/buttonStyles";
+import { flexRowGap2 } from "../../../styles/spacing";
 import { byteToHex } from "../../../utils/byteUtils";
 
 export default function TransmitQueueView() {
@@ -328,7 +329,7 @@ export default function TransmitQueueView() {
 
                   {/* Frame / Data */}
                   <td className="px-4 py-2">
-                    <div className="flex items-center gap-2">
+                    <div className={flexRowGap2}>
                       {formatted.id && (
                         <code className="font-mono text-green-400">
                           {formatted.id}

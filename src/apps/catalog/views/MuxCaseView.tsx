@@ -2,6 +2,8 @@
 
 import React from "react";
 import { Pencil, Trash2 } from "lucide-react";
+import { iconMd, flexRowGap2 } from "../../../styles/spacing";
+import { caption, labelSmallMuted, iconButtonHover, iconButtonHoverDanger, bgSecondary, sectionHeaderText, hoverLight } from "../../../styles";
 import ConfirmDeleteDialog from "../../../dialogs/ConfirmDeleteDialog";
 import BitPreview, { BitRange } from "../../../components/BitPreview";
 import { tomlParse } from "../toml";
@@ -123,7 +125,7 @@ export default function MuxCaseView({
           Mux Case: {caseValue}
         </h3>
 
-        <div className="flex items-center gap-2">
+        <div className={flexRowGap2}>
           <button
             onClick={() => {
               const idKey = selectedNode.path[2];
@@ -153,10 +155,10 @@ export default function MuxCaseView({
                   : undefined;
                 onEditCase(muxPath, caseValue || '', notesStr);
               }}
-              className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+              className={iconButtonHover}
               title="Edit case"
             >
-              <Pencil className="w-4 h-4 text-slate-700 dark:text-slate-200" />
+              <Pencil className={`${iconMd} text-slate-700 dark:text-slate-200`} />
             </button>
           )}
 
@@ -167,17 +169,17 @@ export default function MuxCaseView({
               setPendingDelete({ muxPath, caseKey });
               setConfirmOpen(true);
             }}
-            className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+            className={iconButtonHoverDanger}
             title="Delete case"
           >
-            <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+            <Trash2 className={`${iconMd} text-red-600 dark:text-red-400`} />
           </button>
         </div>
       </div>
 
       {selectedNode.metadata?.properties?.notes && (
-        <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Notes</div>
+        <div className={`p-3 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>Notes</div>
           <div className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap">
             {Array.isArray(selectedNode.metadata.properties.notes)
               ? selectedNode.metadata.properties.notes.join("\n")
@@ -200,7 +202,7 @@ export default function MuxCaseView({
         </div>
 
         <div>
-          <div className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+          <div className={`${sectionHeaderText} mb-2`}>
             Signals ({caseSignals.length})
           </div>
           {caseSignals.length === 0 ? (
@@ -210,7 +212,7 @@ export default function MuxCaseView({
               {caseSignals.map((signal: any, idx: number) => (
                 <div
                   key={`${signal.name || "signal"}-${idx}`}
-                  className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg flex items-center justify-between"
+                  className={`p-3 ${bgSecondary} rounded-lg flex items-center justify-between`}
                 >
                   <div className="flex items-center gap-3">
                     <div
@@ -228,7 +230,7 @@ export default function MuxCaseView({
                         <span>⚡</span>
                         {signal.name || `Signal ${idx + 1}`}
                       </div>
-                      <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                      <div className={`${caption} mt-1`}>
                         Bits {signal.start_bit ?? 0} - {(signal.start_bit ?? 0) + (signal.bit_length ?? 0) - 1} ({signal.bit_length ?? 0} bits)
                       </div>
                       {signal.notes && (
@@ -249,10 +251,10 @@ export default function MuxCaseView({
                           signal.name
                         )
                       }
-                      className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                      className={iconButtonHoverDanger}
                       title="Delete signal"
                     >
-                      <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+                      <Trash2 className={`${iconMd} text-red-600 dark:text-red-400`} />
                     </button>
                   )}
                 </div>
@@ -263,14 +265,14 @@ export default function MuxCaseView({
 
         {nonSignalChildren.length > 0 && (
           <div>
-            <div className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+            <div className={`${sectionHeaderText} mb-2`}>
               Other Contents ({nonSignalChildren.length})
             </div>
             <div className="space-y-2">
               {nonSignalChildren.map((child, idx) => (
                 <div
                   key={idx}
-                  className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer transition-colors"
+                  className={`p-3 ${bgSecondary} rounded-lg ${hoverLight} cursor-pointer transition-colors`}
                   onClick={() => onSelectNode(child)}
                 >
                   <div className="font-medium text-slate-900 dark:text-white flex items-center gap-2">
@@ -280,7 +282,7 @@ export default function MuxCaseView({
                   </div>
 
                   {child.type === "signal" && child.metadata?.properties && (
-                    <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    <div className={`${caption} mt-1`}>
                       Bits {child.metadata.properties.start_bit ?? 0} -
                       {(child.metadata.properties.start_bit ?? 0) + (child.metadata.properties.bit_length ?? 0) - 1}
                     </div>

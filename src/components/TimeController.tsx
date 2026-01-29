@@ -11,7 +11,9 @@ import {
   pauseButtonCompact,
   stopButtonBase,
   stopButtonCompact,
+  disabledState,
 } from "../styles";
+import { iconSm, iconMd, iconLg, flexRowGap2 } from "../styles/spacing";
 
 export type PlaybackSpeed = 0.25 | 0.5 | 1 | 2 | 10 | 30 | 60;
 export type PlaybackState = "playing" | "paused";
@@ -118,7 +120,7 @@ export default function TimeController({
   return (
     <div className={`flex items-center gap-3 ${compact ? "text-sm" : ""}`}>
       {/* Playback controls */}
-      <div className="flex items-center gap-2 border-r border-slate-300 dark:border-slate-600 pr-3">
+      <div className={`${flexRowGap2} border-r border-slate-300 dark:border-slate-600 pr-3`}>
         {isPaused ? (
           <button
             onClick={onPlay}
@@ -126,7 +128,7 @@ export default function TimeController({
             className={compact ? playButtonCompact : playButtonBase}
             title="Play"
           >
-            <Play className={compact ? "w-3.5 h-3.5" : "w-4 h-4"} />
+            <Play className={compact ? iconSm : iconMd} />
             {!compact && "Play"}
           </button>
         ) : showPauseButton ? (
@@ -136,7 +138,7 @@ export default function TimeController({
             className={compact ? pauseButtonCompact : pauseButtonBase}
             title="Pause playback"
           >
-            <Pause className={compact ? "w-3.5 h-3.5" : "w-4 h-4"} />
+            <Pause className={compact ? iconSm : iconMd} />
             {!compact && "Pause"}
           </button>
         ) : (
@@ -148,7 +150,7 @@ export default function TimeController({
             }`}
             title="Streaming..."
           >
-            <Play className={compact ? "w-3.5 h-3.5" : "w-4 h-4"} />
+            <Play className={compact ? iconSm : iconMd} />
             {!compact && "Live"}
           </button>
         )}
@@ -159,15 +161,15 @@ export default function TimeController({
           className={compact ? stopButtonCompact : stopButtonBase}
           title="Pause"
         >
-          <Square className={compact ? "w-3.5 h-3.5" : "w-4 h-4"} />
+          <Square className={compact ? iconSm : iconMd} />
           {!compact && "Pause"}
         </button>
       </div>
 
       {/* Current time display */}
-      <div className="flex items-center gap-2">
+      <div className={flexRowGap2}>
         <Clock
-          className={`${compact ? "w-4 h-4" : "w-5 h-5"} text-slate-600 dark:text-slate-400 ${
+          className={`${compact ? iconMd : iconLg} text-slate-600 dark:text-slate-400 ${
             isPlaying ? "animate-pulse" : ""
           }`}
         />
@@ -182,9 +184,9 @@ export default function TimeController({
 
       {/* Speed control - only show if supported */}
       {showSpeedControl && (
-        <div className="flex items-center gap-2 border-l border-slate-300 dark:border-slate-600 pl-3">
+        <div className={`${flexRowGap2} border-l border-slate-300 dark:border-slate-600 pl-3`}>
           <Zap
-            className={`${compact ? "w-4 h-4" : "w-5 h-5"} text-orange-600 dark:text-orange-400`}
+            className={`${compact ? iconMd : iconLg} text-orange-600 dark:text-orange-400`}
           />
           <select
             value={speed}
@@ -194,7 +196,7 @@ export default function TimeController({
             disabled={disabled}
             className={`${
               compact ? "px-2 py-0.5 text-xs" : "px-3 py-1"
-            } rounded border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-slate-100 disabled:opacity-50 disabled:cursor-not-allowed`}
+            } rounded border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-slate-100 ${disabledState}`}
           >
             {SPEED_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -207,7 +209,7 @@ export default function TimeController({
 
       {/* Time range inputs - only show if supported */}
       {showTimeRangeInputs && (
-        <div className="flex items-center gap-2 border-l border-slate-300 dark:border-slate-600 pl-3">
+        <div className={`${flexRowGap2} border-l border-slate-300 dark:border-slate-600 pl-3`}>
           <label className="text-xs text-slate-600 dark:text-slate-400">
             From:
           </label>
@@ -219,7 +221,7 @@ export default function TimeController({
             disabled={disabled || !isPaused}
             className={`${
               compact ? "px-2 py-0.5 text-xs" : "px-3 py-1 text-sm"
-            } rounded border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-slate-100 disabled:opacity-50 disabled:cursor-not-allowed font-mono`}
+            } rounded border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-slate-100 ${disabledState} font-mono`}
           />
           <label className="text-xs text-slate-600 dark:text-slate-400">
             To:
@@ -232,7 +234,7 @@ export default function TimeController({
             disabled={disabled || !isPaused}
             className={`${
               compact ? "px-2 py-0.5 text-xs" : "px-3 py-1 text-sm"
-            } rounded border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-slate-100 disabled:opacity-50 disabled:cursor-not-allowed font-mono`}
+            } rounded border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-slate-100 ${disabledState} font-mono`}
           />
         </div>
       )}

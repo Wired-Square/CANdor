@@ -1,5 +1,7 @@
 // ui/src/components/ColourPicker.tsx
 
+import { caption } from "../styles/typography";
+
 type ColourPickerProps = {
   label: string;
   value: string;
@@ -16,7 +18,7 @@ export default function ColourPicker({ label, value, onChange }: ColourPickerPro
         onChange={(e) => onChange(e.target.value)}
         className="h-8 w-12 cursor-pointer bg-transparent border border-slate-300 dark:border-slate-600 rounded"
       />
-      <span className="text-xs text-slate-500 dark:text-slate-400 font-mono">{value}</span>
+      <span className={`${caption} font-mono`}>{value}</span>
     </label>
   );
 }

@@ -1,6 +1,7 @@
 // ui/src/dialogs/ErrorDialog.tsx
 
 import { AlertTriangle, X } from "lucide-react";
+import { iconLg, iconXl } from "../styles/spacing";
 import Dialog from "../components/Dialog";
 import { SecondaryButton } from "../components/forms/DialogButtons";
 import {
@@ -38,7 +39,7 @@ export default function ErrorDialog({
         <div className={`flex items-start justify-between ${marginHeading}`}>
           <div className={`flex items-center ${gapSmall}`}>
             <div className={`w-12 h-12 ${bgDanger} ${roundedDefault} flex items-center justify-center`}>
-              <AlertTriangle className={`w-6 h-6 ${textDanger}`} />
+              <AlertTriangle className={`${iconXl} ${textDanger}`} />
             </div>
             <div>
               <h2 className={h2}>{title}</h2>
@@ -48,7 +49,7 @@ export default function ErrorDialog({
             onClick={onClose}
             className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
           >
-            <X className="w-5 h-5" />
+            <X className={iconLg} />
           </button>
         </div>
 

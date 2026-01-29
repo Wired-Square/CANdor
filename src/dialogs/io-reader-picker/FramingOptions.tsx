@@ -10,6 +10,8 @@ import FramingOptionsPanel, {
   type FramingPanelConfig,
   hexToBytes,
 } from "../../components/FramingOptionsPanel";
+import { sectionHeader } from "../../styles/typography";
+import { borderDivider } from "../../styles";
 
 /** Framing configuration for the reader session */
 export interface FramingConfig {
@@ -116,8 +118,8 @@ export default function FramingOptions({
   };
 
   return (
-    <div className="border-b border-slate-200 dark:border-slate-700">
-      <div className="px-4 py-2 bg-slate-50 dark:bg-slate-900/50 text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+    <div className={borderDivider}>
+      <div className={`px-4 py-2 bg-slate-50 dark:bg-slate-900/50 ${sectionHeader}`}>
         Framing
       </div>
       <div className="p-3">

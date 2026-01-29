@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useCallback } from "react";
 import { X, ChevronUp, ChevronDown } from "lucide-react";
+import { iconMd } from "../../../styles/spacing";
+import { disabledState, borderDivider, focusRing, iconButtonHoverSmall } from "../../../styles";
 import { useCatalogEditorStore } from "../../../stores/catalogEditorStore";
 
 export type TextFindBarProps = {
@@ -110,7 +112,7 @@ export default function TextFindBar({ textareaRef }: TextFindBarProps) {
   const currentMatch = textFind.currentIndex + 1;
 
   return (
-    <div className="flex items-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700">
+    <div className={`flex items-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 ${borderDivider}`}>
       <input
         ref={inputRef}
         type="text"
@@ -118,7 +120,7 @@ export default function TextFindBar({ textareaRef }: TextFindBarProps) {
         onChange={(e) => setTextFindQuery(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder="Find in text..."
-        className="flex-1 px-3 py-1.5 text-sm rounded-md border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className={`flex-1 px-3 py-1.5 text-sm rounded-md border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white ${focusRing}`}
       />
 
       <span className="text-sm text-slate-500 dark:text-slate-400 min-w-[60px] text-center">
@@ -134,27 +136,27 @@ export default function TextFindBar({ textareaRef }: TextFindBarProps) {
       <button
         onClick={textFindPrevious}
         disabled={matchCount === 0}
-        className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+        className={`${iconButtonHoverSmall} ${disabledState}`}
         title="Previous match (Shift+Enter)"
       >
-        <ChevronUp className="w-4 h-4" />
+        <ChevronUp className={iconMd} />
       </button>
 
       <button
         onClick={textFindNext}
         disabled={matchCount === 0}
-        className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+        className={`${iconButtonHoverSmall} ${disabledState}`}
         title="Next match (Enter)"
       >
-        <ChevronDown className="w-4 h-4" />
+        <ChevronDown className={iconMd} />
       </button>
 
       <button
         onClick={closeTextFind}
-        className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700"
+        className={iconButtonHoverSmall}
         title="Close (Escape)"
       >
-        <X className="w-4 h-4" />
+        <X className={iconMd} />
       </button>
     </div>
   );

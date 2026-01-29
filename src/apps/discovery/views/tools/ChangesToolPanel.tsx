@@ -1,6 +1,7 @@
 // ui/src/apps/discovery/views/tools/ChangesToolPanel.tsx
 
 import { useDiscoveryStore } from "../../../../stores/discoveryStore";
+import { bgSurface } from "../../../../styles";
 
 export default function ChangesToolPanel() {
   const options = useDiscoveryStore((s) => s.toolbox.changes);
@@ -16,7 +17,7 @@ export default function ChangesToolPanel() {
           max={100}
           value={options.maxExamples}
           onChange={(e) => updateOptions({ maxExamples: Math.max(1, Math.min(100, Number(e.target.value) || 30)) })}
-          className="w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100"
+          className={`w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-600 ${bgSurface} text-slate-800 dark:text-slate-100`}
         />
       </div>
       <p className="text-slate-400 dark:text-slate-500">

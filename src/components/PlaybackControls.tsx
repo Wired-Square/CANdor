@@ -4,6 +4,7 @@
 // Used by Discovery and Decoder when viewing recorded/buffered data.
 
 import { ChevronLeft, ChevronRight, FastForward, Play, Rewind, SkipBack, SkipForward, Square } from "lucide-react";
+import { iconSm } from "../styles/spacing";
 import type { PlaybackSpeed } from "./TimeController";
 
 export type PlaybackState = "playing" | "paused";
@@ -97,7 +98,7 @@ export function PlaybackControls({
           className="p-1 rounded text-gray-400 hover:bg-gray-700 hover:text-gray-200"
           title="Skip to start"
         >
-          <SkipBack className="w-3.5 h-3.5" />
+          <SkipBack className={iconSm} />
         </button>
       )}
 
@@ -112,7 +113,7 @@ export function PlaybackControls({
           className="p-1 rounded text-gray-400 hover:bg-gray-700 hover:text-gray-200"
           title="Skip back 10 seconds"
         >
-          <Rewind className="w-3.5 h-3.5" />
+          <Rewind className={iconSm} />
         </button>
       )}
 
@@ -129,7 +130,7 @@ export function PlaybackControls({
           }`}
           title="Play backward"
         >
-          <Play className="w-3.5 h-3.5 rotate-180" fill="currentColor" />
+          <Play className={`${iconSm} rotate-180`} fill="currentColor" />
         </button>
       )}
 
@@ -145,7 +146,7 @@ export function PlaybackControls({
         }`}
         title="Pause"
       >
-        <Square className="w-3.5 h-3.5" fill="currentColor" />
+        <Square className={iconSm} fill="currentColor" />
       </button>
 
       {/* Step backward (when paused and not at start) */}
@@ -164,7 +165,7 @@ export function PlaybackControls({
             }`}
             title={atStart ? "At start of buffer" : "Step backward one frame"}
           >
-            <ChevronLeft className="w-3.5 h-3.5" strokeWidth={3} />
+            <ChevronLeft className={iconSm} strokeWidth={3} />
           </button>
         );
       })()}
@@ -194,7 +195,7 @@ export function PlaybackControls({
             }`}
             title={atEnd ? "At end of buffer" : "Step forward one frame"}
           >
-            <ChevronRight className="w-3.5 h-3.5" strokeWidth={3} />
+            <ChevronRight className={iconSm} strokeWidth={3} />
           </button>
         );
       })()}
@@ -211,7 +212,7 @@ export function PlaybackControls({
         }`}
         title={isPaused ? "Resume forward" : "Play forward"}
       >
-        <Play className="w-3.5 h-3.5" fill="currentColor" />
+        <Play className={iconSm} fill="currentColor" />
       </button>
 
       {/* Skip forward 10 seconds */}
@@ -225,7 +226,7 @@ export function PlaybackControls({
           className="p-1 rounded text-gray-400 hover:bg-gray-700 hover:text-gray-200"
           title="Skip forward 10 seconds"
         >
-          <FastForward className="w-3.5 h-3.5" />
+          <FastForward className={iconSm} />
         </button>
       )}
 
@@ -237,7 +238,7 @@ export function PlaybackControls({
           className="p-1 rounded text-gray-400 hover:bg-gray-700 hover:text-gray-200"
           title="Skip to end"
         >
-          <SkipForward className="w-3.5 h-3.5" />
+          <SkipForward className={iconSm} />
         </button>
       )}
 

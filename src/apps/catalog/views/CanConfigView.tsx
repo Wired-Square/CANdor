@@ -1,6 +1,8 @@
 // ui/src/apps/catalog/views/CanConfigView.tsx
 
 import { Network, Pencil } from "lucide-react";
+import { iconMd, iconLg } from "../../../styles/spacing";
+import { labelSmallMuted, monoBody, iconButtonHover, bgSecondary } from "../../../styles";
 import type { TomlNode, CanProtocolConfig } from "../types";
 
 export type CanConfigViewProps = {
@@ -24,7 +26,7 @@ export default function CanConfigView({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-green-100 dark:bg-green-900/30 rounded-lg">
-            <Network className="w-5 h-5 text-green-600 dark:text-green-400" />
+            <Network className={`${iconLg} text-green-600 dark:text-green-400`} />
           </div>
           <div>
             <div className="text-lg font-bold text-slate-900 dark:text-white">
@@ -38,21 +40,21 @@ export default function CanConfigView({
         {onEditConfig && (
           <button
             onClick={onEditConfig}
-            className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+            className={iconButtonHover}
             title="Edit configuration"
           >
-            <Pencil className="w-4 h-4 text-slate-700 dark:text-slate-200" />
+            <Pencil className={`${iconMd} text-slate-700 dark:text-slate-200`} />
           </button>
         )}
       </div>
 
       {/* Property cards */}
       <div className="grid grid-cols-2 gap-4">
-        <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+        <div className={`p-4 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>
             Default Endianness
           </div>
-          <div className="font-mono text-sm text-slate-900 dark:text-white">
+          <div className={monoBody}>
             {defaultEndianness ? (
               defaultEndianness === "little" ? "Little Endian" : "Big Endian"
             ) : (
@@ -61,11 +63,11 @@ export default function CanConfigView({
           </div>
         </div>
 
-        <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+        <div className={`p-4 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>
             Default Interval
           </div>
-          <div className="font-mono text-sm text-slate-900 dark:text-white">
+          <div className={monoBody}>
             {defaultInterval !== undefined ? (
               `${defaultInterval} ms`
             ) : (

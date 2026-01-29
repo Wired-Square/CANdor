@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import Dialog from "../components/Dialog";
 import { Select, FormField, PrimaryButton, SecondaryButton } from "../components/forms";
-import { h3, bodyDefault } from "../styles";
+import { h3, bodyDefault, caption } from "../styles";
 
 export type ExportFormat = "csv" | "json" | "candump" | "hex" | "bin";
 
@@ -101,7 +101,7 @@ export default function ExportFramesDialog({
           </Select>
         </FormField>
 
-        <div className="text-xs text-slate-500 dark:text-slate-400">
+        <div className={caption}>
           {formatDescriptions[format]}
         </div>
 

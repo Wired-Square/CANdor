@@ -2,6 +2,7 @@
 
 import React from "react";
 import { Cable, Filter, Network, Plus, Server, UserPlus } from "lucide-react";
+import { iconMd, iconXs } from "../../../styles/spacing";
 import ResizableSidebar from "../../../components/ResizableSidebar";
 import type { TomlNode, ProtocolType, CanProtocolConfig, ModbusProtocolConfig, SerialProtocolConfig } from "../types";
 
@@ -78,7 +79,7 @@ export default function CatalogTreePanel({
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-900/50 transition-colors cursor-pointer"
                 title={canConfig ? `CAN config: ${canConfig.default_endianness} endian${canConfig.frame_id_mask !== undefined ? ', masked' : ''}` : "Configure CAN settings"}
               >
-                <Network className="w-3 h-3" />
+                <Network className={iconXs} />
                 CAN
                 {!canConfig && <span className="text-green-500">!</span>}
               </button>
@@ -89,7 +90,7 @@ export default function CatalogTreePanel({
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors cursor-pointer"
                 title={modbusConfig ? `Modbus config: Addr ${modbusConfig.device_address}, Base ${modbusConfig.register_base}` : "Configure Modbus settings"}
               >
-                <Server className="w-3 h-3" />
+                <Server className={iconXs} />
                 Modbus
                 {!modbusConfig && <span className="text-amber-500">!</span>}
               </button>
@@ -100,7 +101,7 @@ export default function CatalogTreePanel({
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-900/50 transition-colors cursor-pointer"
                 title={serialConfig ? `Serial encoding: ${serialConfig.encoding.toUpperCase()}` : "Configure Serial settings"}
               >
-                <Cable className="w-3 h-3" />
+                <Cable className={iconXs} />
                 Serial
                 {!serialConfig && <span className="text-purple-500">!</span>}
               </button>
@@ -116,14 +117,14 @@ export default function CatalogTreePanel({
               className="p-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
               title="Add new node"
             >
-              <UserPlus className="w-4 h-4" />
+              <UserPlus className={iconMd} />
             </button>
             <button
               onClick={() => handleAddFrame?.()}
               className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
               title="Add new frame"
             >
-              <Plus className="w-4 h-4" />
+              <Plus className={iconMd} />
             </button>
             <button
               onClick={() => setFilterByNode(filterByNode !== null ? null : "")}
@@ -134,7 +135,7 @@ export default function CatalogTreePanel({
               }}
               className="p-2 rounded-lg transition-colors hover:opacity-90 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200"
             >
-              <Filter className="w-4 h-4" />
+              <Filter className={iconMd} />
             </button>
           </div>
         )}

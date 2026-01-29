@@ -2,6 +2,7 @@
 // Standardized dialog button components for consistent styling
 
 import type { ReactNode, ButtonHTMLAttributes } from "react";
+import { disabledState, hoverLight } from "../../styles";
 
 type ButtonProps = {
   children: ReactNode;
@@ -27,7 +28,7 @@ export function PrimaryButton({
       type={type}
       onClick={onClick}
       disabled={disabled}
-      className={`px-4 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
+      className={`px-4 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 ${disabledState} ${className}`}
     >
       {children}
     </button>
@@ -50,7 +51,7 @@ export function SecondaryButton({
       type={type}
       onClick={onClick}
       disabled={disabled}
-      className={`px-4 py-2 text-sm rounded border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
+      className={`px-4 py-2 text-sm rounded border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 ${hoverLight} ${disabledState} ${className}`}
     >
       {children}
     </button>
@@ -73,7 +74,7 @@ export function DangerButton({
       type={type}
       onClick={onClick}
       disabled={disabled}
-      className={`px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
+      className={`px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700 ${disabledState} ${className}`}
     >
       {children}
     </button>
@@ -96,7 +97,7 @@ export function SuccessButton({
       type={type}
       onClick={onClick}
       disabled={disabled}
-      className={`px-4 py-2 text-sm rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
+      className={`px-4 py-2 text-sm rounded bg-green-600 text-white hover:bg-green-700 ${disabledState} ${className}`}
     >
       {children}
     </button>

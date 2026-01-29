@@ -1,9 +1,10 @@
 // ui/src/apps/catalog/dialogs/ValidationErrorsDialog.tsx
 
 import { AlertTriangle, CheckCircle, X } from "lucide-react";
+import { iconMd, iconLg, iconXl } from "../../../styles/spacing";
 import Dialog from "../../../components/Dialog";
 import { SecondaryButton } from "../../../components/forms";
-import { h2 } from "../../../styles";
+import { h2, caption } from "../../../styles";
 import type { ValidationError } from "../types";
 
 type Props = {
@@ -31,9 +32,9 @@ export default function ValidationErrorsDialog({ open, errors, isValid, onClose 
               }`}
             >
               {isValidCatalog ? (
-                <CheckCircle className="w-6 h-6 text-green-600 dark:text-green-400" />
+                <CheckCircle className={`${iconXl} text-green-600 dark:text-green-400`} />
               ) : (
-                <AlertTriangle className="w-6 h-6 text-amber-600 dark:text-amber-400" />
+                <AlertTriangle className={`${iconXl} text-amber-600 dark:text-amber-400`} />
               )}
             </div>
             <div>
@@ -51,7 +52,7 @@ export default function ValidationErrorsDialog({ open, errors, isValid, onClose 
             onClick={onClose}
             className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
           >
-            <X className="w-5 h-5" />
+            <X className={iconLg} />
           </button>
         </div>
 
@@ -69,12 +70,12 @@ export default function ValidationErrorsDialog({ open, errors, isValid, onClose 
                   className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3"
                 >
                   <div className="flex items-start gap-2">
-                    <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
+                    <AlertTriangle className={`${iconMd} text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0`} />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-slate-700 dark:text-slate-300">
                         {error.message}
                       </p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-mono">
+                      <p className={`${caption} mt-1 font-mono`}>
                         {error.field}
                       </p>
                     </div>

@@ -5,6 +5,8 @@ import { useState } from "react";
 import { useDiscoveryStore, type FramingConfig } from "../../../../stores/discoveryStore";
 import type { FramingCandidate, CandidateChecksum, CandidateSourceAddress } from "../../../../utils/analysis/serialFrameAnalysis";
 import { Hash, Shield, Info, CheckCircle2, AlertCircle, Check, Layers, Radio, MapPin } from "lucide-react";
+import { iconMd, iconXs, iconLg, icon2xl, flexRowGap2 } from "../../../../styles/spacing";
+import { caption, captionMuted, textMedium, sectionHeaderText } from "../../../../styles";
 
 export default function SerialAnalysisResultView() {
   const framingResults = useDiscoveryStore((s) => s.toolbox.serialFramingResults);
@@ -163,7 +165,7 @@ export default function SerialAnalysisResultView() {
       <div className="h-full overflow-y-auto p-4 pb-8 space-y-6">
         {/* Summary Header */}
         <div className="flex items-center gap-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
-          <Layers className="w-8 h-8 text-blue-500" />
+          <Layers className={`${icon2xl} text-blue-500`} />
           <div className="flex-1">
             <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
               Framing Detection Results
@@ -177,8 +179,8 @@ export default function SerialAnalysisResultView() {
         {/* General Notes */}
         {framingResult.notes.length > 0 && (
           <div className="space-y-2">
-            <div className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-              <Info className="w-4 h-4" />
+            <div className={`${flexRowGap2} ${sectionHeaderText}`}>
+              <Info className={iconMd} />
               <span>Summary</span>
             </div>
             <ul className="space-y-1 text-sm text-slate-600 dark:text-slate-400">
@@ -194,10 +196,10 @@ export default function SerialAnalysisResultView() {
 
         {/* Framing Candidates */}
         <div className="space-y-3">
-          <div className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-            <Radio className="w-4 h-4" />
+          <div className={`${flexRowGap2} ${sectionHeaderText}`}>
+            <Radio className={iconMd} />
             <span>Detected Framing Modes</span>
-            <span className="text-xs text-slate-400 dark:text-slate-500">
+            <span className={captionMuted}>
               ({appliedFramingIdx !== null ? "1 applied" : `${framingResult.candidates.length} found`})
             </span>
           </div>
@@ -230,8 +232,8 @@ export default function SerialAnalysisResultView() {
                     >
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-sm font-medium text-slate-900 dark:text-white uppercase">
+                          <div className={flexRowGap2}>
+                            <span className={`${textMedium} font-mono uppercase`}>
                               {candidate.mode === 'delimiter'
                                 ? `Delimiter (0x${candidate.delimiterHex})`
                                 : candidate.mode.replace('_', ' ')}
@@ -243,7 +245,7 @@ export default function SerialAnalysisResultView() {
                             )}
                             {isApplied && (
                               <span className="px-1.5 py-0.5 text-xs bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 rounded flex items-center gap-1">
-                                <Check className="w-3 h-3" />
+                                <Check className={iconXs} />
                                 Applied
                               </span>
                             )}
@@ -264,7 +266,7 @@ export default function SerialAnalysisResultView() {
                             avg {candidate.avgFrameLength} bytes
                           </div>
                           {candidate.notes.length > 0 && (
-                            <div className="text-xs text-slate-500 dark:text-slate-500 mt-1">
+                            <div className={`${captionMuted} mt-1`}>
                               {candidate.notes.join(" • ")}
                             </div>
                           )}
@@ -281,13 +283,13 @@ export default function SerialAnalysisResultView() {
                             {isApplied ? "Applied" : "Apply"}
                           </button>
                           {isApplied ? (
-                            <CheckCircle2 className="w-5 h-5 text-blue-500" />
+                            <CheckCircle2 className={`${iconLg} text-blue-500`} />
                           ) : candidate.confidence >= 70 ? (
-                            <CheckCircle2 className="w-5 h-5 text-green-500" />
+                            <CheckCircle2 className={`${iconLg} text-green-500`} />
                           ) : candidate.confidence >= 50 ? (
-                            <AlertCircle className="w-5 h-5 text-yellow-500" />
+                            <AlertCircle className={`${iconLg} text-yellow-500`} />
                           ) : (
-                            <AlertCircle className="w-5 h-5 text-slate-400" />
+                            <AlertCircle className={`${iconLg} text-slate-400`} />
                           )}
                         </div>
                       </div>
@@ -300,7 +302,7 @@ export default function SerialAnalysisResultView() {
 
         {/* Next Steps */}
         <div className="p-4 bg-slate-100 dark:bg-slate-800 rounded-lg">
-          <h4 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+          <h4 className={`${sectionHeaderText} mb-2`}>
             Next Steps
           </h4>
           <ol className="text-sm text-slate-600 dark:text-slate-400 space-y-1 list-decimal list-inside">
@@ -340,8 +342,8 @@ export default function SerialAnalysisResultView() {
       {/* General Notes */}
       {analysisResult.notes.length > 0 && (
         <div className="space-y-2">
-          <div className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-            <Info className="w-4 h-4" />
+          <div className={`${flexRowGap2} ${sectionHeaderText}`}>
+            <Info className={iconMd} />
             <span>Summary</span>
           </div>
           <ul className="space-y-1 text-sm text-slate-600 dark:text-slate-400">
@@ -357,10 +359,10 @@ export default function SerialAnalysisResultView() {
 
       {/* Candidate ID Groups */}
       <div className="space-y-3">
-        <div className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-          <Hash className="w-4 h-4" />
+        <div className={`${flexRowGap2} ${sectionHeaderText}`}>
+          <Hash className={iconMd} />
           <span>Candidate ID Bytes</span>
-          <span className="text-xs text-slate-400 dark:text-slate-500">
+          <span className={captionMuted}>
             ({appliedIdIdx !== null ? "1 applied" : `${analysisResult.candidateIdGroups.length} found`})
           </span>
         </div>
@@ -389,8 +391,8 @@ export default function SerialAnalysisResultView() {
                   >
                     <div className="flex items-start justify-between gap-4">
                       <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-sm font-medium text-slate-900 dark:text-white">
+                        <div className={flexRowGap2}>
+                          <span className={`${textMedium} font-mono`}>
                             byte{candidate.length > 1 ? "s" : ""} [{candidate.startByte}
                             {candidate.length > 1 ? `:${candidate.startByte + candidate.length - 1}` : ""}]
                           </span>
@@ -401,7 +403,7 @@ export default function SerialAnalysisResultView() {
                           )}
                           {isApplied && (
                             <span className="px-1.5 py-0.5 text-xs bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 rounded flex items-center gap-1">
-                              <Check className="w-3 h-3" />
+                              <Check className={iconXs} />
                               Applied ({getUniqueIdCount()} unique IDs)
                             </span>
                           )}
@@ -429,11 +431,11 @@ export default function SerialAnalysisResultView() {
                           {isApplied ? "Applied" : "Apply"}
                         </button>
                         {isApplied ? (
-                          <CheckCircle2 className="w-5 h-5 text-blue-500" />
+                          <CheckCircle2 className={`${iconLg} text-blue-500`} />
                         ) : idx === 0 ? (
-                          <CheckCircle2 className="w-5 h-5 text-green-500" />
+                          <CheckCircle2 className={`${iconLg} text-green-500`} />
                         ) : (
-                          <AlertCircle className="w-5 h-5 text-slate-400" />
+                          <AlertCircle className={`${iconLg} text-slate-400`} />
                         )}
                       </div>
                     </div>
@@ -447,7 +449,7 @@ export default function SerialAnalysisResultView() {
                             ? "border-green-200 dark:border-green-800"
                             : "border-slate-200 dark:border-slate-700"
                       }`}>
-                        <div className="text-xs text-slate-500 dark:text-slate-400 mb-1">Sample values:</div>
+                        <div className={`${caption} mb-1`}>Sample values:</div>
                         <div className="flex flex-wrap gap-1">
                           {candidate.uniqueValues.slice(0, 16).map((val, i) => (
                             <span
@@ -474,10 +476,10 @@ export default function SerialAnalysisResultView() {
 
       {/* Candidate Source Addresses */}
       <div className="space-y-3">
-        <div className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-          <MapPin className="w-4 h-4" />
+        <div className={`${flexRowGap2} ${sectionHeaderText}`}>
+          <MapPin className={iconMd} />
           <span>Candidate Source Addresses</span>
-          <span className="text-xs text-slate-400 dark:text-slate-500">
+          <span className={captionMuted}>
             ({appliedSourceIdx !== null ? "1 applied" : `${analysisResult.candidateSourceAddresses.length} found`})
           </span>
         </div>
@@ -506,8 +508,8 @@ export default function SerialAnalysisResultView() {
                   >
                     <div className="flex items-start justify-between gap-4">
                       <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-sm font-medium text-slate-900 dark:text-white">
+                        <div className={flexRowGap2}>
+                          <span className={`${textMedium} font-mono`}>
                             byte{candidate.length > 1 ? "s" : ""} [{candidate.startByte}
                             {candidate.length > 1 ? `:${candidate.startByte + candidate.length - 1}` : ""}]
                           </span>
@@ -518,7 +520,7 @@ export default function SerialAnalysisResultView() {
                           )}
                           {isApplied && (
                             <span className="px-1.5 py-0.5 text-xs bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 rounded flex items-center gap-1">
-                              <Check className="w-3 h-3" />
+                              <Check className={iconXs} />
                               Applied
                             </span>
                           )}
@@ -546,11 +548,11 @@ export default function SerialAnalysisResultView() {
                           {isApplied ? "Applied" : "Apply"}
                         </button>
                         {isApplied ? (
-                          <CheckCircle2 className="w-5 h-5 text-blue-500" />
+                          <CheckCircle2 className={`${iconLg} text-blue-500`} />
                         ) : idx === 0 ? (
-                          <CheckCircle2 className="w-5 h-5 text-purple-500" />
+                          <CheckCircle2 className={`${iconLg} text-purple-500`} />
                         ) : (
-                          <AlertCircle className="w-5 h-5 text-slate-400" />
+                          <AlertCircle className={`${iconLg} text-slate-400`} />
                         )}
                       </div>
                     </div>
@@ -564,7 +566,7 @@ export default function SerialAnalysisResultView() {
                             ? "border-purple-200 dark:border-purple-800"
                             : "border-slate-200 dark:border-slate-700"
                       }`}>
-                        <div className="text-xs text-slate-500 dark:text-slate-400 mb-1">Sample addresses:</div>
+                        <div className={`${caption} mb-1`}>Sample addresses:</div>
                         <div className="flex flex-wrap gap-1">
                           {candidate.uniqueValues.slice(0, 16).map((val, i) => (
                             <span
@@ -591,10 +593,10 @@ export default function SerialAnalysisResultView() {
 
       {/* Candidate Checksums */}
       <div className="space-y-3">
-        <div className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-          <Shield className="w-4 h-4" />
+        <div className={`${flexRowGap2} ${sectionHeaderText}`}>
+          <Shield className={iconMd} />
           <span>Candidate Checksums</span>
-          <span className="text-xs text-slate-400 dark:text-slate-500">
+          <span className={captionMuted}>
             ({appliedChecksumIdx !== null ? "1 applied" : `${analysisResult.candidateChecksums.length} found`})
           </span>
         </div>
@@ -625,8 +627,8 @@ export default function SerialAnalysisResultView() {
                   >
                     <div className="flex items-start justify-between gap-4">
                       <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-sm font-medium text-slate-900 dark:text-white">
+                        <div className={flexRowGap2}>
+                          <span className={`${textMedium} font-mono`}>
                             {candidate.algorithm}
                           </span>
                           <span className="text-sm text-slate-600 dark:text-slate-400">
@@ -635,7 +637,7 @@ export default function SerialAnalysisResultView() {
                           </span>
                           {isApplied ? (
                             <span className="px-1.5 py-0.5 text-xs bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 rounded flex items-center gap-1">
-                              <Check className="w-3 h-3" />
+                              <Check className={iconXs} />
                               Applied
                             </span>
                           ) : candidate.matchRate === 100 && (
@@ -680,13 +682,13 @@ export default function SerialAnalysisResultView() {
                           {isApplied ? "Applied" : "Apply"}
                         </button>
                         {isApplied ? (
-                          <CheckCircle2 className="w-5 h-5 text-blue-500" />
+                          <CheckCircle2 className={`${iconLg} text-blue-500`} />
                         ) : candidate.matchRate >= 95 ? (
-                          <CheckCircle2 className="w-5 h-5 text-green-500" />
+                          <CheckCircle2 className={`${iconLg} text-green-500`} />
                         ) : candidate.matchRate >= 80 ? (
-                          <AlertCircle className="w-5 h-5 text-yellow-500" />
+                          <AlertCircle className={`${iconLg} text-yellow-500`} />
                         ) : (
-                          <AlertCircle className="w-5 h-5 text-slate-400" />
+                          <AlertCircle className={`${iconLg} text-slate-400`} />
                         )}
                       </div>
                     </div>

@@ -2,6 +2,8 @@
 
 import React from "react";
 import { Plus, Trash2, Pencil } from "lucide-react";
+import { iconMd, flexRowGap2 } from "../../../styles/spacing";
+import { caption, labelSmallMuted, monoBody, iconButtonHover, iconButtonHoverDanger, textMedium, bgSecondary, sectionHeaderText, hoverLight } from "../../../styles";
 import type { TomlNode } from "../types";
 import { tomlParse } from "../toml";
 import { formatFrameId } from "../utils";
@@ -139,14 +141,14 @@ export default function NodeView({
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Node</h3>
 
-        <div className="flex items-center gap-2">
+        <div className={flexRowGap2}>
           {onAddCanFrameForNode && (
             <button
               onClick={() => onAddCanFrameForNode(nodeName)}
               className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-xs font-medium"
               title="Add CAN frame for this node"
             >
-              <Plus className="w-4 h-4" />
+              <Plus className={iconMd} />
               Add CAN Frame
             </button>
           )}
@@ -160,33 +162,33 @@ export default function NodeView({
                   : undefined;
                 onEditNode(nodeName, notesStr);
               }}
-              className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+              className={iconButtonHover}
               title="Edit node"
             >
-              <Pencil className="w-4 h-4 text-slate-700 dark:text-slate-200" />
+              <Pencil className={`${iconMd} text-slate-700 dark:text-slate-200`} />
             </button>
           )}
 
           {onDeleteNode && (
             <button
               onClick={() => onDeleteNode(nodeName)}
-              className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+              className={iconButtonHoverDanger}
               title="Delete node"
             >
-              <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+              <Trash2 className={`${iconMd} text-red-600 dark:text-red-400`} />
             </button>
           )}
         </div>
       </div>
 
-      <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
-        <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Name</div>
-        <div className="font-mono text-sm text-slate-900 dark:text-white">{nodeName}</div>
+      <div className={`p-4 ${bgSecondary} rounded-lg`}>
+        <div className={labelSmallMuted}>Name</div>
+        <div className={monoBody}>{nodeName}</div>
       </div>
 
       {selectedNode.metadata?.properties?.notes && (
-        <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Notes</div>
+        <div className={`p-3 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>Notes</div>
           <div className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap">
             {Array.isArray(selectedNode.metadata.properties.notes)
               ? selectedNode.metadata.properties.notes.join("\n")
@@ -197,14 +199,14 @@ export default function NodeView({
 
       {selectedNode.children && selectedNode.children.length > 0 ? (
         <div className="space-y-2">
-          <div className="text-sm font-medium text-slate-700 dark:text-slate-300">
+          <div className={sectionHeaderText}>
             Items ({selectedNode.children.length})
           </div>
 
           {selectedNode.children.map((child, idx) => (
             <div
               key={idx}
-              className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer transition-colors"
+              className={`p-3 ${bgSecondary} rounded-lg ${hoverLight} cursor-pointer transition-colors`}
               onClick={() => onSelectNode(child)}
             >
               <div className="flex items-start justify-between gap-4">
@@ -219,7 +221,7 @@ export default function NodeView({
                   </div>
 
                   {child.type === "can-frame" && child.metadata?.length !== undefined && (
-                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                    <div className={caption}>
                       {child.metadata.length} bytes
                       {child.metadata.transmitter ? ` • tx: ${child.metadata.transmitter}` : ""}
                     </div>
@@ -238,7 +240,7 @@ export default function NodeView({
       )}
 
       <div className="space-y-2">
-        <div className="text-sm font-medium text-slate-700 dark:text-slate-300">
+        <div className={sectionHeaderText}>
           Transmitted CAN Frames ({framesForNode.length})
         </div>
 
@@ -248,7 +250,7 @@ export default function NodeView({
           framesForNode.map((frame) => (
             <div
               key={frame.id}
-              className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700"
+              className={`p-4 ${bgSecondary} rounded-lg border border-slate-200 dark:border-slate-700`}
             >
               {(() => {
                 const formatted = formatFrameId(frame.id, displayFrameIdFormat);
@@ -256,35 +258,35 @@ export default function NodeView({
               <div className="flex items-center justify-between mb-2">
                 <div className="font-medium text-slate-900 dark:text-white flex items-center gap-2">
                   <span>🔖</span>
-                  <span className="flex items-center gap-2">
+                  <span className={flexRowGap2}>
                     {formatted.primary}
                     {formatted.secondary && (
-                      <span className="text-slate-500 dark:text-slate-400 text-xs">
+                      <span className={caption}>
                         ({formatted.secondary})
                       </span>
                     )}
                   </span>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className={flexRowGap2}>
                   {frame.length !== undefined && (
-                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                    <div className={caption}>
                       {frame.length} bytes
                     </div>
                   )}
                   <button
                     onClick={() => onSelectPath(["frame", "can", frame.id])}
-                    className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                    className={iconButtonHover}
                     title="Edit frame"
                   >
-                    <Pencil className="w-4 h-4 text-slate-700 dark:text-slate-200" />
+                    <Pencil className={`${iconMd} text-slate-700 dark:text-slate-200`} />
                   </button>
                   {onRequestDeleteFrame && (
                     <button
                       onClick={() => onRequestDeleteFrame(frame.id)}
-                      className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                      className={iconButtonHoverDanger}
                       title="Delete frame"
                     >
-                      <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+                      <Trash2 className={`${iconMd} text-red-600 dark:text-red-400`} />
                     </button>
                   )}
                 </div>
@@ -293,17 +295,17 @@ export default function NodeView({
               })()}
 
               {frame.signals.length === 0 ? (
-                <div className="text-xs text-slate-500 dark:text-slate-400">No signals defined.</div>
+                <div className={caption}>No signals defined.</div>
               ) : (
                 <div className="space-y-2">
                   {frame.signals.map((signal, idx) => (
                     <div key={`${signal.name}-${idx}`} className="flex items-start gap-3">
                       <div className="flex-1">
-                        <div className="text-sm font-medium text-slate-900 dark:text-white flex items-center gap-2">
+                        <div className={`${textMedium} flex items-center gap-2`}>
                           <span>⚡</span>
                           {signal.name}
                         </div>
-                        <div className="text-xs text-slate-500 dark:text-slate-400">
+                        <div className={caption}>
                           Bits {signal.start_bit ?? 0} - {(signal.start_bit ?? 0) + (signal.bit_length ?? 0) - 1}
                           {signal.bit_length ? ` (${signal.bit_length} bits)` : ""}
                           {signal.location ? ` • ${signal.location}` : ""}
@@ -312,10 +314,10 @@ export default function NodeView({
                       <div className="flex items-center gap-1">
                         <button
                           onClick={() => onSelectPath(signal.path)}
-                          className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                          className={iconButtonHover}
                           title="Edit signal"
                         >
-                          <Pencil className="w-4 h-4 text-slate-700 dark:text-slate-200" />
+                          <Pencil className={`${iconMd} text-slate-700 dark:text-slate-200`} />
                         </button>
                         {onRequestDeleteSignal && (
                           <button
@@ -327,10 +329,10 @@ export default function NodeView({
                                 signal.name
                               )
                             }
-                            className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                            className={iconButtonHoverDanger}
                             title="Delete signal"
                           >
-                            <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+                            <Trash2 className={`${iconMd} text-red-600 dark:text-red-400`} />
                           </button>
                         )}
                       </div>

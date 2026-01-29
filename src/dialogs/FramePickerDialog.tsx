@@ -1,6 +1,8 @@
 // ui/src/dialogs/FramePickerDialog.tsx
 
 import { X } from "lucide-react";
+import { iconLg } from "../styles/spacing";
+import { borderDivider, hoverLight, bgSurface } from "../styles";
 import Dialog from "../components/Dialog";
 import FramePicker from "../components/FramePicker";
 import type { FrameInfo } from "../types/common";
@@ -38,16 +40,16 @@ export default function FramePickerDialog({
 }: Props) {
   return (
     <Dialog isOpen={isOpen} onBackdropClick={onClose} maxWidth="max-w-sm">
-      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl overflow-hidden">
-        <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+      <div className={`${bgSurface} rounded-xl shadow-xl overflow-hidden`}>
+        <div className={`p-4 ${borderDivider} flex items-center justify-between`}>
           <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
             Select Frames
           </h2>
           <button
             onClick={onClose}
-            className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+            className={`p-1 rounded ${hoverLight} transition-colors`}
           >
-            <X className="w-5 h-5" />
+            <X className={iconLg} />
           </button>
         </div>
         <div className="p-4 max-h-[60vh] overflow-y-auto">

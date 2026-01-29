@@ -99,3 +99,12 @@ export const badgeDarkPanelDanger = `${badgeDarkPanelBase} bg-red-600/30 text-re
  * Dark panel purple badge - purple, for custom header fields
  */
 export const badgeDarkPanelPurple = `${badgeDarkPanelBase} bg-purple-600/30 text-purple-400`;
+
+// ============================================================================
+// Metadata Badges - for filenames, types, and metadata display
+// ============================================================================
+
+/**
+ * Metadata badge - muted gray, for displaying filenames/types
+ */
+export const badgeMetadata = "px-2 py-1 text-xs font-medium bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-400 rounded";

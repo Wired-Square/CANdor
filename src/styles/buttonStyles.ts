@@ -213,3 +213,63 @@ export function tabCountColorClass(color: 'green' | 'purple' | 'gray' | 'orange'
  */
 export const tableIconButtonDark =
   "p-0.5 rounded hover:bg-gray-700 transition-colors";
+
+// =============================================================================
+// Icon Button Hover Styles (for toolbar/card action buttons)
+// =============================================================================
+
+/**
+ * Icon button with hover - light theme
+ * Use for edit/action buttons in cards and dialogs
+ */
+export const iconButtonHover =
+  "p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors";
+
+/**
+ * Icon button with danger hover - for delete actions
+ */
+export const iconButtonHoverDanger =
+  "p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors";
+
+/**
+ * Compact icon button with hover - for tight layouts (star buttons, inline actions)
+ */
+export const iconButtonHoverCompact =
+  "p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded transition-colors";
+
+/**
+ * Small icon button with hover - p-1.5 variant for intermediate sizing
+ */
+export const iconButtonHoverSmall =
+  "p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors";
+
+/**
+ * Secondary button - gray background for cancel/reset actions
+ * Use for: Dialog cancel buttons, reset buttons, secondary actions
+ */
+export const secondaryButton =
+  "px-6 py-2 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors";
+
+/**
+ * Folder picker button - for directory browse buttons
+ * Use for: Directory/file picker buttons in settings
+ */
+export const folderPickerButton =
+  "px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 rounded-lg transition-colors";
+
+/**
+ * Dialog option button - for multi-choice dialog buttons
+ * Use for: Option buttons in picker dialogs
+ */
+export const dialogOptionButton =
+  "flex items-center justify-center gap-2 flex-1 px-3 py-2 text-sm font-medium rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors";
+
+// =============================================================================
+// State Utilities
+// =============================================================================
+
+/**
+ * Disabled state styling
+ * Use as a composable utility with other button styles
+ */
+export const disabledState = "disabled:opacity-50 disabled:cursor-not-allowed";

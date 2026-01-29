@@ -3,6 +3,7 @@
 // A select component styled for dark toolbars (data view bars, etc.)
 
 import { SelectHTMLAttributes, forwardRef } from 'react';
+import { disabledState } from "../../styles";
 
 export interface ToolbarSelectProps extends Omit<SelectHTMLAttributes<HTMLSelectElement>, 'size'> {
   /** Optional size variant */
@@ -20,7 +21,7 @@ const ToolbarSelect = forwardRef<HTMLSelectElement, ToolbarSelectProps>(
       small: 'px-1.5 py-0.5 text-xs',
     };
 
-    const baseClasses = `rounded border border-gray-600 bg-gray-700 text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed`;
+    const baseClasses = `rounded border border-gray-600 bg-gray-700 text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500 ${disabledState}`;
 
     return (
       <select

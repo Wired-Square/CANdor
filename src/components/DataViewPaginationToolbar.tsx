@@ -3,6 +3,7 @@
 // Shared pagination toolbar for data views (Discovery, Decoder, etc.).
 
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2 } from "lucide-react";
+import { iconSm } from "../styles/spacing";
 import {
   bgDarkToolbar,
   borderDarkView,
@@ -82,7 +83,7 @@ export default function DataViewPaginationToolbar({
       {/* Loading indicator */}
       {isLoading && (
         <div className="flex items-center gap-1">
-          <Loader2 className={`w-3.5 h-3.5 animate-spin ${textDarkMuted}`} />
+          <Loader2 className={`${iconSm} animate-spin ${textDarkMuted}`} />
           <span className={`text-xs ${textDarkMuted}`}>Loading...</span>
         </div>
       )}
@@ -96,7 +97,7 @@ export default function DataViewPaginationToolbar({
             className={paginationButtonDark}
             title="First page"
           >
-            <ChevronsLeft className="w-3.5 h-3.5" />
+            <ChevronsLeft className={iconSm} />
           </button>
           <button
             onClick={() => onPageChange(Math.max(0, currentPage - 1))}
@@ -104,7 +105,7 @@ export default function DataViewPaginationToolbar({
             className={paginationButtonDark}
             title="Previous page"
           >
-            <ChevronLeft className="w-3.5 h-3.5" />
+            <ChevronLeft className={iconSm} />
           </button>
           <span className={`text-xs ${textDarkMuted} px-1`}>
             {currentPage + 1} / {totalPages}
@@ -115,7 +116,7 @@ export default function DataViewPaginationToolbar({
             className={paginationButtonDark}
             title="Next page"
           >
-            <ChevronRight className="w-3.5 h-3.5" />
+            <ChevronRight className={iconSm} />
           </button>
           <button
             onClick={() => onPageChange(totalPages - 1)}
@@ -123,7 +124,7 @@ export default function DataViewPaginationToolbar({
             className={paginationButtonDark}
             title="Last page"
           >
-            <ChevronsRight className="w-3.5 h-3.5" />
+            <ChevronsRight className={iconSm} />
           </button>
         </div>
       )}

@@ -1,6 +1,7 @@
 // ui/src/apps/catalog/views/ArrayView.tsx
 
 import type { TomlNode } from "../types";
+import { monoBody, bgSecondary, sectionHeaderText } from "../../../styles";
 
 export type ArrayViewProps = {
   selectedNode: TomlNode;
@@ -11,16 +12,16 @@ export default function ArrayView({ selectedNode }: ArrayViewProps) {
 
   return (
     <div className="space-y-4">
-      <div className="text-sm font-medium text-slate-700 dark:text-slate-300">
+      <div className={sectionHeaderText}>
         Items ({items.length})
       </div>
-      <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+      <div className={`p-4 ${bgSecondary} rounded-lg`}>
         {items.length === 0 ? (
           <div className="text-sm text-slate-500 dark:text-slate-400">No items</div>
         ) : (
           <ul className="space-y-1">
             {items.map((item: any, idx: number) => (
-              <li key={idx} className="font-mono text-sm text-slate-900 dark:text-white">
+              <li key={idx} className={monoBody}>
                 {typeof item === "string" ? `"${item}"` : JSON.stringify(item)}
               </li>
             ))}

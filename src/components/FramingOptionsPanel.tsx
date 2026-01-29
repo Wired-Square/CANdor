@@ -10,7 +10,7 @@
 
 import { useState, useEffect } from "react";
 import { hexToBytes, bytesToHex } from "../utils/byteUtils";
-import { toggleCardClass, toggleChipClass, bgDarkInput, borderDarkView, textDarkMuted } from "../styles";
+import { toggleCardClass, toggleChipClass, bgDarkInput, borderDarkView, textDarkMuted, caption, captionMuted, bgSurface } from "../styles";
 
 // Re-export for backwards compatibility (used by other components)
 export { hexToBytes, bytesToHex };
@@ -232,7 +232,7 @@ export default function FramingOptionsPanel({
     <div className="space-y-3">
       {/* Encoding selection */}
       <div>
-        <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1.5">
+        <label className={`block ${caption} mb-1.5`}>
           Encoding
         </label>
         <div className="grid grid-cols-2 gap-2">
@@ -275,7 +275,7 @@ export default function FramingOptionsPanel({
       {currentMode === "delimiter" && (
         <div className="space-y-2 pl-2 border-l-2 border-blue-300 dark:border-blue-700">
           <div>
-            <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">
+            <label className={`block ${caption} mb-1`}>
               Delimiter (hex)
             </label>
             <input
@@ -284,14 +284,14 @@ export default function FramingOptionsPanel({
               onChange={(e) => handleDelimiterChange(e.target.value)}
               disabled={disabled}
               placeholder="0A or 0D0A"
-              className="w-full px-2 py-1.5 text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 disabled:opacity-50"
+              className={`w-full px-2 py-1.5 text-xs rounded border border-slate-300 dark:border-slate-600 ${bgSurface} text-slate-700 dark:text-slate-200 disabled:opacity-50`}
             />
-            <div className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">
+            <div className={`${captionMuted} mt-0.5`}>
               LF=0A, CR=0D, CRLF=0D0A
             </div>
           </div>
           <div>
-            <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">
+            <label className={`block ${caption} mb-1`}>
               Max frame length
             </label>
             <input
@@ -301,7 +301,7 @@ export default function FramingOptionsPanel({
               value={maxLength}
               onChange={(e) => handleMaxLengthChange(Number(e.target.value))}
               disabled={disabled}
-              className="w-full px-2 py-1.5 text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 disabled:opacity-50"
+              className={`w-full px-2 py-1.5 text-xs rounded border border-slate-300 dark:border-slate-600 ${bgSurface} text-slate-700 dark:text-slate-200 disabled:opacity-50`}
             />
           </div>
         </div>

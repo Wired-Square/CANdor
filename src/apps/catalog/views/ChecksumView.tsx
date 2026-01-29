@@ -2,6 +2,8 @@
 
 import React from "react";
 import { Pencil, Trash2 } from "lucide-react";
+import { iconMd, flexRowGap2 } from "../../../styles/spacing";
+import { labelSmallMuted, monoBody, iconButtonHover, iconButtonHoverDanger, bgSecondary } from "../../../styles";
 import { tomlParse } from "../toml";
 import { getFrameByteLengthFromPath } from "../utils";
 import { getAlgorithmInfo, resolveByteIndexSync } from "../checksums";
@@ -77,7 +79,7 @@ export default function ChecksumView({
       {/* Action Buttons */}
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Checksum Details</h3>
-        <div className="flex items-center gap-2">
+        <div className={flexRowGap2}>
           <button
             onClick={() => {
               try {
@@ -89,10 +91,10 @@ export default function ChecksumView({
                 onSetValidation([{ field: "checksum", message: "Failed to locate checksum for editing" }]);
               }
             }}
-            className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+            className={iconButtonHover}
             title="Edit checksum"
           >
-            <Pencil className="w-4 h-4 text-slate-700 dark:text-slate-200" />
+            <Pencil className={`${iconMd} text-slate-700 dark:text-slate-200`} />
           </button>
 
           <button
@@ -106,10 +108,10 @@ export default function ChecksumView({
                 onSetValidation([{ field: "checksum", message: "Failed to locate checksum for deletion" }]);
               }
             }}
-            className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+            className={iconButtonHoverDanger}
             title="Delete checksum"
           >
-            <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+            <Trash2 className={`${iconMd} text-red-600 dark:text-red-400`} />
           </button>
         </div>
       </div>
@@ -191,20 +193,20 @@ export default function ChecksumView({
       {/* Properties Grid */}
       <div className="grid grid-cols-2 gap-4">
         {/* Core Properties */}
-        <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">name</div>
-          <div className="font-mono text-sm text-slate-900 dark:text-white">"{props.name}"</div>
+        <div className={`p-3 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>name</div>
+          <div className={monoBody}>"{props.name}"</div>
         </div>
 
-        <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">algorithm</div>
-          <div className="font-mono text-sm text-slate-900 dark:text-white">{props.algorithm}</div>
+        <div className={`p-3 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>algorithm</div>
+          <div className={monoBody}>{props.algorithm}</div>
         </div>
 
         {/* Checksum Location */}
-        <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Checksum Position</div>
-          <div className="font-mono text-sm text-slate-900 dark:text-white">
+        <div className={`p-3 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>Checksum Position</div>
+          <div className={monoBody}>
             {props.start_byte !== undefined && props.start_byte < 0 ? (
               <>
                 byte {props.start_byte}{" "}
@@ -217,14 +219,14 @@ export default function ChecksumView({
           </div>
         </div>
 
-        <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">endianness</div>
-          <div className="font-mono text-sm text-slate-900 dark:text-white">{props.endianness || "big"}</div>
+        <div className={`p-3 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>endianness</div>
+          <div className={monoBody}>{props.endianness || "big"}</div>
         </div>
 
         {/* Calculation Range */}
-        <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg col-span-2">
-          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Calculation Range</div>
+        <div className={`p-3 ${bgSecondary} rounded-lg col-span-2`}>
+          <div className={labelSmallMuted}>Calculation Range</div>
           {(() => {
             const hasNegativeStart = props.calc_start_byte !== undefined && props.calc_start_byte < 0;
             const hasNegativeEnd = props.calc_end_byte !== undefined && props.calc_end_byte < 0;
@@ -237,7 +239,7 @@ export default function ChecksumView({
 
             if (hasNegativeStart || hasNegativeEnd) {
               return (
-                <div className="font-mono text-sm text-slate-900 dark:text-white">
+                <div className={monoBody}>
                   bytes {props.calc_start_byte}
                   {hasNegativeStart && <span className="text-slate-500"> (→ {resolvedStart})</span>}
                   {" "}to {props.calc_end_byte}
@@ -248,7 +250,7 @@ export default function ChecksumView({
             }
 
             return (
-              <div className="font-mono text-sm text-slate-900 dark:text-white">
+              <div className={monoBody}>
                 bytes {props.calc_start_byte} to {resolvedEnd - 1} (exclusive end: {props.calc_end_byte})
               </div>
             );
@@ -257,8 +259,8 @@ export default function ChecksumView({
 
         {/* Notes */}
         {props.notes && (
-          <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg col-span-2">
-            <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">notes</div>
+          <div className={`p-3 ${bgSecondary} rounded-lg col-span-2`}>
+            <div className={labelSmallMuted}>notes</div>
             <div className="text-sm text-slate-900 dark:text-white">{props.notes}</div>
           </div>
         )}

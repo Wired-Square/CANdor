@@ -3,9 +3,10 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { Play, Trash2, X } from "lucide-react";
+import { iconMd, iconLg, flexRowGap2 } from "../styles/spacing";
 import Dialog from "../components/Dialog";
 import { Input, SecondaryButton, PrimaryButton, DangerButton } from "../components/forms";
-import { h2, labelSmall, borderDefault } from "../styles";
+import { h2, labelSmall, captionMuted, borderDefault, bgSecondary, hoverLight, sectionHeaderText } from "../styles";
 import {
   getAllFavorites,
   updateFavorite,
@@ -166,9 +167,9 @@ export default function BookmarkEditorDialog({
           <button
             type="button"
             onClick={onClose}
-            className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+            className={`p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 ${hoverLight}`}
           >
-            <X className="w-5 h-5" />
+            <X className={iconLg} />
           </button>
         </div>
 
@@ -187,7 +188,7 @@ export default function BookmarkEditorDialog({
                 {Object.entries(bookmarksByProfile).map(([pid, profileBookmarks]) => (
                   <div key={pid}>
                     {!profileId && (
-                      <div className="px-3 py-2 bg-slate-50 dark:bg-slate-900 text-xs font-medium text-slate-500 dark:text-slate-400">
+                      <div className={`px-3 py-2 bg-slate-50 dark:bg-slate-900 ${labelSmall}`}>
                         {pid}
                       </div>
                     )}
@@ -205,10 +206,10 @@ export default function BookmarkEditorDialog({
                           onClick={() => handleSelectBookmark(bookmark)}
                           className="flex-1 text-left px-3 py-2"
                         >
-                          <div className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                          <div className={sectionHeaderText}>
                             {bookmark.name}
                           </div>
-                          <div className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">
+                          <div className={`${captionMuted} mt-0.5`}>
                             {formatTimeRange(bookmark)}
                           </div>
                         </button>
@@ -223,7 +224,7 @@ export default function BookmarkEditorDialog({
                             title="Load bookmark"
                             className="p-2 mr-1 rounded text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30"
                           >
-                            <Play className="w-4 h-4" />
+                            <Play className={iconMd} />
                           </button>
                         )}
                       </div>
@@ -293,7 +294,7 @@ export default function BookmarkEditorDialog({
                 {!profileId && (
                   <div className="space-y-1">
                     <label className={labelSmall}>Profile</label>
-                    <div className={`px-3 py-2 text-sm rounded border ${borderDefault} bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300`}>
+                    <div className={`px-3 py-2 text-sm rounded border ${borderDefault} ${bgSecondary} text-slate-600 dark:text-slate-300`}>
                       {selectedBookmark.profileId}
                     </div>
                   </div>
@@ -301,10 +302,10 @@ export default function BookmarkEditorDialog({
 
                 <div className="flex items-center justify-between pt-2">
                   <DangerButton onClick={handleDelete}>
-                    <Trash2 className="w-4 h-4" />
+                    <Trash2 className={iconMd} />
                     Delete
                   </DangerButton>
-                  <div className="flex items-center gap-2">
+                  <div className={flexRowGap2}>
                     <SecondaryButton onClick={handleSave} disabled={isSaving}>
                       {isSaving ? "Saving..." : "Save"}
                     </SecondaryButton>

@@ -15,6 +15,7 @@ import {
   textDarkMuted,
 } from "../../../styles/colourTokens";
 import { buttonBase, toggleChipClass } from "../../../styles/buttonStyles";
+import { flexRowGap2 } from "../../../styles/spacing";
 import { byteToHex, hexToBytes } from "../../../utils/byteUtils";
 
 export default function SerialTransmitView() {
@@ -271,7 +272,7 @@ export default function SerialTransmitView() {
                 {preview.hex}
               </code>
             </div>
-            <div className="flex items-center gap-2">
+            <div className={flexRowGap2}>
               <span className={`${textDarkMuted} text-xs`}>ASCII:</span>
               <code className="font-mono text-xs text-gray-500">
                 {preview.ascii}

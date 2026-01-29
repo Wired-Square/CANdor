@@ -4,6 +4,8 @@
 // Allows drag selection to define mask and auto-calculates shift
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
+import { flexRowGap2 } from '../styles/spacing';
+import { caption, captionMuted, sectionHeaderText } from '../styles/typography';
 
 interface MaskBitPickerProps {
   /** Current mask value (as number) */
@@ -158,8 +160,8 @@ export default function MaskBitPicker({
     }
 
     return (
-      <div key={rowLabel} className="flex items-center gap-2">
-        <span className="text-xs text-slate-500 dark:text-slate-400 w-16 text-right font-mono">
+      <div key={rowLabel} className={flexRowGap2}>
+        <span className={`${caption} w-16 text-right font-mono`}>
           {rowLabel}
         </span>
         <div className="flex" style={{ gap: `${BIT_GAP}px` }}>
@@ -179,7 +181,7 @@ export default function MaskBitPicker({
   return (
     <div className="space-y-2">
       {label && (
-        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+        <label className={`block ${sectionHeaderText}`}>
           {label}
         </label>
       )}
@@ -207,20 +209,20 @@ export default function MaskBitPicker({
 
         <div className="mt-3 pt-2 border-t border-slate-300 dark:border-slate-600 space-y-1">
           <div className="flex items-center gap-4 text-xs">
-            <div className="flex items-center gap-2">
+            <div className={flexRowGap2}>
               <div className="w-3 h-3 bg-blue-500 dark:bg-blue-600 rounded-sm" />
               <span className="text-slate-600 dark:text-slate-400">Selected</span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className={flexRowGap2}>
               <div className="w-3 h-3 bg-yellow-400 dark:bg-yellow-500 rounded-sm" />
               <span className="text-slate-600 dark:text-slate-400">Dragging</span>
             </div>
           </div>
 
-          <p className="text-xs text-slate-500 dark:text-slate-400">
+          <p className={caption}>
             Full mask: <span className="font-mono">{maskHex}</span> | Extracting: {extractedBits}
           </p>
-          <p className="text-xs text-slate-400 dark:text-slate-500 italic">
+          <p className={`${captionMuted} italic`}>
             Click and drag to select bits
           </p>
         </div>

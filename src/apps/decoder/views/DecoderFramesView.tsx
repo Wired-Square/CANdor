@@ -2,10 +2,11 @@
 
 import { useRef, useEffect, useState, useMemo } from "react";
 import { Calculator, Star, Clock, Check, X } from "lucide-react";
+import { iconSm, iconXs, flexRowGap2 } from "../../../styles/spacing";
 import { PlaybackControls } from "../../../components/PlaybackControls";
 import { validateChecksum, type ChecksumAlgorithm, type ChecksumValidationResult } from "../../../api/checksums";
 import { badgeDarkPanelInfo, badgeDarkPanelSuccess, badgeDarkPanelDanger, badgeDarkPanelPurple } from "../../../styles/badgeStyles";
-import { bgDarkView, borderDarkView } from "../../../styles";
+import { bgDarkView, borderDarkView, caption, bgSurface } from "../../../styles";
 import type { PlaybackState, PlaybackSpeed } from "../../../components/TimeController";
 import type { IOCapabilities } from '../../../api/io';
 import { formatFrameId } from "../../../utils/frameIds";
@@ -513,7 +514,7 @@ function FrameCard({
     <div className="space-y-2">
       <div className="flex items-center gap-3 text-sm font-semibold text-slate-800 dark:text-slate-100">
         <span className="font-mono">{renderFrameId(frame.id, frame.isExtended)}</span>
-        <span className="text-xs text-slate-500 dark:text-slate-400">len {frame.len}</span>
+        <span className={caption}>len {frame.len}</span>
         {/* Header field badges - clickable to toggle filter */}
         {headerFields.length > 0 && headerFields.map((field) => (
           onToggleHeaderFieldFilter ? (
@@ -550,7 +551,7 @@ function FrameCard({
         {/* Checksum badge - always last */}
         {checksumResult && (
           <span className={checksumResult.valid ? badgeDarkPanelSuccess : badgeDarkPanelDanger}>
-            {checksumResult.valid ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
+            {checksumResult.valid ? <Check className={iconXs} /> : <X className={iconXs} />}
             Checksum: 0x{checksumResult.extracted.toString(16).toUpperCase().padStart(2, '0')}
           </span>
         )}
@@ -604,7 +605,7 @@ function FrameCard({
               ? "bg-white/80 dark:bg-slate-700/80"
               : (idx + rowOffset) % 2 === 0
               ? "bg-slate-50 dark:bg-slate-900/40"
-              : "bg-white dark:bg-slate-800";
+              : bgSurface;
             const timestampStr = formatSignalTimestamp(decoded.timestamp, displayTimeFormat, startTimeSeconds);
 
             return (
@@ -614,7 +615,7 @@ function FrameCard({
               >
                 <div className="flex items-center gap-3">
                   {timestampStr && (
-                    <span className="text-xs text-slate-500 dark:text-slate-400 font-mono w-20 shrink-0">
+                    <span className={`${caption} font-mono w-20 shrink-0`}>
                       {timestampStr}
                     </span>
                   )}
@@ -625,7 +626,7 @@ function FrameCard({
                     {decoded.name}
                   </span>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className={flexRowGap2}>
                   <span
                     className="font-mono transition-colors duration-200 text-slate-600 dark:text-slate-300"
                     style={valueColor ? { color: valueColor } : undefined}
@@ -638,7 +639,7 @@ function FrameCard({
                       className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
                       title="Send to Frame Calculator"
                     >
-                      <Calculator className="w-3 h-3 text-orange-600 dark:text-orange-400" />
+                      <Calculator className={`${iconXs} text-orange-600 dark:text-orange-400`} />
                     </button>
                   )}
                 </div>
@@ -650,7 +651,7 @@ function FrameCard({
 
           if (!hasContent) {
             return (
-              <div className="px-3 py-2 text-xs text-slate-500 dark:text-slate-400">
+              <div className={`px-3 py-2 ${caption}`}>
                 No signals decoded yet.
               </div>
             );
@@ -891,7 +892,7 @@ export default function DecoderFramesView({
           }`}
           title={showTimeRange ? "Hide time range" : "Show time range"}
         >
-          <Clock className="w-3.5 h-3.5" />
+          <Clock className={iconSm} />
         </button>
       )}
       {/* Bookmark picker - only for PostgreSQL readers */}
@@ -907,7 +908,7 @@ export default function DecoderFramesView({
           title={isBookmarkActive ? "Bookmark loaded" : "Load bookmark"}
         >
           <Star
-            className="w-3.5 h-3.5"
+            className={iconSm}
             fill={isBookmarkActive ? "currentColor" : "none"}
           />
         </button>
@@ -917,7 +918,7 @@ export default function DecoderFramesView({
 
   // Time range inputs for toolbar (optional feature)
   const timeRangeInputs = showTimeRange && onStartTimeChange && onEndTimeChange ? (
-    <div className="flex items-center gap-2">
+    <div className={flexRowGap2}>
       <label className="text-xs text-gray-400">Start</label>
       <input
         type="datetime-local"
@@ -1152,7 +1153,7 @@ export default function DecoderFramesView({
                       className="p-1 rounded hover:bg-gray-700 transition-colors"
                       title="Send to Frame Calculator"
                     >
-                      <Calculator className="w-3.5 h-3.5 text-orange-400" />
+                      <Calculator className={`${iconSm} text-orange-400`} />
                     </button>
                   </div>
                 );
@@ -1200,7 +1201,7 @@ export default function DecoderFramesView({
                       className="p-1 rounded hover:bg-gray-700 transition-colors"
                       title="Send to Frame Calculator"
                     >
-                      <Calculator className="w-3.5 h-3.5 text-orange-400" />
+                      <Calculator className={`${iconSm} text-orange-400`} />
                     </button>
                   </div>
                 );

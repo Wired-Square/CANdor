@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { Plus, Trash2 } from "lucide-react";
+import { iconMd } from "../../../styles/spacing";
 import Dialog from "../../../components/Dialog";
 import { Input, SecondaryButton, PrimaryButton } from "../../../components/forms";
 import { h2, helpText, alertDanger, labelSmall } from "../../../styles";
@@ -159,7 +160,7 @@ export default function EnumEditorDialog({
                 className="p-2 text-slate-400 hover:text-red-500 transition-colors"
                 title="Remove"
               >
-                <Trash2 className="w-4 h-4" />
+                <Trash2 className={iconMd} />
               </button>
             </div>
           ))}
@@ -170,7 +171,7 @@ export default function EnumEditorDialog({
           onClick={handleAdd}
           className="mt-3 flex items-center gap-2 px-3 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors"
         >
-          <Plus className="w-4 h-4" />
+          <Plus className={iconMd} />
           Add Value
         </button>
 

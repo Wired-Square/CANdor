@@ -1,6 +1,8 @@
 // ui/src/apps/settings/views/DisplayView.tsx
 
 import ColourPicker from "../../../components/ColourPicker";
+import { flexRowGap2 } from "../../../styles/spacing";
+import { textMedium } from "../../../styles";
 
 type DisplayViewProps = {
   displayFrameIdFormat: "hex" | "decimal";
@@ -55,11 +57,11 @@ export default function DisplayView({
       </div>
 
       <div className="space-y-2">
-        <label className="block text-sm font-medium text-slate-900 dark:text-white">
+        <label className={`block ${textMedium}`}>
           Display Frame ID as
         </label>
         <div className="flex gap-3">
-          <label className="flex items-center gap-2 text-sm text-slate-800 dark:text-slate-100">
+          <label className={`${flexRowGap2} text-sm text-slate-800 dark:text-slate-100`}>
             <input
               type="radio"
               name="frame-id-format"
@@ -69,7 +71,7 @@ export default function DisplayView({
             />
             Hex
           </label>
-          <label className="flex items-center gap-2 text-sm text-slate-800 dark:text-slate-100">
+          <label className={`${flexRowGap2} text-sm text-slate-800 dark:text-slate-100`}>
             <input
               type="radio"
               name="frame-id-format"
@@ -86,7 +88,7 @@ export default function DisplayView({
       </div>
 
       <div className="space-y-2">
-        <label className="block text-sm font-medium text-slate-900 dark:text-white">
+        <label className={`block ${textMedium}`}>
           Display time as
         </label>
         <div className="flex flex-wrap gap-3">
@@ -114,7 +116,7 @@ export default function DisplayView({
       </div>
 
       <div className="space-y-2">
-        <label className="block text-sm font-medium text-slate-900 dark:text-white">
+        <label className={`block ${textMedium}`}>
           Default timezone
         </label>
         <div className="flex gap-3">
@@ -151,7 +153,7 @@ export default function DisplayView({
             { key: "medium", label: "Medium confidence", defaultVal: "#3b82f6" },
             { key: "high", label: "High confidence", defaultVal: "#22c55e" },
           ] as const).map((cfg) => (
-            <div key={cfg.key} className="flex items-center gap-2">
+            <div key={cfg.key} className={flexRowGap2}>
               <ColourPicker
                 label={cfg.label}
                 value={signalColours[cfg.key]}
@@ -176,7 +178,7 @@ export default function DisplayView({
           Configure colors for binary bits in the Frame Calculator and bit previews.
         </p>
         <div className="space-y-2">
-          <div className="flex items-center gap-2">
+          <div className={flexRowGap2}>
             <ColourPicker
               label="Binary 1 colour"
               value={binaryOneColour}
@@ -191,7 +193,7 @@ export default function DisplayView({
               ↺
             </button>
           </div>
-          <div className="flex items-center gap-2">
+          <div className={flexRowGap2}>
             <ColourPicker
               label="Binary 0 colour"
               value={binaryZeroColour}
@@ -206,7 +208,7 @@ export default function DisplayView({
               ↺
             </button>
           </div>
-          <div className="flex items-center gap-2">
+          <div className={flexRowGap2}>
             <ColourPicker
               label="Unused bits colour"
               value={binaryUnusedColour}

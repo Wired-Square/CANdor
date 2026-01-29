@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
+import { iconLg, flexRowGap2 } from '../../../../styles/spacing';
 import Dialog from '../../../../components/Dialog';
 import { resolveByteIndexSync } from '../../../../utils/analysis/checksums';
 import { type ExtractionConfig } from './serialTypes';
@@ -116,7 +117,7 @@ export default function ByteExtractionDialog({
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-white">{title}</h2>
           <button onClick={onClose} className="p-1 hover:bg-gray-700 rounded">
-            <X className="w-5 h-5 text-gray-400" />
+            <X className={`${iconLg} text-gray-400`} />
           </button>
         </div>
 
@@ -127,7 +128,7 @@ export default function ByteExtractionDialog({
         {/* Sample frames with clickable bytes */}
         <div className="space-y-2 font-mono text-sm bg-gray-900 p-3 rounded max-h-48 overflow-y-auto">
           {sampleFrames.slice(0, 5).map((frame, frameIdx) => (
-            <div key={frameIdx} className="flex items-center gap-2">
+            <div key={frameIdx} className={flexRowGap2}>
               <span className="text-gray-500 w-6 text-right">{frameIdx + 1}.</span>
               <div className="flex gap-1 flex-wrap">
                 {frame.map((byte, byteIdx) => (

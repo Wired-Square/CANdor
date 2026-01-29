@@ -4,6 +4,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { X } from 'lucide-react';
+import { iconLg, flexRowGap2 } from '../../../../styles/spacing';
 import Dialog from '../../../../components/Dialog';
 import { resolveByteIndexSync, type ChecksumAlgorithm } from '../../../../utils/analysis/checksums';
 import {
@@ -178,7 +179,7 @@ export default function ChecksumExtractionDialog({
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-white">Configure Checksum</h2>
           <button onClick={onClose} className="p-1 hover:bg-gray-700 rounded">
-            <X className="w-5 h-5 text-gray-400" />
+            <X className={`${iconLg} text-gray-400`} />
           </button>
         </div>
 
@@ -220,7 +221,7 @@ export default function ChecksumExtractionDialog({
             const calcEnd = resolveByteIndexSync(config.calcEndByte, frame.length);
 
             return (
-              <div key={frameIdx} className="flex items-center gap-2">
+              <div key={frameIdx} className={flexRowGap2}>
                 <span className="text-gray-500 w-6 text-right">{frameIdx + 1}.</span>
                 <div className="flex gap-1 flex-wrap">
                   {frame.map((byte, byteIdx) => {
@@ -298,7 +299,7 @@ export default function ChecksumExtractionDialog({
 
           <label className="flex flex-col gap-1 text-sm text-gray-300">
             Calc data range:
-            <div className="flex items-center gap-2">
+            <div className={flexRowGap2}>
               <input
                 type="number"
                 value={config.calcStartByte}

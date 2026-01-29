@@ -3,6 +3,7 @@
 import { useState, useMemo, useCallback } from 'react';
 import { useSettingsStore } from '../apps/settings/stores/settingsStore';
 import { badgeSmallNeutral, badgeSmallInfo } from '../styles/badgeStyles';
+import { caption } from '../styles/typography';
 
 export type TimezoneMode = 'local' | 'utc';
 
@@ -111,8 +112,8 @@ export default function TimeDisplay({
       <div className="flex flex-col">
         {showTime && (
           <span
-            className={`font-mono text-slate-900 dark:text-slate-100 min-w-[80px] leading-tight ${
-              compact ? 'text-sm' : ''
+            className={`font-mono min-w-[80px] leading-tight ${
+              compact ? 'text-sm text-gray-200' : 'text-slate-900 dark:text-slate-100'
             }`}
           >
             {formattedTime}
@@ -120,8 +121,8 @@ export default function TimeDisplay({
         )}
         {showDate && formattedDate && (
           <span
-            className={`font-mono text-slate-500 dark:text-slate-400 leading-tight ${
-              compact ? 'text-[10px]' : 'text-xs'
+            className={`font-mono leading-tight ${
+              compact ? 'text-[10px] text-gray-400' : caption
             }`}
           >
             {formattedDate}

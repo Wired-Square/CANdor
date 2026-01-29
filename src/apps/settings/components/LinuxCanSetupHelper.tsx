@@ -5,6 +5,7 @@
 
 import { useState, useEffect } from "react";
 import { Copy, Check, Terminal } from "lucide-react";
+import { iconMd, flexRowGap2 } from "../../../styles/spacing";
 import { getCanSetupCommand } from "../../../api/gs_usb";
 import { alertWarning, helpText } from "../../../styles";
 
@@ -56,7 +57,7 @@ export default function LinuxCanSetupHelper({ interfaceName, bitrate }: Props) {
   return (
     <div className={alertWarning}>
       <div className="flex items-start gap-2">
-        <Terminal className="w-4 h-4 mt-0.5 flex-shrink-0" />
+        <Terminal className={`${iconMd} mt-0.5 flex-shrink-0`} />
         <div className="flex-1">
           <p className="text-sm font-medium mb-2">
             Linux setup required
@@ -64,7 +65,7 @@ export default function LinuxCanSetupHelper({ interfaceName, bitrate }: Props) {
           <p className={`${helpText} mb-2`}>
             Run this command in your terminal to configure the CAN interface:
           </p>
-          <div className="flex items-center gap-2">
+          <div className={flexRowGap2}>
             <code className="flex-1 p-2 bg-amber-100 dark:bg-amber-900/50 rounded text-xs font-mono break-all">
               {setupCommand}
             </code>
@@ -75,9 +76,9 @@ export default function LinuxCanSetupHelper({ interfaceName, bitrate }: Props) {
               title={copied ? "Copied!" : "Copy to clipboard"}
             >
               {copied ? (
-                <Check className="w-4 h-4 text-green-600 dark:text-green-400" />
+                <Check className={`${iconMd} text-green-600 dark:text-green-400`} />
               ) : (
-                <Copy className="w-4 h-4" />
+                <Copy className={iconMd} />
               )}
             </button>
           </div>

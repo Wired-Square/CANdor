@@ -4,6 +4,7 @@
 // and optional recorded indicator. Used in Decoder, Discovery, and Transmit top bars.
 
 import { History } from "lucide-react";
+import { iconXs } from "../styles/spacing";
 import { textDarkMuted } from "../styles";
 
 // ============================================================================
@@ -86,7 +87,7 @@ export default function ProtocolBadge({
     >
       <StatusLight status={effectiveStatus} />
       <span className="text-xs font-medium text-gray-300">{effectiveLabel}</span>
-      {isRecorded && <History className={`w-3 h-3 ${textDarkMuted}`} />}
+      {isRecorded && <History className={`${iconXs} ${textDarkMuted}`} />}
     </button>
   );
 }

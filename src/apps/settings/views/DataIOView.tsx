@@ -2,6 +2,7 @@
 
 import React from "react";
 import { Cable, Plus, Copy, Edit2, Trash2, Star } from "lucide-react";
+import { iconMd } from "../../../styles/spacing";
 import type { IOProfile } from "../stores/settingsStore";
 import { getReaderProtocols, isReaderRealtime } from "../../../hooks/useSettings";
 import { PrimaryButton } from "../../../components/forms/DialogButtons";
@@ -20,6 +21,7 @@ import {
   badgeWarning,
   badgeNeutral,
   badgeInfo,
+  iconButtonHoverDanger,
 } from "../../../styles";
 
 type DataIOViewProps = {
@@ -269,7 +271,7 @@ export default function DataIOView({
       <div className="flex items-center justify-between">
         <h2 className={h2}>Data IO Profiles</h2>
         <PrimaryButton onClick={onAddProfile}>
-          <Plus className="w-4 h-4" />
+          <Plus className={iconMd} />
           Add Profile
         </PrimaryButton>
       </div>
@@ -322,7 +324,7 @@ export default function DataIOView({
                     }
                   >
                     <Star
-                      className={`w-4 h-4 ${
+                      className={`${iconMd} ${
                         defaultReadProfile === profile.id
                           ? "fill-yellow-500 text-yellow-500"
                           : "text-slate-400 dark:text-slate-500"
@@ -343,21 +345,21 @@ export default function DataIOView({
                   className={`p-2 ${hoverSubtle} ${roundedDefault} transition-colors`}
                   title="Duplicate profile"
                 >
-                  <Copy className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+                  <Copy className={`${iconMd} text-slate-600 dark:text-slate-400`} />
                 </button>
                 <button
                   onClick={() => onEditProfile(profile)}
                   className={`p-2 ${hoverSubtle} ${roundedDefault} transition-colors`}
                   title="Edit profile"
                 >
-                  <Edit2 className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+                  <Edit2 className={`${iconMd} text-slate-600 dark:text-slate-400`} />
                 </button>
                 <button
                   onClick={() => onDeleteProfile(profile.id)}
-                  className={`p-2 hover:bg-red-100 dark:hover:bg-red-900/30 ${roundedDefault} transition-colors`}
+                  className={iconButtonHoverDanger}
                   title="Delete profile"
                 >
-                  <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+                  <Trash2 className={`${iconMd} text-red-600 dark:text-red-400`} />
                 </button>
               </div>
             </div>
