@@ -1,13 +1,11 @@
 // ui/src/apps/discovery/views/DiscoveryTopBar.tsx
 
-import { Search, ChevronRight, ListFilter, Save, Trash2, Info, Wrench, Download, Undo2 } from "lucide-react";
+import { Search, ChevronRight, Save, Trash2, Info, Wrench, Download, Undo2 } from "lucide-react";
 import type { IOProfile } from "../../../types/common";
 import type { BufferMetadata } from "../../../api/buffer";
-import FlexSeparator from "../../../components/FlexSeparator";
-import { IOSessionControls } from "../../../components/SessionControls";
+import AppTopBar from "../../../components/AppTopBar";
 import { buttonBase, iconButtonBase } from "../../../styles/buttonStyles";
-import { iconMd, iconSm, iconLg } from "../../../styles/spacing";
-import { borderDivider, bgSurface } from "../../../styles";
+import { iconMd, iconSm } from "../../../styles/spacing";
 
 type Props = {
   // IO profile selection
@@ -114,119 +112,102 @@ export default function DiscoveryTopBar({
   const hasFrames = isSerialMode ? (frameCount > 0 || serialBytesCount > 0) : frameCount > 0;
 
   return (
-    <div className={`flex-shrink-0 ${bgSurface} ${borderDivider} px-4 py-2`}>
-      <div className="flex flex-wrap items-center gap-2">
-        {/* Discovery icon */}
-        <Search className={`${iconLg} text-purple-600 dark:text-purple-400 shrink-0`} />
-
-        <FlexSeparator />
-
-        {/* IO Session Controls (reader, speed, session actions) */}
-        <IOSessionControls
-          ioProfile={ioProfile}
-          ioProfiles={ioProfiles}
-          multiBusMode={multiBusMode}
-          multiBusProfiles={multiBusProfiles}
-          bufferMetadata={bufferMetadata}
-          defaultReadProfileId={defaultReadProfileId}
-          onOpenIoReaderPicker={onOpenIoReaderPicker}
-          speed={speed}
-          supportsSpeed={supportsSpeed}
-          onOpenSpeedPicker={onOpenSpeedPicker}
-          isStreaming={isStreaming}
-          isStopped={isStopped}
-          isDetached={isDetached}
-          joinerCount={joinerCount}
-          supportsTimeRange={supportsTimeRange}
-          onStop={onStopWatch}
-          onResume={onResume}
-          onDetach={onDetach}
-          onRejoin={onRejoin}
-          onOpenBookmarkPicker={onOpenBookmarkPicker}
-        />
-
-        {/* Right arrow icon */}
-        <ChevronRight className={`${iconSm} text-slate-400 shrink-0`} />
-
-        {/* Frames Button - icon with count. In serial mode, disabled until framing is accepted */}
-        <button
-          onClick={onOpenFramePicker}
-          disabled={isSerialMode && !framingAccepted}
-          className={buttonBase}
-          title={isSerialMode && !framingAccepted ? "Accept framing first to select frames" : "Select frames"}
-        >
-          <ListFilter className={`${iconSm} flex-shrink-0`} />
-          <span className="text-slate-500 dark:text-slate-400">
-            {selectedFrameCount}/{frameCount}
-          </span>
-        </button>
-
-        {/* Undo Framing button - shows in serial mode when framing is accepted */}
-        {isSerialMode && framingAccepted && onUndoFraming && (
+    <AppTopBar
+      icon={Search}
+      iconColour="text-purple-600 dark:text-purple-400"
+      ioSession={{
+        ioProfile,
+        ioProfiles,
+        multiBusMode,
+        multiBusProfiles,
+        bufferMetadata,
+        defaultReadProfileId,
+        onOpenIoReaderPicker,
+        speed,
+        supportsSpeed,
+        onOpenSpeedPicker,
+        isStreaming,
+        isStopped,
+        isDetached,
+        joinerCount,
+        supportsTimeRange,
+        onStop: onStopWatch,
+        onResume,
+        onDetach,
+        onRejoin,
+        onOpenBookmarkPicker,
+      }}
+      framePicker={{
+        frameCount,
+        selectedCount: selectedFrameCount,
+        onOpen: onOpenFramePicker,
+        disabled: isSerialMode && !framingAccepted,
+        disabledTitle: "Accept framing first to select frames",
+      }}
+      actions={
+        <>
           <button
-            onClick={onUndoFraming}
+            onClick={onSave}
+            disabled={!hasFrames}
             className={iconButtonBase}
-            title="Undo framing acceptance"
+            title={isSerialMode ? "Save bytes to decoder" : "Save frames to decoder"}
           >
-            <Undo2 className={iconMd} />
+            <Save className={iconMd} />
           </button>
-        )}
 
-        {/* Right arrow icon */}
-        <ChevronRight className={`${iconSm} text-slate-400 shrink-0`} />
+          <button
+            onClick={onExport}
+            disabled={!hasFrames}
+            className={iconButtonBase}
+            title={isSerialMode && serialActiveTab === 'raw' ? "Export bytes to file" : "Export frames to file"}
+          >
+            <Download className={iconMd} />
+          </button>
 
-        {/* Toolbox button */}
+          <button
+            onClick={onClear}
+            disabled={!hasFrames}
+            className={`${iconButtonBase} hover:!bg-red-600 hover:!text-white`}
+            title={isSerialMode ? "Clear all bytes" : "Clear all frames"}
+          >
+            <Trash2 className={iconMd} />
+          </button>
+
+          <button
+            onClick={onInfo}
+            disabled={!hasFrames}
+            className={`${iconButtonBase} ${hasFrames ? "text-purple-600 dark:text-purple-400" : ""}`}
+            title="View decoder knowledge"
+          >
+            <Info className={iconMd} />
+          </button>
+        </>
+      }
+    >
+      {/* Undo Framing button - shows in serial mode when framing is accepted */}
+      {isSerialMode && framingAccepted && onUndoFraming && (
         <button
-          onClick={onOpenToolbox}
-          disabled={!hasFrames}
-          className={buttonBase}
-          title="Analysis tools"
-        >
-          <Wrench className={`${iconSm} flex-shrink-0`} />
-          <span>Tools</span>
-        </button>
-
-        {/* Separator */}
-        <FlexSeparator />
-
-        {/* Decoder actions */}
-        <button
-          onClick={onSave}
-          disabled={!hasFrames}
+          onClick={onUndoFraming}
           className={iconButtonBase}
-          title={isSerialMode ? "Save bytes to decoder" : "Save frames to decoder"}
+          title="Undo framing acceptance"
         >
-          <Save className={iconMd} />
+          <Undo2 className={iconMd} />
         </button>
+      )}
 
-        <button
-          onClick={onExport}
-          disabled={!hasFrames}
-          className={iconButtonBase}
-          title={isSerialMode && serialActiveTab === 'raw' ? "Export bytes to file" : "Export frames to file"}
-        >
-          <Download className={iconMd} />
-        </button>
+      {/* Right arrow icon */}
+      <ChevronRight className={`${iconSm} text-slate-400 shrink-0`} />
 
-        <button
-          onClick={onClear}
-          disabled={!hasFrames}
-          className={`${iconButtonBase} hover:!bg-red-600 hover:!text-white`}
-          title={isSerialMode ? "Clear all bytes" : "Clear all frames"}
-        >
-          <Trash2 className={iconMd} />
-        </button>
-
-        <button
-          onClick={onInfo}
-          disabled={!hasFrames}
-          className={`${iconButtonBase} ${hasFrames ? "text-purple-600 dark:text-purple-400" : ""}`}
-          title="View decoder knowledge"
-        >
-          <Info className={iconMd} />
-        </button>
-
-      </div>
-    </div>
+      {/* Toolbox button */}
+      <button
+        onClick={onOpenToolbox}
+        disabled={!hasFrames}
+        className={buttonBase}
+        title="Analysis tools"
+      >
+        <Wrench className={`${iconSm} flex-shrink-0`} />
+        <span>Tools</span>
+      </button>
+    </AppTopBar>
   );
 }

@@ -13,13 +13,13 @@ import { useSettings, type IOProfile } from "../../hooks/useSettings";
 import { useTransmitHandlers } from "./hooks/useTransmitHandlers";
 import type { TransmitHistoryEvent, SerialTransmitHistoryEvent, RepeatStoppedEvent } from "../../api/transmit";
 import {
-  bgDarkView,
   bgDarkToolbar,
   borderDarkView,
   textDarkMuted,
 } from "../../styles/colourTokens";
 import { dataViewTabClass, tabCountColorClass } from "../../styles/buttonStyles";
 import ProtocolBadge from "../../components/ProtocolBadge";
+import AppLayout from "../../components/AppLayout";
 import TransmitTopBar from "./views/TransmitTopBar";
 import CanTransmitView from "./views/CanTransmitView";
 import SerialTransmitView from "./views/SerialTransmitView";
@@ -271,33 +271,37 @@ export default function Transmit() {
   };
 
   return (
-    <div className={`flex flex-col h-full ${bgDarkView}`}>
-      {/* Top Bar */}
-      <TransmitTopBar
-        ioProfiles={transmitProfiles}
-        ioProfile={ioProfile}
-        defaultReadProfileId={settings?.default_read_profile}
-        multiBusMode={multiBusMode}
-        multiBusProfiles={multiBusProfiles}
-        isStreaming={isStreaming}
-        isStopped={isStopped}
-        isDetached={isDetached}
-        joinerCount={joinerCount}
-        capabilities={capabilities}
-        onOpenIoPicker={handlers.handleOpenIoPicker}
-        onStop={handlers.handleStop}
-        onResume={handlers.handleResume}
-        onDetach={handlers.handleDetach}
-        onRejoin={handlers.handleRejoin}
-        isLoading={isLoading}
-        error={transmitError}
-      />
-
-      {/* Error Banner */}
-      {transmitError && (
-        <div
-          className={`flex items-center gap-2 px-4 py-2 bg-red-900/50 border-b ${borderDarkView}`}
-        >
+    <AppLayout
+      theme="dark"
+      topBar={
+        <TransmitTopBar
+          ioProfiles={transmitProfiles}
+          ioProfile={ioProfile}
+          defaultReadProfileId={settings?.default_read_profile}
+          multiBusMode={multiBusMode}
+          multiBusProfiles={multiBusProfiles}
+          isStreaming={isStreaming}
+          isStopped={isStopped}
+          isDetached={isDetached}
+          joinerCount={joinerCount}
+          capabilities={capabilities}
+          onOpenIoPicker={handlers.handleOpenIoPicker}
+          onStop={handlers.handleStop}
+          onResume={handlers.handleResume}
+          onDetach={handlers.handleDetach}
+          onRejoin={handlers.handleRejoin}
+          isLoading={isLoading}
+          error={transmitError}
+        />
+      }
+    >
+      {/* Bubble container */}
+      <div className={`flex-1 flex flex-col min-h-0 rounded-lg border ${borderDarkView} overflow-hidden`}>
+        {/* Error Banner */}
+        {transmitError && (
+          <div
+            className="flex items-center gap-2 px-4 py-2 bg-red-900/50 border-b border-slate-700"
+          >
           <AlertCircle size={16} className="text-red-400 shrink-0" />
           <span className="text-red-300 text-sm flex-1">{transmitError}</span>
           <button
@@ -392,6 +396,7 @@ export default function Transmit() {
           <div className="flex-1 overflow-hidden">{renderTabContent()}</div>
         </>
       )}
+      </div>
 
       {/* IO Picker Dialog */}
       <IoReaderPickerDialog
@@ -412,6 +417,6 @@ export default function Transmit() {
         ingestProfileId={isStreaming ? effectiveSessionId : null}
         onStopIngest={handlers.handleStop}
       />
-    </div>
+    </AppLayout>
   );
 }

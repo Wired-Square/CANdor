@@ -1,18 +1,13 @@
 // ui/src/apps/transmit/views/TransmitTopBar.tsx
 //
 // Top toolbar for the Transmit app with IO picker button and session controls.
-// Uses shared SessionControls components for consistency with Discovery/Decoder.
+// Uses shared AppTopBar component for consistent layout.
 
 import { Send, Link2, GitMerge } from "lucide-react";
-import { iconLg, flexRowGap2 } from "../../../styles/spacing";
+import { flexRowGap2 } from "../../../styles/spacing";
 import type { IOProfile } from "../../../types/common";
-import { IOSessionControls } from "../../../components/SessionControls";
-import FlexSeparator from "../../../components/FlexSeparator";
-import {
-  bgDarkToolbar,
-  borderDarkView,
-  textDarkMuted,
-} from "../../../styles/colourTokens";
+import AppTopBar from "../../../components/AppTopBar";
+import { textDarkMuted } from "../../../styles/colourTokens";
 
 interface Props {
   // IO profiles
@@ -75,32 +70,42 @@ export default function TransmitTopBar({
   const showAsMultiBus = multiBusMode || multiBusProfiles.length > 0;
 
   return (
-    <div
-      className={`flex items-center gap-2 px-4 py-2 ${bgDarkToolbar} border-b ${borderDarkView}`}
+    <AppTopBar
+      icon={Send}
+      iconColour="text-red-500"
+      theme="dark"
+      ioSession={{
+        ioProfile,
+        ioProfiles,
+        multiBusMode,
+        multiBusProfiles,
+        defaultReadProfileId,
+        onOpenIoReaderPicker: onOpenIoPicker,
+        isStreaming,
+        isStopped,
+        isDetached,
+        joinerCount,
+        onStop,
+        onResume,
+        onDetach,
+        onRejoin,
+      }}
+      actions={
+        <>
+          {/* Loading indicator */}
+          {isLoading && (
+            <span className={`text-xs ${textDarkMuted}`}>Loading...</span>
+          )}
+
+          {/* Connection error */}
+          {error && (
+            <span className="text-xs text-red-400 max-w-[300px] truncate">
+              {error}
+            </span>
+          )}
+        </>
+      }
     >
-      {/* Transmit icon */}
-      <Send className={`${iconLg} text-red-500 shrink-0`} />
-
-      <FlexSeparator />
-
-      {/* IO Session Controls (reader + session actions) */}
-      <IOSessionControls
-        ioProfile={ioProfile}
-        ioProfiles={ioProfiles}
-        multiBusMode={multiBusMode}
-        multiBusProfiles={multiBusProfiles}
-        defaultReadProfileId={defaultReadProfileId}
-        onOpenIoReaderPicker={onOpenIoPicker}
-        isStreaming={isStreaming}
-        isStopped={isStopped}
-        isDetached={isDetached}
-        joinerCount={joinerCount}
-        onStop={onStop}
-        onResume={onResume}
-        onDetach={onDetach}
-        onRejoin={onRejoin}
-      />
-
       {/* Capability badges */}
       {capabilities && (
         <div className={flexRowGap2}>
@@ -130,20 +135,6 @@ export default function TransmitTopBar({
           <span className="text-xs">{joinerCount} apps connected</span>
         </div>
       )}
-
-      <div className="flex-1" />
-
-      {/* Loading indicator */}
-      {isLoading && (
-        <span className={`text-xs ${textDarkMuted}`}>Loading...</span>
-      )}
-
-      {/* Connection error */}
-      {error && (
-        <span className="text-xs text-red-400 max-w-[300px] truncate">
-          {error}
-        </span>
-      )}
-    </div>
+    </AppTopBar>
   );
 }

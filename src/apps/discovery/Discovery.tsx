@@ -8,6 +8,7 @@ import { useDiscoveryStore, type FrameMessage, type PlaybackSpeed } from "../../
 import { useDiscoveryUIStore } from "../../stores/discoveryUIStore";
 import { useDiscoveryHandlers } from "./hooks/useDiscoveryHandlers";
 import type { StreamEndedPayload, PlaybackPosition } from '../../api/io';
+import AppLayout from "../../components/AppLayout";
 import DiscoveryTopBar from "./views/DiscoveryTopBar";
 import DiscoveryFramesView from "./views/DiscoveryFramesView";
 import SerialDiscoveryView from "./views/SerialDiscoveryView";
@@ -723,46 +724,47 @@ export default function Discovery() {
   }, [skipReader, dialogs.ioReaderPicker]);
 
   return (
-    <div className="h-full flex flex-col bg-slate-50 dark:bg-slate-900 overflow-hidden">
-      <DiscoveryTopBar
-        ioProfiles={settings?.io_profiles || []}
-        ioProfile={ioProfile}
-        onIoProfileChange={handlers.handleIoProfileChange}
-        defaultReadProfileId={settings?.default_read_profile}
-        bufferMetadata={bufferMetadata}
-        isStreaming={isStreaming}
-        multiBusMode={multiBusMode}
-        multiBusProfiles={ioProfiles}
-        onStopWatch={handlers.handleStop}
-        isStopped={isStopped}
-        onResume={start}
-        joinerCount={joinerCount}
-        onDetach={handlers.handleDetach}
-        isDetached={isDetached}
-        onRejoin={handlers.handleRejoin}
-        supportsTimeRange={capabilities?.supports_time_range ?? false}
-        onOpenBookmarkPicker={() => dialogs.bookmarkPicker.open()}
-        speed={playbackSpeed}
-        supportsSpeed={capabilities?.supports_speed_control ?? false}
-        onOpenSpeedPicker={() => dialogs.speedPicker.open()}
-        frameCount={frameList.length}
-        selectedFrameCount={selectedFrames.size}
-        onOpenFramePicker={() => dialogs.framePicker.open()}
-        isSerialMode={isSerialMode}
-        serialBytesCount={backendByteCount > 0 ? backendByteCount : serialBytesBuffer.length}
-        framingAccepted={framingAccepted}
-        serialActiveTab={serialActiveTab}
-        onUndoFraming={undoAcceptFraming}
-        onOpenIoReaderPicker={() => dialogs.ioReaderPicker.open()}
-        onSave={openSaveDialog}
-        onExport={() => dialogs.export.open()}
-        onClear={handlers.handleClearDiscoveredFrames}
-        onInfo={openInfoView}
-        onOpenToolbox={() => dialogs.toolbox.open()}
-      />
-
-      <div className="flex-1 flex flex-col min-h-0 overflow-hidden m-2">
-        {isSerialMode ? (
+    <AppLayout
+      topBar={
+        <DiscoveryTopBar
+          ioProfiles={settings?.io_profiles || []}
+          ioProfile={ioProfile}
+          onIoProfileChange={handlers.handleIoProfileChange}
+          defaultReadProfileId={settings?.default_read_profile}
+          bufferMetadata={bufferMetadata}
+          isStreaming={isStreaming}
+          multiBusMode={multiBusMode}
+          multiBusProfiles={ioProfiles}
+          onStopWatch={handlers.handleStop}
+          isStopped={isStopped}
+          onResume={start}
+          joinerCount={joinerCount}
+          onDetach={handlers.handleDetach}
+          isDetached={isDetached}
+          onRejoin={handlers.handleRejoin}
+          supportsTimeRange={capabilities?.supports_time_range ?? false}
+          onOpenBookmarkPicker={() => dialogs.bookmarkPicker.open()}
+          speed={playbackSpeed}
+          supportsSpeed={capabilities?.supports_speed_control ?? false}
+          onOpenSpeedPicker={() => dialogs.speedPicker.open()}
+          frameCount={frameList.length}
+          selectedFrameCount={selectedFrames.size}
+          onOpenFramePicker={() => dialogs.framePicker.open()}
+          isSerialMode={isSerialMode}
+          serialBytesCount={backendByteCount > 0 ? backendByteCount : serialBytesBuffer.length}
+          framingAccepted={framingAccepted}
+          serialActiveTab={serialActiveTab}
+          onUndoFraming={undoAcceptFraming}
+          onOpenIoReaderPicker={() => dialogs.ioReaderPicker.open()}
+          onSave={openSaveDialog}
+          onExport={() => dialogs.export.open()}
+          onClear={handlers.handleClearDiscoveredFrames}
+          onInfo={openInfoView}
+          onOpenToolbox={() => dialogs.toolbox.open()}
+        />
+      }
+    >
+      {isSerialMode ? (
           <SerialDiscoveryView
             isStreaming={isStreaming}
             displayTimeFormat={displayTimeFormat}
@@ -811,7 +813,6 @@ export default function Discovery() {
             onSpeedChange={handlers.handleSpeedChange}
           />
         )}
-      </div>
 
       <SaveFramesDialog
         open={showSaveDialog}
@@ -949,6 +950,6 @@ export default function Discovery() {
         isOpen={showInfoView}
         onClose={closeInfoView}
       />
-    </div>
+    </AppLayout>
   );
 }

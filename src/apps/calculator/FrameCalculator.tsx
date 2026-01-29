@@ -11,6 +11,7 @@ import { SecondaryButton } from "../../components/forms";
 import { useSettings } from "../../hooks/useSettings";
 import { cleanHex, hexToBytes, numberToHex, decodeGroups } from "./frameUtils";
 import { buttonBase, iconButtonBase, toggleButtonClass, selectionButtonClass, groupButtonClass, disabledState, caption, captionMuted, borderDivider, hoverLight, bgSurface } from "../../styles";
+import { borderDarkView, bgDarkView } from "../../styles/colourTokens";
 import { iconMd, iconSm, iconXs, iconLg, flexRowGap2 } from "../../styles/spacing";
 import { h2, sectionHeaderText } from "../../styles/typography";
 
@@ -519,7 +520,9 @@ export default function FrameCalculator() {
   return (
     <>
       <AppLayout topBar={topBar}>
-        <div className="p-6 space-y-4">
+        {/* Bubble container */}
+        <div className={`flex-1 flex flex-col min-h-0 rounded-lg border ${borderDarkView} overflow-hidden ${bgDarkView}`}>
+          <div className="flex-1 overflow-y-auto p-6 space-y-4">
           <div className="grid grid-cols-1 gap-4">
             {groups.map((g, groupIdx) => {
               // Format hex with uppercase pairs and no 0x prefix
@@ -657,6 +660,7 @@ export default function FrameCalculator() {
                 </div>
               );
             })}
+          </div>
           </div>
         </div>
       </AppLayout>

@@ -1,9 +1,12 @@
 // ui/src/apps/settings/Settings.tsx
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { pickDirectory } from '../../api/dialogs';
-import SettingsTopBar from './layout/SettingsTopBar';
-import SettingsSidebar from './layout/SettingsSidebar';
+import AppLayout from "../../components/AppLayout";
+import AppTopBar from "../../components/AppTopBar";
+import AppSideBar, { type SideBarItem } from "../../components/AppSideBar";
+import { Cog, MapPin, Cable, BookOpen, Monitor, Bookmark } from "lucide-react";
+import { bgDarkView, borderDarkView } from "../../styles/colourTokens";
 import LocationsView from './views/LocationsView';
 import DisplayView from './views/DisplayView';
 import CatalogsView from './views/CatalogsView';
@@ -15,7 +18,7 @@ import EditCatalogDialog from './dialogs/EditCatalogDialog';
 import ConfirmDeleteDialog from '../../dialogs/ConfirmDeleteDialog';
 import DuplicateCatalogDialog from './dialogs/DuplicateCatalogDialog';
 import EditBookmarkDialog from './dialogs/EditBookmarkDialog';
-import { useSettingsStore } from './stores/settingsStore';
+import { useSettingsStore, type SettingsSection } from './stores/settingsStore';
 import { useSettingsForms } from './hooks/useSettingsForms';
 import { useSettingsHandlers } from './hooks/useSettingsHandlers';
 
@@ -106,6 +109,19 @@ export default function Settings() {
     loadBookmarks();
   }, [loadSettings, loadBookmarks]);
 
+  // Sidebar items
+  const sidebarItems: SideBarItem[] = [
+    { id: 'general', label: 'General', icon: Cog },
+    { id: 'locations', label: 'Storage', icon: MapPin },
+    { id: 'data-io', label: 'Data IO', icon: Cable },
+    { id: 'catalogs', label: 'Catalogs', icon: BookOpen },
+    { id: 'bookmarks', label: 'Bookmarks', icon: Bookmark },
+    { id: 'display', label: 'Display', icon: Monitor },
+  ];
+
+  // Sidebar collapsed state
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
   // Directory picker helper
   const handlePickDirectory = async (
     currentPath: string,
@@ -122,15 +138,26 @@ export default function Settings() {
   };
 
   return (
-    <div className="h-full flex flex-col bg-slate-50 dark:bg-slate-900 overflow-hidden">
-      <SettingsTopBar />
-
-      {/* Sidebar + Content Layout */}
-      <div className="flex-1 flex min-h-0 overflow-hidden">
-        <SettingsSidebar currentSection={currentSection} onSelect={setSection} />
+    <AppLayout
+      topBar={
+        <AppTopBar
+          icon={Cog}
+          iconColour="text-orange-600 dark:text-orange-400"
+        />
+      }
+    >
+      {/* Sidebar + Content in bubble */}
+      <div className={`flex-1 flex min-h-0 rounded-lg border ${borderDarkView} overflow-hidden`}>
+        <AppSideBar
+          items={sidebarItems}
+          activeItem={currentSection}
+          onSelect={(id) => setSection(id as SettingsSection)}
+          collapsed={sidebarCollapsed}
+          onToggleCollapsed={() => setSidebarCollapsed(!sidebarCollapsed)}
+        />
 
         {/* Content Area */}
-        <main className="flex-1 min-h-0 overflow-y-auto p-6">
+        <main className={`flex-1 min-h-0 overflow-y-auto p-6 ${bgDarkView}`}>
           {/* Locations Section */}
           {currentSection === 'locations' && (
             <LocationsView
@@ -306,6 +333,6 @@ export default function Settings() {
         onCancel={handlers.handleCancelDeleteBookmark}
         onConfirm={handlers.handleConfirmDeleteBookmark}
       />
-    </div>
+    </AppLayout>
   );
 }

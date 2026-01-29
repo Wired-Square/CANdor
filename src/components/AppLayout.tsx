@@ -1,47 +1,55 @@
 // ui/src/components/AppLayout.tsx
+//
+// Standardised outer layout component for apps. Provides consistent container
+// structure with theme support and content margin for the bubble effect.
 
-import { ReactNode } from "react";
-import { bgSurface } from "../styles";
+import { type ReactNode } from "react";
+import { bgDarkView } from "../styles/colourTokens";
 
-type AppLayoutProps = {
+interface AppLayoutProps {
+  /** Top bar content (rendered via AppTopBar or custom) */
   topBar: ReactNode;
-  sidebar?: ReactNode;
+  /** Main content */
   children: ReactNode;
-  sidebarWidth?: string;
-};
+  /** Theme: 'auto' (light/dark) or 'dark' (always dark like Transmit) */
+  theme?: "auto" | "dark";
+  /** Add m-2 margin around content for bubble effect (default: true) */
+  contentMargin?: boolean;
+}
 
 /**
- * Standard app layout with:
- * - Static top bar (never scrolls)
- * - Optional sidebar (scrolls independently)
- * - Main content area (scrolls independently)
+ * Standardised outer layout component for apps.
+ *
+ * Provides:
+ * - Full-height flex column container
+ * - Theme support (auto light/dark or always dark)
+ * - Optional margin around content for bubble effect
+ *
+ * @example
+ * ```tsx
+ * <AppLayout topBar={<AppTopBar icon={Search} ... />}>
+ *   <AppTabView ...>
+ *     {content}
+ *   </AppTabView>
+ * </AppLayout>
+ * ```
  */
 export default function AppLayout({
   topBar,
-  sidebar,
   children,
-  sidebarWidth = "w-72",
+  theme = "auto",
+  contentMargin = true,
 }: AppLayoutProps) {
+  const bgClass =
+    theme === "dark" ? bgDarkView : "bg-slate-50 dark:bg-slate-900";
+
   return (
-    <div className="h-full flex flex-col bg-slate-50 dark:bg-slate-900 overflow-hidden">
-      {/* Static top bar */}
+    <div className={`h-full flex flex-col ${bgClass} overflow-hidden`}>
       {topBar}
-
-      {/* Body: sidebar + main content */}
-      <div className="flex-1 flex min-h-0 overflow-hidden">
-        {/* Sidebar - scrolls independently */}
-        {sidebar && (
-          <aside
-            className={`${sidebarWidth} ${bgSurface} border-r border-slate-200 dark:border-slate-700 flex flex-col overflow-hidden`}
-          >
-            <div className="flex-1 overflow-y-auto overscroll-none">{sidebar}</div>
-          </aside>
-        )}
-
-        {/* Main content - scrolls independently */}
-        <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
-          <div className="flex-1 overflow-y-auto overscroll-none">{children}</div>
-        </main>
+      <div
+        className={`flex-1 flex flex-col min-h-0 overflow-hidden ${contentMargin ? "m-2" : ""}`}
+      >
+        {children}
       </div>
     </div>
   );

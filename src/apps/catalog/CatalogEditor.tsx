@@ -6,6 +6,8 @@ import { useSettings, getDisplayFrameIdFormat, getSaveFrameIdFormat } from "../.
 import { useCatalogEditorStore } from "../../stores/catalogEditorStore";
 import { listCatalogs, type CatalogMetadata } from "../../api/catalog";
 import { Eye } from "lucide-react";
+import AppLayout from "../../components/AppLayout";
+import { borderDarkView, bgDarkView } from "../../styles/colourTokens";
 import CatalogTreePanel from "./layouts/CatalogTreePanel";
 import CatalogToolbar from "./layouts/CatalogToolbar";
 import SelectionHeader from "./layouts/SelectionHeader";
@@ -348,26 +350,30 @@ export default function CatalogEditor() {
   }, [expandedNodes, selectedNode, filterByNode, formatFrameIdForDisplay]);
 
   return (
-    <div className="h-full flex flex-col bg-slate-50 dark:bg-slate-900 overflow-hidden">
-      <CatalogToolbar
-        editMode={editMode}
-        catalogPath={catalogPath}
-        hasUnsavedChanges={hasUnsavedChanges}
-        validationState={validationState}
-        catalogs={catalogs}
-        defaultCatalogFilename={settings?.default_catalog}
-        onOpenPicker={handleOpenCatalogPicker}
-        onSave={handlers.handleSave}
-        onReload={handlers.handleReload}
-        onExport={() => forms.setShowExportDialog(true)}
-        onValidate={handlers.handleValidate}
-        onToggleMode={() => setMode(editMode === "ui" ? "text" : "ui")}
-        onEditConfig={() => openDialog("config")}
-      />
+    <AppLayout
+      topBar={
+        <CatalogToolbar
+          editMode={editMode}
+          catalogPath={catalogPath}
+          hasUnsavedChanges={hasUnsavedChanges}
+          validationState={validationState}
+          catalogs={catalogs}
+          defaultCatalogFilename={settings?.default_catalog}
+          onOpenPicker={handleOpenCatalogPicker}
+          onSave={handlers.handleSave}
+          onReload={handlers.handleReload}
+          onExport={() => forms.setShowExportDialog(true)}
+          onValidate={handlers.handleValidate}
+          onToggleMode={() => setMode(editMode === "ui" ? "text" : "ui")}
+          onEditConfig={() => openDialog("config")}
+        />
+      }
+    >
+      {/* Bubble container */}
+      <div className={`flex-1 flex flex-col min-h-0 rounded-lg border ${borderDarkView} overflow-hidden`}>
+        {editMode === "ui" && catalogPath && <FindBar />}
 
-      {editMode === "ui" && catalogPath && <FindBar />}
-
-      <div className="flex-1 flex min-h-0 overflow-hidden">
+        <div className={`flex-1 flex min-h-0 overflow-hidden ${bgDarkView}`}>
         {/* Tree View Panel - Only show in UI mode */}
         {editMode === "ui" && (
           <CatalogTreePanel
@@ -589,6 +595,7 @@ export default function CatalogEditor() {
           )}
 
         </main>
+        </div>
       </div>
 
       <CatalogDialogs
@@ -624,6 +631,6 @@ export default function CatalogEditor() {
         onImportError={(message) => setValidation([{ field: "import", message }])}
         onNewCatalog={handlers.handleNewCatalog}
       />
-    </div>
+    </AppLayout>
   );
 }

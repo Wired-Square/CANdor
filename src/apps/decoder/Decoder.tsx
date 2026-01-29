@@ -8,6 +8,7 @@ import { useIOSessionManager } from '../../hooks/useIOSessionManager';
 import { listCatalogs, type CatalogMetadata } from "../../api/catalog";
 import { clearBuffer } from "../../api/buffer";
 import type { StreamEndedPayload, PlaybackPosition } from '../../api/io';
+import AppLayout from "../../components/AppLayout";
 import DecoderTopBar from "./views/DecoderTopBar";
 import DecoderFramesView from "./views/DecoderFramesView";
 import FramePickerDialog from "../../dialogs/FramePickerDialog";
@@ -748,60 +749,63 @@ export default function Decoder() {
   };
 
   return (
-    <div className="h-full flex flex-col bg-slate-50 dark:bg-slate-900 overflow-hidden">
-      {catalogNotification && (
-        <FlashNotification
-          message={catalogNotification}
-          type="info"
-          duration={2000}
-          onDismiss={() => setCatalogNotification(null)}
-        />
-      )}
-      <DecoderTopBar
-        catalogs={catalogs}
-        catalogPath={catalogPath}
-        onCatalogChange={handlers.handleCatalogChange}
-        defaultCatalogFilename={settings?.default_catalog}
-        ioProfiles={settings?.io_profiles || []}
-        ioProfile={ioProfile}
-        onIoProfileChange={handlers.handleIoProfileChange}
-        defaultReadProfileId={settings?.default_read_profile}
-        bufferMetadata={bufferMetadata}
-        multiBusMode={multiBusMode}
-        multiBusProfiles={ioProfiles}
-        speed={playbackSpeed}
-        supportsSpeed={capabilities?.supports_speed_control ?? false}
-        isStreaming={isDecoding || isIngesting}
-        onStopStream={isDecoding ? handlers.handleStopWatch : stopIngest}
-        isStopped={isStopped}
-        onResume={start}
-        joinerCount={joinerCount}
-        onDetach={handlers.handleDetach}
-        isDetached={isDetached}
-        onRejoin={handlers.handleRejoin}
-        supportsTimeRange={capabilities?.supports_time_range ?? false}
-        onOpenBookmarkPicker={() => dialogs.bookmarkPicker.open()}
-        frameCount={frameList.length}
-        selectedFrameCount={selectedFrames.size}
-        onOpenFramePicker={() => dialogs.framePicker.open()}
-        onOpenIoReaderPicker={() => dialogs.ioReaderPicker.open()}
-        onOpenSpeedPicker={() => dialogs.speedPicker.open()}
-        onOpenCatalogPicker={() => dialogs.catalogPicker.open()}
-        showRawBytes={showRawBytes}
-        onToggleRawBytes={toggleShowRawBytes}
-        onClear={handlers.handleClear}
-        viewMode={viewMode}
-        onToggleViewMode={toggleViewMode}
-        minFrameLength={serialConfig?.min_frame_length ?? 0}
-        onOpenFilterDialog={() => dialogs.filter.open()}
-        hideUnseen={hideUnseen}
-        onToggleHideUnseen={toggleHideUnseen}
-        showAsciiGutter={showAsciiGutter}
-        onToggleAsciiGutter={toggleAsciiGutter}
-        frameIdFilter={frameIdFilter}
-      />
-
-      <div className="flex-1 flex flex-col min-h-0 overflow-hidden m-2">
+    <AppLayout
+      topBar={
+        <>
+          {catalogNotification && (
+            <FlashNotification
+              message={catalogNotification}
+              type="info"
+              duration={2000}
+              onDismiss={() => setCatalogNotification(null)}
+            />
+          )}
+          <DecoderTopBar
+            catalogs={catalogs}
+            catalogPath={catalogPath}
+            onCatalogChange={handlers.handleCatalogChange}
+            defaultCatalogFilename={settings?.default_catalog}
+            ioProfiles={settings?.io_profiles || []}
+            ioProfile={ioProfile}
+            onIoProfileChange={handlers.handleIoProfileChange}
+            defaultReadProfileId={settings?.default_read_profile}
+            bufferMetadata={bufferMetadata}
+            multiBusMode={multiBusMode}
+            multiBusProfiles={ioProfiles}
+            speed={playbackSpeed}
+            supportsSpeed={capabilities?.supports_speed_control ?? false}
+            isStreaming={isDecoding || isIngesting}
+            onStopStream={isDecoding ? handlers.handleStopWatch : stopIngest}
+            isStopped={isStopped}
+            onResume={start}
+            joinerCount={joinerCount}
+            onDetach={handlers.handleDetach}
+            isDetached={isDetached}
+            onRejoin={handlers.handleRejoin}
+            supportsTimeRange={capabilities?.supports_time_range ?? false}
+            onOpenBookmarkPicker={() => dialogs.bookmarkPicker.open()}
+            frameCount={frameList.length}
+            selectedFrameCount={selectedFrames.size}
+            onOpenFramePicker={() => dialogs.framePicker.open()}
+            onOpenIoReaderPicker={() => dialogs.ioReaderPicker.open()}
+            onOpenSpeedPicker={() => dialogs.speedPicker.open()}
+            onOpenCatalogPicker={() => dialogs.catalogPicker.open()}
+            showRawBytes={showRawBytes}
+            onToggleRawBytes={toggleShowRawBytes}
+            onClear={handlers.handleClear}
+            viewMode={viewMode}
+            onToggleViewMode={toggleViewMode}
+            minFrameLength={serialConfig?.min_frame_length ?? 0}
+            onOpenFilterDialog={() => dialogs.filter.open()}
+            hideUnseen={hideUnseen}
+            onToggleHideUnseen={toggleHideUnseen}
+            showAsciiGutter={showAsciiGutter}
+            onToggleAsciiGutter={toggleAsciiGutter}
+            frameIdFilter={frameIdFilter}
+          />
+        </>
+      }
+    >
         <DecoderFramesView
           frames={frameList}
           selectedIds={selectedFrames}
@@ -861,7 +865,6 @@ export default function Decoder() {
           showAsciiGutter={showAsciiGutter}
           frameIdFilter={frameIdFilter}
         />
-      </div>
 
       <FramePickerDialog
         isOpen={dialogs.framePicker.isOpen}
@@ -952,6 +955,6 @@ export default function Decoder() {
           setFrameIdFilter(idFilter);
         }}
       />
-    </div>
+    </AppLayout>
   );
 }

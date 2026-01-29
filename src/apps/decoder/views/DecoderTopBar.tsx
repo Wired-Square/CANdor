@@ -1,14 +1,12 @@
 // ui/src/apps/decoder/views/DecoderTopBar.tsx
 
-import { Activity, ChevronRight, ListFilter, Star, Glasses, Trash2, Users, User, Filter, Eye, EyeOff, Type } from "lucide-react";
-import { iconSm, iconMd, iconLg } from "../../../styles/spacing";
-import { borderDivider, bgSurface } from "../../../styles";
+import { Activity, ChevronRight, Star, Glasses, Trash2, Users, User, Filter, Eye, EyeOff, Type } from "lucide-react";
+import { iconSm, iconMd } from "../../../styles/spacing";
 import type { CatalogMetadata } from "../../../api/catalog";
 import type { IOProfile } from "../../../types/common";
 import type { PlaybackSpeed } from "../../../components/TimeController";
 import type { BufferMetadata } from "../../../api/buffer";
-import FlexSeparator from "../../../components/FlexSeparator";
-import { IOSessionControls } from "../../../components/SessionControls";
+import AppTopBar from "../../../components/AppTopBar";
 import { buttonBase, iconButtonBase, toggleButtonClass } from "../../../styles/buttonStyles";
 
 type Props = {
@@ -136,162 +134,146 @@ export default function DecoderTopBar({
   const catalogName = selectedCatalog?.name || "No catalog";
   const isDefaultCatalog = selectedCatalog?.filename === defaultCatalogFilename;
 
+  // Filter button state
+  const hasFilters = minFrameLength > 0 || frameIdFilter.trim() !== '';
+  const filterParts: string[] = [];
+  if (minFrameLength > 0) filterParts.push(`min ${minFrameLength}B`);
+  if (frameIdFilter.trim()) filterParts.push(`ID: ${frameIdFilter}`);
+
   return (
-    <div className={`flex-shrink-0 ${bgSurface} ${borderDivider} px-4 py-2`}>
-      <div className="flex flex-wrap items-center gap-2">
-        {/* Decoder icon */}
-        <Activity className={`${iconLg} text-green-600 dark:text-green-400 shrink-0`} />
+    <AppTopBar
+      icon={Activity}
+      iconColour="text-green-600 dark:text-green-400"
+      ioSession={{
+        ioProfile,
+        ioProfiles,
+        multiBusMode,
+        multiBusProfiles,
+        bufferMetadata,
+        defaultReadProfileId,
+        onOpenIoReaderPicker,
+        speed,
+        supportsSpeed,
+        onOpenSpeedPicker,
+        isStreaming,
+        isStopped,
+        isDetached,
+        joinerCount,
+        supportsTimeRange,
+        onStop: onStopStream,
+        onResume,
+        onDetach,
+        onRejoin,
+        onOpenBookmarkPicker,
+      }}
+      framePicker={{
+        frameCount,
+        selectedCount: selectedFrameCount,
+        onOpen: onOpenFramePicker,
+      }}
+    >
+      {/* Right arrow icon */}
+      <ChevronRight className={`${iconSm} text-slate-400 shrink-0`} />
 
-        <FlexSeparator />
-
-        {/* IO Session Controls (reader, speed, session actions) */}
-        <IOSessionControls
-          ioProfile={ioProfile}
-          ioProfiles={ioProfiles}
-          multiBusMode={multiBusMode}
-          multiBusProfiles={multiBusProfiles}
-          bufferMetadata={bufferMetadata}
-          defaultReadProfileId={defaultReadProfileId}
-          onOpenIoReaderPicker={onOpenIoReaderPicker}
-          speed={speed}
-          supportsSpeed={supportsSpeed}
-          onOpenSpeedPicker={onOpenSpeedPicker}
-          isStreaming={isStreaming}
-          isStopped={isStopped}
-          isDetached={isDetached}
-          joinerCount={joinerCount}
-          supportsTimeRange={supportsTimeRange}
-          onStop={onStopStream}
-          onResume={onResume}
-          onDetach={onDetach}
-          onRejoin={onRejoin}
-          onOpenBookmarkPicker={onOpenBookmarkPicker}
-        />
-
-        {/* Right arrow icon */}
-        <ChevronRight className={`${iconSm} text-slate-400 shrink-0`} />
-
-        {/* Frames Button - icon with count */}
+      {/* Catalog Selection */}
+      {hasCatalog ? (
         <button
-          onClick={onOpenFramePicker}
+          onClick={onOpenCatalogPicker}
           className={buttonBase}
-          title="Select frames to decode"
+          title="Select Decoder Catalog"
         >
-          <ListFilter className={`${iconSm} flex-shrink-0`} />
-          <span className="text-slate-500 dark:text-slate-400">
-            {selectedFrameCount}/{frameCount}
-          </span>
+          {isDefaultCatalog && (
+            <Star className={`${iconSm} text-amber-500 flex-shrink-0`} fill="currentColor" />
+          )}
+          <span className="max-w-32 truncate">{catalogName}</span>
         </button>
+      ) : (
+        <button
+          onClick={onOpenCatalogPicker}
+          className={buttonBase}
+          title="Select Decoder Catalog"
+        >
+          <span className="text-slate-400 dark:text-slate-500 italic">No catalog</span>
+        </button>
+      )}
 
-        {/* Right arrow icon */}
-        <ChevronRight className={`${iconSm} text-slate-400 shrink-0`} />
+      {/* Raw bytes toggle */}
+      {onToggleRawBytes && (
+        <button
+          onClick={onToggleRawBytes}
+          className={toggleButtonClass(showRawBytes, "purple")}
+          title={showRawBytes ? "Hide raw bytes" : "Show raw bytes"}
+        >
+          <Glasses className={iconSm} />
+        </button>
+      )}
 
-        {/* Catalog Selection */}
-        {hasCatalog ? (
-          <button
-            onClick={onOpenCatalogPicker}
-            className={buttonBase}
-            title="Select Decoder Catalog"
-          >
-            {isDefaultCatalog && (
-              <Star className={`${iconSm} text-amber-500 flex-shrink-0`} fill="currentColor" />
-            )}
-            <span className="max-w-32 truncate">{catalogName}</span>
-          </button>
-        ) : (
-          <button
-            onClick={onOpenCatalogPicker}
-            className={buttonBase}
-            title="Select Decoder Catalog"
-          >
-            <span className="text-slate-400 dark:text-slate-500 italic">No catalog</span>
-          </button>
-        )}
+      {/* Clear decoded values */}
+      {onClear && (
+        <button
+          onClick={onClear}
+          className={buttonBase}
+          title="Clear decoded values"
+        >
+          <Trash2 className={iconSm} />
+        </button>
+      )}
 
-        {/* Raw bytes toggle */}
-        {onToggleRawBytes && (
-          <button
-            onClick={onToggleRawBytes}
-            className={toggleButtonClass(showRawBytes, "purple")}
-            title={showRawBytes ? "Hide raw bytes" : "Show raw bytes"}
-          >
-            <Glasses className={iconSm} />
-          </button>
-        )}
+      {/* View mode toggle (single vs per-source) */}
+      {onToggleViewMode && (
+        <button
+          onClick={onToggleViewMode}
+          className={toggleButtonClass(viewMode === 'per-source', 'blue')}
+          title={viewMode === 'single' ? 'Show per source address' : 'Show single (most recent)'}
+        >
+          {viewMode === 'per-source' ? (
+            <Users className={iconSm} />
+          ) : (
+            <User className={iconSm} />
+          )}
+        </button>
+      )}
 
-        {/* Clear decoded values */}
-        {onClear && (
-          <button
-            onClick={onClear}
-            className={buttonBase}
-            title="Clear decoded values"
-          >
-            <Trash2 className={iconSm} />
-          </button>
-        )}
+      {/* Frame filters button - colored when any filter is active */}
+      {onOpenFilterDialog && (
+        <button
+          onClick={onOpenFilterDialog}
+          className={toggleButtonClass(hasFilters, 'yellow')}
+          title={hasFilters ? `Filters: ${filterParts.join(', ')}` : 'Set frame filters'}
+        >
+          <Filter className={iconSm} />
+        </button>
+      )}
 
-        {/* View mode toggle (single vs per-source) */}
-        {onToggleViewMode && (
-          <button
-            onClick={onToggleViewMode}
-            className={toggleButtonClass(viewMode === 'per-source', 'blue')}
-            title={viewMode === 'single' ? 'Show per source address' : 'Show single (most recent)'}
-          >
-            {viewMode === 'per-source' ? (
-              <Users className={iconSm} />
-            ) : (
-              <User className={iconSm} />
-            )}
-          </button>
-        )}
+      {/* Hide unseen frames toggle */}
+      {onToggleHideUnseen && (
+        <button
+          onClick={onToggleHideUnseen}
+          className={toggleButtonClass(hideUnseen, 'blue')}
+          title={hideUnseen ? 'Showing only seen frames' : 'Showing all frames'}
+        >
+          {hideUnseen ? (
+            <EyeOff className={iconSm} />
+          ) : (
+            <Eye className={iconSm} />
+          )}
+        </button>
+      )}
 
-        {/* Frame filters button - colored when any filter is active */}
-        {onOpenFilterDialog && (() => {
-          const hasFilters = minFrameLength > 0 || frameIdFilter.trim() !== '';
-          const filterParts: string[] = [];
-          if (minFrameLength > 0) filterParts.push(`min ${minFrameLength}B`);
-          if (frameIdFilter.trim()) filterParts.push(`ID: ${frameIdFilter}`);
-          return (
-            <button
-              onClick={onOpenFilterDialog}
-              className={toggleButtonClass(hasFilters, 'yellow')}
-              title={hasFilters ? `Filters: ${filterParts.join(', ')}` : 'Set frame filters'}
-            >
-              <Filter className={iconSm} />
-            </button>
-          );
-        })()}
-
-        {/* Hide unseen frames toggle */}
-        {onToggleHideUnseen && (
-          <button
-            onClick={onToggleHideUnseen}
-            className={toggleButtonClass(hideUnseen, 'blue')}
-            title={hideUnseen ? 'Showing only seen frames' : 'Showing all frames'}
-          >
-            {hideUnseen ? (
-              <EyeOff className={iconSm} />
-            ) : (
-              <Eye className={iconSm} />
-            )}
-          </button>
-        )}
-
-        {/* ASCII toggle */}
-        {onToggleAsciiGutter && (
-          <button
-            onClick={onToggleAsciiGutter}
-            className={`${iconButtonBase} ${
-              showAsciiGutter
-                ? "!bg-yellow-600 !text-white hover:!bg-yellow-500"
-                : ""
-            }`}
-            title={showAsciiGutter ? "Hide ASCII column" : "Show ASCII column"}
-          >
-            <Type className={iconMd} />
-          </button>
-        )}
-      </div>
-    </div>
+      {/* ASCII toggle */}
+      {onToggleAsciiGutter && (
+        <button
+          onClick={onToggleAsciiGutter}
+          className={`${iconButtonBase} ${
+            showAsciiGutter
+              ? "!bg-yellow-600 !text-white hover:!bg-yellow-500"
+              : ""
+          }`}
+          title={showAsciiGutter ? "Hide ASCII column" : "Show ASCII column"}
+        >
+          <Type className={iconMd} />
+        </button>
+      )}
+    </AppTopBar>
   );
 }

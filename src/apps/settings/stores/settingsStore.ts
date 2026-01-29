@@ -14,9 +14,8 @@ import {
   getAllFavorites,
   type TimeRangeFavorite,
 } from '../../../utils/favorites';
-import type { SettingsSection } from '../layout/SettingsSidebar';
-
 // Types
+export type SettingsSection = "general" | "locations" | "data-io" | "catalogs" | "bookmarks" | "display";
 export type DefaultFrameType = 'can' | 'modbus' | 'serial';
 
 export interface DirectoryValidation {
