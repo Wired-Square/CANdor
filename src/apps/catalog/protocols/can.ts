@@ -3,37 +3,7 @@
 
 import type { CANConfig, ValidationError } from "../types";
 import type { ProtocolHandler, ProtocolDefaults, ParsedFrame } from "./index";
-
-/**
- * Parse a CAN ID string (hex or decimal) to a number
- */
-function parseCanId(id: string): number | null {
-  const trimmed = id.trim();
-  const isHex = /^0x[0-9a-fA-F]+$/i.test(trimmed);
-  const isDec = /^\d+$/.test(trimmed);
-  if (isHex) return parseInt(trimmed, 16);
-  if (isDec) return parseInt(trimmed, 10);
-  return null;
-}
-
-/**
- * Find a frame in allFrames by its numeric ID value (case-insensitive for hex)
- */
-function findFrameByNumericId(
-  targetId: string,
-  allFrames: Record<string, any>
-): any | undefined {
-  const targetNum = parseCanId(targetId);
-  if (targetNum === null) return undefined;
-
-  for (const key of Object.keys(allFrames)) {
-    const keyNum = parseCanId(key);
-    if (keyNum === targetNum) {
-      return allFrames[key];
-    }
-  }
-  return undefined;
-}
+import { findFrameByNumericId } from "../../../utils/catalogParser";
 
 const canHandler: ProtocolHandler<CANConfig> = {
   type: "can",

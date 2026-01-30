@@ -14,6 +14,8 @@ export type SignalDef = {
   format?: SignalFormat;
   enum?: Record<number, string>;
   confidence?: Confidence;
+  /** True if this signal is inherited from a mirror source frame */
+  _inherited?: boolean;
 };
 
 export type MuxCaseDef = {
@@ -37,6 +39,12 @@ export type FrameDetail = {
   lenMismatch?: boolean;
   signals: SignalDef[];
   mux?: MuxDef;
+  /** Expected transmission interval in milliseconds */
+  interval?: number;
+  /** Frame ID this frame mirrors (inherits signals from) */
+  mirrorOf?: string;
+  /** Frame ID this frame copies metadata from */
+  copyFrom?: string;
 };
 
 export type CatalogSettings = {

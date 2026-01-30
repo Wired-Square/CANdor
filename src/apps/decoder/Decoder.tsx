@@ -87,6 +87,7 @@ export default function Decoder() {
   const showAsciiGutter = useDecoderStore((state) => state.showAsciiGutter);
   const frameIdFilter = useDecoderStore((state) => state.frameIdFilter);
   const frameIdFilterSet = useDecoderStore((state) => state.frameIdFilterSet);
+  const mirrorValidation = useDecoderStore((state) => state.mirrorValidation);
 
   // Zustand store actions
   const initFromSettings = useDecoderStore((state) => state.initFromSettings);
@@ -128,7 +129,7 @@ export default function Decoder() {
   // We store all frames (not just latest per ID) to ensure mux cases aren't lost
   // Note: sessionStore also throttles frame delivery at 10Hz, this provides additional
   // batching for expensive decode/store operations within each callback
-  const pendingFramesRef = useRef<Array<{ frameId: number; bytes: number[]; sourceAddress?: number }>>([]);
+  const pendingFramesRef = useRef<Array<{ frameId: number; bytes: number[]; sourceAddress?: number; timestamp: number }>>([]);
   const pendingUnmatchedRef = useRef<Array<{ frameId: number; bytes: number[]; timestamp: number; sourceAddress?: number }>>([]);
   const pendingFilteredRef = useRef<Array<{ frameId: number; bytes: number[]; timestamp: number; sourceAddress?: number; reason: 'too_short' | 'id_filter' }>>([]);
   const pendingTimeRef = useRef<number | null>(null);
@@ -176,8 +177,8 @@ export default function Decoder() {
     const framesToDecode = pendingFramesRef.current;
     pendingFramesRef.current = [];
 
-    for (const { frameId, bytes, sourceAddress } of framesToDecode) {
-      decodeSignalsRef.current(frameId, bytes, sourceAddress);
+    for (const { frameId, bytes, sourceAddress, timestamp } of framesToDecode) {
+      decodeSignalsRef.current(frameId, bytes, sourceAddress, timestamp);
     }
 
     // Add unmatched frames to store
@@ -224,6 +225,16 @@ export default function Decoder() {
     const frameIdMask = currentProtocol === 'can'
       ? storeState.canConfig?.frame_id_mask
       : storeState.serialConfig?.frame_id_mask;
+
+    // Build a set of source frame IDs that need to be processed for mirror validation
+    // (sources of selected mirror frames)
+    const mirrorSourceMap = storeState.mirrorSourceMap;
+    const sourceIdsForValidation = new Set<number>();
+    for (const [mirrorId, sourceId] of mirrorSourceMap) {
+      if (currentSelectedFrames.has(mirrorId)) {
+        sourceIdsForValidation.add(sourceId);
+      }
+    }
 
     // Get frame ID extraction config from serialConfig for frontend re-extraction
     // This allows correct frame ID extraction even if catalog was loaded after streaming started
@@ -275,8 +286,11 @@ export default function Decoder() {
       // Check if frame exists in catalog (using masked ID)
       if (catalogFrames.has(maskedFrameId)) {
         // Frame exists in catalog - decode if selected (check both raw and masked IDs)
-        if (currentSelectedFrames.has(maskedFrameId) || currentSelectedFrames.has(frameId)) {
-          pendingFramesRef.current.push({ frameId, bytes: f.bytes, sourceAddress: f.source_address });
+        // Also process source frames for mirror validation even if not selected
+        const isSelected = currentSelectedFrames.has(maskedFrameId) || currentSelectedFrames.has(frameId);
+        const isSourceForSelectedMirror = sourceIdsForValidation.has(maskedFrameId);
+        if (isSelected || isSourceForSelectedMirror) {
+          pendingFramesRef.current.push({ frameId, bytes: f.bytes, sourceAddress: f.source_address, timestamp });
         }
       } else {
         // Frame not in catalog - add to unmatched
@@ -864,6 +878,7 @@ export default function Decoder() {
           onTabChange={setActiveTab}
           showAsciiGutter={showAsciiGutter}
           frameIdFilter={frameIdFilter}
+          mirrorValidation={mirrorValidation}
         />
 
       <FramePickerDialog

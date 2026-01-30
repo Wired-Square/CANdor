@@ -1,11 +1,12 @@
 // ui/src/apps/decoder/views/DecoderFramesView.tsx
 
 import { useRef, useEffect, useState, useMemo } from "react";
-import { Calculator, Star, Clock, Check, X } from "lucide-react";
+import { Calculator, Star, Clock, Check, X, ArrowDownRight } from "lucide-react";
 import { iconSm, iconXs, flexRowGap2 } from "../../../styles/spacing";
 import { PlaybackControls } from "../../../components/PlaybackControls";
 import { validateChecksum, type ChecksumAlgorithm, type ChecksumValidationResult } from "../../../api/checksums";
-import { badgeDarkPanelInfo, badgeDarkPanelSuccess, badgeDarkPanelDanger, badgeDarkPanelPurple } from "../../../styles/badgeStyles";
+import { badgeDarkPanelInfo, badgeDarkPanelSuccess, badgeDarkPanelDanger, badgeDarkPanelPurple, badgeDarkPanelCyan } from "../../../styles/badgeStyles";
+import { parseCanId } from "../../../utils/catalogParser";
 import { caption, bgSurface } from "../../../styles";
 import type { PlaybackState, PlaybackSpeed } from "../../../components/TimeController";
 import type { IOCapabilities } from '../../../api/io';
@@ -13,7 +14,7 @@ import { formatFrameId } from "../../../utils/frameIds";
 import { sendHexDataToCalculator } from "../../../utils/windowCommunication";
 import AppTabView, { type TabDefinition, type ProtocolBadge } from "../../../components/AppTabView";
 import HeaderFieldFilter from "../../../components/HeaderFieldFilter";
-import type { DecodedFrame, DecodedSignal, DecoderViewMode, UnmatchedFrame, FilteredFrame } from "../../../stores/decoderStore";
+import type { DecodedFrame, DecodedSignal, DecoderViewMode, UnmatchedFrame, FilteredFrame, MirrorValidationEntry } from "../../../stores/decoderStore";
 import { MAX_UNMATCHED_FRAMES, MAX_FILTERED_FRAMES } from "../../../stores/decoderStore";
 import type { FrameDetail, SignalDef, MuxDef } from "../../../types/decoder";
 import type { SerialFrameConfig } from "../../../utils/frameExport";
@@ -158,6 +159,8 @@ type Props = {
   showAsciiGutter?: boolean;
   /** Frame ID filter for unmatched/filtered tabs */
   frameIdFilter?: string;
+  /** Mirror validation results - keyed by mirror frame ID */
+  mirrorValidation?: Map<number, MirrorValidationEntry>;
 };
 
 /**
@@ -279,6 +282,7 @@ function FrameCard({
   displayTimeFormat = "human",
   onToggleHeaderFieldFilter,
   startTimeSeconds,
+  mirrorValidation,
 }: {
   frame: FrameDetail;
   decodedFrame: DecodedFrame | undefined;
@@ -300,6 +304,8 @@ function FrameCard({
   onToggleHeaderFieldFilter?: (fieldName: string, value: number) => void;
   /** Start time in epoch seconds for delta-start calculation */
   startTimeSeconds?: number;
+  /** Mirror validation result for this frame (if it's a mirror frame) */
+  mirrorValidation?: MirrorValidationEntry;
 }) {
   // Track which byte indices are currently "bright" (recently changed)
   const [brightByteIndices, setBrightByteIndices] = useState<Set<number>>(new Set());
@@ -515,6 +521,32 @@ function FrameCard({
       <div className="flex items-center gap-3 text-sm font-semibold text-[color:var(--text-primary)]">
         <span className="font-mono">{renderFrameId(frame.id, frame.isExtended)}</span>
         <span className={caption}>len {frame.len}</span>
+        {/* Mirror frame badge */}
+        {frame.mirrorOf && (
+          <span className={badgeDarkPanelCyan} title={`Inherits signals from frame ${frame.mirrorOf}`}>
+            <ArrowDownRight className={iconXs} />
+            Mirror of {formatFrameId(parseCanId(frame.mirrorOf) ?? 0, displayFrameIdFormat)}
+          </span>
+        )}
+        {/* Mirror validation badge */}
+        {mirrorValidation && (
+          <span
+            className={
+              mirrorValidation.isValid === true
+                ? badgeDarkPanelSuccess
+                : mirrorValidation.isValid === false
+                  ? badgeDarkPanelDanger
+                  : badgeDarkPanelInfo
+            }
+            title={`Last comparison: ${mirrorValidation.timeDeltaMs.toFixed(0)}ms apart`}
+          >
+            {mirrorValidation.isValid === true && <Check className={iconXs} />}
+            {mirrorValidation.isValid === false && <X className={iconXs} />}
+            {mirrorValidation.isValid === null && <Clock className={iconXs} />}
+            {mirrorValidation.isValid === true ? 'Match' :
+             mirrorValidation.isValid === false ? 'Mismatch' : 'Pending'}
+          </span>
+        )}
         {/* Header field badges - clickable to toggle filter */}
         {headerFields.length > 0 && headerFields.map((field) => (
           onToggleHeaderFieldFilter ? (
@@ -593,6 +625,23 @@ function FrameCard({
           // Find signal definition for confidence color
           const findSignalDef = (name: string) => allSignals.find(s => s.name === name);
 
+          // Check if a signal's bytes have any mismatches (for per-signal validation indicator)
+          // Only show per-signal mismatch when frame-level is also showing mismatch (respects hysteresis)
+          const signalHasMismatch = (signal: SignalDef): boolean | null => {
+            if (!mirrorValidation || mirrorValidation.isValid === null) return null; // No validation data yet
+            if (!signal._inherited) return null; // Only show for inherited signals
+            // If frame shows Match, all signals show as matching (green checkmark)
+            if (mirrorValidation.isValid === true) return false;
+            // Frame shows Mismatch - check which specific signals have mismatched bytes
+            const signalBytes = getSignalByteIndices(signal);
+            for (const byteIdx of signalBytes) {
+              if (mirrorValidation.mismatchedByteIndices.has(byteIdx)) {
+                return true; // Has mismatch
+              }
+            }
+            return false; // All bytes match
+          };
+
           // Render a single signal row
           const renderSignalRow = (decoded: DecodedSignal, idx: number, rowOffset: number) => {
             const signalDef = findSignalDef(decoded.name);
@@ -607,6 +656,7 @@ function FrameCard({
               ? "bg-[var(--table-row-alt)]"
               : bgSurface;
             const timestampStr = formatSignalTimestamp(decoded.timestamp, displayTimeFormat, startTimeSeconds);
+            const signalMismatch = signalDef ? signalHasMismatch(signalDef) : null;
 
             return (
               <div
@@ -625,6 +675,23 @@ function FrameCard({
                   >
                     {decoded.name}
                   </span>
+                  {signalDef?._inherited && (
+                    <span
+                      className={`${caption} italic flex items-center gap-1 ${
+                        signalMismatch === true ? 'text-red-400' :
+                        signalMismatch === false ? 'text-green-400' : 'text-cyan-500'
+                      }`}
+                      title={
+                        signalMismatch === true ? `Mismatch with source frame ${frame.mirrorOf}` :
+                        signalMismatch === false ? `Matches source frame ${frame.mirrorOf}` :
+                        frame.mirrorOf ? `Inherited from ${frame.mirrorOf}` : 'Inherited signal'
+                      }
+                    >
+                      {signalMismatch === true && <X className={iconXs} />}
+                      {signalMismatch === false && <Check className={iconXs} />}
+                      {signalMismatch === null && '(inherited)'}
+                    </span>
+                  )}
                 </div>
                 <div className={flexRowGap2}>
                   <span
@@ -749,6 +816,7 @@ export default function DecoderFramesView({
   onTabChange,
   showAsciiGutter = false,
   frameIdFilter: _frameIdFilter = '',
+  mirrorValidation,
 }: Props) {
   void _onToggleRawBytes; // Silence unused variable warning
   void _frameIdFilter; // Frame ID filtering is done at processing level in Decoder.tsx
@@ -1046,6 +1114,7 @@ export default function DecoderFramesView({
                     displayTimeFormat={displayTimeFormat}
                     onToggleHeaderFieldFilter={onToggleHeaderFieldFilter}
                     startTimeSeconds={startTimeSeconds}
+                    mirrorValidation={mirrorValidation?.get(f.id)}
                   />
                 ))
             ) : (
@@ -1110,6 +1179,7 @@ export default function DecoderFramesView({
                         displayTimeFormat={displayTimeFormat}
                         onToggleHeaderFieldFilter={onToggleHeaderFieldFilter}
                         startTimeSeconds={startTimeSeconds}
+                        mirrorValidation={mirrorValidation?.get(f.id)}
                       />
                     ))}
                   </div>

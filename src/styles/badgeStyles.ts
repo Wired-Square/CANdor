@@ -101,6 +101,11 @@ export const badgeDarkPanelDanger = `${badgeDarkPanelBase} bg-red-600/30 text-re
  */
 export const badgeDarkPanelPurple = `${badgeDarkPanelBase} bg-purple-600/30 text-purple-400`;
 
+/**
+ * Dark panel cyan badge - cyan, for mirror frame indicators
+ */
+export const badgeDarkPanelCyan = `${badgeDarkPanelBase} bg-cyan-600/30 text-cyan-400`;
+
 // ============================================================================
 // Metadata Badges - for filenames, types, and metadata display
 // ============================================================================

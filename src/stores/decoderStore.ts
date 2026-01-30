@@ -6,76 +6,20 @@ import { create } from 'zustand';
 export const MAX_UNMATCHED_FRAMES = 1000;
 /** Maximum number of filtered frames to keep in buffer */
 export const MAX_FILTERED_FRAMES = 1000;
-import { openCatalogAtPath } from '../apps/catalog/io';
-import { tomlParse } from '../apps/catalog/toml';
 import { saveCatalog } from '../api';
 import { buildFramesToml, type SerialFrameConfig } from '../utils/frameExport';
 import { formatFrameId } from '../utils/frameIds';
 import { decodeSignal } from '../utils/signalDecode';
 import { extractBits } from '../utils/bits';
-import type { FrameDetail, SignalDef, MuxDef, MuxCaseDef } from '../types/decoder';
-import { isMuxCaseKey, findMatchingMuxCase } from '../utils/muxCaseMatch';
+import type { FrameDetail, SignalDef, MuxDef } from '../types/decoder';
+import { findMatchingMuxCase } from '../utils/muxCaseMatch';
 import type { SelectionSet } from '../utils/selectionSets';
 import type { CanHeaderField, HeaderFieldFormat } from '../apps/catalog/types';
 import type { PlaybackSpeed } from '../components/TimeController';
+import { loadCatalog as loadCatalogFromPath, parseCanId } from '../utils/catalogParser';
 
 // Re-export for consumers that import from decoderStore
 export type { PlaybackSpeed } from '../components/TimeController';
-
-/**
- * Normalize a signal definition from TOML, mapping byte_order to endianness.
- * This handles the transition from the old 'endianness' key to the new 'byte_order' key.
- */
-function normalizeSignal(raw: any): SignalDef {
-  return {
-    ...raw,
-    // Map byte_order to internal endianness property, fall back to endianness for backwards compatibility
-    endianness: raw.byte_order ?? raw.endianness,
-  };
-}
-
-/**
- * Normalize an array of signal definitions from TOML.
- */
-function normalizeSignals(rawSignals: any[]): SignalDef[] {
-  return rawSignals.map(normalizeSignal);
-}
-
-/**
- * Parse a raw mux object from TOML into a structured MuxDef.
- * Supports case keys as single values ("0"), ranges ("0-3"), or comma-separated ("1,2,5").
- */
-function parseMux(mux: any): MuxDef | undefined {
-  if (!mux || typeof mux !== 'object') return undefined;
-
-  const startBit = mux.start_bit ?? 0;
-  const bitLength = mux.bit_length ?? 8;
-  const name = mux.name;
-  const cases: Record<string, MuxCaseDef> = {};
-
-  // Iterate over mux cases (keys can be "0", "0-3", "1,2,5", etc.)
-  for (const [key, caseData] of Object.entries<any>(mux)) {
-    // Skip reserved keys (like "name", "start_bit", "bit_length", "default")
-    if (!isMuxCaseKey(key)) continue;
-
-    // Normalize signals to map byte_order -> endianness
-    const caseSignals = Array.isArray(caseData?.signals) ? normalizeSignals(caseData.signals) : [];
-    const nestedMux = caseData?.mux ? parseMux(caseData.mux) : undefined;
-
-    // Store with original key string (preserves ranges like "0-3")
-    cases[key] = {
-      signals: caseSignals,
-      mux: nestedMux,
-    };
-  }
-
-  return {
-    name,
-    start_bit: startBit,
-    bit_length: bitLength,
-    cases,
-  };
-}
 
 /** Result of decoding a mux structure */
 type MuxDecodeResult = {
@@ -231,6 +175,26 @@ export type FilteredFrame = {
   reason: 'too_short' | 'id_filter';
 };
 
+/** Mirror validation entry - tracks comparison between mirror and source frames */
+export type MirrorValidationEntry = {
+  sourceFrameId: number;
+  mirrorFrameId: number;
+  lastMirrorBytes: number[];
+  lastMirrorTimestamp: number;
+  lastSourceBytes: number[];
+  lastSourceTimestamp: number;
+  /** true = match, false = mismatch, null = unknown/waiting */
+  isValid: boolean | null;
+  /** Time delta between mirror and source frame arrival (ms) */
+  timeDeltaMs: number;
+  /** Byte indices to compare (inherited signal bytes) */
+  inheritedByteIndices: Set<number>;
+  /** Byte indices that don't match between mirror and source (for per-signal display) */
+  mismatchedByteIndices: Set<number>;
+  /** Consecutive mismatch count for hysteresis (only flip to Mismatch after several bad validations) */
+  consecutiveMismatches: number;
+};
+
 interface DecoderState {
   // Catalog and frames
   catalogPath: string | null;
@@ -243,6 +207,12 @@ interface DecoderState {
   canConfig: CanConfig | null;
   /** Serial config from [frame.serial.config] - used for frame ID/source address extraction */
   serialConfig: SerialFrameConfig | null;
+  /** Map of mirror frame ID to source frame ID for mirror validation */
+  mirrorSourceMap: Map<number, number>;
+  /** Mirror validation results - keyed by mirror frame ID */
+  mirrorValidation: Map<number, MirrorValidationEntry>;
+  /** Fuzz window for mirror validation (ms) - frames must arrive within this window to compare */
+  mirrorFuzzWindowMs: number;
 
   // Decoding state
   decoded: Map<number, DecodedFrame>;
@@ -302,7 +272,7 @@ interface DecoderState {
   clearDecoded: () => void;
 
   // Actions - Decoding
-  decodeSignals: (frameId: number, bytes: number[], sourceAddress?: number) => void;
+  decodeSignals: (frameId: number, bytes: number[], sourceAddress?: number, frameTimestamp?: number) => void;
   /** Batch decode multiple frames in a single state update (for high-speed playback) */
   decodeSignalsBatch: (
     framesToDecode: Array<{ frameId: number; bytes: number[]; sourceAddress?: number }>,
@@ -357,6 +327,9 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
   protocol: 'can',
   canConfig: null,
   serialConfig: null,
+  mirrorSourceMap: new Map(),
+  mirrorValidation: new Map(),
+  mirrorFuzzWindowMs: 1000, // 1 second - generous to handle batching and varying frame rates
   decoded: new Map(),
   decodedPerSource: new Map(),
   unmatchedFrames: [],
@@ -390,214 +363,82 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
   // Catalog actions
   loadCatalog: async (path: string) => {
     try {
-      const content = await openCatalogAtPath(path);
-      const parsed = tomlParse(content) as any;
+      // Use common catalog parser API
+      const catalog = await loadCatalogFromPath(path);
+
+      // Convert ParsedCatalog to decoder's FrameDetail format
       const frameMap = new Map<number, FrameDetail>();
       const seenIds = new Set<number>();
 
-      // Parse CAN frames
-      const canFrames = parsed?.frame?.can || {};
-      Object.entries<any>(canFrames).forEach(([idKey, body]) => {
-        // Skip 'config' key - it's the protocol config, not a frame
-        if (idKey === 'config') return;
-
-        // Parse frame ID: handle both "0x100" and "100" formats
-        // Note: parseInt("0x100", 16) returns 0 because 'x' is invalid hex,
-        // so we must strip the 0x prefix before parsing
-        const cleanedKey = String(idKey).replace(/"/g, '').replace(/^0x/i, '');
-        const numId = parseInt(cleanedKey, 16);
-        if (!Number.isFinite(numId)) return;
-
-        const len = body?.length ?? 0;
-        const isExtended = numId > 0x7ff;
-
-        // Parse plain signals (normalize byte_order -> endianness)
-        const plainSignals = Array.isArray(body?.signals) ? normalizeSignals(body.signals) : [];
-
-        // Parse mux structure (preserving hierarchy for proper decoding)
-        const mux = body?.mux ? parseMux(body.mux) : undefined;
-
-        frameMap.set(numId, {
-          id: numId,
-          len,
-          isExtended,
-          bus: body?.bus,
+      for (const [id, frame] of catalog.frames) {
+        frameMap.set(id, {
+          id,
+          len: frame.length,
+          isExtended: frame.isExtended,
+          bus: frame.bus,
           lenMismatch: false,
-          signals: plainSignals,
-          mux,
+          signals: frame.signals as SignalDef[],
+          mux: frame.mux,
+          interval: frame.interval,
+          mirrorOf: frame.mirrorOf,
+          copyFrom: frame.copyFrom,
         });
-        seenIds.add(numId);
-      });
+        seenIds.add(id);
+      }
 
-      // Parse Serial frames
-      const serialFrames = parsed?.frame?.serial || {};
-      Object.entries<any>(serialFrames).forEach(([idKey, body]) => {
-        // Skip 'config' key - it's the protocol config, not a frame
-        if (idKey === 'config') return;
-
-        // Parse frame ID: handle both "0x100" and "100" formats
-        // Note: parseInt("0x100", 16) returns 0 because 'x' is invalid hex,
-        // so we must strip the 0x prefix before parsing
-        const cleanedKey = String(idKey).replace(/"/g, '').replace(/^0x/i, '');
-        const numId = parseInt(cleanedKey, 16);
-        if (!Number.isFinite(numId)) return;
-
-        const len = body?.length ?? 0;
-
-        // Parse plain signals (normalize byte_order -> endianness)
-        const plainSignals = Array.isArray(body?.signals) ? normalizeSignals(body.signals) : [];
-
-        // Parse mux structure (preserving hierarchy for proper decoding)
-        const mux = body?.mux ? parseMux(body.mux) : undefined;
-
-        frameMap.set(numId, {
-          id: numId,
-          len,
-          isExtended: false,
-          bus: body?.bus,
-          lenMismatch: false,
-          signals: plainSignals,
-          mux,
-        });
-        seenIds.add(numId);
-      });
-
-      // Extract CAN config from [meta.can] (preferred) or [frame.can.config] (legacy)
-      const rawCanConfig = parsed?.meta?.can || parsed?.frame?.can?.config;
+      // Convert CanProtocolConfig to CanConfig (compatible structure)
       let canConfig: CanConfig | null = null;
-      if (rawCanConfig && typeof rawCanConfig === 'object') {
-        // Parse header fields from [frame.can.config.fields]
-        let fields: Record<string, CanHeaderField> | undefined;
-        if (rawCanConfig.fields && typeof rawCanConfig.fields === 'object') {
-          fields = {};
-          for (const [name, fieldDef] of Object.entries<any>(rawCanConfig.fields)) {
-            if (!fieldDef || typeof fieldDef !== 'object') continue;
-            const mask = fieldDef.mask;
-            if (typeof mask !== 'number') continue;
-            fields[name] = {
-              mask,
-              shift: typeof fieldDef.shift === 'number' ? fieldDef.shift : undefined,
-              format: fieldDef.format === 'decimal' ? 'decimal' : 'hex',
-            };
-          }
-          if (Object.keys(fields).length === 0) fields = undefined;
-        }
+      if (catalog.canConfig) {
+        const fields: Record<string, CanHeaderField> | undefined = catalog.canConfig.fields
+          ? Object.fromEntries(
+              Object.entries(catalog.canConfig.fields).map(([name, field]) => [
+                name,
+                {
+                  mask: field.mask,
+                  shift: field.shift,
+                  format: field.format || 'hex',
+                } as CanHeaderField,
+              ])
+            )
+          : undefined;
+
         canConfig = {
-          default_byte_order: rawCanConfig.default_byte_order,
-          default_interval: rawCanConfig.default_interval,
-          frame_id_mask: rawCanConfig.frame_id_mask,
+          default_byte_order: catalog.canConfig.default_byte_order,
+          default_interval: catalog.canConfig.default_interval,
+          frame_id_mask: catalog.canConfig.frame_id_mask,
           fields,
         };
       }
 
-      // Extract serial config from [meta.serial]
-      const rawSerialConfig = parsed?.meta?.serial;
+      // Convert SerialProtocolConfig to SerialFrameConfig
       let serialConfig: SerialFrameConfig | null = null;
-      if (rawSerialConfig && typeof rawSerialConfig === 'object') {
-        // Parse checksum config if present
-        const rawChecksum = rawSerialConfig.checksum;
-        let checksumConfig: SerialFrameConfig['checksum'] = undefined;
-        if (rawChecksum && typeof rawChecksum === 'object') {
-          checksumConfig = {
-            algorithm: rawChecksum.algorithm,
-            start_byte: rawChecksum.start_byte,
-            byte_length: rawChecksum.byte_length ?? 1,
-            calc_start_byte: rawChecksum.calc_start_byte ?? 0,
-            calc_end_byte: rawChecksum.calc_end_byte,
-            big_endian: rawChecksum.big_endian ?? false,
-          };
-        }
-
-        // Helper to convert mask to byte position and length
-        // Mask is a bitmask over header bytes, e.g., 0xFFFF means first 2 bytes
-        const maskToBytePosition = (mask: number): { startByte: number; bytes: number } | null => {
-          if (!mask || mask === 0) return null;
-
-          // Find the first and last set bit
-          let firstBit = -1;
-          let lastBit = -1;
-          for (let i = 0; i < 32; i++) {
-            if ((mask >> i) & 1) {
-              if (firstBit === -1) firstBit = i;
-              lastBit = i;
-            }
-          }
-
-          if (firstBit === -1) return null;
-
-          // Convert bit positions to byte positions
-          const startByte = Math.floor(firstBit / 8);
-          const endByte = Math.floor(lastBit / 8);
-          const bytes = endByte - startByte + 1;
-
-          return { startByte, bytes };
-        };
-
-        // Parse fields from new format [meta.serial.fields.id], [meta.serial.fields.source_address], etc.
-        const fields = rawSerialConfig.fields;
-        let frameIdStartByte: number | undefined;
-        let frameIdBytes: number | undefined;
-        let frameIdByteOrder: "big" | "little" | undefined;
-        let frameIdMask: number | undefined;
-        let sourceAddressStartByte: number | undefined;
-        let sourceAddressBytes: number | undefined;
-        let sourceAddressByteOrder: "big" | "little" | undefined;
-        let headerFieldDefs: SerialFrameConfig['header_fields'] = [];
-
-        if (fields && typeof fields === 'object') {
-          // Parse all fields
-          for (const [fieldName, fieldDef] of Object.entries(fields)) {
-            if (!fieldDef || typeof fieldDef !== 'object' || (fieldDef as any).mask === undefined) continue;
-
-            const fd = fieldDef as { mask: number; byte_order?: "big" | "little"; format?: "hex" | "decimal" };
-            const pos = maskToBytePosition(fd.mask);
-            if (!pos) continue;
-
-            // Add to header field definitions
-            headerFieldDefs.push({
-              name: fieldName,
-              mask: fd.mask,
-              byte_order: fd.byte_order || 'big',
-              format: fd.format || 'hex',
-              start_byte: pos.startByte,
-              bytes: pos.bytes,
-            });
-
-            // Special handling for id and source_address fields
-            if (fieldName === 'id') {
-              frameIdStartByte = pos.startByte;
-              frameIdBytes = pos.bytes;
-              frameIdByteOrder = fd.byte_order || 'big';
-              frameIdMask = fd.mask;
-            } else if (fieldName === 'source_address') {
-              sourceAddressStartByte = pos.startByte;
-              sourceAddressBytes = pos.bytes;
-              sourceAddressByteOrder = fd.byte_order || 'big';
-            }
-          }
-        }
-
-        // Fall back to legacy format if fields not present
+      if (catalog.serialConfig) {
+        const sc = catalog.serialConfig;
         serialConfig = {
-          default_byte_order: rawSerialConfig.default_byte_order,
-          encoding: rawSerialConfig.encoding,
-          frame_id_start_byte: frameIdStartByte ?? rawSerialConfig.frame_id_start_byte,
-          frame_id_bytes: frameIdBytes ?? rawSerialConfig.frame_id_bytes,
-          frame_id_byte_order: frameIdByteOrder ?? rawSerialConfig.frame_id_byte_order,
-          frame_id_mask: frameIdMask ?? rawSerialConfig.frame_id_mask,
-          source_address_start_byte: sourceAddressStartByte ?? rawSerialConfig.source_address_start_byte,
-          source_address_bytes: sourceAddressBytes ?? rawSerialConfig.source_address_bytes,
-          source_address_byte_order: sourceAddressByteOrder ?? rawSerialConfig.source_address_byte_order,
-          min_frame_length: rawSerialConfig.min_frame_length,
-          checksum: checksumConfig,
-          header_length: rawSerialConfig.header_length,
-          header_fields: headerFieldDefs.length > 0 ? headerFieldDefs : undefined,
+          default_byte_order: sc.default_byte_order,
+          encoding: sc.encoding,
+          frame_id_start_byte: sc.frame_id_start_byte,
+          frame_id_bytes: sc.frame_id_bytes,
+          frame_id_byte_order: sc.frame_id_byte_order,
+          frame_id_mask: sc.frame_id_mask,
+          source_address_start_byte: sc.source_address_start_byte,
+          source_address_bytes: sc.source_address_bytes,
+          source_address_byte_order: sc.source_address_byte_order,
+          min_frame_length: sc.min_frame_length,
+          header_length: sc.header_length,
+          header_fields: sc.header_fields,
+          checksum: sc.checksum ? {
+            algorithm: sc.checksum.algorithm,
+            start_byte: sc.checksum.start_byte,
+            byte_length: sc.checksum.byte_length,
+            calc_start_byte: sc.checksum.calc_start_byte,
+            calc_end_byte: sc.checksum.calc_end_byte ?? -1,
+            big_endian: sc.checksum.big_endian ?? false,
+          } : undefined,
         };
       }
 
       // Preserve existing frame selection when reloading catalog
-      // - Keep frames that still exist in the new catalog
-      // - New frames are selected by default
       const { selectedFrames: currentSelected, catalogPath: currentPath } = get();
       const isReload = currentPath === path;
 
@@ -607,34 +448,30 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
         const existingFrameIds = new Set(frameMap.keys());
         newSelected = new Set<number>();
 
-        // Keep currently selected frames that still exist
         for (const id of currentSelected) {
           if (existingFrameIds.has(id)) {
             newSelected.add(id);
           }
         }
 
-        // Add new frames (frames that weren't in previous catalog) as selected
         for (const id of existingFrameIds) {
           if (!currentSelected.has(id) && !get().frames.has(id)) {
             newSelected.add(id);
           }
         }
       } else {
-        // Loading a different catalog: select all frames
         newSelected = new Set(Array.from(frameMap.keys()));
       }
 
-      // Extract protocol from [meta].default_frame, or auto-detect from frames
-      const metaDefaultFrame = parsed?.meta?.default_frame;
-      let protocol: 'can' | 'serial';
-      if (metaDefaultFrame === 'serial' || metaDefaultFrame === 'can') {
-        protocol = metaDefaultFrame;
-      } else {
-        // Auto-detect: if there are serial frames but no CAN frames, use serial
-        const hasSerialFrames = Object.keys(serialFrames).filter(k => k !== 'config').length > 0;
-        const hasCanFrames = Object.keys(canFrames).filter(k => k !== 'config').length > 0;
-        protocol = hasSerialFrames && !hasCanFrames ? 'serial' : 'can';
+      // Build mirror source map for validation
+      const mirrorSourceMap = new Map<number, number>();
+      for (const [id, frame] of catalog.frames) {
+        if (frame.mirrorOf) {
+          const sourceId = parseCanId(frame.mirrorOf);
+          if (sourceId !== null) {
+            mirrorSourceMap.set(id, sourceId);
+          }
+        }
       }
 
       set({
@@ -642,9 +479,10 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
         selectedFrames: newSelected,
         catalogPath: path,
         seenIds,
-        protocol,
+        protocol: catalog.protocol,
         canConfig,
         serialConfig,
+        mirrorSourceMap,
       });
     } catch (e) {
       console.error('Failed to load catalog', e);
@@ -747,7 +585,7 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
   },
 
   // Decoding actions
-  decodeSignals: (frameId, bytes, sourceAddress) => {
+  decodeSignals: (frameId, bytes, sourceAddress, frameTimestamp) => {
     const { frames, decoded, decodedPerSource, protocol, canConfig, serialConfig } = get();
 
     // Apply frame_id_mask before catalog lookup
@@ -933,7 +771,114 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
       }
     }
 
-    set({ decoded: next, decodedPerSource: nextPerSource, seenHeaderFieldValues: nextSeenValues });
+    // Mirror validation: compare bytes between mirror and source frames
+    const { mirrorSourceMap, mirrorValidation, mirrorFuzzWindowMs } = get();
+    const nextMirrorValidation = new Map(mirrorValidation);
+
+    // Check if this frame is a mirror (has a source it mirrors)
+    const mirrorSourceId = mirrorSourceMap.get(maskedFrameId);
+
+    // Find ALL mirrors that use this frame as a source (one source can have multiple mirrors)
+    const mirrorsOfThisSource: number[] = [];
+    for (const [mirrorId, sourceId] of mirrorSourceMap) {
+      if (sourceId === maskedFrameId) {
+        mirrorsOfThisSource.push(mirrorId);
+      }
+    }
+
+    // Helper to update a validation entry
+    const updateValidationEntry = (validationKey: number, sourceFrameId: number, mirrorFrameId: number, isMirrorFrame: boolean) => {
+      // Calculate fuzz window based on frame interval
+      const sourceFrame = frames.get(sourceFrameId);
+      const frameInterval = sourceFrame?.interval ?? canConfig?.default_interval ?? mirrorFuzzWindowMs;
+      const effectiveFuzzWindow = frameInterval * 2;
+
+      // Get or create validation entry
+      let entry = nextMirrorValidation.get(validationKey);
+      if (!entry) {
+        // Compute inherited byte indices from mirror frame definition
+        const mirrorFrame = frames.get(mirrorFrameId);
+        const inheritedByteIndices = new Set<number>();
+        if (mirrorFrame) {
+          for (const signal of mirrorFrame.signals) {
+            if (signal._inherited && signal.start_bit !== undefined && signal.bit_length !== undefined) {
+              const startByte = Math.floor(signal.start_bit / 8);
+              const endByte = Math.floor((signal.start_bit + signal.bit_length - 1) / 8);
+              for (let i = startByte; i <= endByte; i++) {
+                inheritedByteIndices.add(i);
+              }
+            }
+          }
+        }
+
+        entry = {
+          sourceFrameId,
+          mirrorFrameId,
+          lastMirrorBytes: [],
+          lastMirrorTimestamp: 0,
+          lastSourceBytes: [],
+          lastSourceTimestamp: 0,
+          isValid: null,
+          timeDeltaMs: 0,
+          inheritedByteIndices,
+          mismatchedByteIndices: new Set(),
+          consecutiveMismatches: 0,
+        };
+      }
+
+      // Update appropriate side
+      const validationTimestamp = frameTimestamp ?? now;
+      if (isMirrorFrame) {
+        entry.lastMirrorBytes = [...bytes];
+        entry.lastMirrorTimestamp = validationTimestamp;
+      } else {
+        entry.lastSourceBytes = [...bytes];
+        entry.lastSourceTimestamp = validationTimestamp;
+      }
+
+      // Check if we have both sides within fuzz window
+      const timeDelta = Math.abs(entry.lastMirrorTimestamp - entry.lastSourceTimestamp) * 1000;
+      entry.timeDeltaMs = timeDelta;
+
+      if (entry.lastMirrorBytes.length > 0 && entry.lastSourceBytes.length > 0) {
+        if (timeDelta <= effectiveFuzzWindow) {
+          // Compare ONLY inherited signal bytes and track which ones mismatch
+          const mismatched = new Set<number>();
+          for (const idx of entry.inheritedByteIndices) {
+            if (entry.lastMirrorBytes[idx] !== entry.lastSourceBytes[idx]) {
+              mismatched.add(idx);
+            }
+          }
+          entry.mismatchedByteIndices = mismatched;
+
+          // Hysteresis: stay on Match unless we see several consecutive mismatches
+          if (mismatched.size === 0) {
+            entry.consecutiveMismatches = 0;
+            entry.isValid = true;
+          } else {
+            entry.consecutiveMismatches++;
+            if (entry.consecutiveMismatches >= 3) {
+              entry.isValid = false;
+            }
+          }
+        }
+        // Outside fuzz window: keep current state, don't reset
+      }
+
+      nextMirrorValidation.set(validationKey, entry);
+    };
+
+    // If this frame is a mirror, update its entry
+    if (mirrorSourceId !== undefined) {
+      updateValidationEntry(maskedFrameId, mirrorSourceId, maskedFrameId, true);
+    }
+
+    // If this frame is a source for any mirrors, update ALL their entries
+    for (const mirrorId of mirrorsOfThisSource) {
+      updateValidationEntry(mirrorId, maskedFrameId, mirrorId, false);
+    }
+
+    set({ decoded: next, decodedPerSource: nextPerSource, seenHeaderFieldValues: nextSeenValues, mirrorValidation: nextMirrorValidation });
   },
 
   decodeSignalsBatch: (framesToDecode, unmatchedToAdd, filteredToAdd) => {
