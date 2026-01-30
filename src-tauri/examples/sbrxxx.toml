@@ -1,9 +1,85 @@
 [meta]
 name = "SBRXXX"
-version = 3
+version = 4
 
 [meta.can]
 default_byte_order = "little"
+
+[frame.can."0x000"]
+length = 8
+mirror_of = "0x700"
+
+[frame.can."0x001"]
+length = 8
+mirror_of = "0x701"
+
+[frame.can."0x002"]
+length = 8
+mirror_of = "0x702"
+
+[frame.can."0x003"]
+length = 8
+mirror_of = "0x703"
+
+[frame.can."0x004"]
+length = 8
+mirror_of = "0x704"
+
+[frame.can."0x005"]
+length = 8
+mirror_of = "0x705"
+
+[frame.can."0x006"]
+length = 8
+mirror_of = "0x706"
+
+[frame.can."0x013"]
+length = 8
+mirror_of = "0x713"
+
+[frame.can."0x014"]
+length = 8
+mirror_of = "0x714"
+
+[frame.can."0x015"]
+length = 8
+mirror_of = "0x715"
+
+[frame.can."0x016"]
+length = 8
+mirror_of = "0x716"
+
+[frame.can."0x017"]
+length = 8
+mirror_of = "0x717"
+
+[frame.can."0x018"]
+length = 8
+mirror_of = "0x718"
+
+[frame.can."0x019"]
+length = 8
+mirror_of = "0x719"
+
+[frame.can."0x01A"]
+length = 8
+mirror_of = "0x71A"
+
+[frame.can."0x01b"]
+length = 8
+mirror_of = "0x71B"
+
+[frame.can."0x01c"]
+length = 8
+mirror_of = "0x71c"
+
+[frame.can."0x01d"]
+length = 8
+mirror_of = "0x71d"
+
+[frame.can."0x01e"]
+length = 8
+mirror_of = "0x71e"
 
 [frame.can."0x100"]
 length = 8
@@ -263,6 +339,40 @@ signed = false
 min = 0
 max = 100
 confidence = "high"
+
+[frame.can."0x501"]
+length = 8
+mirror_of = "0x701"
+
+[frame.can."0x502"]
+length = 8
+mirror_of = "0x702"
+
+[frame.can."0x503"]
+length = 8
+mirror_of = "0x703"
+
+[frame.can."0x504"]
+length = 8
+mirror_of = "0x704"
+
+[[frame.can."0x504".signals]]
+name = "Status_Battery_Current_Inverted"
+start_bit = 16
+bit_length = 16
+factor = 0.1
+unit = "A"
+signed = true
+confidence = "high"
+notes = "This is the opposite sign to the signal at 0x704"
+
+[frame.can."0x505"]
+length = 8
+mirror_of = "0x705"
+
+[frame.can."0x506"]
+length = 8
+mirror_of = "0x706"
 
 [frame.can."0x512"]
 length = 8
