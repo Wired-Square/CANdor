@@ -188,7 +188,7 @@ pub fn initialise(app: &AppHandle) -> Result<(), String> {
 
     // Load existing data if available
     manager.data = load_from_disk(&path)?;
-    manager.store_path = Some(path);
+    manager.store_path = Some(path.clone());
     manager.dirty = false;
 
     eprintln!(
@@ -196,7 +196,53 @@ pub fn initialise(app: &AppHandle) -> Result<(), String> {
         manager.data.entries.len()
     );
 
+    // Migrate data from old tauri-plugin-store format if needed
+    let app_data_dir = path.parent().ok_or("Invalid store path")?;
+    let mut migrated = false;
+
+    // Migrate favorites.dat -> favorites.timeRanges
+    if !manager.data.entries.contains_key("favorites.timeRanges") {
+        if let Some(data) = migrate_old_store(app_data_dir, "favorites.dat", "timeRangeFavorites") {
+            eprintln!("[StoreManager] Migrating favorites from old store");
+            manager.data.entries.insert("favorites.timeRanges".to_string(), data);
+            migrated = true;
+        }
+    }
+
+    // Migrate selection-sets.dat -> selectionSets.all
+    if !manager.data.entries.contains_key("selectionSets.all") {
+        if let Some(data) = migrate_old_store(app_data_dir, "selection-sets.dat", "selectionSets") {
+            eprintln!("[StoreManager] Migrating selection sets from old store");
+            manager.data.entries.insert("selectionSets.all".to_string(), data);
+            migrated = true;
+        }
+    }
+
+    if migrated {
+        manager.dirty = true;
+        drop(manager); // Release lock before saving
+        schedule_save();
+        eprintln!("[StoreManager] Migration complete, scheduled save");
+    }
+
     Ok(())
+}
+
+/// Try to migrate data from an old tauri-plugin-store file.
+/// Returns the value if found, None otherwise.
+fn migrate_old_store(app_data_dir: &std::path::Path, filename: &str, key: &str) -> Option<serde_json::Value> {
+    let old_path = app_data_dir.join(filename);
+    if !old_path.exists() {
+        return None;
+    }
+
+    let content = fs::read_to_string(&old_path).ok()?;
+
+    // tauri-plugin-store uses a simple JSON object format
+    let data: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    // Get the value from the old key
+    data.get(key).cloned()
 }
 
 /// Get a value from the store
