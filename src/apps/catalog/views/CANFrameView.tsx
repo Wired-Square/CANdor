@@ -1,7 +1,7 @@
 // ui/src/apps/catalog/views/CANFrameView.tsx
 
 import { useCallback, useMemo, useState } from "react";
-import { Pencil, Trash2 } from "lucide-react";
+import { Pencil, Trash2, Layers } from "lucide-react";
 import { iconMd } from "../../../styles/spacing";
 import { caption, labelSmall, labelSmallMuted, monoBody, iconButtonHover, iconButtonHoverDanger, bgSecondary, hoverLight } from "../../../styles";
 import BitPreview, { BitRange } from "../../../components/BitPreview";
@@ -291,6 +291,15 @@ export default function CANFrameView({
                               <div className="font-medium text-[color:var(--text-primary)] flex items-center gap-2">
                                 <span>⚡</span>
                                 {signal.name}
+                                {signal._inherited && (
+                                  <span
+                                    className="text-xs text-[color:var(--accent-purple)] flex items-center gap-1"
+                                    title="Inherited from mirror primary"
+                                  >
+                                    <Layers className="w-3 h-3" />
+                                    <span>inherited</span>
+                                  </span>
+                                )}
                               </div>
 
                               <div className={`${caption} mt-1 space-y-0.5`}>

@@ -621,6 +621,8 @@ function objectToTree(obj: any, parentPath: string[], meta: MetaFields | null, c
             const canConfig = parsed.config as import("./types").CANConfig;
             metadata.isCopy = !!canConfig.copy;
             metadata.copyFrom = canConfig.copy;
+            metadata.isMirror = !!canConfig.mirror_of;
+            metadata.mirrorOf = canConfig.mirror_of;
             metadata.extended = canConfig.extended;
             metadata.bus = canConfig.bus;
           } else if (protocol === "modbus") {

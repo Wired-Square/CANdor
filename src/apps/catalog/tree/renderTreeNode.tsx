@@ -1,7 +1,7 @@
 // ui/src/apps/catalog/tree/renderTreeNode.tsx
 
 import React from "react";
-import { ChevronDown, ChevronRight, Link2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Link2, Layers } from "lucide-react";
 import { iconMd, iconSm } from "../../../styles/spacing";
 import { hoverLight } from "../../../styles";
 import type { TomlNode } from "../types";
@@ -37,6 +37,7 @@ export function createRenderTreeNode({
     const hasChildren = !!node.children && node.children.length > 0 && node.type !== "meta";
     const isSelected = (selectedNode?.path.join(".") ?? "") === nodePath;
     const isCopy = node.metadata?.isCopy;
+    const isMirror = node.metadata?.isMirror;
 
     return (
       <div key={nodePath}>
@@ -70,6 +71,11 @@ export function createRenderTreeNode({
             {isCopy && (
               <span title={`Copied from ${node.metadata?.copyFrom}`}>
                 <Link2 className={`${iconSm} text-[color:var(--accent-blue)] flex-shrink-0`} />
+              </span>
+            )}
+            {isMirror && (
+              <span title={`Mirror of ${node.metadata?.mirrorOf}`}>
+                <Layers className={`${iconSm} text-[color:var(--accent-purple)] flex-shrink-0`} />
               </span>
             )}
             {node.type === "signal" && "⚡ "}

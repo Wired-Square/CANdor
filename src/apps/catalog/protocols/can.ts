@@ -24,8 +24,10 @@ const canHandler: ProtocolHandler<CANConfig> = {
 
     const isCopy = !!value.copy;
     const copyFrom = value.copy;
+    const isMirror = !!value.mirror_of;
+    const mirrorOf = value.mirror_of;
 
-    // Handle copy/inheritance from another CAN frame
+    // Handle copy/inheritance from another CAN frame (metadata only)
     if (isCopy && copyFrom && allFrames?.[copyFrom]) {
       const sourceFrame = allFrames[copyFrom];
       if (length === undefined && sourceFrame.length !== undefined) {
@@ -49,8 +51,60 @@ const canHandler: ProtocolHandler<CANConfig> = {
       intervalInherited = true;
     }
 
-    const signals = value.signals || value.signal || [];
-    const mux = value.mux;
+    let signals = value.signals || value.signal || [];
+    let mux = value.mux;
+
+    // Handle mirror inheritance (signals + metadata)
+    // Mirror signals override primary signals by bit position
+    if (isMirror && mirrorOf && allFrames?.[mirrorOf]) {
+      const primaryFrame = allFrames[mirrorOf];
+      const primarySignals = primaryFrame.signals || primaryFrame.signal || [];
+      const mirrorSignals = signals;
+
+      // Build a map of mirror signals by bit position for override lookup
+      const bitKey = (s: any) => `${s.start_bit}:${s.bit_length}`;
+      const mirrorByPosition = new Map(mirrorSignals.map((s: any) => [bitKey(s), s]));
+
+      // Start with primary signals, override by bit position
+      // Mark inherited signals with _inherited: true
+      signals = primarySignals.map((ps: any) => {
+        const override = mirrorByPosition.get(bitKey(ps));
+        if (override) {
+          return override; // Overridden by mirror - not inherited
+        }
+        return { ...ps, _inherited: true }; // Inherited from primary
+      });
+
+      // Add any mirror signals at new positions (not inherited)
+      const primaryPositions = new Set(primarySignals.map(bitKey));
+      for (const ms of mirrorSignals) {
+        if (!primaryPositions.has(bitKey(ms))) {
+          signals.push(ms);
+        }
+      }
+
+      // Inherit mux if not locally defined
+      if (!mux && primaryFrame.mux) {
+        mux = primaryFrame.mux;
+      }
+
+      // Inherit metadata if not using copy
+      if (!isCopy) {
+        if (length === undefined && primaryFrame.length !== undefined) {
+          length = primaryFrame.length;
+          lengthInherited = true;
+        }
+        if (transmitter === undefined && primaryFrame.transmitter !== undefined) {
+          transmitter = primaryFrame.transmitter;
+          transmitterInherited = true;
+        }
+        const srcInterval = primaryFrame.tx?.interval ?? primaryFrame.tx?.interval_ms;
+        if (interval === undefined && srcInterval !== undefined) {
+          interval = srcInterval;
+          intervalInherited = true;
+        }
+      }
+    }
 
     return {
       base: {
@@ -67,6 +121,7 @@ const canHandler: ProtocolHandler<CANConfig> = {
         extended: value.extended,
         bus: value.bus,
         copy: copyFrom,
+        mirror_of: mirrorOf,
       },
       inherited: {
         length: lengthInherited,
@@ -109,6 +164,10 @@ const canHandler: ProtocolHandler<CANConfig> = {
 
     if (config.copy) {
       obj.copy = config.copy;
+    }
+
+    if (config.mirror_of) {
+      obj.mirror_of = config.mirror_of;
     }
 
     // Signals and mux are handled separately in TOML structure
@@ -175,6 +234,7 @@ const canHandler: ProtocolHandler<CANConfig> = {
     extended: false,
     bus: undefined,
     copy: undefined,
+    mirror_of: undefined,
   }),
 
   getFrameDisplayId: (config) => config.id,

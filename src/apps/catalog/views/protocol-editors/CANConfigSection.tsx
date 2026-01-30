@@ -71,7 +71,7 @@ export default function CANConfigSection({
         </p>
       </div>
 
-      {/* Copy from - Optional */}
+      {/* Copy from - Optional (mutually exclusive with Mirror Of) */}
       <div>
         <label className={`block ${textMedium} mb-2`}>
           Copy From
@@ -83,13 +83,39 @@ export default function CANConfigSection({
             onChange({
               ...config,
               copy: e.target.value || undefined,
+              mirror_of: undefined, // Clear mirror when setting copy
             })
           }
-          className={`w-full px-4 py-2 bg-[var(--bg-surface)] border border-[color:var(--border-default)] rounded-lg text-[color:var(--text-primary)] font-mono ${focusRing}`}
+          disabled={!!config.mirror_of}
+          className={`w-full px-4 py-2 bg-[var(--bg-surface)] border border-[color:var(--border-default)] rounded-lg text-[color:var(--text-primary)] font-mono ${focusRing} disabled:opacity-50 disabled:cursor-not-allowed`}
           placeholder="0x456"
         />
         <p className={`${caption} mt-1`}>
-          Inherit properties from another CAN frame (optional)
+          Inherit metadata (length, transmitter, interval) from another frame
+        </p>
+      </div>
+
+      {/* Mirror Of - Optional (mutually exclusive with Copy From) */}
+      <div>
+        <label className={`block ${textMedium} mb-2`}>
+          Mirror Of
+        </label>
+        <input
+          type="text"
+          value={config.mirror_of ?? ""}
+          onChange={(e) =>
+            onChange({
+              ...config,
+              mirror_of: e.target.value || undefined,
+              copy: undefined, // Clear copy when setting mirror
+            })
+          }
+          disabled={!!config.copy}
+          className={`w-full px-4 py-2 bg-[var(--bg-surface)] border border-[color:var(--border-default)] rounded-lg text-[color:var(--text-primary)] font-mono ${focusRing} disabled:opacity-50 disabled:cursor-not-allowed`}
+          placeholder="0x456"
+        />
+        <p className={`${caption} mt-1`}>
+          Inherit ALL signals from another frame (override by bit position)
         </p>
       </div>
     </div>

@@ -86,7 +86,7 @@ fn parse_notes(value: Option<&toml::Value>) -> Option<String> {
 }
 
 /// Mux case from parsed TOML
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct MuxCase {
     value: String,
     signals: Vec<SignalDoc>,
@@ -96,7 +96,7 @@ struct MuxCase {
 }
 
 /// Mux from parsed TOML
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct MuxDoc {
     name: Option<String>,
     start_bit: i32,
@@ -164,7 +164,7 @@ impl MuxDoc {
 }
 
 /// CAN frame from parsed TOML
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CanFrameDoc {
     name: Option<String>,
     length: Option<i32>,
@@ -687,13 +687,75 @@ pub fn render_catalog_as_dbc_with_mode(
     let mut nodes_set: HashSet<String> = HashSet::new();
     nodes_set.insert(default_receiver.to_string());
 
-    // Parse all frames first
+    // Parse all frames first (two passes: collect then resolve mirrors)
     let mut frames: Vec<(u32, CanFrameDoc)> = Vec::new();
 
     if let Some(can_table) = can_frames {
+        // First pass: collect all frames into a map for mirror lookups
+        let mut frame_map: HashMap<String, CanFrameDoc> = HashMap::new();
         for (id_str, frame_value) in can_table {
             if let Some(frame) = CanFrameDoc::from_toml(frame_value) {
+                frame_map.insert(id_str.clone(), frame);
+            }
+        }
+
+        // Second pass: resolve mirrors and collect frames
+        for (id_str, frame_value) in can_table {
+            if let Some(mut frame) = frame_map.get(id_str).cloned() {
                 let frame_id = parse_frame_id(id_str).unwrap_or(0);
+
+                // Handle mirror_of: merge signals from primary frame
+                if let Some(mirror_of) = frame_value.get("mirror_of").and_then(|v| v.as_str()) {
+                    if let Some(primary) = frame_map.get(mirror_of) {
+                        // Build map of mirror signals by bit position for override lookup
+                        let mirror_by_position: HashMap<(i32, i32), SignalDoc> = frame
+                            .signals
+                            .iter()
+                            .map(|s| ((s.start_bit, s.bit_length), s.clone()))
+                            .collect();
+
+                        // Start with primary signals, override by bit position
+                        let mut merged: Vec<SignalDoc> = primary
+                            .signals
+                            .iter()
+                            .map(|ps| {
+                                let key = (ps.start_bit, ps.bit_length);
+                                mirror_by_position
+                                    .get(&key)
+                                    .cloned()
+                                    .unwrap_or_else(|| ps.clone())
+                            })
+                            .collect();
+
+                        // Add mirror signals at new positions
+                        let primary_positions: HashSet<(i32, i32)> = primary
+                            .signals
+                            .iter()
+                            .map(|s| (s.start_bit, s.bit_length))
+                            .collect();
+                        for ms in &frame.signals {
+                            if !primary_positions.contains(&(ms.start_bit, ms.bit_length)) {
+                                merged.push(ms.clone());
+                            }
+                        }
+                        frame.signals = merged;
+
+                        // Inherit mux if not locally defined
+                        if frame.mux.is_none() && primary.mux.is_some() {
+                            frame.mux = primary.mux.clone();
+                        }
+
+                        // Inherit length if not locally defined
+                        if frame.length.is_none() && primary.length.is_some() {
+                            frame.length = primary.length;
+                        }
+
+                        // Inherit transmitter if not locally defined
+                        if frame.transmitter.is_none() && primary.transmitter.is_some() {
+                            frame.transmitter = primary.transmitter.clone();
+                        }
+                    }
+                }
 
                 // Collect transmitters
                 if let Some(tx) = &frame.transmitter {
@@ -1309,5 +1371,78 @@ signal = [
             result.contains(r#"CM_ SG_ 256 Sig "Signal \"test\"";"#),
             "Signal comment should have escaped quotes"
         );
+    }
+
+    #[test]
+    fn test_mirror_frames_export() {
+        // Test that mirror frames inherit signals from primary frame
+        let toml = r#"
+[meta]
+name = "MirrorTest"
+version = 1
+
+[frame.can."0x100"]
+length = 8
+transmitter = "ECU1"
+signal = [
+    { name = "Voltage", start_bit = 0, bit_length = 16 },
+    { name = "Current", start_bit = 16, bit_length = 16 },
+    { name = "Power", start_bit = 32, bit_length = 16 },
+]
+
+[frame.can."0x200"]
+mirror_of = "0x100"
+"#;
+        let result = render_catalog_as_dbc(toml, "Vector__XXX").unwrap();
+
+        // Primary frame should have all signals
+        assert!(result.contains("BO_ 256 MSG_100:"), "Primary frame should exist");
+        assert!(result.contains("SG_ Voltage"), "Primary should have Voltage");
+        assert!(result.contains("SG_ Current"), "Primary should have Current");
+        assert!(result.contains("SG_ Power"), "Primary should have Power");
+
+        // Mirror frame should also have all signals (inherited)
+        assert!(result.contains("BO_ 512 MSG_200:"), "Mirror frame should exist");
+        // Both frames should have 3 signals each (6 total SG_ lines)
+        let sg_count = result.matches("SG_ ").count();
+        assert_eq!(sg_count, 6, "Should have 6 signals total (3 per frame)");
+    }
+
+    #[test]
+    fn test_mirror_frames_override_by_position() {
+        // Test that mirror frame signals override primary signals by bit position
+        let toml = r#"
+[meta]
+name = "MirrorOverrideTest"
+version = 1
+
+[frame.can."0x100"]
+length = 8
+signal = [
+    { name = "Voltage", start_bit = 0, bit_length = 16 },
+    { name = "Current", start_bit = 16, bit_length = 16 },
+]
+
+[frame.can."0x200"]
+mirror_of = "0x100"
+signal = [
+    { name = "CurrentOverride", start_bit = 16, bit_length = 16 },
+]
+"#;
+        let result = render_catalog_as_dbc(toml, "Vector__XXX").unwrap();
+
+        // Primary frame should have original signals
+        assert!(result.contains("BO_ 256 MSG_100:"), "Primary frame should exist");
+
+        // Mirror frame should have Voltage (inherited) and CurrentOverride (override)
+        assert!(result.contains("BO_ 512 MSG_200:"), "Mirror frame should exist");
+        // Check that CurrentOverride appears (from mirror) instead of Current
+        assert!(
+            result.contains("SG_ CurrentOverride"),
+            "Mirror should have overridden signal"
+        );
+        // Voltage should appear twice (once per frame)
+        let voltage_count = result.matches("SG_ Voltage").count();
+        assert_eq!(voltage_count, 2, "Voltage should appear in both frames");
     }
 }

@@ -89,7 +89,8 @@ export interface CANConfig {
   id: string;                    // "0x123" or decimal
   extended?: boolean;            // 29-bit extended ID
   bus?: number;                  // CAN bus index
-  copy?: string;                 // Inherit from another frame
+  copy?: string;                 // Inherit metadata from another frame
+  mirror_of?: string;            // Inherit ALL signals from another frame (by bit position)
 }
 
 /** Modbus protocol configuration */
@@ -199,6 +200,8 @@ export interface TomlNode {
     frameType?: ProtocolType;
     isCopy?: boolean;
     copyFrom?: string;
+    isMirror?: boolean;
+    mirrorOf?: string;
     isArray?: boolean;
     arrayItems?: any[];
     properties?: Record<string, any>;
@@ -230,6 +233,8 @@ export interface TomlNode {
     intervalInherited?: boolean;
     notes?: string | string[];
     signals?: any[];
+    /** Bit keys (start_bit:bit_length) of signals inherited from mirror primary */
+    inheritedSignalBitKeys?: Set<string>;
     hasMux?: boolean;
     muxSignalCount?: number;
     // Mux-specific

@@ -1,6 +1,6 @@
 // ui/src/apps/catalog/layout/SelectionHeader.tsx
 
-import { Link2 } from "lucide-react";
+import { Link2, Layers } from "lucide-react";
 import { iconXl, flexRowGap2 } from "../../../styles/spacing";
 import type { TomlNode } from "../types";
 
@@ -52,6 +52,11 @@ export default function SelectionHeader({ selectedNode, formatFrameId }: Selecti
             <Link2 className={`${iconXl} text-[color:var(--accent-primary)]`} />
           </span>
         )}
+        {selectedNode.metadata?.isMirror && (
+          <span title={`Mirror of ${selectedNode.metadata?.mirrorOf}`}>
+            <Layers className={`${iconXl} text-[color:var(--accent-purple)]`} />
+          </span>
+        )}
         {idLabel ? (
           <span className={flexRowGap2}>
             <span>{idLabel.primary}</span>
@@ -70,6 +75,11 @@ export default function SelectionHeader({ selectedNode, formatFrameId }: Selecti
         {selectedNode.metadata?.isCopy && (
           <span className="text-xs bg-[var(--accent-bg)] text-[color:var(--accent-primary)] px-2 py-1 rounded">
             Copy of {selectedNode.metadata?.copyFrom}
+          </span>
+        )}
+        {selectedNode.metadata?.isMirror && (
+          <span className="text-xs bg-[var(--bg-surface)] text-[color:var(--accent-purple)] px-2 py-1 rounded border border-[color:var(--accent-purple)]">
+            Mirror of {selectedNode.metadata?.mirrorOf}
           </span>
         )}
       </div>
