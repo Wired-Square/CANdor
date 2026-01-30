@@ -214,8 +214,14 @@ pub fn run() {
 
                 match event_id {
                     "about" => {
-                        // Broadcast to all windows - each window will show its own about dialog
-                        let _ = app.emit("show-about", ());
+                        // Emit only to the focused window
+                        if let Some(window) = app
+                            .webview_windows()
+                            .values()
+                            .find(|w| w.is_focused().unwrap_or(false))
+                        {
+                            let _ = app.emit_to(window.label(), "show-about", ());
+                        }
                     }
                     // Note: undo, redo, cut, copy, paste, select-all are handled natively
                     // by predefined menu items - no custom handlers needed
