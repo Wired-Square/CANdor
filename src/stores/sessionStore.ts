@@ -223,6 +223,8 @@ export interface Session {
   hasQueuedMessages: boolean;
   /** Whether the session was stopped explicitly by user (vs stream ending naturally) */
   stoppedExplicitly: boolean;
+  /** Reason why the stream ended (from stream-ended event) */
+  streamEndedReason: "complete" | "stopped" | "disconnected" | "error" | null;
   /** Current playback speed (null until set, 1 = realtime, 0 = unlimited) */
   speed: number | null;
 }
@@ -491,6 +493,7 @@ async function setupSessionEventListeners(
       const payload = event.payload;
       updateSession(sessionId, {
         ioState: "stopped",
+        streamEndedReason: payload.reason as Session["streamEndedReason"],
         buffer: {
           available: payload.buffer_available,
           id: payload.buffer_id,
@@ -736,6 +739,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             createdAt: Date.now(),
             hasQueuedMessages: false,
             stoppedExplicitly: false,
+            streamEndedReason: null,
             speed: null,
           };
           set((s) => ({
@@ -867,6 +871,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         createdAt: existingSession?.createdAt ?? Date.now(),
         hasQueuedMessages: existingSession?.hasQueuedMessages ?? false,
         stoppedExplicitly: existingSession?.stoppedExplicitly ?? false,
+        streamEndedReason: existingSession?.streamEndedReason ?? null,
         speed: existingSession?.speed ?? null,
       };
 
@@ -1084,6 +1089,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           ...s.sessions[sessionId],
           ioState: "starting",
           stoppedExplicitly: false, // Reset flag when starting
+          streamEndedReason: null, // Reset reason when starting
         },
       },
     }));

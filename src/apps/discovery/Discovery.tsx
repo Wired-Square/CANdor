@@ -5,7 +5,7 @@ import { listen, emit } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettings, getDisplayFrameIdFormat, getSaveFrameIdFormat } from "../../hooks/useSettings";
-import { useIOSessionManager } from '../../hooks/useIOSessionManager';
+import { useIOSessionManager, type SessionReconfigurationInfo } from '../../hooks/useIOSessionManager';
 import { useFocusStore } from '../../stores/focusStore';
 import { useDiscoveryStore, type FrameMessage, type PlaybackSpeed } from "../../stores/discoveryStore";
 import { useDiscoveryUIStore } from "../../stores/discoveryUIStore";
@@ -36,6 +36,7 @@ import { pickFileToSave } from "../../api/dialogs";
 import { saveCatalog } from "../../api/catalog";
 import { formatFilenameDate } from "../../utils/timeFormat";
 import { useDialogManager } from "../../hooks/useDialogManager";
+import { getFavoritesForProfile } from "../../utils/favorites";
 
 export default function Discovery() {
   const { settings } = useSettings();
@@ -337,6 +338,15 @@ export default function Discovery() {
     setIoProfile,
   ]);
 
+  // Callback for when session is reconfigured (e.g., bookmark jump)
+  const handleSessionReconfigured = useCallback((info: SessionReconfigurationInfo) => {
+    if (info.reason === "bookmark" && info.bookmark) {
+      setStartTime(info.bookmark.startTime);
+      setEndTime(info.bookmark.endTime);
+      setActiveBookmarkId(info.bookmark.id);
+    }
+  }, [setStartTime, setEndTime, setActiveBookmarkId]);
+
   // Cleanup callback for before starting a new watch session
   const clearBeforeWatch = useCallback(() => {
     clearBuffer();
@@ -366,6 +376,7 @@ export default function Discovery() {
     setPlaybackSpeed: (speed: number) => setPlaybackSpeed(speed as PlaybackSpeed),
     onBeforeWatch: clearBeforeWatch,
     onBeforeMultiWatch: clearBeforeWatch,
+    onSessionReconfigured: handleSessionReconfigured,
   });
 
   // Destructure everything from the manager
@@ -408,6 +419,8 @@ export default function Discovery() {
     selectMultipleProfiles,
     joinSession,
     skipReader,
+    // Bookmark methods
+    jumpToBookmark,
   } = manager;
 
   // Session controls from the underlying session
@@ -417,7 +430,7 @@ export default function Discovery() {
     bufferId,
     bufferType,
     bufferCount,
-    stoppedExplicitly,
+    streamEndedReason,
     start,
     stop,
     pause,
@@ -431,10 +444,11 @@ export default function Discovery() {
   // Track previous buffer state to detect when buffer becomes available
   const prevBufferAvailableRef = useRef(false);
 
-  // Handle stream ended for Watch mode
+  // Handle stream ended for Watch mode - only switch to buffer when stream completes naturally
+  // (not when stopped explicitly for bookmark jumps, etc.)
   useEffect(() => {
-    if (bufferAvailable && bufferCount > 0 && bufferId && !prevBufferAvailableRef.current && stoppedExplicitly) {
-      console.log(`[Discovery] Buffer transition starting - bufferAvailable=${bufferAvailable}, bufferCount=${bufferCount}, bufferId=${bufferId}, bufferType=${bufferType}, stoppedExplicitly=${stoppedExplicitly}`);
+    if (bufferAvailable && bufferCount > 0 && bufferId && !prevBufferAvailableRef.current && streamEndedReason === "complete") {
+      console.log(`[Discovery] Buffer transition starting - bufferAvailable=${bufferAvailable}, bufferCount=${bufferCount}, bufferId=${bufferId}, bufferType=${bufferType}, streamEndedReason=${streamEndedReason}`);
       (async () => {
         const preferredBufferId = (bufferType === "bytes" && framedBufferId) ? framedBufferId : bufferId;
         console.log(`[Discovery] Using preferredBufferId=${preferredBufferId}, framedBufferId=${framedBufferId}`);
@@ -498,7 +512,7 @@ export default function Discovery() {
       })();
     }
     prevBufferAvailableRef.current = bufferAvailable;
-  }, [bufferAvailable, bufferId, bufferCount, bufferType, framedBufferId, stoppedExplicitly, setIoProfile, reinitialize, stop, clearSerialBytes, resetFraming, addSerialBytes, triggerBufferReady, setBackendByteCount, enableBufferMode, setMaxBuffer, setFrameInfoFromBuffer]);
+  }, [bufferAvailable, bufferId, bufferCount, bufferType, framedBufferId, streamEndedReason, setIoProfile, reinitialize, stop, clearSerialBytes, resetFraming, addSerialBytes, triggerBufferReady, setBackendByteCount, enableBufferMode, setMaxBuffer, setFrameInfoFromBuffer]);
 
   // Note: isStreaming, isPaused, isStopped, isRealtime are now provided by useIOSessionManager
 
@@ -670,6 +684,7 @@ export default function Discovery() {
     selectProfile,
     selectMultipleProfiles,
     joinSession,
+    jumpToBookmark,
 
     // Session actions
     setIoProfile,
@@ -738,16 +753,35 @@ export default function Discovery() {
     }
   }, [isFocused, ioProfileName, isStreaming, isPaused, capabilities, joinerCount]);
 
+  // Report bookmarks to menu when focused or profile changes
+  useEffect(() => {
+    const updateBookmarksMenu = async () => {
+      if (isFocused) {
+        const profileId = sourceProfileId || ioProfile;
+        if (profileId && !isBufferProfileId(profileId)) {
+          const bookmarks = await getFavoritesForProfile(profileId);
+          await invoke("update_bookmarks_menu", {
+            bookmarks: bookmarks.map((b) => ({ id: b.id, name: b.name })),
+          });
+        } else {
+          // No profile or buffer mode - clear bookmarks menu
+          await invoke("update_bookmarks_menu", { bookmarks: [] });
+        }
+      }
+    };
+    updateBookmarksMenu();
+  }, [isFocused, ioProfile, sourceProfileId]);
+
   // Listen for session control menu commands
   useEffect(() => {
     const currentWindow = getCurrentWebviewWindow();
 
     const setupListeners = async () => {
       // Session control events from menu (only respond when targeted)
-      const unlistenControl = await currentWindow.listen<{ action: string; targetPanelId: string | null }>(
+      const unlistenControl = await currentWindow.listen<{ action: string; targetPanelId: string | null; bookmarkId?: string }>(
         "session-control",
-        (event) => {
-          const { action, targetPanelId } = event.payload;
+        async (event) => {
+          const { action, targetPanelId, bookmarkId } = event.payload;
           if (targetPanelId !== "discovery") return;
 
           switch (action) {
@@ -786,6 +820,19 @@ export default function Discovery() {
               break;
             case "picker":
               dialogs.ioReaderPicker.open();
+              break;
+            case "jump-to-bookmark":
+              // Jump to bookmark from menu
+              if (bookmarkId) {
+                const profileId = sourceProfileId || ioProfile;
+                if (profileId) {
+                  const bookmarks = await getFavoritesForProfile(profileId);
+                  const bookmark = bookmarks.find((b) => b.id === bookmarkId);
+                  if (bookmark) {
+                    await jumpToBookmark(bookmark);
+                  }
+                }
+              }
               break;
           }
         }

@@ -27,6 +27,7 @@ import type { IOCapabilities } from "../../../api/io";
 import type { BufferMetadata } from "../../../api/buffer";
 import type { FrameDetail } from "../../../types/decoder";
 import type { IngestOptions as ManagerIngestOptions } from "../../../hooks/useIOSessionManager";
+import type { TimeRangeFavorite } from "../../../utils/favorites";
 // Note: SerialFrameConfig is read directly from store in session handlers to avoid stale closures
 import type { SelectionSet } from "../../../utils/selectionSets";
 
@@ -128,6 +129,7 @@ export interface UseDecoderHandlersParams {
   selectMultipleProfiles: (profileIds: string[]) => void;
   joinSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
   skipReader: () => Promise<void>;
+  jumpToBookmark: (bookmark: TimeRangeFavorite, options?: Omit<ManagerIngestOptions, "startTime" | "endTime" | "maxFrames">) => Promise<void>;
 
   // Ingest speed
   ingestSpeed: number;
@@ -210,11 +212,7 @@ export function useDecoderHandlers(params: UseDecoderHandlersParams): DecoderHan
   const timeHandlers = useDecoderTimeHandlers({
     setTimeRange: params.setTimeRange,
     seek: params.seek,
-    reinitialize: params.reinitialize,
-    ioProfile: params.ioProfile,
     capabilities: params.capabilities,
-    setStartTime: params.setStartTime,
-    setEndTime: params.setEndTime,
     updateCurrentTime: params.updateCurrentTime,
     setCurrentFrameIndex: params.setCurrentFrameIndex,
     startTime: params.startTime,
@@ -223,6 +221,7 @@ export function useDecoderHandlers(params: UseDecoderHandlersParams): DecoderHan
     maxTimeUs: params.maxTimeUs,
     totalFrames: params.totalFrames,
     setActiveBookmarkId: params.setActiveBookmarkId,
+    jumpToBookmark: params.jumpToBookmark,
   });
 
   // Selection handlers (save, load, clear selection sets)

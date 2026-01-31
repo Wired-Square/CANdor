@@ -3,30 +3,21 @@
 // Bookmark handlers for Discovery: load, save, bookmark dialog.
 
 import { useCallback } from "react";
-import { addFavorite, markFavoriteUsed, type TimeRangeFavorite } from "../../../../utils/favorites";
-import { localToUtc, microsToDatetimeLocal } from "../../../../utils/timeFormat";
-import { isBufferProfileId } from "../../../../hooks/useIOSessionManager";
+import { addFavorite, type TimeRangeFavorite } from "../../../../utils/favorites";
+import { microsToDatetimeLocal } from "../../../../utils/timeFormat";
+import type { IngestOptions } from "../../../../hooks/useIOSessionManager";
 
 export interface UseDiscoveryBookmarkHandlersParams {
   // State
   ioProfile: string | null;
   sourceProfileId: string | null;
-  bufferModeEnabled: boolean;
 
   // State setters
   setBookmarkFrameId: (id: number) => void;
   setBookmarkFrameTime: (time: string) => void;
-  setActiveBookmarkId: (id: string | null) => void;
 
-  // Store actions
-  setStartTime: (time: string) => void;
-  setEndTime: (time: string) => void;
-  setIoProfile: (profileId: string | null) => void;
-  disableBufferMode: () => void;
-
-  // Session actions
-  setTimeRange: (start: string, end: string) => Promise<void>;
-  reinitialize: (profileId?: string, options?: { startTime?: string; endTime?: string; limit?: number }) => Promise<void>;
+  // Manager method for jumping to bookmarks
+  jumpToBookmark: (bookmark: TimeRangeFavorite, options?: Omit<IngestOptions, "startTime" | "endTime" | "maxFrames">) => Promise<void>;
 
   // Dialog controls
   openBookmarkDialog: () => void;
@@ -35,16 +26,9 @@ export interface UseDiscoveryBookmarkHandlersParams {
 export function useDiscoveryBookmarkHandlers({
   ioProfile,
   sourceProfileId,
-  bufferModeEnabled,
   setBookmarkFrameId,
   setBookmarkFrameTime,
-  setActiveBookmarkId,
-  setStartTime,
-  setEndTime,
-  setIoProfile,
-  disableBufferMode,
-  setTimeRange,
-  reinitialize,
+  jumpToBookmark,
   openBookmarkDialog,
 }: UseDiscoveryBookmarkHandlersParams) {
   // Handle bookmark button click from DiscoveryFramesView
@@ -62,60 +46,12 @@ export function useDiscoveryBookmarkHandlers({
     await addFavorite(name, profileId, fromTime, toTime);
   }, [sourceProfileId, ioProfile]);
 
-  // Handle loading a bookmark (sets time range and marks bookmark as active)
+  // Handle loading a bookmark - delegates to manager's jumpToBookmark
+  // The manager handles: stopping if streaming, cleanup, reinitialize, notify apps
   const handleLoadBookmark = useCallback(async (bookmark: TimeRangeFavorite) => {
-    console.log("[Discovery:handleLoadBookmark] Loading bookmark:", bookmark.name);
-    console.log("[Discovery:handleLoadBookmark] Bookmark times - start:", bookmark.startTime, "end:", bookmark.endTime);
-    console.log("[Discovery:handleLoadBookmark] Current state - ioProfile:", ioProfile, "sourceProfileId:", sourceProfileId, "bufferModeEnabled:", bufferModeEnabled);
-
-    setStartTime(bookmark.startTime);
-    setEndTime(bookmark.endTime);
-    setActiveBookmarkId(bookmark.id);
-
-    const startUtc = localToUtc(bookmark.startTime);
-    const endUtc = localToUtc(bookmark.endTime);
-    console.log("[Discovery:handleLoadBookmark] UTC times - start:", startUtc, "end:", endUtc);
-
-    // Only need a valid start time to load a bookmark (end time can be empty/undefined)
-    if (startUtc) {
-      // Determine the profile to use for the bookmark query
-      const targetProfile = sourceProfileId || ioProfile;
-
-      // If viewing buffer data, reinitialize to get fresh data from the source
-      if (bufferModeEnabled && targetProfile) {
-        console.log("[Discovery:handleLoadBookmark] Buffer mode enabled, reinitializing with profile:", targetProfile);
-        disableBufferMode();
-        if (isBufferProfileId(ioProfile)) {
-          setIoProfile(targetProfile);
-        }
-        await reinitialize(targetProfile, { startTime: startUtc, endTime: endUtc, limit: bookmark.maxFrames });
-        console.log("[Discovery:handleLoadBookmark] Reinitialized with new time range");
-      } else if (targetProfile) {
-        // Not viewing buffer - just update the time range on current session
-        console.log("[Discovery:handleLoadBookmark] Calling setTimeRange on current session...");
-        await setTimeRange(startUtc, endUtc ?? "");
-        console.log("[Discovery:handleLoadBookmark] setTimeRange completed");
-      } else {
-        console.warn("[Discovery:handleLoadBookmark] No target profile available");
-      }
-    } else {
-      console.warn("[Discovery:handleLoadBookmark] Skipping setTimeRange - no valid start time");
-    }
-
-    await markFavoriteUsed(bookmark.id);
-    console.log("[Discovery:handleLoadBookmark] Done");
-  }, [
-    ioProfile,
-    sourceProfileId,
-    bufferModeEnabled,
-    setStartTime,
-    setEndTime,
-    setActiveBookmarkId,
-    setIoProfile,
-    disableBufferMode,
-    setTimeRange,
-    reinitialize,
-  ]);
+    console.log("[Discovery:handleLoadBookmark] Delegating to manager.jumpToBookmark:", bookmark.name);
+    await jumpToBookmark(bookmark);
+  }, [jumpToBookmark]);
 
   return {
     handleBookmark,

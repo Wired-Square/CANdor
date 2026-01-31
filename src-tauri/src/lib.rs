@@ -30,6 +30,16 @@ struct SessionMenuItems {
 
 struct SessionMenuState(Mutex<Option<SessionMenuItems>>);
 
+// Store reference to the bookmarks submenu for dynamic updates
+struct BookmarksMenuState(Mutex<Option<Submenu<Wry>>>);
+
+// Bookmark info received from frontend for menu display
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct BookmarkInfo {
+    id: String,
+    name: String,
+}
+
 // Window configuration helper
 struct WindowConfig {
     title: &'static str,
@@ -186,6 +196,45 @@ fn update_menu_session_state(
         // Stop Session: enabled when streaming (stops entire session for all apps)
         let _ = items.stop_all.set_enabled(is_streaming);
     }
+}
+
+/// Update the Bookmarks > Jump to Bookmark submenu with bookmarks for the current profile.
+/// Called by the frontend when panel focus or IO profile changes.
+#[tauri::command]
+fn update_bookmarks_menu(
+    app: AppHandle,
+    state: State<BookmarksMenuState>,
+    bookmarks: Vec<BookmarkInfo>,
+) -> Result<(), String> {
+    if let Some(submenu) = state.0.lock().unwrap().as_ref() {
+        // Remove existing bookmark items (IDs start with "bookmark-jump-")
+        // We need to collect the items first to avoid borrow issues
+        let items_to_remove: Vec<_> = submenu
+            .items()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|item| {
+                if let tauri::menu::MenuItemKind::MenuItem(menu_item) = item {
+                    menu_item.id().0.starts_with("bookmark-jump-")
+                } else {
+                    false
+                }
+            })
+            .collect();
+
+        for item in items_to_remove {
+            let _ = submenu.remove(&item);
+        }
+
+        // Add new bookmark items
+        for bookmark in bookmarks {
+            let item_id = format!("bookmark-jump-{}", bookmark.id);
+            if let Ok(menu_item) = MenuItemBuilder::with_id(&item_id, &bookmark.name).build(&app) {
+                let _ = submenu.append(&menu_item);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Create a new main window with the specified label.
@@ -355,8 +404,13 @@ pub fn run() {
             let bookmark_manage_item =
                 MenuItemBuilder::with_id("bookmark-manage", "Manage Bookmarks…").build(app)?;
 
+            // Create "Jump to Bookmark" submenu (dynamically populated by frontend)
+            let jump_to_bookmark_submenu = SubmenuBuilder::new(app, "Jump to Bookmark")
+                .build()?;
+
             let bookmarks_menu = SubmenuBuilder::new(app, "Bookmarks")
                 .item(&bookmark_save_item)
+                .item(&jump_to_bookmark_submenu)
                 .separator()
                 .item(&bookmark_manage_item)
                 .build()?;
@@ -392,6 +446,9 @@ pub fn run() {
                 stop_all: session_stop_all_item,
             };
             *app.state::<SessionMenuState>().0.lock().unwrap() = Some(session_menu_items);
+
+            // Store bookmarks submenu reference for dynamic updates
+            *app.state::<BookmarksMenuState>().0.lock().unwrap() = Some(jump_to_bookmark_submenu);
 
             // Handle menu events
             app.on_menu_event(|app, event| {
@@ -451,6 +508,11 @@ pub fn run() {
                         open_settings_singleton(app, &app.state::<SettingsWindowState>());
                         emit_to_focused_window(app, "menu-bookmark-manage", ());
                     }
+                    id if id.starts_with("bookmark-jump-") => {
+                        // Jump to specific bookmark - extract ID and emit to focused window
+                        let bookmark_id = id.strip_prefix("bookmark-jump-").unwrap_or("");
+                        emit_to_focused_window(app, "menu-jump-to-bookmark", bookmark_id.to_string());
+                    }
                     _ => {
                         // Unknown menu item - ignore
                     }
@@ -481,12 +543,14 @@ pub fn run() {
         })
         .manage(SettingsWindowState(Mutex::new(None)))
         .manage(SessionMenuState(Mutex::new(None)))
+        .manage(BookmarksMenuState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             greet,
             create_main_window,
             settings_panel_closed,
             open_settings_panel,
             update_menu_session_state,
+            update_bookmarks_menu,
             catalog::open_catalog,
             catalog::save_catalog,
             catalog::validate_catalog,

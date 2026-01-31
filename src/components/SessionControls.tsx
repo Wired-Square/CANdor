@@ -129,13 +129,12 @@ export function SessionActionButtons({
 }: SessionActionButtonsProps) {
   return (
     <>
-      {/* Bookmark button - shown when source supports time range, disabled while streaming */}
+      {/* Bookmark button - shown when source supports time range */}
       {supportsTimeRange && onOpenBookmarkPicker && (
         <button
           onClick={onOpenBookmarkPicker}
-          disabled={isStreaming}
           className={buttonBase}
-          title={isStreaming ? "Stop streaming to change time range" : "Load saved time bookmark"}
+          title="Load saved time bookmark"
         >
           <Bookmark className={iconSm} />
         </button>

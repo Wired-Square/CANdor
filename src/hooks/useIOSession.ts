@@ -103,6 +103,8 @@ export interface UseIOSessionResult {
   joinerCount: number;
   /** Whether the session was stopped explicitly by user (vs stream ending naturally) */
   stoppedExplicitly: boolean;
+  /** Reason why the stream ended: "complete" = natural end, "stopped" = explicit stop */
+  streamEndedReason: "complete" | "stopped" | "disconnected" | "error" | null;
   /** Current playback speed (null until set, 1 = realtime, 0 = unlimited) */
   speed: number | null;
 
@@ -700,6 +702,7 @@ export function useIOSession(
     bufferCount: session?.buffer?.count ?? 0,
     joinerCount: session?.listenerCount ?? 0,
     stoppedExplicitly: session?.stoppedExplicitly ?? false,
+    streamEndedReason: session?.streamEndedReason ?? null,
     speed: session?.speed ?? null,
     start,
     stop,

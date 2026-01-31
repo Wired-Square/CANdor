@@ -28,6 +28,23 @@ import type { BusMapping, PlaybackPosition, RawBytesPayload } from "../api/io";
 import type { IOProfile } from "./useSettings";
 import type { FrameMessage } from "../stores/discoveryStore";
 import type { StreamEndedPayload, IOCapabilities } from "../api/io";
+import { markFavoriteUsed, type TimeRangeFavorite } from "../utils/favorites";
+import { localToUtc } from "../utils/timeFormat";
+
+/** Reason for session reconfiguration */
+export type SessionReconfigurationReason = "bookmark" | "time_range_change";
+
+/** Information about a session reconfiguration */
+export interface SessionReconfigurationInfo {
+  /** Why the session was reconfigured */
+  reason: SessionReconfigurationReason;
+  /** The bookmark that triggered the reconfiguration (if reason === 'bookmark') */
+  bookmark?: TimeRangeFavorite;
+  /** New start time (UTC ISO-8601) */
+  startTime?: string;
+  /** New end time (UTC ISO-8601) */
+  endTime?: string;
+}
 
 /** Options for handleDialogStartIngest - matches IoReaderPickerDialog */
 export interface IngestOptions {
@@ -99,6 +116,8 @@ export interface UseIOSessionManagerOptions {
   onBeforeMultiWatch?: () => void;
   /** Ref to track stream completion (if provided, manager resets it during watch operations) */
   streamCompletedRef?: React.MutableRefObject<boolean>;
+  /** Called after session is reconfigured (bookmark jump, time range change) */
+  onSessionReconfigured?: (info: SessionReconfigurationInfo) => void;
 }
 
 /** Result of the IO session manager hook */
@@ -228,6 +247,13 @@ export interface UseIOSessionManagerResult {
   skipReader: () => Promise<void>;
   /** Ref that tracks whether stream has completed (for ignoring stale time updates) */
   streamCompletedRef: React.MutableRefObject<boolean>;
+
+  // ---- Bookmark Methods ----
+  /** Jump to a bookmark, stopping current stream if needed and reinitializing with bookmark time range */
+  jumpToBookmark: (
+    bookmark: TimeRangeFavorite,
+    options?: Omit<IngestOptions, "startTime" | "endTime" | "maxFrames">
+  ) => Promise<void>;
 }
 
 /**
@@ -307,6 +333,7 @@ export function useIOSessionManager(
     onBeforeWatch,
     onBeforeMultiWatch,
     streamCompletedRef: streamCompletedRefProp,
+    onSessionReconfigured,
   } = options;
 
   // ---- Profile State ----
@@ -607,6 +634,104 @@ export function useIOSessionManager(
     setIsWatching(false);
   }, [session]);
 
+  // Jump to a bookmark: stop if streaming, cleanup, reinitialize with bookmark time range
+  const jumpToBookmark = useCallback(
+    async (
+      bookmark: TimeRangeFavorite,
+      opts?: Omit<IngestOptions, "startTime" | "endTime" | "maxFrames">
+    ) => {
+      // Convert bookmark times to UTC
+      const startUtc = localToUtc(bookmark.startTime);
+      const endUtc = localToUtc(bookmark.endTime);
+
+      if (!startUtc) {
+        console.warn("[IOSessionManager:jumpToBookmark] No valid start time in bookmark");
+        return;
+      }
+
+      // Determine target profile (bookmark's profile or current)
+      const targetProfile = bookmark.profileId || sourceProfileId || ioProfile;
+      if (!targetProfile) {
+        console.warn("[IOSessionManager:jumpToBookmark] No profile available");
+        return;
+      }
+
+      console.log(`[IOSessionManager:jumpToBookmark] Jumping to bookmark "${bookmark.name}"`);
+
+      // Step 1: Stop current stream if streaming
+      if (isWatching) {
+        console.log("[IOSessionManager:jumpToBookmark] Stopping current watch...");
+        await session.stop();
+        setIsWatching(false);
+      }
+
+      // Step 2: Run cleanup callback (same as onBeforeWatch)
+      onBeforeWatch?.();
+
+      // Step 3: Clear multi-bus state
+      setMultiBusMode(false);
+      setMultiBusProfiles([]);
+
+      // Step 4: Reinitialize with bookmark time range
+      // Use provided speed, or current session speed, or default to realtime (1)
+      const effectiveSpeed = opts?.speed ?? session.speed ?? 1;
+      await session.reinitialize(targetProfile, {
+        startTime: startUtc,
+        endTime: endUtc || undefined,
+        speed: effectiveSpeed,
+        limit: bookmark.maxFrames,
+        framingEncoding: opts?.framingEncoding,
+        delimiter: opts?.delimiter,
+        maxFrameLength: opts?.maxFrameLength,
+        frameIdStartByte: opts?.frameIdStartByte,
+        frameIdBytes: opts?.frameIdBytes,
+        frameIdBigEndian: opts?.frameIdStartByte !== undefined ? true : undefined,
+        sourceAddressStartByte: opts?.sourceAddressStartByte,
+        sourceAddressBytes: opts?.sourceAddressBytes,
+        sourceAddressBigEndian: opts?.sourceAddressEndianness === "big",
+        minFrameLength: opts?.minFrameLength,
+        emitRawBytes: opts?.emitRawBytes,
+        busOverride: opts?.busOverride,
+      });
+
+      // Step 5: Update manager state
+      setIoProfile(targetProfile);
+      if (opts?.speed !== undefined) {
+        setPlaybackSpeedProp?.(opts.speed);
+      }
+
+      // Step 6: Start watching
+      setIsWatching(true);
+      resetWatchFrameCount();
+      streamCompletedRef.current = false;
+
+      // Step 7: Notify app of reconfiguration
+      onSessionReconfigured?.({
+        reason: "bookmark",
+        bookmark,
+        startTime: startUtc,
+        endTime: endUtc ?? undefined,
+      });
+
+      // Step 8: Mark bookmark as used
+      await markFavoriteUsed(bookmark.id);
+    },
+    [
+      sourceProfileId,
+      ioProfile,
+      isWatching,
+      session,
+      onBeforeWatch,
+      setMultiBusMode,
+      setMultiBusProfiles,
+      setIoProfile,
+      setPlaybackSpeedProp,
+      resetWatchFrameCount,
+      streamCompletedRef,
+      onSessionReconfigured,
+    ]
+  );
+
   // Select a profile: clear multi-bus, set profile, set default speed
   // App handlers call this for common logic, then add buffer-specific or app-specific logic
   const selectProfile = useCallback((profileId: string | null) => {
@@ -723,5 +848,8 @@ export function useIOSessionManager(
     joinSession,
     skipReader,
     streamCompletedRef,
+
+    // Bookmark Methods
+    jumpToBookmark,
   };
 }

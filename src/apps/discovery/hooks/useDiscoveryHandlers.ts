@@ -28,6 +28,7 @@ import type { BufferMetadata, TimestampedByte } from "../../../api/buffer";
 import type { ExportDataMode } from "../../../dialogs/ExportFramesDialog";
 import type { SelectionSet } from "../../../utils/selectionSets";
 import { isBufferProfileId, type IngestOptions as ManagerIngestOptions } from "../../../hooks/useIOSessionManager";
+import type { TimeRangeFavorite } from "../../../utils/favorites";
 
 export interface UseDiscoveryHandlersParams {
   // Session state
@@ -91,6 +92,7 @@ export interface UseDiscoveryHandlersParams {
   selectProfile: (profileId: string | null) => void;
   selectMultipleProfiles: (profileIds: string[]) => void;
   joinSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
+  jumpToBookmark: (bookmark: TimeRangeFavorite, options?: Omit<ManagerIngestOptions, "startTime" | "endTime" | "maxFrames">) => Promise<void>;
 
   // Session actions
   setIoProfile: (profileId: string | null) => void;
@@ -245,18 +247,11 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
 
   // Bookmark handlers
   const bookmarkHandlers = useDiscoveryBookmarkHandlers({
-    ioProfile: params.ioProfile,
-    sourceProfileId: params.sourceProfileId,
-    bufferModeEnabled: params.bufferModeEnabled,
     setBookmarkFrameId: params.setBookmarkFrameId,
     setBookmarkFrameTime: params.setBookmarkFrameTime,
-    setActiveBookmarkId: params.setActiveBookmarkId,
-    setStartTime: params.setStartTime,
-    setEndTime: params.setEndTime,
-    setIoProfile: params.setIoProfile,
-    disableBufferMode: params.disableBufferMode,
-    setTimeRange: params.setTimeRange,
-    reinitialize: params.reinitialize,
+    ioProfile: params.ioProfile,
+    sourceProfileId: params.sourceProfileId,
+    jumpToBookmark: params.jumpToBookmark,
     openBookmarkDialog: params.openBookmarkDialog,
   });
 

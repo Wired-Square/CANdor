@@ -4,24 +4,19 @@
 
 import { useCallback } from "react";
 import { localToUtc } from "../../../../utils/timeFormat";
-import { markFavoriteUsed, type TimeRangeFavorite } from "../../../../utils/favorites";
+import type { TimeRangeFavorite } from "../../../../utils/favorites";
 import type { IOCapabilities } from "../../../../api/io";
+import type { IngestOptions } from "../../../../hooks/useIOSessionManager";
 
 export interface UseDecoderTimeHandlersParams {
   // Session actions
   setTimeRange: (start?: string, end?: string) => Promise<void>;
   seek: (timeUs: number) => Promise<void>;
-  reinitialize: (profileId?: string, options?: { startTime?: string; endTime?: string; limit?: number }) => Promise<void>;
-
-  // Session state
-  ioProfile: string | null;
 
   // Capabilities
   capabilities: IOCapabilities | null;
 
   // Store actions
-  setStartTime: (time: string) => void;
-  setEndTime: (time: string) => void;
   updateCurrentTime: (time: number) => void;
   setCurrentFrameIndex?: (index: number) => void;
 
@@ -36,16 +31,15 @@ export interface UseDecoderTimeHandlersParams {
 
   // Bookmark state
   setActiveBookmarkId: (id: string | null) => void;
+
+  // Manager method for jumping to bookmarks
+  jumpToBookmark: (bookmark: TimeRangeFavorite, options?: Omit<IngestOptions, "startTime" | "endTime" | "maxFrames">) => Promise<void>;
 }
 
 export function useDecoderTimeHandlers({
   setTimeRange,
   seek,
-  reinitialize,
-  ioProfile,
   capabilities,
-  setStartTime,
-  setEndTime,
   updateCurrentTime,
   setCurrentFrameIndex,
   startTime,
@@ -54,24 +48,23 @@ export function useDecoderTimeHandlers({
   maxTimeUs,
   totalFrames,
   setActiveBookmarkId,
+  jumpToBookmark,
 }: UseDecoderTimeHandlersParams) {
   // Handle time range changes
   const handleStartTimeChange = useCallback(
     async (time: string) => {
-      setStartTime(time);
       setActiveBookmarkId(null); // Clear bookmark when time changes
       await setTimeRange(localToUtc(time), localToUtc(endTime));
     },
-    [setStartTime, setActiveBookmarkId, setTimeRange, endTime]
+    [setActiveBookmarkId, setTimeRange, endTime]
   );
 
   const handleEndTimeChange = useCallback(
     async (time: string) => {
-      setEndTime(time);
       setActiveBookmarkId(null); // Clear bookmark when time changes
       await setTimeRange(localToUtc(startTime), localToUtc(time));
     },
-    [setEndTime, setActiveBookmarkId, setTimeRange, startTime]
+    [setActiveBookmarkId, setTimeRange, startTime]
   );
 
   // Handle timeline scrubber position change
@@ -100,26 +93,14 @@ export function useDecoderTimeHandlers({
     [updateCurrentTime, setCurrentFrameIndex, minTimeUs, maxTimeUs, totalFrames, capabilities, seek]
   );
 
-  // Handle loading a bookmark (sets time range and marks bookmark as active)
+  // Handle loading a bookmark - delegates to manager's jumpToBookmark
+  // The manager handles: stopping if streaming, cleanup, reinitialize, notify apps
   const handleLoadBookmark = useCallback(
     async (bookmark: TimeRangeFavorite) => {
-      setStartTime(bookmark.startTime);
-      setEndTime(bookmark.endTime);
-      setActiveBookmarkId(bookmark.id);
-
-      const startUtc = localToUtc(bookmark.startTime);
-      const endUtc = localToUtc(bookmark.endTime);
-
-      // If bookmark has maxFrames, we need to reinitialize to apply the limit
-      if (bookmark.maxFrames && ioProfile) {
-        await reinitialize(ioProfile, { startTime: startUtc, endTime: endUtc, limit: bookmark.maxFrames });
-      } else {
-        await setTimeRange(startUtc, endUtc);
-      }
-
-      await markFavoriteUsed(bookmark.id);
+      console.log("[Decoder:handleLoadBookmark] Delegating to manager.jumpToBookmark:", bookmark.name);
+      await jumpToBookmark(bookmark);
     },
-    [setStartTime, setEndTime, setActiveBookmarkId, setTimeRange, reinitialize, ioProfile]
+    [jumpToBookmark]
   );
 
   return {

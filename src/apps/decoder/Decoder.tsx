@@ -6,7 +6,8 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettings, getDisplayFrameIdFormat } from "../../hooks/useSettings";
 import { useDecoderStore } from "../../stores/decoderStore";
-import { useIOSessionManager } from '../../hooks/useIOSessionManager';
+import { useIOSessionManager, type SessionReconfigurationInfo, isBufferProfileId } from '../../hooks/useIOSessionManager';
+import { getFavoritesForProfile } from "../../utils/favorites";
 import { useFocusStore } from '../../stores/focusStore';
 import { listCatalogs, type CatalogMetadata } from "../../api/catalog";
 import { clearBuffer } from "../../api/buffer";
@@ -396,6 +397,15 @@ export default function Decoder() {
     }
   }, [dialogs.ioReaderPicker]);
 
+  // Callback for when session is reconfigured (e.g., bookmark jump)
+  const handleSessionReconfigured = useCallback((info: SessionReconfigurationInfo) => {
+    if (info.reason === "bookmark" && info.bookmark) {
+      setStartTime(info.bookmark.startTime);
+      setEndTime(info.bookmark.endTime);
+      setActiveBookmarkId(info.bookmark.id);
+    }
+  }, [setStartTime, setEndTime, setActiveBookmarkId]);
+
   // Use the IO session manager hook - manages session lifecycle, ingest, multi-bus, and derived state
   const manager = useIOSessionManager({
     appName: "decoder",
@@ -416,6 +426,7 @@ export default function Decoder() {
     onBeforeWatch: clearFrames,
     onBeforeMultiWatch: clearFrames,
     streamCompletedRef,
+    onSessionReconfigured: handleSessionReconfigured,
   });
 
   // Destructure everything from the manager
@@ -458,6 +469,8 @@ export default function Decoder() {
     joinSession,
     skipReader,
     // Note: streamCompletedRef is created locally and passed to manager via options
+    // Bookmark methods
+    jumpToBookmark,
   } = manager;
 
   // Session controls from the underlying session
@@ -552,6 +565,7 @@ export default function Decoder() {
     selectMultipleProfiles,
     joinSession,
     skipReader,
+    jumpToBookmark,
 
     // Ingest speed
     ingestSpeed,
@@ -589,16 +603,34 @@ export default function Decoder() {
     }
   }, [isFocused, ioProfileName, isStreaming, isPaused, capabilities, joinerCount]);
 
+  // Report bookmarks to menu when focused or profile changes
+  useEffect(() => {
+    const updateBookmarksMenu = async () => {
+      if (isFocused) {
+        if (ioProfile && !isBufferProfileId(ioProfile)) {
+          const bookmarks = await getFavoritesForProfile(ioProfile);
+          await invoke("update_bookmarks_menu", {
+            bookmarks: bookmarks.map((b) => ({ id: b.id, name: b.name })),
+          });
+        } else {
+          // No profile or buffer mode - clear bookmarks menu
+          await invoke("update_bookmarks_menu", { bookmarks: [] });
+        }
+      }
+    };
+    updateBookmarksMenu();
+  }, [isFocused, ioProfile]);
+
   // Listen for session control menu commands
   useEffect(() => {
     const currentWindow = getCurrentWebviewWindow();
 
     const setupListeners = async () => {
       // Session control events from menu (only respond when targeted)
-      const unlistenControl = await currentWindow.listen<{ action: string; targetPanelId: string | null }>(
+      const unlistenControl = await currentWindow.listen<{ action: string; targetPanelId: string | null; bookmarkId?: string }>(
         "session-control",
-        (event) => {
-          const { action, targetPanelId } = event.payload;
+        async (event) => {
+          const { action, targetPanelId, bookmarkId } = event.payload;
           if (targetPanelId !== "decoder") return;
 
           switch (action) {
@@ -637,6 +669,16 @@ export default function Decoder() {
               break;
             case "picker":
               dialogs.ioReaderPicker.open();
+              break;
+            case "jump-to-bookmark":
+              // Jump to bookmark from menu
+              if (bookmarkId && ioProfile) {
+                const bookmarks = await getFavoritesForProfile(ioProfile);
+                const bookmark = bookmarks.find((b) => b.id === bookmarkId);
+                if (bookmark) {
+                  await jumpToBookmark(bookmark);
+                }
+              }
               break;
           }
         }

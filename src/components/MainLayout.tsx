@@ -528,6 +528,16 @@ export default function MainLayout() {
         useSettingsStore.getState().setSection("bookmarks");
       });
 
+      // Jump to bookmark - emit to focused app with bookmark ID
+      const unlistenJumpToBookmark = await currentWindow.listen<string>("menu-jump-to-bookmark", (event) => {
+        const targetPanelId = useFocusStore.getState().focusedPanelId;
+        currentWindow.emit("session-control", {
+          action: "jump-to-bookmark",
+          targetPanelId,
+          bookmarkId: event.payload,
+        });
+      });
+
       return () => {
         unlistenPlay();
         unlistenPause();
@@ -537,6 +547,7 @@ export default function MainLayout() {
         unlistenClear();
         unlistenPicker();
         unlistenBookmarkManage();
+        unlistenJumpToBookmark();
       };
     };
 
