@@ -3,6 +3,7 @@
 // Catalog-related handlers for Decoder: catalog change, clear data by active tab.
 
 import { useCallback } from "react";
+import { useSessionStore } from "../../../../stores/sessionStore";
 
 export interface UseDecoderCatalogHandlersParams {
   // Store actions
@@ -29,7 +30,9 @@ export function useDecoderCatalogHandlers({
         try {
           await loadCatalog(path);
         } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
           console.error("Failed to load catalog:", e);
+          useSessionStore.getState().showAppError("Catalog Error", "Failed to load catalog.", msg);
         }
       }
     },

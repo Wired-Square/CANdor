@@ -12,6 +12,7 @@ import { isBufferProfileId } from "../../../../hooks/useIOSessionManager";
 import { useBufferSession } from "../../../../hooks/useBufferSession";
 import type { BufferMetadata } from "../../../../api/buffer";
 import { useDecoderStore } from "../../../../stores/decoderStore";
+import { useSessionStore } from "../../../../stores/sessionStore";
 
 export interface UseDecoderSessionHandlersParams {
   // Session manager actions (for buffer reinitialize only)
@@ -147,6 +148,7 @@ export function useDecoderSessionHandlers({
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           console.error(`Failed to start multi-bus session:`, msg);
+          useSessionStore.getState().showAppError("Multi-Bus Error", "Failed to start multi-bus session.", msg);
         }
       }
       // Ingest mode not supported for multi-bus

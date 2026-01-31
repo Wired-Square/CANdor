@@ -7,6 +7,7 @@ import {
   SECURE_FIELDS,
 } from '../../../../api/credentials';
 import { useSettingsStore, type IOProfile } from '../../stores/settingsStore';
+import { useSessionStore } from '../../../../stores/sessionStore';
 
 export function useIOProfileHandlers() {
   // Store selectors
@@ -22,6 +23,9 @@ export function useIOProfileHandlers() {
   const openDialog = useSettingsStore((s) => s.openDialog);
   const closeDialog = useSettingsStore((s) => s.closeDialog);
   const setDialogPayload = useSettingsStore((s) => s.setDialogPayload);
+
+  // Global error dialog
+  const showAppError = useSessionStore((s) => s.showAppError);
 
   // Open dialog for adding a new profile
   const handleAddIOProfile = () => {
@@ -114,7 +118,7 @@ export function useIOProfileHandlers() {
 
     // Validate profile name is not empty
     if (!profileForm.name.trim()) {
-      alert('Profile name is required');
+      showAppError('Validation Error', 'Profile name is required.');
       return;
     }
 
@@ -123,14 +127,14 @@ export function useIOProfileHandlers() {
       (p) => p.name === profileForm.name && p.id !== editingProfileId
     );
     if (isDuplicate) {
-      alert('A profile with this name already exists. Please choose a unique name.');
+      showAppError('Validation Error', 'A profile with this name already exists. Please choose a unique name.');
       return;
     }
 
     // Validate required fields for specific profile types
     if (profileForm.kind === 'slcan' || profileForm.kind === 'serial') {
       if (!profileForm.connection.port) {
-        alert('Serial port is required. Please select a port from the dropdown.');
+        showAppError('Validation Error', 'Serial port is required. Please select a port from the dropdown.');
         return;
       }
     }
@@ -150,8 +154,9 @@ export function useIOProfileHandlers() {
           await storeCredential(profileId, field, value);
           connectionWithoutSecrets[`_${field}_stored`] = true;
         } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
           console.error(`Failed to store ${field} in keyring:`, error);
-          alert(`Failed to securely store ${field}. Please try again.`);
+          showAppError('Credential Error', `Failed to securely store ${field}.`, msg);
           return;
         }
       }

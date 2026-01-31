@@ -5,6 +5,7 @@ import { useState, useEffect } from "react";
 import { Play, Plus, Trash2, X } from "lucide-react";
 import type { IOProfile } from "../apps/settings/stores/settingsStore";
 import { useSettingsStore } from "../apps/settings/stores/settingsStore";
+import { useSessionStore } from "../stores/sessionStore";
 import { iconMd, iconLg, flexRowGap2 } from "../styles/spacing";
 import Dialog from "../components/Dialog";
 import { Input, SecondaryButton, PrimaryButton, DangerButton } from "../components/forms";
@@ -80,6 +81,8 @@ export default function BookmarkEditorDialog({
   const [createTimezoneMode, setCreateTimezoneMode] = useState<TimezoneMode>("default");
   const defaultTz = useSettingsStore((s) => s.display.timezone);
 
+  const showAppError = useSessionStore((s) => s.showAppError);
+
   // Load bookmarks when dialog opens
   useEffect(() => {
     if (isOpen) {
@@ -107,7 +110,9 @@ export default function BookmarkEditorDialog({
       all.sort((a, b) => a.name.localeCompare(b.name));
       setBookmarks(all);
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error("Failed to load bookmarks:", err);
+      showAppError("Load Error", "Failed to load bookmarks.", msg);
     } finally {
       setIsLoading(false);
     }
@@ -159,7 +164,9 @@ export default function BookmarkEditorDialog({
       await loadBookmarks();
       onBookmarksChanged?.();
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error("Failed to save bookmark:", err);
+      showAppError("Save Error", "Failed to save bookmark.", msg);
     } finally {
       setIsSaving(false);
     }
@@ -175,7 +182,9 @@ export default function BookmarkEditorDialog({
       await loadBookmarks();
       onBookmarksChanged?.();
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error("Failed to delete bookmark:", err);
+      showAppError("Delete Error", "Failed to delete bookmark.", msg);
     }
   };
 
@@ -226,7 +235,9 @@ export default function BookmarkEditorDialog({
       setIsCreating(false);
       setCreateForm({ profileId: "", name: "", startTime: "", endTime: "", maxFrames: "" });
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error("Failed to create bookmark:", err);
+      showAppError("Create Error", "Failed to create bookmark.", msg);
     } finally {
       setIsCreatingBookmark(false);
     }

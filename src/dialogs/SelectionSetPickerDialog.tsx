@@ -13,6 +13,7 @@ import {
   deleteSelectionSet,
   type SelectionSet,
 } from "../utils/selectionSets";
+import { useSessionStore } from "../stores/sessionStore";
 
 type Props = {
   isOpen: boolean;
@@ -39,6 +40,8 @@ export default function SelectionSetPickerDialog({
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
+  const showAppError = useSessionStore((s) => s.showAppError);
+
   // Load selection sets when dialog opens
   useEffect(() => {
     if (isOpen) {
@@ -58,7 +61,9 @@ export default function SelectionSetPickerDialog({
       all.sort((a, b) => a.name.localeCompare(b.name));
       setSelectionSets(all);
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error("Failed to load selection sets:", err);
+      showAppError("Load Error", "Failed to load selection sets.", msg);
     } finally {
       setIsLoading(false);
     }
@@ -82,7 +87,9 @@ export default function SelectionSetPickerDialog({
       await loadSelectionSets();
       onSelectionSetsChanged?.();
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error("Failed to save selection set:", err);
+      showAppError("Save Error", "Failed to save selection set.", msg);
     } finally {
       setIsSaving(false);
     }
@@ -98,7 +105,9 @@ export default function SelectionSetPickerDialog({
       await loadSelectionSets();
       onSelectionSetsChanged?.();
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error("Failed to delete selection set:", err);
+      showAppError("Delete Error", "Failed to delete selection set.", msg);
     }
   };
 

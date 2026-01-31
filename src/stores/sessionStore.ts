@@ -100,8 +100,8 @@ let flushTimeoutId: ReturnType<typeof setTimeout> | null = null;
 /** Getter for event listeners - set after store is created */
 let getEventListeners: (() => Record<string, SessionEventListeners>) | null = null;
 
-/** Getter for showIOError - set after store is created */
-let getGlobalShowIOError: (() => ((title: string, message: string, details?: string) => void) | null) | null = null;
+/** Getter for showAppError - set after store is created */
+let getGlobalShowAppError: (() => ((title: string, message: string, details?: string) => void) | null) | null = null;
 
 /** Flush all pending frames to their callbacks */
 function flushPendingFrames() {
@@ -399,18 +399,18 @@ export interface SessionStore {
   /** Get sessions for Transmit dropdown (connected + disconnected with queue) */
   getTransmitDropdownSessions: () => Session[];
 
-  // ---- Global IO Error Dialog ----
-  /** Global IO error dialog state (shown for session errors) */
-  ioErrorDialog: {
+  // ---- Global App Error Dialog ----
+  /** Global app error dialog state (shown for errors across the app) */
+  appErrorDialog: {
     isOpen: boolean;
     title: string;
     message: string;
     details: string | null;
   };
-  /** Show the global IO error dialog */
-  showIOError: (title: string, message: string, details?: string) => void;
-  /** Close the global IO error dialog */
-  closeIOError: () => void;
+  /** Show the global app error dialog */
+  showAppError: (title: string, message: string, details?: string) => void;
+  /** Close the global app error dialog */
+  closeAppError: () => void;
 }
 
 // ============================================================================
@@ -471,11 +471,11 @@ async function setupSessionEventListeners(
       if (!isExpectedError) {
         invokeCallbacks(eventListeners, "onError", error);
         // Show global error dialog
-        // Note: showIOError will be called after store is created
-        if (typeof getGlobalShowIOError === "function") {
-          const showIOError = getGlobalShowIOError();
-          if (showIOError) {
-            showIOError("Stream Error", "An error occurred while streaming.", error);
+        // Note: showAppError will be called after store is created
+        if (typeof getGlobalShowAppError === "function") {
+          const showAppError = getGlobalShowAppError();
+          if (showAppError) {
+            showAppError("Stream Error", "An error occurred while streaming.", error);
           }
         }
       }
@@ -600,7 +600,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   multiBusProfiles: [],
   sourceProfileId: null,
   outputBusToSource: new Map(),
-  ioErrorDialog: {
+  appErrorDialog: {
     isOpen: false,
     title: "",
     message: "",
@@ -625,7 +625,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
         // Handle startup error (error that occurred before listener registered)
         if (result.startup_error) {
-          get().showIOError("Stream Error", "An error occurred while starting the session.", result.startup_error);
+          get().showAppError("Stream Error", "An error occurred while starting the session.", result.startup_error);
         }
 
         // Add listener to heartbeat tracking
@@ -692,7 +692,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         listenerCount = regResult.listener_count;
         // Handle startup error (error that occurred before listener registered)
         if (regResult.startup_error) {
-          get().showIOError("Stream Error", "An error occurred while starting the session.", regResult.startup_error);
+          get().showAppError("Stream Error", "An error occurred while starting the session.", regResult.startup_error);
         }
       } catch {
         // Ignore - we already joined
@@ -740,7 +740,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           listenerCount = regResult.listener_count;
           // Handle startup error (error that occurred before listener registered)
           if (regResult.startup_error) {
-            get().showIOError("Stream Error", "An error occurred while starting the session.", regResult.startup_error);
+            get().showAppError("Stream Error", "An error occurred while starting the session.", regResult.startup_error);
           }
         } catch {
           // Ignore
@@ -765,7 +765,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             listenerCount = regResult.listener_count;
             // Handle startup error (error that occurred before listener registered)
             if (regResult.startup_error) {
-              get().showIOError("Stream Error", "An error occurred while starting the session.", regResult.startup_error);
+              get().showAppError("Stream Error", "An error occurred while starting the session.", regResult.startup_error);
             }
           } catch {
             // Ignore
@@ -1347,10 +1347,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         (s.lifecycleState === "disconnected" && s.hasQueuedMessages))
     ),
 
-  // ---- Global IO Error Dialog ----
-  showIOError: (title, message, details) =>
+  // ---- Global App Error Dialog ----
+  showAppError: (title, message, details) =>
     set({
-      ioErrorDialog: {
+      appErrorDialog: {
         isOpen: true,
         title,
         message,
@@ -1358,9 +1358,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       },
     }),
 
-  closeIOError: () =>
+  closeAppError: () =>
     set({
-      ioErrorDialog: {
+      appErrorDialog: {
         isOpen: false,
         title: "",
         message: "",
@@ -1372,8 +1372,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 // Initialize the event listeners getter for frame throttling
 getEventListeners = () => useSessionStore.getState()._eventListeners;
 
-// Initialize the showIOError getter for error handling
-getGlobalShowIOError = () => useSessionStore.getState().showIOError;
+// Initialize the showAppError getter for error handling
+getGlobalShowAppError = () => useSessionStore.getState().showAppError;
 
 // ============================================================================
 // Convenience Hooks
@@ -1425,15 +1425,15 @@ export function useTransmitDropdownSessions(): Session[] {
   );
 }
 
-/** Hook for global IO error dialog state and actions */
-export function useIOErrorDialog() {
-  const isOpen = useSessionStore((s) => s.ioErrorDialog.isOpen);
-  const title = useSessionStore((s) => s.ioErrorDialog.title);
-  const message = useSessionStore((s) => s.ioErrorDialog.message);
-  const details = useSessionStore((s) => s.ioErrorDialog.details);
-  const closeIOError = useSessionStore((s) => s.closeIOError);
+/** Hook for global app error dialog state and actions */
+export function useAppErrorDialog() {
+  const isOpen = useSessionStore((s) => s.appErrorDialog.isOpen);
+  const title = useSessionStore((s) => s.appErrorDialog.title);
+  const message = useSessionStore((s) => s.appErrorDialog.message);
+  const details = useSessionStore((s) => s.appErrorDialog.details);
+  const closeAppError = useSessionStore((s) => s.closeAppError);
 
-  return { isOpen, title, message, details, closeIOError };
+  return { isOpen, title, message, details, closeAppError };
 }
 
 /** Source info for a bus in multi-bus mode */
@@ -1634,7 +1634,7 @@ export async function createAndStartMultiSourceSession(
   const regResult = await registerSessionListener(sessionId, listenerId);
   // Handle startup error (error that occurred before listener registered)
   if (regResult.startup_error) {
-    useSessionStore.getState().showIOError("Stream Error", "An error occurred while starting the session.", regResult.startup_error);
+    useSessionStore.getState().showAppError("Stream Error", "An error occurred while starting the session.", regResult.startup_error);
   }
 
   return {
@@ -1675,7 +1675,7 @@ export async function joinMultiSourceSession(
   const regResult = await registerSessionListener(sessionId, listenerId);
   // Handle startup error (error that occurred before listener registered)
   if (regResult.startup_error) {
-    useSessionStore.getState().showIOError("Stream Error", "An error occurred while starting the session.", regResult.startup_error);
+    useSessionStore.getState().showAppError("Stream Error", "An error occurred while starting the session.", regResult.startup_error);
   }
 
   return {

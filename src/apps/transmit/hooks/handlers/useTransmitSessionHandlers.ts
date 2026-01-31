@@ -5,6 +5,7 @@
 import { useCallback } from "react";
 import type { IngestOptions } from "../../../../hooks/useIOSessionManager";
 import { useTransmitStore } from "../../../../stores/transmitStore";
+import { useSessionStore } from "../../../../stores/sessionStore";
 
 export interface UseTransmitSessionHandlersParams {
   // Session manager state
@@ -79,7 +80,9 @@ export function useTransmitSessionHandlers({
           setShowIoPickerDialog(false);
         }
       } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
         console.error("Failed to create session:", e);
+        useSessionStore.getState().showAppError("Session Error", "Failed to create session.", msg);
       }
     },
     [multiBusMode, setMultiBusMode, setMultiBusProfiles, setIoProfile, reinitialize, isStreaming, start, setShowIoPickerDialog]
@@ -135,7 +138,9 @@ export function useTransmitSessionHandlers({
         // Close the dialog
         setShowIoPickerDialog(false);
       } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
         console.error("Failed to join session:", e);
+        useSessionStore.getState().showAppError("Session Error", "Failed to join session.", msg);
       }
     },
     [multiBusMode, setMultiBusMode, setMultiBusProfiles, setIoProfile, rejoin, setShowIoPickerDialog]
@@ -155,7 +160,9 @@ export function useTransmitSessionHandlers({
           setShowIoPickerDialog(false);
         }
       } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
         console.error("Failed to create multi-source session:", e);
+        useSessionStore.getState().showAppError("Multi-Bus Error", "Failed to create multi-source session.", msg);
       }
     },
     [startMultiBusSession, setShowIoPickerDialog]
