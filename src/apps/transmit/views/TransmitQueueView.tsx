@@ -26,6 +26,7 @@ import {
 import { toolbarSelect } from "../../../styles/inputStyles";
 import { flexRowGap2 } from "../../../styles/spacing";
 import { byteToHex } from "../../../utils/byteUtils";
+import { formatBusLabel } from "../../../utils/busFormat";
 
 export default function TransmitQueueView() {
   // Store selectors
@@ -33,6 +34,7 @@ export default function TransmitQueueView() {
   const activeSession = useActiveSession();
   const activeGroups = useTransmitStore((s) => s.activeGroups);
   const sessions = useSessionStore((s) => s.sessions);
+  const outputBusToSource = useSessionStore((s) => s.outputBusToSource);
 
   // Store actions
   const removeFromQueue = useTransmitStore((s) => s.removeFromQueue);
@@ -321,13 +323,21 @@ export default function TransmitQueueView() {
 
                   {/* Bus */}
                   <td className="px-4 py-2">
-                    <div className="flex items-center gap-1.5">
-                      {isOrphaned && (
-                        <span className="text-amber-500" title="Session disconnected">
-                          <AlertCircle size={12} />
+                    <div className="flex flex-col gap-0.5">
+                      <div className="flex items-center gap-1.5">
+                        {isOrphaned && (
+                          <span className="text-amber-500" title="Session disconnected">
+                            <AlertCircle size={12} />
+                          </span>
+                        )}
+                        <span
+                          className={`${textDataSecondary} text-xs truncate max-w-[100px]`}
+                          title={formatBusLabel(item.profileName, item.canFrame?.bus, outputBusToSource)}
+                        >
+                          {formatBusLabel(item.profileName, item.canFrame?.bus, outputBusToSource)}
                         </span>
-                      )}
-                      {item.type === "can" && item.canFrame ? (
+                      </div>
+                      {item.type === "can" && item.canFrame && (
                         <select
                           value={item.canFrame.bus}
                           onChange={(e) =>
@@ -342,8 +352,6 @@ export default function TransmitQueueView() {
                             </option>
                           ))}
                         </select>
-                      ) : (
-                        <span className={textDataSecondary}>Serial</span>
                       )}
                     </div>
                   </td>

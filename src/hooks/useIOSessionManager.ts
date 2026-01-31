@@ -19,6 +19,7 @@ import {
   BUFFER_PROFILE_ID,
   type CreateMultiSourceOptions,
   type PerInterfaceFramingConfig,
+  type BusSourceInfo,
 } from "../stores/sessionStore";
 
 // Re-export for backward compatibility
@@ -125,6 +126,8 @@ export interface UseIOSessionManagerResult {
   sourceProfileId: string | null;
   /** Set source profile ID */
   setSourceProfileId: (profileId: string | null) => void;
+  /** Maps output bus number to source info (profileName, deviceBus) */
+  outputBusToSource: Map<number, BusSourceInfo>;
 
   // ---- Effective Session ----
   /** Effective session ID (multi-bus ID or single profile ID) */
@@ -317,9 +320,11 @@ export function useIOSessionManager(
     multiBusMode,
     multiBusProfiles,
     sourceProfileId,
+    outputBusToSource,
     setMultiBusMode,
     setMultiBusProfiles,
     setSourceProfileId,
+    setOutputBusToSource,
   } = useMultiBusState();
 
   // ---- Detach/Watch State ----
@@ -484,13 +489,30 @@ export function useIOSessionManager(
 
     await createAndStartMultiSourceSession(createOptions);
 
+    // Build output bus → source mapping
+    const busToSource = new Map<number, { profileName: string; deviceBus: number }>();
+    if (busMappings) {
+      for (const [profileId, mappings] of busMappings) {
+        const profileName = profileNamesMap.get(profileId) ?? profileId;
+        for (const mapping of mappings) {
+          if (mapping.enabled) {
+            busToSource.set(mapping.outputBus, {
+              profileName,
+              deviceBus: mapping.deviceBus,
+            });
+          }
+        }
+      }
+    }
+
     // Update state
     setMultiBusMode(true);
     setMultiBusProfiles(profileIds);
+    setOutputBusToSource(busToSource);
     setMultiSessionId(sessionId);
     setIoProfile(sessionId);
     setIsDetached(false);
-  }, [appName, profileNamesMap, setMultiBusMode, setMultiBusProfiles, setIoProfile]);
+  }, [appName, profileNamesMap, setMultiBusMode, setMultiBusProfiles, setOutputBusToSource, setIoProfile]);
 
   // Join existing multi-source session
   const joinExistingSession = useCallback(async (
@@ -652,6 +674,7 @@ export function useIOSessionManager(
     setMultiBusProfiles,
     sourceProfileId,
     setSourceProfileId,
+    outputBusToSource,
 
     // Effective Session
     effectiveSessionId,

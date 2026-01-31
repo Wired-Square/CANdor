@@ -305,6 +305,8 @@ export interface SessionStore {
   multiBusProfiles: string[];
   /** Source profile ID - preserved when switching to buffer mode */
   sourceProfileId: string | null;
+  /** Maps output bus number to source info { profileName, deviceBus } */
+  outputBusToSource: Map<number, { profileName: string; deviceBus: number }>;
 
   // ---- Actions: Session Lifecycle ----
   /** Open a session - creates if not exists, joins if exists */
@@ -373,6 +375,8 @@ export interface SessionStore {
   setMultiBusProfiles: (profiles: string[]) => void;
   /** Set source profile ID (preserved when switching to buffer) */
   setSourceProfileId: (profileId: string | null) => void;
+  /** Set output bus to source mapping (output bus → { profileName, deviceBus }) */
+  setOutputBusToSource: (mapping: Map<number, { profileName: string; deviceBus: number }>) => void;
   /** Reset multi-bus state (disable mode, clear profiles) */
   resetMultiBusState: () => void;
 
@@ -568,6 +572,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   multiBusMode: false,
   multiBusProfiles: [],
   sourceProfileId: null,
+  outputBusToSource: new Map(),
 
   // ---- Session Lifecycle ----
   openSession: async (profileId, profileName, listenerId, options = {}) => {
@@ -1250,10 +1255,13 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   setSourceProfileId: (profileId) => set({ sourceProfileId: profileId }),
 
+  setOutputBusToSource: (mapping) => set({ outputBusToSource: mapping }),
+
   resetMultiBusState: () => set({
     multiBusMode: false,
     multiBusProfiles: [],
     sourceProfileId: null,
+    outputBusToSource: new Map(),
   }),
 
   // ---- Selectors ----
@@ -1340,6 +1348,12 @@ export function useTransmitDropdownSessions(): Session[] {
   );
 }
 
+/** Source info for a bus in multi-bus mode */
+export interface BusSourceInfo {
+  profileName: string;
+  deviceBus: number;
+}
+
 /** Multi-bus state returned by useMultiBusState hook */
 export interface MultiBusState {
   /** Whether multi-bus mode is active */
@@ -1348,12 +1362,16 @@ export interface MultiBusState {
   multiBusProfiles: string[];
   /** Source profile ID (preserved when switching to buffer) */
   sourceProfileId: string | null;
+  /** Maps output bus number to source info */
+  outputBusToSource: Map<number, BusSourceInfo>;
   /** Enable/disable multi-bus mode */
   setMultiBusMode: (enabled: boolean) => void;
   /** Set profiles in multi-bus session */
   setMultiBusProfiles: (profiles: string[]) => void;
   /** Set source profile ID */
   setSourceProfileId: (profileId: string | null) => void;
+  /** Set output bus to source mapping */
+  setOutputBusToSource: (mapping: Map<number, BusSourceInfo>) => void;
   /** Reset all multi-bus state */
   resetMultiBusState: () => void;
 }
@@ -1365,9 +1383,11 @@ export function useMultiBusState(): MultiBusState {
       multiBusMode: s.multiBusMode,
       multiBusProfiles: s.multiBusProfiles,
       sourceProfileId: s.sourceProfileId,
+      outputBusToSource: s.outputBusToSource,
       setMultiBusMode: s.setMultiBusMode,
       setMultiBusProfiles: s.setMultiBusProfiles,
       setSourceProfileId: s.setSourceProfileId,
+      setOutputBusToSource: s.setOutputBusToSource,
       resetMultiBusState: s.resetMultiBusState,
     }))
   );

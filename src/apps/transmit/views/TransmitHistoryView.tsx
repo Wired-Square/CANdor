@@ -5,6 +5,7 @@
 import React, { useCallback, useMemo } from "react";
 import { Trash2, Check, X, Download } from "lucide-react";
 import { useTransmitStore } from "../../../stores/transmitStore";
+import { useSessionStore } from "../../../stores/sessionStore";
 import { useSettings } from "../../../hooks/useSettings";
 import {
   bgDataToolbar,
@@ -16,12 +17,14 @@ import { flexRowGap2 } from "../../../styles/spacing";
 import { buttonBase } from "../../../styles/buttonStyles";
 import { byteToHex } from "../../../utils/byteUtils";
 import { formatIsoUs, formatHumanUs, renderDeltaNode } from "../../../utils/timeFormat";
+import { formatBusLabel } from "../../../utils/busFormat";
 
 export default function TransmitHistoryView() {
   const { settings } = useSettings();
 
   // Store selectors
   const history = useTransmitStore((s) => s.history);
+  const outputBusToSource = useSessionStore((s) => s.outputBusToSource);
 
   // Store actions
   const clearHistory = useTransmitStore((s) => s.clearHistory);
@@ -217,7 +220,7 @@ export default function TransmitHistoryView() {
             <tr>
               <th className="text-left px-4 py-2 w-12"></th>
               <th className="text-left px-4 py-2">Timestamp</th>
-              <th className="text-left px-4 py-2">Interface</th>
+              <th className="text-left px-4 py-2">Bus</th>
               <th className="text-left px-4 py-2 w-16">Type</th>
               <th className="text-left px-4 py-2">Frame / Data</th>
               <th className="text-left px-4 py-2">Error</th>
@@ -255,9 +258,14 @@ export default function TransmitHistoryView() {
                     </span>
                   </td>
 
-                  {/* Interface */}
+                  {/* Source */}
                   <td className="px-4 py-2">
-                    <span className="text-gray-300">{item.profileName}</span>
+                    <span
+                      className={`${textDataSecondary} text-xs truncate max-w-[120px] block`}
+                      title={formatBusLabel(item.profileName, formatted.bus, outputBusToSource)}
+                    >
+                      {formatBusLabel(item.profileName, formatted.bus, outputBusToSource)}
+                    </span>
                   </td>
 
                   {/* Type */}
@@ -280,11 +288,6 @@ export default function TransmitHistoryView() {
                         <code className="font-mono text-green-400">
                           {formatted.id}
                         </code>
-                      )}
-                      {formatted.bus !== null && formatted.bus !== undefined && (
-                        <span className="text-xs text-amber-400">
-                          Bus {formatted.bus}
-                        </span>
                       )}
                       <code className="font-mono text-gray-400 text-xs">
                         {formatted.details}
