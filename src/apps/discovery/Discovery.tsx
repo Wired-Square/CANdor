@@ -732,9 +732,11 @@ export default function Discovery() {
         profileName: ioProfileName ?? null,
         isStreaming,
         isPaused,
+        canPause: capabilities?.can_pause ?? false,
+        joinerCount: joinerCount ?? 1,
       });
     }
-  }, [isFocused, ioProfileName, isStreaming, isPaused]);
+  }, [isFocused, ioProfileName, isStreaming, isPaused, capabilities, joinerCount]);
 
   // Listen for session control menu commands
   useEffect(() => {
@@ -762,6 +764,19 @@ export default function Discovery() {
               }
               break;
             case "stop":
+              // Pause frame delivery (like timeline Pause button)
+              if (isStreaming && !isPaused) {
+                pause();
+              }
+              break;
+            case "detach":
+              // Disconnect from shared session (others keep streaming)
+              if (isStreaming && joinerCount > 1) {
+                handleDetach();
+              }
+              break;
+            case "stopAll":
+              // Stop this app's watch (like top bar Stop button)
               if (isStreaming) {
                 stopWatch();
               }
@@ -798,7 +813,7 @@ export default function Discovery() {
     return () => {
       cleanup.then((fn) => fn());
     };
-  }, [isPaused, isStopped, isStreaming, sessionReady, resume, start, pause, stopWatch, handlers, currentTime, dialogs]);
+  }, [isPaused, isStopped, isStreaming, sessionReady, joinerCount, resume, start, pause, stop, stopWatch, handleDetach, handlers, currentTime, dialogs]);
 
   // Handle skip for IoReaderPickerDialog
   const handleSkip = useCallback(async () => {

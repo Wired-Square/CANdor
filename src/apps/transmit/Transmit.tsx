@@ -191,9 +191,11 @@ export default function Transmit() {
         profileName: ioProfileName ?? null,
         isStreaming,
         isPaused,
+        canPause: capabilities?.can_pause ?? false,
+        joinerCount: joinerCount ?? 1,
       });
     }
-  }, [isFocused, ioProfileName, isStreaming, isPaused]);
+  }, [isFocused, ioProfileName, isStreaming, isPaused, capabilities, joinerCount]);
 
   // Listen for session control menu commands
   useEffect(() => {
@@ -213,6 +215,19 @@ export default function Transmit() {
               }
               break;
             case "stop":
+              // Stop this app's connection (leave session)
+              if (isStreaming || isPaused) {
+                leave();
+              }
+              break;
+            case "detach":
+              // Disconnect from shared session (others keep streaming)
+              if (isStreaming && joinerCount > 1) {
+                managerDetach();
+              }
+              break;
+            case "stopAll":
+              // Stop the entire session for all apps
               if (isStreaming || isPaused) {
                 stop();
               }
@@ -234,7 +249,7 @@ export default function Transmit() {
     return () => {
       cleanup.then((fn) => fn());
     };
-  }, [isStopped, isStreaming, isPaused, sessionReady, start, stop, setShowIoPickerDialog]);
+  }, [isStopped, isStreaming, isPaused, sessionReady, joinerCount, start, stop, leave, managerDetach, setShowIoPickerDialog]);
 
   // Listen for transmit history events from repeat transmissions
   const addHistoryItem = useTransmitStore((s) => s.addHistoryItem);

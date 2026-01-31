@@ -504,6 +504,15 @@ export default function MainLayout() {
         emitSessionControl("stop");
       });
 
+      // Session connection controls
+      const unlistenDetach = await currentWindow.listen("menu-session-detach", () => {
+        emitSessionControl("detach");
+      });
+
+      const unlistenStopAll = await currentWindow.listen("menu-session-stop-all", () => {
+        emitSessionControl("stopAll");
+      });
+
       // Clear frames - emit to focused app
       const unlistenClear = await currentWindow.listen("menu-session-clear", () => {
         emitSessionControl("clear");
@@ -523,6 +532,8 @@ export default function MainLayout() {
         unlistenPlay();
         unlistenPause();
         unlistenStop();
+        unlistenDetach();
+        unlistenStopAll();
         unlistenClear();
         unlistenPicker();
         unlistenBookmarkManage();

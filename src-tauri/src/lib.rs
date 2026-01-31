@@ -24,6 +24,8 @@ struct SessionMenuItems {
     play: MenuItem<Wry>,
     pause: MenuItem<Wry>,
     stop: MenuItem<Wry>,
+    detach: MenuItem<Wry>,
+    stop_all: MenuItem<Wry>,
 }
 
 struct SessionMenuState(Mutex<Option<SessionMenuItems>>);
@@ -157,6 +159,8 @@ fn update_menu_session_state(
     profile_name: Option<String>,
     is_streaming: bool,
     is_paused: bool,
+    can_pause: bool,
+    joiner_count: u32,
 ) {
     if let Some(items) = state.0.lock().unwrap().as_ref() {
         // Update source info item text
@@ -166,14 +170,21 @@ fn update_menu_session_state(
             .unwrap_or_else(|| "No source selected".to_string());
         let _ = items.source.set_text(&text);
 
-        // Update Play enabled state (enabled when stopped or paused)
+        // Play: enabled when stopped or paused
         let _ = items.play.set_enabled(!is_streaming || is_paused);
 
-        // Update Pause enabled state (enabled when streaming and not paused)
-        let _ = items.pause.set_enabled(is_streaming && !is_paused);
+        // Pause: enabled when streaming, not paused, AND source supports pause
+        let _ = items.pause.set_enabled(is_streaming && !is_paused && can_pause);
 
-        // Update Stop enabled state (enabled when streaming)
-        let _ = items.stop.set_enabled(is_streaming);
+        // Stop: enabled when streaming, not paused, and source supports pause
+        // (Stop now acts as pause for timeline sources, like the timeline Pause button)
+        let _ = items.stop.set_enabled(is_streaming && !is_paused && can_pause);
+
+        // Detach Session: enabled when streaming and multiple apps connected
+        let _ = items.detach.set_enabled(is_streaming && joiner_count > 1);
+
+        // Stop Session: enabled when streaming (stops entire session for all apps)
+        let _ = items.stop_all.set_enabled(is_streaming);
     }
 }
 
@@ -300,6 +311,8 @@ pub fn run() {
             let session_picker_item = MenuItemBuilder::with_id("session-picker", "Select Source…")
                 .accelerator("cmdOrCtrl+I")
                 .build(app)?;
+
+            // Playback controls (frame delivery)
             let session_play_item = MenuItemBuilder::with_id("session-play", "Play")
                 .accelerator("cmdOrCtrl+Return")
                 .build(app)?;
@@ -309,6 +322,14 @@ pub fn run() {
             let session_stop_item = MenuItemBuilder::with_id("session-stop", "Stop")
                 .accelerator("cmdOrCtrl+Shift+.")
                 .build(app)?;
+
+            // Session connection controls
+            let session_detach_item = MenuItemBuilder::with_id("session-detach", "Detach Session")
+                .enabled(false)
+                .build(app)?;
+            let session_stop_all_item = MenuItemBuilder::with_id("session-stop-all", "Stop Session")
+                .build(app)?;
+
             let session_clear_item = MenuItemBuilder::with_id("session-clear", "Clear Frames")
                 .accelerator("cmdOrCtrl+K")
                 .build(app)?;
@@ -320,6 +341,9 @@ pub fn run() {
                 .item(&session_play_item)
                 .item(&session_pause_item)
                 .item(&session_stop_item)
+                .separator()
+                .item(&session_detach_item)
+                .item(&session_stop_all_item)
                 .separator()
                 .item(&session_clear_item)
                 .build()?;
@@ -364,6 +388,8 @@ pub fn run() {
                 play: session_play_item,
                 pause: session_pause_item,
                 stop: session_stop_item,
+                detach: session_detach_item,
+                stop_all: session_stop_all_item,
             };
             *app.state::<SessionMenuState>().0.lock().unwrap() = Some(session_menu_items);
 
@@ -406,6 +432,12 @@ pub fn run() {
                     }
                     "session-stop" => {
                         emit_to_focused_window(app, "menu-session-stop", ());
+                    }
+                    "session-detach" => {
+                        emit_to_focused_window(app, "menu-session-detach", ());
+                    }
+                    "session-stop-all" => {
+                        emit_to_focused_window(app, "menu-session-stop-all", ());
                     }
                     "session-clear" => {
                         emit_to_focused_window(app, "menu-session-clear", ());
