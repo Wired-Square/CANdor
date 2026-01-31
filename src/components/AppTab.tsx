@@ -3,10 +3,10 @@
 
 import { useState, useEffect } from "react";
 import { type IDockviewPanelHeaderProps } from "dockview-react";
-import { Search, Activity, FileText, Calculator, GitCompare, ListOrdered, Scan, Send, Settings, X } from "lucide-react";
+import { Search, Activity, FileText, Calculator, GitCompare, ListOrdered, Scan, Send, Settings, DatabaseZap, X } from "lucide-react";
 import { iconMd, iconXs } from "../styles/spacing";
 
-type PanelId = "discovery" | "decoder" | "catalog-editor" | "frame-calculator" | "payload-analysis" | "frame-order-analysis" | "serial-frame-analysis" | "transmit" | "settings";
+type PanelId = "discovery" | "decoder" | "catalog-editor" | "frame-calculator" | "payload-analysis" | "frame-order-analysis" | "serial-frame-analysis" | "transmit" | "query" | "settings";
 
 // Icon and color config for each panel
 const panelConfig: Record<PanelId, { icon: typeof Search; color: string }> = {
@@ -18,6 +18,7 @@ const panelConfig: Record<PanelId, { icon: typeof Search; color: string }> = {
   "payload-analysis": { icon: GitCompare, color: "text-pink-400" },
   "frame-order-analysis": { icon: ListOrdered, color: "text-amber-400" },
   "serial-frame-analysis": { icon: Scan, color: "text-cyan-400" },
+  query: { icon: DatabaseZap, color: "text-amber-400" },
   settings: { icon: Settings, color: "text-orange-400" },
 };
 

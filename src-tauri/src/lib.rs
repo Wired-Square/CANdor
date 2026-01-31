@@ -4,6 +4,7 @@ mod catalog;
 mod checksums;
 mod credentials;
 mod dbc_export;
+mod dbquery;
 mod framing;
 mod io;
 mod profile_tracker;
@@ -667,6 +668,9 @@ pub fn run() {
             store_manager::store_delete,
             store_manager::store_has,
             store_manager::store_keys,
+            // Database Query API (Query app)
+            dbquery::db_query_byte_changes,
+            dbquery::db_query_frame_changes,
         ])
         // Handle window close events to prevent crashes on macOS 26.2+ (Tahoe)
         //

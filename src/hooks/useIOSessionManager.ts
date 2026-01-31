@@ -27,7 +27,7 @@ export { isBufferProfileId, BUFFER_PROFILE_ID };
 import type { BusMapping, PlaybackPosition, RawBytesPayload } from "../api/io";
 import type { IOProfile } from "./useSettings";
 import type { FrameMessage } from "../stores/discoveryStore";
-import type { StreamEndedPayload, IOCapabilities } from "../api/io";
+import { setSessionListenerActive, type StreamEndedPayload, type IOCapabilities } from "../api/io";
 import { markFavoriteUsed, type TimeRangeFavorite } from "../utils/favorites";
 import { localToUtc } from "../utils/timeFormat";
 
@@ -237,6 +237,8 @@ export interface UseIOSessionManagerResult {
   watchMultiSource: (profileIds: string[], options: IngestOptions) => Promise<void>;
   /** Stop watching (stop session, clear watch state) */
   stopWatch: () => Promise<void>;
+  /** Connect to a profile without streaming (creates session in stopped state, for Query app) */
+  connectOnly: (profileId: string, options?: IngestOptions) => Promise<void>;
   /** Select a profile (clear multi-bus, set profile, set default speed) */
   selectProfile: (profileId: string | null) => void;
   /** Select multiple profiles for multi-bus mode */
@@ -591,6 +593,14 @@ export function useIOSessionManager(
       ...reinitializeOptions,
     });
 
+    // Ensure listener is ACTIVE so we receive frames
+    // (connectOnly sets listener inactive, so we need to reactivate it)
+    try {
+      await setSessionListenerActive(profileId, appName, true);
+    } catch {
+      // Ignore - may fail if session doesn't exist yet
+    }
+
     // Clear multi-bus state when switching to a single source
     setMultiBusMode(false);
     setMultiBusProfiles([]);
@@ -605,7 +615,7 @@ export function useIOSessionManager(
     setIsWatching(true);
     resetWatchFrameCount();
     streamCompletedRef.current = false;
-  }, [session, onBeforeWatch, setMultiBusMode, setMultiBusProfiles, setIoProfile, setPlaybackSpeedProp, resetWatchFrameCount]);
+  }, [session, appName, onBeforeWatch, setMultiBusMode, setMultiBusProfiles, setIoProfile, setPlaybackSpeedProp, resetWatchFrameCount]);
 
   // Watch multiple sources: start multi-bus session, set speed, start watching
   const watchMultiSource = useCallback(async (
@@ -633,6 +643,45 @@ export function useIOSessionManager(
     await session.stop();
     setIsWatching(false);
   }, [session]);
+
+  // Connect only: create session without streaming (for Query app)
+  // Creates/joins the session with skipAutoStart to prevent auto-starting playback sources.
+  // Also marks our listener as INACTIVE so we don't receive frames even if session is running.
+  // This is useful when:
+  // - Postgres session is new: session stays stopped, Query won't receive frames
+  // - Postgres session is shared (Discovery streaming): Query joins but won't receive frames
+  const connectOnly = useCallback(async (
+    profileId: string,
+    opts?: IngestOptions
+  ) => {
+    await session.reinitialize(profileId, {
+      startTime: opts?.startTime,
+      endTime: opts?.endTime,
+      speed: opts?.speed,
+      limit: opts?.maxFrames,
+      skipAutoStart: true, // Don't auto-start - Query connects but doesn't stream
+    });
+
+    // Mark our listener as INACTIVE so we don't receive frames
+    // This is the key difference from watchSingleSource - we connect but don't stream
+    try {
+      await setSessionListenerActive(profileId, appName, false);
+    } catch {
+      // Ignore - listener may not be fully registered yet
+    }
+
+    // Clear multi-bus state when connecting to a single source
+    setMultiBusMode(false);
+    setMultiBusProfiles([]);
+
+    // Set profile but don't start watching
+    setIoProfile(profileId);
+    if (opts?.speed !== undefined) {
+      setPlaybackSpeedProp?.(opts.speed);
+    }
+
+    // Note: Do NOT set isWatching - session is connected but not streaming to us
+  }, [session, appName, setMultiBusMode, setMultiBusProfiles, setIoProfile, setPlaybackSpeedProp]);
 
   // Jump to a bookmark: stop if streaming, cleanup, reinitialize with bookmark time range
   const jumpToBookmark = useCallback(
@@ -843,6 +892,7 @@ export function useIOSessionManager(
     watchSingleSource,
     watchMultiSource,
     stopWatch,
+    connectOnly,
     selectProfile,
     selectMultipleProfiles,
     joinSession,

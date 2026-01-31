@@ -44,6 +44,7 @@ const CatalogEditor = lazy(() => import("../apps/catalog/CatalogEditor"));
 const FrameCalculator = lazy(() => import("../apps/calculator/FrameCalculator"));
 const PayloadAnalysis = lazy(() => import("../apps/analysis/PayloadAnalysis"));
 const FrameOrderAnalysis = lazy(() => import("../apps/analysis/FrameOrderAnalysis"));
+const Query = lazy(() => import("../apps/query/Query"));
 const Settings = lazy(() => import("../apps/settings/Settings"));
 
 // Get layout key for a specific window (per-window persistence)
@@ -106,6 +107,10 @@ function FrameOrderAnalysisPanel(_props: IDockviewPanelProps) {
   return <PanelWrapper><FrameOrderAnalysis /></PanelWrapper>;
 }
 
+function QueryPanel(_props: IDockviewPanelProps) {
+  return <PanelWrapper><Query /></PanelWrapper>;
+}
+
 function SettingsPanel(_props: IDockviewPanelProps) {
   return <PanelWrapper><Settings /></PanelWrapper>;
 }
@@ -119,6 +124,7 @@ const components = {
   "frame-calculator": FrameCalculatorPanel,
   "payload-analysis": PayloadAnalysisPanel,
   "frame-order-analysis": FrameOrderAnalysisPanel,
+  query: QueryPanel,
   settings: SettingsPanel,
 };
 
@@ -237,6 +243,7 @@ const panelTitles: Record<PanelId, string> = {
   "frame-calculator": "Calculator",
   "payload-analysis": "Payload Analysis",
   "frame-order-analysis": "Frame Order",
+  query: "Query",
   settings: "Settings",
 };
 

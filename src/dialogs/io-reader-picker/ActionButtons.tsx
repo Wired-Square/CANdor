@@ -7,6 +7,8 @@ import { primaryButtonBase, successButtonBase, panelFooter, errorBoxCompact, dan
 import { iconMd, iconSm } from "../../styles/spacing";
 
 type Props = {
+  /** Dialog mode: "streaming" shows Watch/Ingest, "connect" shows just Connect */
+  mode?: "streaming" | "connect";
   isIngesting: boolean;
   ingestProfileId: string | null;
   checkedReaderId: string | null;
@@ -45,9 +47,12 @@ type Props = {
   isMultiSourceLive?: boolean;
   /** Called when user wants to restart a live multi-source session with updated config */
   onMultiRestartClick?: () => void;
+  /** Called when user clicks Connect in connect mode (creates session without streaming) */
+  onConnectClick?: () => void;
 };
 
 export default function ActionButtons({
+  mode = "streaming",
   isIngesting,
   ingestProfileId,
   checkedReaderId,
@@ -71,6 +76,7 @@ export default function ActionButtons({
   onRestartClick,
   isMultiSourceLive = false,
   onMultiRestartClick,
+  onConnectClick,
 }: Props) {
   const isCsvSelected = checkedReaderId === CSV_EXTERNAL_ID;
   const isCheckedRealtime = checkedProfile ? isRealtimeProfile(checkedProfile) : false;
@@ -153,6 +159,19 @@ export default function ActionButtons({
               {importError}
             </div>
           )}
+        </div>
+      ) : mode === "connect" && checkedReaderId ? (
+        // Connect mode - show single Connect button (for Query app)
+        // Uses onConnectClick if provided (creates session without streaming), falls back to onWatchClick
+        <div className="flex gap-2">
+          <button
+            onClick={onConnectClick ?? onWatchClick}
+            className={`flex-1 ${successButtonBase}`}
+          >
+            <Plug className={iconMd} />
+            <span>Connect</span>
+          </button>
+          {releaseButton}
         </div>
       ) : checkedReaderId ? (
         // IO reader selected - show action buttons based on session state
@@ -255,7 +274,7 @@ export default function ActionButtons({
         </button>
       ) : (
         <div className="text-center text-sm text-[color:var(--text-muted)] py-1">
-          Select an IO reader to continue
+          {mode === "connect" ? "Select a database to connect" : "Select an IO reader to continue"}
         </div>
       )}
     </div>

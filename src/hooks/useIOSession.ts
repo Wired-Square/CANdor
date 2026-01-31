@@ -152,6 +152,8 @@ export interface UseIOSessionResult {
       emitRawBytes?: boolean;
       // Bus override for single-bus devices (0-7)
       busOverride?: number;
+      // Skip auto-starting playback sources (for connect-only mode)
+      skipAutoStart?: boolean;
     }
   ) => Promise<void>;
   /** Switch to buffer replay mode (after stream ends with buffer data) */
@@ -542,6 +544,7 @@ export function useIOSession(
         minFrameLength?: number;
         emitRawBytes?: boolean;
         busOverride?: number;
+        skipAutoStart?: boolean;
       }
     ) => {
       // For reinitialize, use new profile ID if provided, else current
@@ -571,7 +574,8 @@ export function useIOSession(
         }
 
         // Reinitialize uses Rust's atomic check - if other listeners exist, it won't destroy
-        // The backend auto-starts the session after creation
+        // The backend doesn't auto-start playback sources (postgres, csv) - that happens in openSession
+        // unless skipAutoStart is set
         await reinitializeSession(
           targetProfileId,
           listenerIdRef.current,
@@ -590,6 +594,7 @@ export function useIOSession(
             minFrameLength: opts?.minFrameLength,
             emitRawBytes: opts?.emitRawBytes,
             busOverride: opts?.busOverride,
+            skipAutoStart: opts?.skipAutoStart,
           }
         );
 

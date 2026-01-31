@@ -109,6 +109,8 @@ export interface IngestOptions {
 const EMPTY_SELECTED_IDS: string[] = [];
 
 type Props = {
+  /** Dialog mode: "streaming" shows Watch/Ingest, "connect" shows just Connect */
+  mode?: "streaming" | "connect";
   isOpen: boolean;
   onClose: () => void;
   ioProfiles: IOProfile[];
@@ -159,9 +161,12 @@ type Props = {
   onSkip?: () => void;
   /** Listener ID for this app (e.g., "discovery", "decoder") - required for Leave button */
   listenerId?: string;
+  /** Called when user clicks Connect in connect mode (creates session without streaming) */
+  onConnect?: (profileId: string) => void;
 };
 
 export default function IoReaderPickerDialog({
+  mode = "streaming",
   isOpen,
   onClose,
   ioProfiles,
@@ -190,6 +195,7 @@ export default function IoReaderPickerDialog({
   disabledProfiles,
   onSkip,
   listenerId,
+  onConnect,
 }: Props) {
   // Use stable empty array when selectedIds is not provided (avoids re-renders)
   const selectedIds = selectedIdsProp ?? EMPTY_SELECTED_IDS;
@@ -1309,7 +1315,8 @@ export default function IoReaderPickerDialog({
           />
 
           {/* Show ingest options - even for live sessions so user can modify and apply changes */}
-          {(checkedReaderId || isMultiBusMode) && (
+          {/* Hide in connect mode since we're just selecting a database, not streaming */}
+          {mode !== "connect" && (checkedReaderId || isMultiBusMode) && (
             <>
               <IngestOptions
                 checkedReaderId={checkedReaderId}
@@ -1359,6 +1366,7 @@ export default function IoReaderPickerDialog({
         </div>
 
         <ActionButtons
+          mode={mode}
           isIngesting={isIngesting}
           ingestProfileId={ingestProfileId}
           checkedReaderId={checkedReaderId}
@@ -1382,6 +1390,10 @@ export default function IoReaderPickerDialog({
           onRestartClick={isCheckedProfileLive && !isCheckedProfileStopped ? handleRestartClick : undefined}
           isMultiSourceLive={isMultiSourceLive}
           onMultiRestartClick={isMultiSourceLive ? handleMultiRestartClick : undefined}
+          onConnectClick={checkedReaderId && onConnect ? () => {
+            onConnect(checkedReaderId);
+            onClose();
+          } : undefined}
         />
       </div>
     </Dialog>

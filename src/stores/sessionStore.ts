@@ -264,6 +264,8 @@ export interface CreateSessionOptions {
   minFrameLength?: number;
   /** Bus number override for single-bus devices (0-7) */
   busOverride?: number;
+  /** Skip auto-starting playback sources (postgres, csv) - for connect-only mode */
+  skipAutoStart?: boolean;
 }
 
 /** Callbacks for a session - stored per listener in the frontend */
@@ -876,10 +878,13 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     // Step 5.5: Start the session if it's still stopped (for playback sources like PostgreSQL, CSV)
     // Playback sources don't auto-start on the backend to avoid emitting frames before listeners are ready.
     // Now that event listeners are set up, we can safely start.
-    // EXCEPTION: Buffer mode should NOT auto-start - data is already in the buffer store
+    // EXCEPTION 1: Buffer mode should NOT auto-start - data is already in the buffer store
     // and can be accessed via pagination without streaming. User can start playback manually.
+    // EXCEPTION 2: skipAutoStart option - for connect-only mode (Query app) where we want
+    // to create the session but not start streaming until user explicitly requests it.
     const isBufferSession = isBufferProfileId(profileId);
-    if (ioState === "stopped" && !isBufferSession) {
+    const shouldAutoStart = ioState === "stopped" && !isBufferSession && !options.skipAutoStart;
+    if (shouldAutoStart) {
       try {
         await startReaderSession(sessionId);
         ioState = "running";

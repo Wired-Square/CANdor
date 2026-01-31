@@ -1,7 +1,7 @@
 // ui/src/components/LogoMenu.tsx
 
 import { useState, useRef, useEffect } from "react";
-import { Search, Activity, FileText, Calculator, Settings, Send, ArrowUpCircle } from "lucide-react";
+import { Search, Activity, FileText, Calculator, Settings, Send, ArrowUpCircle, DatabaseZap } from "lucide-react";
 import { iconMd } from "../styles/spacing";
 import { bgSurface, borderDefault } from "../styles";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -9,7 +9,7 @@ import logo from "../assets/logo.png";
 import { useUpdateStore } from "../stores/updateStore";
 import { openSettingsPanel } from "../api";
 
-export type PanelId = "discovery" | "decoder" | "catalog-editor" | "frame-calculator" | "payload-analysis" | "frame-order-analysis" | "transmit" | "settings";
+export type PanelId = "discovery" | "decoder" | "catalog-editor" | "frame-calculator" | "payload-analysis" | "frame-order-analysis" | "transmit" | "query" | "settings";
 
 interface LogoMenuProps {
   onPanelClick: (panelId: PanelId) => void;
@@ -58,6 +58,13 @@ const menuItems: MenuItem[] = [
     label: "Calculator",
     color: "text-teal-400",
     bgColor: "hover:bg-teal-500/10",
+  },
+  {
+    id: "query",
+    icon: DatabaseZap,
+    label: "Query",
+    color: "text-amber-400",
+    bgColor: "hover:bg-amber-500/10",
   },
   {
     id: "settings",
