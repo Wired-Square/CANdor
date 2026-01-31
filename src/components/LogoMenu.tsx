@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Search, Activity, FileText, Calculator, Settings, Send, ArrowUpCircle } from "lucide-react";
 import { iconMd } from "../styles/spacing";
+import { bgSurface, borderDefault } from "../styles";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import logo from "../assets/logo.png";
 import { useUpdateStore } from "../stores/updateStore";
@@ -145,14 +146,14 @@ export default function LogoMenu({ onPanelClick }: LogoMenuProps) {
 
       {/* Dropdown menu */}
       {isOpen && (
-        <div className="absolute top-full left-2 mt-1 py-1 min-w-[180px] bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50">
+        <div className={`absolute top-full left-2 mt-1 py-1 min-w-[180px] ${bgSurface} ${borderDefault} rounded-lg shadow-xl z-50`}>
           {menuItems.map((item) => {
             const Icon = item.icon;
             // Add divider before Settings
             const showDivider = item.id === "settings";
             return (
               <div key={item.id}>
-                {showDivider && <div className="my-1 border-t border-slate-700" />}
+                {showDivider && <div className={`my-1 border-t ${borderDefault}`} />}
                 <button
                   onClick={() => handleItemClick(item.id)}
                   className={`

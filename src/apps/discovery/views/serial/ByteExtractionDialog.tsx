@@ -10,6 +10,7 @@ import Dialog from '../../../../components/Dialog';
 import { resolveByteIndexSync } from '../../../../utils/analysis/checksums';
 import { type ExtractionConfig } from './serialTypes';
 import { byteToHex } from '../../../../utils/byteUtils';
+import { bgSurface, bgDataView, textPrimary, textSecondary, textMuted, borderDefault, hoverBg } from '../../../../styles';
 
 interface ByteExtractionDialogProps {
   isOpen: boolean;
@@ -115,21 +116,21 @@ export default function ByteExtractionDialog({
     <Dialog isOpen={isOpen} maxWidth="max-w-2xl">
       <div className="p-4 space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-white">{title}</h2>
-          <button onClick={onClose} className="p-1 hover:bg-gray-700 rounded">
-            <X className={`${iconLg} text-gray-400`} />
+          <h2 className={`text-lg font-semibold ${textPrimary}`}>{title}</h2>
+          <button onClick={onClose} className={`p-1 ${hoverBg} rounded`}>
+            <X className={`${iconLg} ${textSecondary}`} />
           </button>
         </div>
 
-        <p className="text-sm text-gray-400">
+        <p className={`text-sm ${textSecondary}`}>
           Click bytes to select range, or enter values manually below.
         </p>
 
         {/* Sample frames with clickable bytes */}
-        <div className="space-y-2 font-mono text-sm bg-gray-900 p-3 rounded max-h-48 overflow-y-auto">
+        <div className={`space-y-2 font-mono text-sm ${bgDataView} p-3 rounded max-h-48 overflow-y-auto`}>
           {sampleFrames.slice(0, 5).map((frame, frameIdx) => (
             <div key={frameIdx} className={flexRowGap2}>
-              <span className="text-gray-500 w-6 text-right">{frameIdx + 1}.</span>
+              <span className={`${textMuted} w-6 text-right`}>{frameIdx + 1}.</span>
               <div className="flex gap-1 flex-wrap">
                 {frame.map((byte, byteIdx) => (
                   <button
@@ -138,7 +139,7 @@ export default function ByteExtractionDialog({
                     className={`px-1.5 py-0.5 rounded text-xs font-medium transition-colors ${
                       isByteSelected(byteIdx, frame.length)
                         ? `${colorClasses.bgLight} ${colorClasses.text} ring-1 ring-current`
-                        : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                        : `${bgSurface} ${textPrimary} hover:brightness-95`
                     }`}
                     title={useNegativeIndex ? `[${byteIdx - frame.length}]` : `[${byteIdx}]`}
                   >
@@ -152,9 +153,9 @@ export default function ByteExtractionDialog({
         </div>
 
         {/* Manual controls */}
-        <div className="flex items-center gap-4 pt-2 border-t border-gray-700 flex-wrap">
+        <div className={`flex items-center gap-4 pt-2 border-t ${borderDefault} flex-wrap`}>
           {supportsNegativeIndex && (
-            <label className="flex items-center gap-2 text-sm text-gray-300">
+            <label className={`flex items-center gap-2 text-sm ${textSecondary}`}>
               <input
                 type="checkbox"
                 checked={useNegativeIndex}
@@ -172,21 +173,21 @@ export default function ByteExtractionDialog({
               From end
             </label>
           )}
-          <label className="flex items-center gap-2 text-sm text-gray-300">
+          <label className={`flex items-center gap-2 text-sm ${textSecondary}`}>
             {useNegativeIndex ? 'Offset from end:' : 'Start byte:'}
             <input
               type="number"
               value={startByte}
               onChange={(e) => setStartByte(Number(e.target.value))}
-              className="w-16 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-center"
+              className={`w-16 px-2 py-1 ${bgSurface} ${borderDefault} rounded ${textPrimary} text-center`}
             />
           </label>
-          <label className="flex items-center gap-2 text-sm text-gray-300">
+          <label className={`flex items-center gap-2 text-sm ${textSecondary}`}>
             Length:
             <select
               value={numBytes}
               onChange={(e) => setNumBytes(Number(e.target.value))}
-              className="px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white"
+              className={`px-2 py-1 ${bgSurface} ${borderDefault} rounded ${textPrimary}`}
             >
               <option value={1}>1 byte</option>
               <option value={2}>2 bytes</option>
@@ -194,12 +195,12 @@ export default function ByteExtractionDialog({
               <option value={4}>4 bytes</option>
             </select>
           </label>
-          <label className="flex items-center gap-2 text-sm text-gray-300">
+          <label className={`flex items-center gap-2 text-sm ${textSecondary}`}>
             Byte order:
             <select
               value={endianness}
               onChange={(e) => setEndianness(e.target.value as 'big' | 'little')}
-              className="px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white"
+              className={`px-2 py-1 ${bgSurface} ${borderDefault} rounded ${textPrimary}`}
             >
               <option value="big">Big Endian</option>
               <option value="little">Little Endian</option>

@@ -22,7 +22,7 @@ import FrameDataTable, { type FrameRow } from '../../components/FrameDataTable';
 import { PaginationToolbar, TimelineSection, FRAME_PAGE_SIZE_OPTIONS } from '../../components';
 import ByteExtractionDialog from './ByteExtractionDialog';
 import ChecksumExtractionDialog from './ChecksumExtractionDialog';
-import { bgDataToolbar, borderDataView } from '../../../../styles';
+import { bgDataToolbar, borderDataView, bgSurface, textSecondary, borderDefault } from '../../../../styles';
 
 // ============================================================================
 // Extraction Badge
@@ -37,11 +37,12 @@ interface ExtractionBadgeProps {
 }
 
 function ExtractionBadge({ label, config, isActive, onClick, color }: ExtractionBadgeProps) {
+  const inactiveClasses = `${bgSurface} ${textSecondary} ${borderDefault}`;
   const colorClasses = color === 'cyan'
-    ? { active: 'bg-cyan-700 text-cyan-200 border-cyan-600', inactive: 'bg-gray-700 text-gray-400 border-gray-600' }
+    ? { active: 'bg-cyan-700 text-cyan-200 border-cyan-600', inactive: inactiveClasses }
     : color === 'purple'
-    ? { active: 'bg-purple-700 text-purple-200 border-purple-600', inactive: 'bg-gray-700 text-gray-400 border-gray-600' }
-    : { active: 'bg-amber-700 text-amber-200 border-amber-600', inactive: 'bg-gray-700 text-gray-400 border-gray-600' };
+    ? { active: 'bg-purple-700 text-purple-200 border-purple-600', inactive: inactiveClasses }
+    : { active: 'bg-amber-700 text-amber-200 border-amber-600', inactive: inactiveClasses };
 
   // Format the byte range - handle negative indices nicely
   const formatRange = (cfg: ExtractionConfig) => {
@@ -82,7 +83,7 @@ function ChecksumBadge({ config, onClick }: ChecksumBadgeProps) {
   const isActive = config !== null;
   const colorClasses = {
     active: 'bg-amber-700 text-amber-200 border-amber-600',
-    inactive: 'bg-gray-700 text-gray-400 border-gray-600'
+    inactive: `${bgSurface} ${textSecondary} ${borderDefault}`
   };
 
   const getAlgoLabel = (algo: DiscoveryChecksumAlgorithm) => {

@@ -7,7 +7,7 @@ import { PlaybackControls } from "../../../components/PlaybackControls";
 import { validateChecksum, type ChecksumAlgorithm, type ChecksumValidationResult } from "../../../api/checksums";
 import { badgeDarkPanelInfo, badgeDarkPanelSuccess, badgeDarkPanelDanger, badgeDarkPanelPurple, badgeDarkPanelCyan } from "../../../styles/badgeStyles";
 import { parseCanId } from "../../../utils/catalogParser";
-import { caption, bgSurface } from "../../../styles";
+import { caption, bgSurface, bgDataView, textPrimary, textMuted, textDataPrimary, textDataPurple, textDataCyan, textDataYellow, textDataOrange, textDataAmber, borderDefault, hoverBg, textSecondary } from "../../../styles";
 import type { PlaybackState, PlaybackSpeed } from "../../../components/TimeController";
 import type { IOCapabilities } from '../../../api/io';
 import { formatFrameId } from "../../../utils/frameIds";
@@ -956,7 +956,7 @@ export default function DecoderFramesView({
           className={`p-1.5 rounded transition-colors ${
             showTimeRange
               ? 'bg-blue-600 text-white hover:bg-blue-500'
-              : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200'
+              : `${bgSurface} ${textSecondary} hover:brightness-95`
           }`}
           title={showTimeRange ? "Hide time range" : "Show time range"}
         >
@@ -971,7 +971,7 @@ export default function DecoderFramesView({
           className={`p-1.5 rounded transition-colors ${
             isBookmarkActive
               ? 'bg-yellow-600 text-white hover:bg-yellow-500'
-              : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200'
+              : `${bgSurface} ${textSecondary} hover:brightness-95`
           }`}
           title={isBookmarkActive ? "Bookmark loaded" : "Load bookmark"}
         >
@@ -987,19 +987,19 @@ export default function DecoderFramesView({
   // Time range inputs for toolbar (optional feature)
   const timeRangeInputs = showTimeRange && onStartTimeChange && onEndTimeChange ? (
     <div className={flexRowGap2}>
-      <label className="text-xs text-gray-400">Start</label>
+      <label className={`text-xs ${textMuted}`}>Start</label>
       <input
         type="datetime-local"
         value={startTime || ""}
         onChange={(e) => onStartTimeChange(e.target.value)}
-        className="px-2 py-1 text-xs rounded border border-gray-600 bg-gray-900 text-gray-200"
+        className={`px-2 py-1 text-xs rounded ${borderDefault} ${bgSurface} ${textPrimary}`}
       />
-      <label className="text-xs text-gray-400 ml-2">End</label>
+      <label className={`text-xs ${textMuted} ml-2`}>End</label>
       <input
         type="datetime-local"
         value={endTime || ""}
         onChange={(e) => onEndTimeChange(e.target.value)}
-        className="px-2 py-1 text-xs rounded border border-gray-600 bg-gray-900 text-gray-200"
+        className={`px-2 py-1 text-xs rounded ${borderDefault} ${bgSurface} ${textPrimary}`}
       />
     </div>
   ) : null;
@@ -1186,14 +1186,14 @@ export default function DecoderFramesView({
                 ))
             )}
             {selectedFrames.length === 0 && (
-              <div className="text-sm text-gray-500">No frames selected.</div>
+              <div className={`text-sm ${textMuted}`}>No frames selected.</div>
             )}
           </>
         ) : activeTab === 'unmatched' ? (
           // Unmatched frames tab content - timestamped list of raw frames
           <div className="space-y-1">
             {unmatchedFrames.length === 0 ? (
-              <div className="text-sm text-gray-500">No unmatched frames.</div>
+              <div className={`text-sm ${textMuted}`}>No unmatched frames.</div>
             ) : (
               unmatchedFrames.slice(-100).reverse().map((frame, idx) => {
                 const date = new Date(frame.timestamp * 1000);
@@ -1210,24 +1210,24 @@ export default function DecoderFramesView({
                 return (
                   <div
                     key={`${frame.timestamp}-${frame.frameId}-${idx}`}
-                    className="flex items-center gap-3 px-3 py-1.5 bg-gray-800 rounded text-sm font-mono"
+                    className={`flex items-center gap-3 px-3 py-1.5 ${bgDataView} rounded text-sm font-mono`}
                   >
-                    <span className="text-gray-500 text-xs">{timeStr}</span>
-                    <span className="text-purple-400 font-semibold">{idStr}</span>
+                    <span className={`${textMuted} text-xs`}>{timeStr}</span>
+                    <span className={`${textDataPurple} font-semibold`}>{idStr}</span>
                     {frame.sourceAddress !== undefined && (
-                      <span className="text-cyan-400 text-xs">src: 0x{frame.sourceAddress.toString(16).toUpperCase()}</span>
+                      <span className={`${textDataCyan} text-xs`}>src: 0x{frame.sourceAddress.toString(16).toUpperCase()}</span>
                     )}
-                    <span className="text-gray-500 text-xs">[{frame.bytes.length}]</span>
-                    <span className="text-gray-300 flex-1">{bytesHex}</span>
+                    <span className={`${textMuted} text-xs`}>[{frame.bytes.length}]</span>
+                    <span className={`${textDataPrimary} flex-1`}>{bytesHex}</span>
                     {showAsciiGutter && (
-                      <span className="text-yellow-400 text-xs font-mono">{asciiStr}</span>
+                      <span className={`${textDataYellow} text-xs font-mono`}>{asciiStr}</span>
                     )}
                     <button
                       onClick={() => sendHexDataToCalculator(bytesHex.replace(/\s+/g, ''))}
-                      className="p-1 rounded hover:bg-gray-700 transition-colors"
+                      className={`p-1 rounded ${hoverBg} transition-colors`}
                       title="Send to Frame Calculator"
                     >
-                      <Calculator className={`${iconSm} text-orange-400`} />
+                      <Calculator className={`${iconSm} ${textDataOrange}`} />
                     </button>
                   </div>
                 );
@@ -1238,7 +1238,7 @@ export default function DecoderFramesView({
           // Filtered frames tab content - frames filtered by length or ID
           <div className="space-y-1">
             {filteredFrames.length === 0 ? (
-              <div className="text-sm text-gray-500">No filtered frames.</div>
+              <div className={`text-sm ${textMuted}`}>No filtered frames.</div>
             ) : (
               filteredFrames.slice(-100).reverse().map((frame, idx) => {
                 const date = new Date(frame.timestamp * 1000);
@@ -1255,27 +1255,27 @@ export default function DecoderFramesView({
                 return (
                   <div
                     key={`${frame.timestamp}-${frame.frameId}-${idx}`}
-                    className="flex items-center gap-3 px-3 py-1.5 bg-gray-800 rounded text-sm font-mono"
+                    className={`flex items-center gap-3 px-3 py-1.5 ${bgDataView} rounded text-sm font-mono`}
                   >
-                    <span className="text-gray-500 text-xs">{timeStr}</span>
-                    <span className="text-purple-400 font-semibold">{idStr}</span>
+                    <span className={`${textMuted} text-xs`}>{timeStr}</span>
+                    <span className={`${textDataPurple} font-semibold`}>{idStr}</span>
                     {frame.sourceAddress !== undefined && (
-                      <span className="text-cyan-400 text-xs">src: 0x{frame.sourceAddress.toString(16).toUpperCase()}</span>
+                      <span className={`${textDataCyan} text-xs`}>src: 0x{frame.sourceAddress.toString(16).toUpperCase()}</span>
                     )}
-                    <span className="text-gray-500 text-xs">[{frame.bytes.length}]</span>
-                    <span className="text-gray-300 flex-1">{bytesHex}</span>
+                    <span className={`${textMuted} text-xs`}>[{frame.bytes.length}]</span>
+                    <span className={`${textDataPrimary} flex-1`}>{bytesHex}</span>
                     {showAsciiGutter && (
-                      <span className="text-yellow-400 text-xs font-mono">{asciiStr}</span>
+                      <span className={`${textDataYellow} text-xs font-mono`}>{asciiStr}</span>
                     )}
-                    <span className="text-amber-400 text-xs">
+                    <span className={`${textDataAmber} text-xs`}>
                       {frame.reason === 'id_filter' ? 'ID filter' : 'too short'}
                     </span>
                     <button
                       onClick={() => sendHexDataToCalculator(bytesHex.replace(/\s+/g, ''))}
-                      className="p-1 rounded hover:bg-gray-700 transition-colors"
+                      className={`p-1 rounded ${hoverBg} transition-colors`}
                       title="Send to Frame Calculator"
                     >
-                      <Calculator className={`${iconSm} text-orange-400`} />
+                      <Calculator className={`${iconSm} ${textDataOrange}`} />
                     </button>
                   </div>
                 );

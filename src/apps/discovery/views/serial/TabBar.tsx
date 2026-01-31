@@ -6,6 +6,7 @@
 import { useMemo } from 'react';
 import { Layers, Filter, Settings, Network, FileText } from 'lucide-react';
 import { iconSm, iconXs } from '../../../../styles/spacing';
+import { bgSurface, textSecondary } from '../../../../styles';
 import { DiscoveryTabBar, type TabDefinition } from '../../components';
 import type { FramingConfig } from '../../../../stores/discoveryStore';
 import { useDiscoveryUIStore } from '../../../../stores/discoveryUIStore';
@@ -99,7 +100,7 @@ export default function TabBar({
         className={`p-1.5 rounded transition-colors ${
           showBusColumn
             ? 'bg-cyan-600 text-white hover:bg-cyan-500'
-            : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200'
+            : `${bgSurface} ${textSecondary} hover:brightness-95`
         }`}
         title={showBusColumn ? 'Hide Bus column' : 'Show Bus column'}
       >
@@ -110,7 +111,7 @@ export default function TabBar({
         className={`p-1.5 rounded transition-colors ${
           showAsciiColumn
             ? 'bg-yellow-600 text-white hover:bg-yellow-500'
-            : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200'
+            : `${bgSurface} ${textSecondary} hover:brightness-95`
         }`}
         title={showAsciiColumn ? 'Hide ASCII column' : 'Show ASCII column'}
       >
@@ -121,7 +122,7 @@ export default function TabBar({
       {activeTab === 'raw' && (
         <button
           onClick={onOpenRawBytesViewDialog}
-          className="flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-colors bg-gray-700 text-gray-300 hover:bg-gray-600"
+          className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-colors ${bgSurface} ${textSecondary} hover:brightness-95`}
           title="Configure raw bytes display"
         >
           <Settings className={iconXs} />
@@ -136,7 +137,7 @@ export default function TabBar({
           className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-colors ${
             framingConfig
               ? 'bg-blue-600 text-white hover:bg-blue-500'
-              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              : `${bgSurface} ${textSecondary} hover:brightness-95`
           }`}
           title="Configure framing mode"
         >
@@ -152,7 +153,7 @@ export default function TabBar({
           className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-colors ${
             minFrameLength > 0
               ? 'bg-amber-600 text-white hover:bg-amber-500'
-              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              : `${bgSurface} ${textSecondary} hover:brightness-95`
           }`}
           title="Configure frame filters"
         >

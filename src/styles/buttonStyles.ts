@@ -118,7 +118,7 @@ export function toggleCardClass(isActive: boolean): string {
   const base = "w-full text-left px-4 py-3 rounded border transition-colors";
   return isActive
     ? `${base} bg-blue-900/30 border-blue-600 text-white`
-    : `${base} bg-gray-800 border-gray-700 text-gray-300 hover:border-gray-600`;
+    : `${base} bg-[var(--bg-surface)] border-[color:var(--border-default)] text-[color:var(--text-secondary)] hover:brightness-95`;
 }
 
 /**
@@ -159,13 +159,13 @@ export function groupButtonClass(isActive: boolean): string {
 // =============================================================================
 
 /**
- * Pagination button - dark themed for data views
+ * Pagination button - themed for data views
  */
 export const paginationButtonDark =
-  "p-1 rounded text-gray-400 hover:bg-gray-700 hover:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed";
+  "p-1 rounded text-[color:var(--text-secondary)] hover:bg-[var(--hover-bg)] disabled:opacity-30 disabled:cursor-not-allowed";
 
 /**
- * Tab button for dark data views
+ * Tab button for data views
  * @param isActive - Whether the tab is currently active
  * @param hasIndicator - Whether to show purple indicator (for tabs with new data)
  */
@@ -177,7 +177,7 @@ export function dataViewTabClass(isActive: boolean, hasIndicator = false): strin
   if (hasIndicator) {
     return `${base} text-purple-400 border-transparent hover:text-purple-300`;
   }
-  return `${base} text-gray-400 border-transparent hover:text-gray-200`;
+  return `${base} text-[color:var(--text-secondary)] border-transparent hover:brightness-110`;
 }
 
 /**
@@ -210,10 +210,10 @@ export function tabCountColorClass(color: 'green' | 'purple' | 'gray' | 'orange'
 }
 
 /**
- * Small icon button for tables (dark theme) - bookmark, calculator buttons
+ * Small icon button for tables - bookmark, calculator buttons
  */
 export const tableIconButtonDark =
-  "p-0.5 rounded hover:bg-gray-700 transition-colors";
+  "p-0.5 rounded hover:bg-[var(--hover-bg)] transition-colors";
 
 // =============================================================================
 // Icon Button Hover Styles (for toolbar/card action buttons)

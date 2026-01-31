@@ -14,6 +14,7 @@ import {
   getChecksumByteCount,
 } from './serialTypes';
 import { byteToHex } from '../../../../utils/byteUtils';
+import { bgSurface, bgDataView, textPrimary, textSecondary, textMuted, borderDefault, hoverBg } from '../../../../styles';
 
 const DEFAULT_CHECKSUM_CONFIG: ChecksumConfig = {
   startByte: -2,
@@ -177,9 +178,9 @@ export default function ChecksumExtractionDialog({
     <Dialog isOpen={isOpen} maxWidth="max-w-2xl">
       <div className="p-4 space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-white">Configure Checksum</h2>
-          <button onClick={onClose} className="p-1 hover:bg-gray-700 rounded">
-            <X className={`${iconLg} text-gray-400`} />
+          <h2 className={`text-lg font-semibold ${textPrimary}`}>Configure Checksum</h2>
+          <button onClick={onClose} className={`p-1 ${hoverBg} rounded`}>
+            <X className={`${iconLg} ${textSecondary}`} />
           </button>
         </div>
 
@@ -204,7 +205,7 @@ export default function ChecksumExtractionDialog({
                   className={`px-2 py-1 text-xs rounded transition-colors ${
                     config.algorithm === algorithm
                       ? 'bg-green-600 text-white'
-                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                      : `${bgSurface} ${textSecondary} hover:brightness-95`
                   }`}
                 >
                   {CHECKSUM_ALGORITHMS.find(a => a.value === algorithm)?.label} ({matchCount}/{Math.min(20, sampleFrames.length)})
@@ -215,14 +216,14 @@ export default function ChecksumExtractionDialog({
         )}
 
         {/* Sample frames preview */}
-        <div className="space-y-2 font-mono text-sm bg-gray-900 p-3 rounded max-h-40 overflow-y-auto">
+        <div className={`space-y-2 font-mono text-sm ${bgDataView} p-3 rounded max-h-40 overflow-y-auto`}>
           {sampleFrames.slice(0, 5).map((frame, frameIdx) => {
             const checksumStart = resolveByteIndexSync(config.startByte, frame.length);
             const calcEnd = resolveByteIndexSync(config.calcEndByte, frame.length);
 
             return (
               <div key={frameIdx} className={flexRowGap2}>
-                <span className="text-gray-500 w-6 text-right">{frameIdx + 1}.</span>
+                <span className={`${textMuted} w-6 text-right`}>{frameIdx + 1}.</span>
                 <div className="flex gap-1 flex-wrap">
                   {frame.map((byte, byteIdx) => {
                     const isChecksum = byteIdx >= checksumStart && byteIdx < checksumStart + config.numBytes;
@@ -250,8 +251,8 @@ export default function ChecksumExtractionDialog({
         </div>
 
         {/* Configuration */}
-        <div className="grid grid-cols-2 gap-4 pt-2 border-t border-gray-700">
-          <label className="flex flex-col gap-1 text-sm text-gray-300">
+        <div className={`grid grid-cols-2 gap-4 pt-2 border-t ${borderDefault}`}>
+          <label className={`flex flex-col gap-1 text-sm ${textSecondary}`}>
             Algorithm:
             <select
               value={config.algorithm}
@@ -266,7 +267,7 @@ export default function ChecksumExtractionDialog({
                   calcEndByte: -byteCount,
                 }));
               }}
-              className="px-2 py-1.5 bg-gray-700 border border-gray-600 rounded text-white"
+              className={`px-2 py-1.5 ${bgSurface} ${borderDefault} rounded ${textPrimary}`}
             >
               {CHECKSUM_ALGORITHMS.map(algo => (
                 <option key={algo.value} value={algo.value}>{algo.label}</option>
@@ -274,44 +275,44 @@ export default function ChecksumExtractionDialog({
             </select>
           </label>
 
-          <label className="flex flex-col gap-1 text-sm text-gray-300">
+          <label className={`flex flex-col gap-1 text-sm ${textSecondary}`}>
             Byte order:
             <select
               value={config.endianness}
               onChange={(e) => setConfig(prev => ({ ...prev, endianness: e.target.value as 'big' | 'little' }))}
-              className="px-2 py-1.5 bg-gray-700 border border-gray-600 rounded text-white"
+              className={`px-2 py-1.5 ${bgSurface} ${borderDefault} rounded ${textPrimary}`}
             >
               <option value="little">Little Endian</option>
               <option value="big">Big Endian</option>
             </select>
           </label>
 
-          <label className="flex flex-col gap-1 text-sm text-gray-300">
+          <label className={`flex flex-col gap-1 text-sm ${textSecondary}`}>
             Checksum position:
             <input
               type="number"
               value={config.startByte}
               onChange={(e) => setConfig(prev => ({ ...prev, startByte: Number(e.target.value) }))}
-              className="px-2 py-1.5 bg-gray-700 border border-gray-600 rounded text-white"
+              className={`px-2 py-1.5 ${bgSurface} ${borderDefault} rounded ${textPrimary}`}
             />
-            <span className="text-xs text-gray-500">Negative = from end (e.g., -2)</span>
+            <span className={`text-xs ${textMuted}`}>Negative = from end (e.g., -2)</span>
           </label>
 
-          <label className="flex flex-col gap-1 text-sm text-gray-300">
+          <label className={`flex flex-col gap-1 text-sm ${textSecondary}`}>
             Calc data range:
             <div className={flexRowGap2}>
               <input
                 type="number"
                 value={config.calcStartByte}
                 onChange={(e) => setConfig(prev => ({ ...prev, calcStartByte: Number(e.target.value) }))}
-                className="w-16 px-2 py-1.5 bg-gray-700 border border-gray-600 rounded text-white text-center"
+                className={`w-16 px-2 py-1.5 ${bgSurface} ${borderDefault} rounded ${textPrimary} text-center`}
               />
-              <span className="text-gray-500">to</span>
+              <span className={textMuted}>to</span>
               <input
                 type="number"
                 value={config.calcEndByte}
                 onChange={(e) => setConfig(prev => ({ ...prev, calcEndByte: Number(e.target.value) }))}
-                className="w-16 px-2 py-1.5 bg-gray-700 border border-gray-600 rounded text-white text-center"
+                className={`w-16 px-2 py-1.5 ${bgSurface} ${borderDefault} rounded ${textPrimary} text-center`}
               />
             </div>
           </label>

@@ -12,7 +12,7 @@ import { PlaybackControls, type PlaybackState } from "../../../components/Playba
 import type { PlaybackSpeed } from "../../../components/TimeController";
 import ChangesResultView from "./tools/ChangesResultView";
 import MessageOrderResultView from "./tools/MessageOrderResultView";
-import { bgDataView, textDataSecondary } from "../../../styles";
+import { bgDataView, textDataSecondary, bgSurface, textMuted, textPrimary, textSecondary, borderDefault } from "../../../styles";
 import type { FrameMessage } from "../../../types/frame";
 import type { IOCapabilities } from "../../../api/io";
 
@@ -560,25 +560,25 @@ function DiscoveryFramesView({
   // Time range inputs for toolbar (optional feature)
   const timeRangeInputs = showTimeRange && onStartTimeChange && onEndTimeChange ? (
     <div className={flexRowGap2}>
-      <label className="text-xs text-gray-400">Start</label>
+      <label className={`text-xs ${textMuted}`}>Start</label>
       <input
         type="datetime-local"
         value={startTime || ""}
         onChange={(e) => onStartTimeChange(e.target.value)}
-        className="px-2 py-1 text-xs rounded border border-gray-600 bg-gray-900 text-gray-200"
+        className={`px-2 py-1 text-xs rounded ${borderDefault} ${bgSurface} ${textPrimary}`}
       />
-      <label className="text-xs text-gray-400 ml-2">End</label>
+      <label className={`text-xs ${textMuted} ml-2`}>End</label>
       <input
         type="datetime-local"
         value={endTime || ""}
         onChange={(e) => onEndTimeChange(e.target.value)}
-        className="px-2 py-1 text-xs rounded border border-gray-600 bg-gray-900 text-gray-200"
+        className={`px-2 py-1 text-xs rounded ${borderDefault} ${bgSurface} ${textPrimary}`}
       />
-      <label className="text-xs text-gray-400 ml-2">Buffer</label>
+      <label className={`text-xs ${textMuted} ml-2`}>Buffer</label>
       <select
         value={maxBuffer}
         onChange={(e) => onMaxBufferChange(Number(e.target.value))}
-        className="px-2 py-1 text-xs rounded border border-gray-600 bg-gray-900 text-gray-200"
+        className={`px-2 py-1 text-xs rounded ${borderDefault} ${bgSurface} ${textPrimary}`}
         title="History buffer size"
       >
         <option value={10000}>10k</option>
@@ -602,7 +602,7 @@ function DiscoveryFramesView({
         className={`p-1.5 rounded transition-colors ${
           showBusColumn
             ? 'bg-cyan-600 text-white hover:bg-cyan-500'
-            : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200'
+            : `${bgSurface} ${textSecondary} hover:brightness-95`
         }`}
         title={showBusColumn ? 'Hide Bus column' : 'Show Bus column'}
       >
@@ -613,7 +613,7 @@ function DiscoveryFramesView({
         className={`p-1.5 rounded transition-colors ${
           showAsciiColumn
             ? 'bg-yellow-600 text-white hover:bg-yellow-500'
-            : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200'
+            : `${bgSurface} ${textSecondary} hover:brightness-95`
         }`}
         title={showAsciiColumn ? 'Hide ASCII column' : 'Show ASCII column'}
       >
