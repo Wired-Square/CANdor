@@ -92,6 +92,7 @@ interface AppSettings {
   binary_zero_colour?: string;
   binary_unused_colour?: string;
   discovery_history_buffer?: number;
+  query_result_limit?: number;
   // Theme settings
   theme_mode?: ThemeMode;
   theme_bg_primary_light?: string;
@@ -245,6 +246,7 @@ interface SettingsState {
   general: {
     discoveryHistoryBuffer: number;
     defaultFrameType: DefaultFrameType;
+    queryResultLimit: number;
   };
 
   // UI state
@@ -314,6 +316,7 @@ interface SettingsState {
   // Actions - General
   setDiscoveryHistoryBuffer: (buffer: number) => void;
   setDefaultFrameType: (type: DefaultFrameType) => void;
+  setQueryResultLimit: (limit: number) => void;
 }
 
 // Auto-save debounce
@@ -369,6 +372,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   general: {
     discoveryHistoryBuffer: 100000,
     defaultFrameType: 'can',
+    queryResultLimit: 10000,
   },
 
   ui: {
@@ -435,6 +439,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         binary_zero_colour: settings.binary_zero_colour || '#94a3b8',
         binary_unused_colour: settings.binary_unused_colour || '#64748b',
         discovery_history_buffer: settings.discovery_history_buffer ?? 100000,
+        query_result_limit: settings.query_result_limit ?? 10000,
         default_frame_type: (settings.default_frame_type as DefaultFrameType) ?? 'can',
         // Theme settings
         theme_mode: (settings.theme_mode as ThemeMode) ?? 'auto',
@@ -518,6 +523,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         general: {
           discoveryHistoryBuffer: normalized.discovery_history_buffer ?? 100000,
           defaultFrameType: normalized.default_frame_type ?? 'can',
+          queryResultLimit: normalized.query_result_limit ?? 10000,
         },
         originalSettings: normalized,
       });
@@ -581,6 +587,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         binary_zero_colour: display.binaryZeroColour,
         binary_unused_colour: display.binaryUnusedColour,
         discovery_history_buffer: general.discoveryHistoryBuffer,
+        query_result_limit: general.queryResultLimit,
         // Theme settings
         theme_mode: display.themeMode,
         theme_bg_primary_light: display.themeColours.bgPrimaryLight,
@@ -642,6 +649,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       binary_zero_colour: display.binaryZeroColour,
       binary_unused_colour: display.binaryUnusedColour,
       discovery_history_buffer: general.discoveryHistoryBuffer,
+      query_result_limit: general.queryResultLimit,
       // Theme settings
       theme_mode: display.themeMode,
       theme_bg_primary_light: display.themeColours.bgPrimaryLight,
@@ -954,6 +962,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setDefaultFrameType: (type) => {
     set((state) => ({
       general: { ...state.general, defaultFrameType: type },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  setQueryResultLimit: (limit) => {
+    set((state) => ({
+      general: { ...state.general, queryResultLimit: limit },
     }));
     scheduleSave(get().saveSettings);
   },

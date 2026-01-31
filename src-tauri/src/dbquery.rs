@@ -148,10 +148,12 @@ pub async fn db_query_byte_changes(
     is_extended: bool,
     start_time: Option<String>,
     end_time: Option<String>,
+    limit: Option<u32>,
 ) -> Result<ByteChangeQueryResult, String> {
     let query_start = std::time::Instant::now();
-    println!("[dbquery] db_query_byte_changes called with profile_id='{}', frame_id={}, byte_index={}, is_extended={}",
-        profile_id, frame_id, byte_index, is_extended);
+    let result_limit = limit.unwrap_or(10000);
+    println!("[dbquery] db_query_byte_changes called with profile_id='{}', frame_id={}, byte_index={}, is_extended={}, limit={}",
+        profile_id, frame_id, byte_index, is_extended, result_limit);
 
     // Load settings to get profile
     let settings = load_settings(app).await.map_err(|e| format!("Failed to load settings: {}", e))?;
@@ -200,36 +202,40 @@ pub async fn db_query_byte_changes(
     // This avoids fetching all rows and comparing in Rust
     let frame_id_i32 = frame_id as i32;
     let byte_index_i32 = byte_index as i32;
+    // Convert bool to i32 for PostgreSQL compatibility (some schemas use integer for extended)
+    let is_extended_int: i32 = if is_extended { 1 } else { 0 };
 
     // Build the base query that extracts and compares the specific byte in SQL
+    // Use explicit type casts to help tokio-postgres type inference
     let mut query = String::from(
         r#"
         WITH ordered_frames AS (
             SELECT
                 ts,
-                public.get_byte_safe(data_bytes, $3) as curr_byte,
-                LAG(public.get_byte_safe(data_bytes, $3)) OVER (ORDER BY ts) as prev_byte
+                public.get_byte_safe(data_bytes, $3::int4) as curr_byte,
+                LAG(public.get_byte_safe(data_bytes, $3::int4)) OVER (ORDER BY ts) as prev_byte
             FROM public.can_frame
-            WHERE id = $1 AND extended = $2
+            WHERE id = $1::int4 AND extended = ($2::int4 != 0)
         "#
     );
 
     // Add time range conditions to the CTE
-    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&frame_id_i32, &is_extended, &byte_index_i32];
+    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&frame_id_i32, &is_extended_int, &byte_index_i32];
 
+    // Use explicit text cast to help PostgreSQL type inference for timestamp conversion
     if let Some(ref start) = start_time {
         let idx = params.len() + 1;
-        query.push_str(&format!(" AND ts >= ${}::timestamptz", idx));
-        params.push(start);
+        query.push_str(&format!(" AND ts >= (${}::text)::timestamptz", idx));
+        params.push(start as &(dyn tokio_postgres::types::ToSql + Sync));
     }
     if let Some(ref end) = end_time {
         let idx = params.len() + 1;
-        query.push_str(&format!(" AND ts < ${}::timestamptz", idx));
-        params.push(end);
+        query.push_str(&format!(" AND ts < (${}::text)::timestamptz", idx));
+        params.push(end as &(dyn tokio_postgres::types::ToSql + Sync));
     }
 
     // Filter to only rows where the byte actually changed (in SQL, not Rust)
-    query.push_str(
+    query.push_str(&format!(
         r#"
             ORDER BY ts
         )
@@ -242,13 +248,14 @@ pub async fn db_query_byte_changes(
           AND curr_byte IS NOT NULL
           AND prev_byte IS DISTINCT FROM curr_byte
         ORDER BY ts
-        LIMIT 10000
-        "#
-    );
+        LIMIT {}
+        "#,
+        result_limit
+    ));
 
     println!("[dbquery] Executing query:\n{}", query);
-    println!("[dbquery] Query params: frame_id={}, is_extended={}, byte_index={}, start_time={:?}, end_time={:?}",
-        frame_id_i32, is_extended, byte_index_i32, start_time, end_time);
+    println!("[dbquery] Query params: frame_id={}, is_extended={} (int={}), byte_index={}, start_time={:?}, end_time={:?}",
+        frame_id_i32, is_extended, is_extended_int, byte_index_i32, start_time, end_time);
 
     let rows = client
         .query(&query, &params)
@@ -273,8 +280,8 @@ pub async fn db_query_byte_changes(
     }
 
     let execution_time_ms = query_start.elapsed().as_millis() as u64;
-    println!("[dbquery] Found {} byte changes at index {} (returned {} rows in {}ms)",
-        results.len(), byte_index, rows_scanned, execution_time_ms);
+    println!("[dbquery] byte_changes: frame=0x{:X} byte={} ext={} | {} changes, {}ms",
+        frame_id, byte_index, is_extended, results.len(), execution_time_ms);
 
     Ok(ByteChangeQueryResult {
         stats: QueryStats {
@@ -297,10 +304,12 @@ pub async fn db_query_frame_changes(
     is_extended: bool,
     start_time: Option<String>,
     end_time: Option<String>,
+    limit: Option<u32>,
 ) -> Result<FrameChangeQueryResult, String> {
     let query_start = std::time::Instant::now();
-    println!("[dbquery] db_query_frame_changes called with profile_id='{}', frame_id={}, is_extended={}",
-        profile_id, frame_id, is_extended);
+    let result_limit = limit.unwrap_or(10000);
+    println!("[dbquery] db_query_frame_changes called with profile_id='{}', frame_id={}, is_extended={}, limit={}",
+        profile_id, frame_id, is_extended, result_limit);
 
     // Load settings to get profile
     let settings = load_settings(app).await.map_err(|e| format!("Failed to load settings: {}", e))?;
@@ -346,7 +355,10 @@ pub async fn db_query_frame_changes(
     // Build query - filter frame changes in SQL for efficiency
     // Only return rows where the payload differs from the previous frame
     let frame_id_i32 = frame_id as i32;
+    // Convert bool to i32 for PostgreSQL compatibility (some schemas use integer for extended)
+    let is_extended_int: i32 = if is_extended { 1 } else { 0 };
 
+    // Use explicit type casts to help tokio-postgres type inference
     let mut query = String::from(
         r#"
         WITH ordered_frames AS (
@@ -355,25 +367,26 @@ pub async fn db_query_frame_changes(
                 data_bytes,
                 LAG(data_bytes) OVER (ORDER BY ts) as prev_data
             FROM public.can_frame
-            WHERE id = $1 AND extended = $2
+            WHERE id = $1::int4 AND extended = ($2::int4 != 0)
         "#
     );
 
-    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&frame_id_i32, &is_extended];
+    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&frame_id_i32, &is_extended_int];
 
+    // Use explicit text cast to help PostgreSQL type inference for timestamp conversion
     if let Some(ref start) = start_time {
         let idx = params.len() + 1;
-        query.push_str(&format!(" AND ts >= ${}::timestamptz", idx));
-        params.push(start);
+        query.push_str(&format!(" AND ts >= (${}::text)::timestamptz", idx));
+        params.push(start as &(dyn tokio_postgres::types::ToSql + Sync));
     }
     if let Some(ref end) = end_time {
         let idx = params.len() + 1;
-        query.push_str(&format!(" AND ts < ${}::timestamptz", idx));
-        params.push(end);
+        query.push_str(&format!(" AND ts < (${}::text)::timestamptz", idx));
+        params.push(end as &(dyn tokio_postgres::types::ToSql + Sync));
     }
 
     // Filter to only rows where payload changed (bytea comparison in SQL)
-    query.push_str(
+    query.push_str(&format!(
         r#"
             ORDER BY ts
         )
@@ -385,13 +398,14 @@ pub async fn db_query_frame_changes(
         WHERE prev_data IS NOT NULL
           AND prev_data IS DISTINCT FROM data_bytes
         ORDER BY ts
-        LIMIT 10000
-        "#
-    );
+        LIMIT {}
+        "#,
+        result_limit
+    ));
 
     println!("[dbquery] Executing query:\n{}", query);
-    println!("[dbquery] Query params: frame_id={}, is_extended={}, start_time={:?}, end_time={:?}",
-        frame_id_i32, is_extended, start_time, end_time);
+    println!("[dbquery] Query params: frame_id={}, is_extended={} (int={}), start_time={:?}, end_time={:?}",
+        frame_id_i32, is_extended, is_extended_int, start_time, end_time);
 
     let rows = client
         .query(&query, &params)
@@ -429,8 +443,8 @@ pub async fn db_query_frame_changes(
     }
 
     let execution_time_ms = query_start.elapsed().as_millis() as u64;
-    println!("[dbquery] Found {} frame changes (scanned {} rows in {}ms)",
-        results.len(), rows_scanned, execution_time_ms);
+    println!("[dbquery] frame_changes: frame=0x{:X} ext={} | {} changes, {}ms",
+        frame_id, is_extended, results.len(), execution_time_ms);
 
     Ok(FrameChangeQueryResult {
         stats: QueryStats {

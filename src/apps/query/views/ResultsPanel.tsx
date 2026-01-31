@@ -1,38 +1,84 @@
 // src/apps/query/views/ResultsPanel.tsx
 //
 // Results display panel. Shows query results in a timeline view with
-// click-to-ingest functionality.
+// click-to-ingest functionality. Supports grouped results by query.
 
-import { useCallback } from "react";
-import { PlayCircle, Download, AlertCircle, Database } from "lucide-react";
+import { useCallback, useState, useMemo } from "react";
+import { PlayCircle, Download, AlertCircle, Database, Bookmark, FileDown } from "lucide-react";
 import {
-  useQueryStore,
   QUERY_TYPE_INFO,
   type ByteChangeResult,
   type FrameChangeResult,
+  type QueuedQuery,
 } from "../stores/queryStore";
 import { useSettingsStore } from "../../settings/stores/settingsStore";
 import { formatHumanUs } from "../../../utils/timeFormat";
+import DataViewPaginationToolbar, { FRAME_PAGE_SIZE_OPTIONS } from "../../../components/DataViewPaginationToolbar";
 import { iconButtonBase, buttonBase } from "../../../styles/buttonStyles";
 import { monoBody } from "../../../styles/typography";
 import { iconSm, iconMd, iconXl } from "../../../styles/spacing";
 import { borderDivider, hoverBg, textPrimary, textSecondary, textMuted, textDataAmber, textDataGreen, textDataPurple } from "../../../styles/colourTokens";
 
 interface Props {
+  selectedQuery: QueuedQuery | null;
   onIngestEvent: (timestampUs: number) => Promise<void>;
+  onIngestAll: () => void;
+  onExport: () => void;
+  onBookmark: () => void;
 }
 
-export default function ResultsPanel({ onIngestEvent }: Props) {
-  // Store selectors
-  const queryType = useQueryStore((s) => s.queryType);
-  const results = useQueryStore((s) => s.results);
-  const resultCount = useQueryStore((s) => s.resultCount);
-  const lastQueryStats = useQueryStore((s) => s.lastQueryStats);
-  const isRunning = useQueryStore((s) => s.isRunning);
-  const error = useQueryStore((s) => s.error);
+export default function ResultsPanel({
+  selectedQuery,
+  onIngestEvent,
+  onIngestAll,
+  onExport,
+  onBookmark,
+}: Props) {
   const timezone = useSettingsStore((s) => s.display.timezone);
 
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(0);
+  const [pageSize, setPageSize] = useState(100);
+
+  // Extract data from selected query
+  const queryType = selectedQuery?.queryType ?? "byte_changes";
+  const results = selectedQuery?.results ?? null;
+  const resultCount = results ? (results as unknown[]).length : 0;
+  const lastQueryStats = selectedQuery?.stats ?? null;
+  const isRunning = selectedQuery?.status === "running";
+  const error = selectedQuery?.errorMessage ?? null;
+
   const queryInfo = QUERY_TYPE_INFO[queryType];
+
+  // Calculate paginated results
+  const { paginatedResults, totalPages } = useMemo(() => {
+    if (!results || resultCount === 0) {
+      return { paginatedResults: [], totalPages: 0 };
+    }
+
+    const allResults = results as (ByteChangeResult | FrameChangeResult)[];
+
+    // If pageSize is -1 (All), show all results
+    if (pageSize === -1) {
+      return { paginatedResults: allResults, totalPages: 1 };
+    }
+
+    const total = Math.ceil(resultCount / pageSize);
+    const start = currentPage * pageSize;
+    const end = Math.min(start + pageSize, resultCount);
+    return {
+      paginatedResults: allResults.slice(start, end),
+      totalPages: total,
+    };
+  }, [results, resultCount, currentPage, pageSize]);
+
+  // Reset page when query changes
+  const queryId = selectedQuery?.id;
+  const [lastQueryId, setLastQueryId] = useState<string | null>(null);
+  if (queryId !== lastQueryId) {
+    setLastQueryId(queryId ?? null);
+    setCurrentPage(0);
+  }
 
   // Format timestamp for display (short form: date + time with milliseconds)
   const formatTimestamp = useCallback((timestampUs: number) => {
@@ -82,14 +128,27 @@ export default function ResultsPanel({ onIngestEvent }: Props) {
     return `0x${value.toString(16).toUpperCase().padStart(2, "0")}`;
   }, []);
 
-  // Render empty state
+  // Render empty state (no query selected)
+  if (!selectedQuery) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full p-8 text-center">
+        <Database className={`${iconXl} ${textMuted} mb-4`} />
+        <h3 className={`text-sm font-medium ${textPrimary} mb-2`}>No Query Selected</h3>
+        <p className={`text-xs ${textSecondary} max-w-xs`}>
+          Select a completed query from the Queue tab to view its results.
+        </p>
+      </div>
+    );
+  }
+
+  // Render empty state (query has no results yet)
   if (!results && !isRunning && !error) {
     return (
       <div className="flex flex-col items-center justify-center h-full p-8 text-center">
         <Database className={`${iconXl} ${textMuted} mb-4`} />
         <h3 className={`text-sm font-medium ${textPrimary} mb-2`}>No Results</h3>
         <p className={`text-xs ${textSecondary} max-w-xs`}>
-          Configure a query in the panel on the left and click "Run Query" to search the database.
+          This query has not been run yet or returned no data.
         </p>
       </div>
     );
@@ -131,7 +190,7 @@ export default function ResultsPanel({ onIngestEvent }: Props) {
         </p>
         {lastQueryStats && (
           <p className={`text-xs ${textMuted}`}>
-            Scanned {lastQueryStats.rows_scanned.toLocaleString()} rows in {lastQueryStats.execution_time_ms}ms
+            Scanned {lastQueryStats.rows_scanned.toLocaleString()} rows in {lastQueryStats.execution_time_ms.toLocaleString()}ms
           </p>
         )}
       </div>
@@ -143,41 +202,75 @@ export default function ResultsPanel({ onIngestEvent }: Props) {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className={`flex items-center justify-between px-4 py-2 ${borderDivider}`}>
-        <div>
-          <h2 className={`text-sm font-semibold ${textPrimary}`}>Results</h2>
+        <div className="flex-1 min-w-0">
+          <h2 className={`text-sm font-semibold ${textPrimary} truncate`}>
+            {selectedQuery.displayName}
+          </h2>
           <p className={`text-xs ${textSecondary}`}>
             {resultCount.toLocaleString()} {queryInfo.label.toLowerCase()} found
             {lastQueryStats && (
               <span className={textMuted}>
-                {" "}· {lastQueryStats.rows_scanned.toLocaleString()} rows in {lastQueryStats.execution_time_ms}ms
+                {" "}· {lastQueryStats.rows_scanned.toLocaleString()} rows in {lastQueryStats.execution_time_ms.toLocaleString()}ms
               </span>
             )}
           </p>
         </div>
-        <button
-          className={iconButtonBase}
-          title="Export results to CSV"
-          disabled={resultCount === 0}
-        >
-          <Download className={iconMd} />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={onIngestAll}
+            className={`${buttonBase} text-xs`}
+            title="Ingest all results"
+            disabled={resultCount === 0}
+          >
+            <Download className={iconSm} />
+            <span>Ingest All</span>
+          </button>
+          <button
+            onClick={onBookmark}
+            className={iconButtonBase}
+            title="Bookmark time range"
+            disabled={resultCount === 0}
+          >
+            <Bookmark className={`${iconMd} ${textDataAmber}`} />
+          </button>
+          <button
+            onClick={onExport}
+            className={iconButtonBase}
+            title="Export results to CSV"
+            disabled={resultCount === 0}
+          >
+            <FileDown className={iconMd} />
+          </button>
+        </div>
       </div>
+
+      {/* Pagination toolbar */}
+      <DataViewPaginationToolbar
+        currentPage={currentPage}
+        totalPages={totalPages}
+        pageSize={pageSize}
+        pageSizeOptions={FRAME_PAGE_SIZE_OPTIONS}
+        onPageChange={setCurrentPage}
+        onPageSizeChange={(size) => {
+          setPageSize(size);
+          setCurrentPage(0);
+        }}
+      />
 
       {/* Results list */}
       <div className="flex-1 overflow-auto">
         <div className="divide-y divide-[var(--border-default)]">
-          {results &&
-            (results as (ByteChangeResult | FrameChangeResult)[]).map((result, index) => (
-              <ResultRow
-                key={index}
-                result={result}
-                queryType={queryType}
-                formatTimestamp={formatTimestamp}
-                formatTimestampFull={formatTimestampFull}
-                formatByte={formatByte}
-                onIngest={onIngestEvent}
-              />
-            ))}
+          {paginatedResults.map((result, index) => (
+            <ResultRow
+              key={currentPage * pageSize + index}
+              result={result}
+              queryType={queryType}
+              formatTimestamp={formatTimestamp}
+              formatTimestampFull={formatTimestampFull}
+              formatByte={formatByte}
+              onIngest={onIngestEvent}
+            />
+          ))}
         </div>
       </div>
     </div>
@@ -241,6 +334,17 @@ function ResultRow({
 
   // Render frame change result
   const frameResult = result as FrameChangeResult;
+
+  // Format changed byte indices - show up to 4, then "+N more"
+  const formatChangedIndices = (indices: number[]) => {
+    if (indices.length === 0) return "no bytes changed";
+    if (indices.length <= 4) {
+      return `byte${indices.length > 1 ? "s" : ""} ${indices.join(", ")}`;
+    }
+    const shown = indices.slice(0, 4).join(", ");
+    return `bytes ${shown}, +${indices.length - 4} more`;
+  };
+
   return (
     <div className={`flex items-center gap-3 px-4 py-2 ${hoverBg} group`}>
       {/* Timestamp */}
@@ -251,9 +355,12 @@ function ResultRow({
         {formatTimestamp(frameResult.timestamp_us)}
       </span>
 
-      {/* Changed bytes count */}
-      <span className={`text-xs ${textSecondary} flex-1`}>
-        {frameResult.changed_indices.length} byte(s) changed
+      {/* Changed byte indices */}
+      <span
+        className={`${monoBody} text-xs ${textSecondary} flex-1`}
+        title={`Changed: ${frameResult.changed_indices.join(", ")}`}
+      >
+        {formatChangedIndices(frameResult.changed_indices)}
       </span>
 
       {/* Ingest button */}

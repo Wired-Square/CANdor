@@ -4,20 +4,26 @@
 // about CAN bus history. Uses the session system so other apps can share the
 // session to visualise discovered timeslices.
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSettings } from "../../hooks/useSettings";
 import { useIOSessionManager } from "../../hooks/useIOSessionManager";
 import { useQueryStore } from "./stores/queryStore";
 import { useDialogManager } from "../../hooks/useDialogManager";
 import type { FrameMessage } from "../../stores/discoveryStore";
 import type { PlaybackPosition } from "../../api/io";
+import type { CatalogMetadata } from "../../api/catalog";
+import { listCatalogs } from "../../api/catalog";
+import { getFavoritesForProfile, addFavorite, type TimeRangeFavorite } from "../../utils/favorites";
 import AppLayout from "../../components/AppLayout";
 import AppTabView, { type TabDefinition, type ProtocolBadge } from "../../components/AppTabView";
 import QueryTopBar from "./views/QueryTopBar";
 import QueryBuilderPanel from "./views/QueryBuilderPanel";
+import QueuePanel from "./views/QueuePanel";
 import ResultsPanel from "./views/ResultsPanel";
 import IoReaderPickerDialog from "../../dialogs/IoReaderPickerDialog";
 import ErrorDialog from "../../dialogs/ErrorDialog";
+import CatalogPickerDialog from "../decoder/dialogs/CatalogPickerDialog";
+import AddBookmarkDialog from "../../dialogs/AddBookmarkDialog";
 
 export default function Query() {
   const { settings } = useSettings();
@@ -30,13 +36,70 @@ export default function Query() {
   const setIoProfile = useQueryStore((s) => s.setIoProfile);
   const error = useQueryStore((s) => s.error);
   const setError = useQueryStore((s) => s.setError);
-  const resultCount = useQueryStore((s) => s.resultCount);
+  const queue = useQueryStore((s) => s.queue);
+  const selectedQueryId = useQueryStore((s) => s.selectedQueryId);
+  const setSelectedQueryId = useQueryStore((s) => s.setSelectedQueryId);
+  const removeQueueItem = useQueryStore((s) => s.removeQueueItem);
+  const catalogPath = useQueryStore((s) => s.catalogPath);
+  const setCatalogPath = useQueryStore((s) => s.setCatalogPath);
+  const selectedFavouriteId = useQueryStore((s) => s.selectedFavouriteId);
+  const setSelectedFavouriteId = useQueryStore((s) => s.setSelectedFavouriteId);
+
+  // Catalog state
+  const [catalogs, setCatalogs] = useState<CatalogMetadata[]>([]);
+
+  // Favourites state
+  const [favourites, setFavourites] = useState<TimeRangeFavorite[]>([]);
+
+  // Computed values
+  const queueCount = queue.length;
+  const pendingCount = queue.filter((q) => q.status === "pending").length;
+  const selectedQuery = queue.find((q) => q.id === selectedQueryId) ?? null;
+  const selectedQueryResultCount = selectedQuery?.results
+    ? (selectedQuery.results as unknown[]).length
+    : 0;
 
   // Dialog management
   const dialogs = useDialogManager([
     "ioReaderPicker",
     "error",
+    "catalogPicker",
+    "addBookmark",
   ] as const);
+
+  // Load catalogs when decoder directory changes
+  useEffect(() => {
+    const decoderDir = settings?.decoder_dir;
+    if (!decoderDir) return;
+
+    const loadCatalogList = async () => {
+      try {
+        const list = await listCatalogs(decoderDir);
+        setCatalogs(list);
+      } catch (e) {
+        console.error("Failed to load catalog list:", e);
+      }
+    };
+    loadCatalogList();
+  }, [settings?.decoder_dir]);
+
+  // Load favourites when profile changes
+  useEffect(() => {
+    if (!ioProfile) {
+      setFavourites([]);
+      return;
+    }
+
+    const loadFavourites = async () => {
+      try {
+        const favs = await getFavoritesForProfile(ioProfile);
+        setFavourites(favs);
+      } catch (e) {
+        console.error("Failed to load favourites:", e);
+      }
+    };
+    loadFavourites();
+  }, [ioProfile]);
 
   // Filter profiles to postgres only
   const postgresProfiles = useMemo(
@@ -131,13 +194,119 @@ export default function Query() {
     dialogs.error.close();
   }, [setError, dialogs.error]);
 
+  // Handle catalog selection
+  const handleCatalogChange = useCallback(
+    (path: string) => {
+      setCatalogPath(path);
+    },
+    [setCatalogPath]
+  );
+
+  // Handle favourite selection for time bounds
+  const handleFavouriteSelect = useCallback(
+    (id: string | null) => {
+      setSelectedFavouriteId(id);
+    },
+    [setSelectedFavouriteId]
+  );
+
+  // Handle queue item selection
+  const handleSelectQuery = useCallback(
+    (id: string) => {
+      setSelectedQueryId(id);
+      setActiveTab("results");
+    },
+    [setSelectedQueryId]
+  );
+
+  // Handle queue item removal
+  const handleRemoveQuery = useCallback(
+    (id: string) => {
+      removeQueueItem(id);
+    },
+    [removeQueueItem]
+  );
+
+  // Get time range from selected query results for bookmarking
+  const getSelectedQueryTimeRange = useCallback(() => {
+    if (!selectedQuery?.results || (selectedQuery.results as unknown[]).length === 0) {
+      return null;
+    }
+    const results = selectedQuery.results as { timestamp_us: number }[];
+    const timestamps = results.map((r) => r.timestamp_us);
+    return {
+      minTimestampUs: Math.min(...timestamps),
+      maxTimestampUs: Math.max(...timestamps),
+    };
+  }, [selectedQuery]);
+
+  // Handle bookmark button click (from results)
+  const handleBookmarkQuery = useCallback(() => {
+    if (selectedQuery) {
+      dialogs.addBookmark.open();
+    }
+  }, [selectedQuery, dialogs.addBookmark]);
+
+  // Handle save bookmark
+  const handleSaveBookmark = useCallback(
+    async (name: string, startTime: string, endTime: string) => {
+      if (!ioProfile) return;
+      try {
+        await addFavorite(name, ioProfile, startTime, endTime);
+        // Reload favourites
+        const favs = await getFavoritesForProfile(ioProfile);
+        setFavourites(favs);
+      } catch (e) {
+        console.error("Failed to save bookmark:", e);
+      }
+    },
+    [ioProfile]
+  );
+
+  // Handle ingest all results (from selected query)
+  const handleIngestAllResults = useCallback(async () => {
+    const timeRange = getSelectedQueryTimeRange();
+    if (timeRange && ioProfile) {
+      const startTime = new Date(timeRange.minTimestampUs / 1000).toISOString();
+      const endTime = new Date(timeRange.maxTimestampUs / 1000).toISOString();
+      await watchSingleSource(ioProfile, { startTime, endTime });
+    }
+  }, [ioProfile, watchSingleSource, getSelectedQueryTimeRange]);
+
+  // Handle export (placeholder)
+  const handleExportQuery = useCallback(() => {
+    // TODO: Implement export functionality
+    console.log("Export query results:", selectedQuery?.id);
+  }, [selectedQuery]);
+
+  // Get bookmark time range for the dialog
+  const bookmarkTimeRange = useMemo(() => {
+    const range = getSelectedQueryTimeRange();
+    if (!range) return { startTime: "", endTime: "" };
+    return {
+      startTime: new Date(range.minTimestampUs / 1000).toISOString().slice(0, 19),
+      endTime: new Date(range.maxTimestampUs / 1000).toISOString().slice(0, 19),
+    };
+  }, [getSelectedQueryTimeRange]);
+
   // Tab definitions
   const tabs: TabDefinition[] = useMemo(
     () => [
       { id: "query", label: "Query" },
-      { id: "results", label: "Results", count: resultCount > 0 ? resultCount : undefined, countColor: "green" as const },
+      {
+        id: "queue",
+        label: "Queue",
+        count: queueCount > 0 ? queueCount : undefined,
+        countColor: pendingCount > 0 ? ("orange" as const) : ("green" as const),
+      },
+      {
+        id: "results",
+        label: "Results",
+        count: selectedQueryResultCount > 0 ? selectedQueryResultCount : undefined,
+        countColor: "green" as const,
+      },
     ],
-    [resultCount]
+    [queueCount, pendingCount, selectedQueryResultCount]
   );
 
   // Protocol badge for PostgreSQL
@@ -153,6 +322,10 @@ export default function Query() {
           ioProfiles={postgresProfiles}
           ioProfile={ioProfile}
           defaultReadProfileId={settings?.default_read_profile}
+          catalogs={catalogs}
+          catalogPath={catalogPath}
+          defaultCatalogFilename={settings?.default_catalog}
+          onOpenCatalogPicker={() => dialogs.catalogPicker.open()}
           onOpenIoReaderPicker={() => dialogs.ioReaderPicker.open()}
           isStreaming={isStreaming}
           isStopped={isStopped}
@@ -166,7 +339,7 @@ export default function Query() {
         />
       }
     >
-      {/* Tab view: Query Builder / Results */}
+      {/* Tab view: Query Builder / Queue / Results */}
       <AppTabView
         tabs={tabs}
         activeTab={activeTab}
@@ -176,10 +349,30 @@ export default function Query() {
         isStreaming={isStreaming}
         contentArea={{ className: "p-0" }}
       >
-        {activeTab === "query" ? (
-          <QueryBuilderPanel profileId={ioProfile} disabled={!ioProfile} />
-        ) : (
-          <ResultsPanel onIngestEvent={handleIngestAroundEvent} />
+        {activeTab === "query" && (
+          <QueryBuilderPanel
+            profileId={ioProfile}
+            disabled={!ioProfile}
+            favourites={favourites}
+            selectedFavouriteId={selectedFavouriteId}
+            onFavouriteSelect={handleFavouriteSelect}
+            onSwitchToQueue={() => setActiveTab("queue")}
+          />
+        )}
+        {activeTab === "queue" && (
+          <QueuePanel
+            onSelectQuery={handleSelectQuery}
+            onRemoveQuery={handleRemoveQuery}
+          />
+        )}
+        {activeTab === "results" && (
+          <ResultsPanel
+            selectedQuery={selectedQuery}
+            onIngestEvent={handleIngestAroundEvent}
+            onIngestAll={handleIngestAllResults}
+            onExport={handleExportQuery}
+            onBookmark={handleBookmarkQuery}
+          />
         )}
       </AppTabView>
 
@@ -202,6 +395,25 @@ export default function Query() {
         title="Query Error"
         message={error || "An error occurred"}
         onClose={handleCloseError}
+      />
+
+      {/* Catalog Picker Dialog */}
+      <CatalogPickerDialog
+        isOpen={dialogs.catalogPicker.isOpen}
+        onClose={() => dialogs.catalogPicker.close()}
+        catalogs={catalogs}
+        selectedPath={catalogPath}
+        defaultFilename={settings?.default_catalog}
+        onSelect={handleCatalogChange}
+      />
+
+      {/* Add Bookmark Dialog */}
+      <AddBookmarkDialog
+        isOpen={dialogs.addBookmark.isOpen}
+        frameId={0}
+        frameTime={bookmarkTimeRange.startTime}
+        onClose={() => dialogs.addBookmark.close()}
+        onSave={handleSaveBookmark}
       />
     </AppLayout>
   );

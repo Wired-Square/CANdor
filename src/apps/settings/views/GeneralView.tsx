@@ -11,6 +11,8 @@ type GeneralViewProps = {
   onChangeDiscoveryHistoryBuffer: (value: number) => void;
   defaultFrameType: DefaultFrameType;
   onChangeDefaultFrameType: (value: DefaultFrameType) => void;
+  queryResultLimit: number;
+  onChangeQueryResultLimit: (value: number) => void;
 };
 
 export default function GeneralView({
@@ -18,6 +20,8 @@ export default function GeneralView({
   onChangeDiscoveryHistoryBuffer,
   defaultFrameType,
   onChangeDefaultFrameType,
+  queryResultLimit,
+  onChangeQueryResultLimit,
 }: GeneralViewProps) {
   return (
     <div className="space-y-6">
@@ -53,6 +57,26 @@ export default function GeneralView({
             const value = Number(e.target.value);
             if (value >= 1000 && value <= 10000000) {
               onChangeDiscoveryHistoryBuffer(value);
+            }
+          }}
+        />
+      </div>
+
+      <div className="space-y-2">
+        <label className={labelDefault}>Query Result Limit</label>
+        <p className={helpText}>
+          Maximum number of results returned by database queries in the Query app
+        </p>
+        <Input
+          type="number"
+          min={100}
+          max={100000}
+          step={1000}
+          value={queryResultLimit}
+          onChange={(e) => {
+            const value = Number(e.target.value);
+            if (value >= 100 && value <= 100000) {
+              onChangeQueryResultLimit(value);
             }
           }}
         />

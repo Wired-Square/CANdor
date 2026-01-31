@@ -104,6 +104,7 @@ export interface AppSettings {
   binary_zero_colour?: string;
   binary_unused_colour?: string;
   discovery_history_buffer?: number;
+  query_result_limit?: number;
   // Theme settings
   theme_mode?: ThemeMode;
   theme_bg_primary_light?: string;
@@ -154,6 +155,7 @@ function normalizeSettings(
     binary_zero_colour: settings.binary_zero_colour || "#94a3b8",
     binary_unused_colour: settings.binary_unused_colour || "#64748b",
     discovery_history_buffer: settings.discovery_history_buffer ?? 100000,
+    query_result_limit: settings.query_result_limit ?? 10000,
     // Theme settings
     theme_mode: settings.theme_mode ?? "auto",
     theme_bg_primary_light: settings.theme_bg_primary_light || "#ffffff",

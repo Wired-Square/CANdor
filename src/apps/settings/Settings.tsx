@@ -79,6 +79,8 @@ export default function Settings() {
   const setDiscoveryHistoryBuffer = useSettingsStore((s) => s.setDiscoveryHistoryBuffer);
   const defaultFrameType = useSettingsStore((s) => s.general.defaultFrameType);
   const setDefaultFrameType = useSettingsStore((s) => s.setDefaultFrameType);
+  const queryResultLimit = useSettingsStore((s) => s.general.queryResultLimit);
+  const setQueryResultLimit = useSettingsStore((s) => s.setQueryResultLimit);
 
   // IO Profiles
   const ioProfiles = useSettingsStore((s) => s.ioProfiles.profiles);
@@ -202,6 +204,8 @@ export default function Settings() {
               onChangeDiscoveryHistoryBuffer={setDiscoveryHistoryBuffer}
               defaultFrameType={defaultFrameType}
               onChangeDefaultFrameType={setDefaultFrameType}
+              queryResultLimit={queryResultLimit}
+              onChangeQueryResultLimit={setQueryResultLimit}
             />
           )}
 

@@ -52,7 +52,8 @@ export async function queryByteChanges(
   byteIndex: number,
   isExtended: boolean,
   startTime?: string,
-  endTime?: string
+  endTime?: string,
+  limit?: number
 ): Promise<ByteChangeQueryResult> {
   return invoke("db_query_byte_changes", {
     profileId,
@@ -61,6 +62,7 @@ export async function queryByteChanges(
     isExtended,
     startTime,
     endTime,
+    limit,
   });
 }
 
@@ -74,7 +76,8 @@ export async function queryFrameChanges(
   frameId: number,
   isExtended: boolean,
   startTime?: string,
-  endTime?: string
+  endTime?: string,
+  limit?: number
 ): Promise<FrameChangeQueryResult> {
   return invoke("db_query_frame_changes", {
     profileId,
@@ -82,5 +85,6 @@ export async function queryFrameChanges(
     isExtended,
     startTime,
     endTime,
+    limit,
   });
 }

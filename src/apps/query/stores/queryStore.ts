@@ -1,9 +1,12 @@
 // src/apps/query/stores/queryStore.ts
 //
 // Zustand store for the Query app. Manages query configuration, execution state,
-// and results display.
+// results display, and query queue.
 
 import { create } from "zustand";
+import { queryByteChanges, queryFrameChanges } from "../../../api/dbquery";
+import type { TimeRangeFavorite } from "../../../utils/favorites";
+import { useSettingsStore } from "../../settings/stores/settingsStore";
 
 /** Available query types */
 export type QueryType =
@@ -97,6 +100,75 @@ export const CONTEXT_PRESETS: { label: string; beforeMs: number; afterMs: number
   { label: "±1m", beforeMs: 60000, afterMs: 60000 },
 ];
 
+/** Queue item status */
+export type QueryStatus = "pending" | "running" | "completed" | "error";
+
+/** Time bounds from favourite for query */
+export interface QueryTimeBounds {
+  startTime: string;
+  endTime: string;
+  maxFrames?: number;
+  favouriteName: string;
+}
+
+/** A queued query with its configuration and results */
+export interface QueuedQuery {
+  /** Unique identifier for this queue item */
+  id: string;
+  /** Query type (byte_changes, frame_changes, etc.) */
+  queryType: QueryType;
+  /** Query parameters at time of submission */
+  queryParams: QueryParams;
+  /** Profile ID for the database connection */
+  profileId: string;
+  /** Current status */
+  status: QueryStatus;
+  /** When the query was submitted */
+  submittedAt: number;
+  /** When the query started running */
+  startedAt?: number;
+  /** When the query completed */
+  completedAt?: number;
+  /** Error message if status is 'error' */
+  errorMessage?: string;
+  /** Query results (null until completed) */
+  results: QueryResult | null;
+  /** Query statistics (null until completed) */
+  stats: QueryStats | null;
+  /** Display name for the query (auto-generated) */
+  displayName: string;
+  /** Time bounds from favourite (optional) */
+  timeBounds?: QueryTimeBounds;
+  /** Result limit for this query */
+  resultLimit: number;
+}
+
+/** Format frame ID with leading zeros (3 digits for standard, 8 for extended) */
+function formatFrameId(frameId: number, isExtended: boolean): string {
+  const hexDigits = isExtended ? 8 : 3;
+  return `0x${frameId.toString(16).toUpperCase().padStart(hexDigits, "0")}`;
+}
+
+/** Generate a display name for a query */
+function generateQueryDisplayName(queryType: QueryType, queryParams: QueryParams, timeBounds?: QueryTimeBounds): string {
+  const frameHex = formatFrameId(queryParams.frameId, queryParams.isExtended);
+  const typeLabel = QUERY_TYPE_INFO[queryType].label;
+
+  let name = `${typeLabel} - ${frameHex}`;
+  if (queryType === "byte_changes") {
+    name += ` [byte ${queryParams.byteIndex}]`;
+  }
+  if (queryParams.isExtended) {
+    name += " (ext)";
+  }
+  if (timeBounds) {
+    name += ` · ${timeBounds.favouriteName}`;
+  }
+  return name;
+}
+
+export { formatFrameId };
+
 interface QueryState {
   // Profile state (synced with session manager)
   ioProfile: string | null;
@@ -108,14 +180,22 @@ interface QueryState {
   // Context window for ingest
   contextWindow: ContextWindow;
 
-  // Query execution state
+  // Query execution state (for backwards compat - now managed via queue)
   isRunning: boolean;
   error: string | null;
 
-  // Results
+  // Results (legacy - now managed via queue)
   results: QueryResult | null;
   resultCount: number;
   lastQueryStats: QueryStats | null;
+
+  // Queue state
+  queue: QueuedQuery[];
+  selectedQueryId: string | null;
+  selectedFavouriteId: string | null;
+
+  // Catalog state
+  catalogPath: string | null;
 
   // Actions
   setIoProfile: (profile: string | null) => void;
@@ -127,6 +207,18 @@ interface QueryState {
   setResults: (results: QueryResult | null, stats?: QueryStats) => void;
   clearResults: () => void;
   reset: () => void;
+
+  // Queue actions
+  enqueueQuery: (profileId: string, favourite?: TimeRangeFavorite | null, resultLimit?: number) => string;
+  updateQueueItem: (id: string, updates: Partial<QueuedQuery>) => void;
+  removeQueueItem: (id: string) => void;
+  clearQueue: () => void;
+  setSelectedQueryId: (id: string | null) => void;
+  setSelectedFavouriteId: (id: string | null) => void;
+  processNextQuery: () => Promise<void>;
+
+  // Catalog actions
+  setCatalogPath: (path: string | null) => void;
 }
 
 const initialQueryParams: QueryParams = {
@@ -140,7 +232,7 @@ const initialContextWindow: ContextWindow = {
   afterMs: 5000,
 };
 
-export const useQueryStore = create<QueryState>((set) => ({
+export const useQueryStore = create<QueryState>((set, get) => ({
   // Initial state
   ioProfile: null,
   queryType: "byte_changes",
@@ -151,6 +243,14 @@ export const useQueryStore = create<QueryState>((set) => ({
   results: null,
   resultCount: 0,
   lastQueryStats: null,
+
+  // Queue state
+  queue: [],
+  selectedQueryId: null,
+  selectedFavouriteId: null,
+
+  // Catalog state
+  catalogPath: null,
 
   // Actions
   setIoProfile: (profile) => set({ ioProfile: profile }),
@@ -189,5 +289,184 @@ export const useQueryStore = create<QueryState>((set) => ({
       results: null,
       resultCount: 0,
       lastQueryStats: null,
+      queue: [],
+      selectedQueryId: null,
+      selectedFavouriteId: null,
+      catalogPath: null,
     }),
+
+  // Queue actions
+  enqueueQuery: (profileId: string, favourite?: TimeRangeFavorite | null, resultLimit?: number) => {
+    const { queryType, queryParams } = get();
+    const id = `query_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+    const timeBounds: QueryTimeBounds | undefined = favourite
+      ? {
+          startTime: favourite.startTime,
+          endTime: favourite.endTime,
+          maxFrames: favourite.maxFrames,
+          favouriteName: favourite.name,
+        }
+      : undefined;
+
+    const displayName = generateQueryDisplayName(queryType, queryParams, timeBounds);
+
+    // Use provided limit or fall back to settings
+    const limit = resultLimit ?? useSettingsStore.getState().general.queryResultLimit;
+
+    const newItem: QueuedQuery = {
+      id,
+      queryType,
+      queryParams: { ...queryParams },
+      profileId,
+      status: "pending",
+      submittedAt: Date.now(),
+      results: null,
+      stats: null,
+      displayName,
+      timeBounds,
+      resultLimit: limit,
+    };
+
+    set((state) => ({
+      queue: [...state.queue, newItem],
+    }));
+
+    // Auto-start processing if nothing is running
+    setTimeout(() => get().processNextQuery(), 0);
+
+    return id;
+  },
+
+  updateQueueItem: (id: string, updates: Partial<QueuedQuery>) => {
+    set((state) => ({
+      queue: state.queue.map((item) =>
+        item.id === id ? { ...item, ...updates } : item
+      ),
+    }));
+  },
+
+  removeQueueItem: (id: string) => {
+    set((state) => ({
+      queue: state.queue.filter((item) => item.id !== id),
+      selectedQueryId: state.selectedQueryId === id ? null : state.selectedQueryId,
+    }));
+  },
+
+  clearQueue: () => {
+    set({ queue: [], selectedQueryId: null });
+  },
+
+  setSelectedQueryId: (id: string | null) => {
+    set({ selectedQueryId: id });
+  },
+
+  setSelectedFavouriteId: (id: string | null) => {
+    set({ selectedFavouriteId: id });
+  },
+
+  processNextQuery: async () => {
+    const { queue, updateQueueItem, setIsRunning } = get();
+
+    // Check if anything is already running
+    if (queue.some((q) => q.status === "running")) {
+      return;
+    }
+
+    // Find next pending query
+    const nextQuery = queue.find((q) => q.status === "pending");
+    if (!nextQuery) {
+      setIsRunning(false);
+      return;
+    }
+
+    // Mark as running
+    setIsRunning(true);
+    updateQueueItem(nextQuery.id, {
+      status: "running",
+      startedAt: Date.now(),
+    });
+
+    try {
+      let results: QueryResult = [];
+      let stats: QueryStats | undefined;
+
+      const { profileId, queryType, queryParams, timeBounds, resultLimit } = nextQuery;
+
+      // Convert datetime-local format to ISO-8601 for the backend
+      // datetime-local is "YYYY-MM-DDTHH:mm" but backend needs full ISO timestamp
+      const toIsoTimestamp = (dt: string | undefined): string | undefined => {
+        if (!dt) return undefined;
+        try {
+          // Parse as local time and convert to ISO
+          const date = new Date(dt);
+          if (isNaN(date.getTime())) return undefined;
+          return date.toISOString();
+        } catch {
+          return undefined;
+        }
+      };
+
+      // Only pass non-empty time bounds to the backend (empty strings cause serialization errors)
+      const startTime = toIsoTimestamp(timeBounds?.startTime);
+      const endTime = toIsoTimestamp(timeBounds?.endTime);
+
+      switch (queryType) {
+        case "byte_changes": {
+          const response = await queryByteChanges(
+            profileId,
+            queryParams.frameId,
+            queryParams.byteIndex,
+            queryParams.isExtended,
+            startTime,
+            endTime,
+            resultLimit
+          );
+          results = response.results;
+          stats = response.stats;
+          break;
+        }
+
+        case "frame_changes": {
+          const response = await queryFrameChanges(
+            profileId,
+            queryParams.frameId,
+            queryParams.isExtended,
+            startTime,
+            endTime,
+            resultLimit
+          );
+          results = response.results;
+          stats = response.stats;
+          break;
+        }
+
+        default:
+          // Other query types not yet implemented
+          results = [];
+          break;
+      }
+
+      updateQueueItem(nextQuery.id, {
+        status: "completed",
+        completedAt: Date.now(),
+        results,
+        stats: stats ?? null,
+      });
+    } catch (e) {
+      updateQueueItem(nextQuery.id, {
+        status: "error",
+        completedAt: Date.now(),
+        errorMessage: e instanceof Error ? e.message : String(e),
+      });
+    }
+
+    // Process next query in queue
+    setTimeout(() => get().processNextQuery(), 0);
+  },
+
+  // Catalog actions
+  setCatalogPath: (path: string | null) => {
+    set({ catalogPath: path });
+  },
 }));
