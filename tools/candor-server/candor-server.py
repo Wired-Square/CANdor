@@ -359,6 +359,7 @@ class PostgresWriter:
         stats_interval: float = 10.0,
         cache_path: Optional[str] = None,
         cache_max_mb: int = 1000,
+        queue_flush_pct: int = 50,
     ):
         if not dsn:
             raise ValueError("Postgres DSN is required")
@@ -376,6 +377,7 @@ class PostgresWriter:
         self._disk_cache = DiskCache(path=cache_path, max_mb=cache_max_mb)
         self._db_unavailable = False
         self._draining_cache = False
+        self._queue_flush_threshold = queue_flush_pct / 100.0
 
         # Check for existing cached frames from previous session
         cached_count = self._disk_cache.count()
@@ -505,6 +507,9 @@ class PostgresWriter:
         batch: List[tuple] = []
         while self._alive:
             try:
+                # Proactively flush queue to disk if it's getting full
+                self._maybe_flush_queue_overflow()
+
                 # Try to connect if not connected
                 if not getattr(self, "_conn", None):
                     self._connect()
@@ -638,6 +643,20 @@ class PostgresWriter:
 
         if drained > 0:
             self._log.info("drained %d frames from queue to disk cache", drained)
+
+    def _maybe_flush_queue_overflow(self):
+        """Flush queue to disk if it exceeds threshold, even when DB is available."""
+        cap = self.q.maxsize or 0
+        if not cap:
+            return
+
+        size = self.q.qsize()
+        if size / cap >= self._queue_flush_threshold:
+            self._log.warning(
+                "queue at %d%% (%d/%d), flushing to disk cache",
+                int(size / cap * 100), size, cap
+            )
+            self._drain_queue_to_cache()
 
     def _shutdown_flush(self):
         """Flush remaining frames on shutdown - to DB if available, else to disk."""
@@ -1286,6 +1305,7 @@ def apply_config_overrides(args: argparse.Namespace, cfg: dict) -> argparse.Name
             "dir": "pg_dir",
             "cache_path": "pg_cache_path",
             "cache_max_mb": "pg_cache_max_mb",
+            "queue_flush_pct": "pg_queue_flush_pct",
         }.items():
             if cfg_key in postgres_conf:
                 setattr(args, arg_key, postgres_conf[cfg_key])
@@ -1367,6 +1387,9 @@ def build_parser():
     ap.add_argument(
         "--pg-cache-max-mb", type=int, default=1000,
         help="Max disk cache size in MB (default: 1000)")
+    ap.add_argument(
+        "--pg-queue-flush-pct", type=int, default=50,
+        help="Flush queue to disk when this full (default: 50%%)")
 
     # Config file (TOML)
     ap.add_argument("-C", "--config", help="Path to TOML config file that OVERRIDES CLI options")
@@ -1419,6 +1442,7 @@ def main():
             stats_interval=args.stats_interval,
             cache_path=args.pg_cache_path,
             cache_max_mb=args.pg_cache_max_mb,
+            queue_flush_pct=args.pg_queue_flush_pct,
         )
 
     try:

@@ -100,6 +100,13 @@ dir = "rx"
 # Adjust based on your available disk space and expected outage duration.
 cache_max_mb = 1000
 
+# Proactive queue overflow threshold (percentage). When the in-memory queue
+# reaches this level, frames are flushed to disk cache even if the database
+# is connected. This prevents frame loss during cache recovery, when the
+# worker thread is busy draining old cached frames and new frames accumulate.
+# Lower values are more conservative; 50% gives ample headroom before overflow.
+queue_flush_pct = 50
+
 [logging]
 # Log level: DEBUG, INFO, WARNING, ERROR
 # DEBUG shows frame-level detail (very verbose on busy buses)
