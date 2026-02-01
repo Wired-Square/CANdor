@@ -79,6 +79,27 @@ queue_size = 200000
 # Use "rx" for received frames, "tx" for transmitted (if you add TX logging).
 dir = "rx"
 
+# --- Disk Cache (Outage Resilience) ---
+# When PostgreSQL is unavailable (network outage, maintenance, etc.), frames
+# are written to a local SQLite cache instead of being dropped. When the
+# connection is restored, cached frames are drained to PostgreSQL in strict
+# temporal order before new frames are processed.
+#
+# On graceful shutdown (systemctl stop, SIGTERM, Ctrl+C), any remaining
+# in-memory frames are flushed to the disk cache if the DB is unavailable.
+# On next startup, cached frames from the previous session are automatically
+# detected and drained.
+
+# Path to the SQLite cache file. Default: ~/.candor-server-cache.db
+# TIP: Use a fast local disk (not NFS). The cache uses WAL mode for durability.
+# Environment variable PG_CACHE_PATH can also be used.
+# cache_path = "/home/pi/.candor-server-cache.db"
+
+# Maximum disk cache size in megabytes. When exceeded, new frames are dropped.
+# At ~3,700 frames/min, 1000 MB holds roughly 45 hours of data.
+# Adjust based on your available disk space and expected outage duration.
+cache_max_mb = 1000
+
 [logging]
 # Log level: DEBUG, INFO, WARNING, ERROR
 # DEBUG shows frame-level detail (very verbose on busy buses)

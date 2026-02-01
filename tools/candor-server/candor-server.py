@@ -6,15 +6,17 @@ import os
 import select
 import signal
 import socket
+import sqlite3
 import struct
 import tomllib
 import time
 import threading
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from queue import Queue, Full, Empty
 from pyroute2 import IPRoute
-from typing import Dict, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
 
 log = logging.getLogger("candor")
 
@@ -201,6 +203,135 @@ def format_candump_line(
     return f"{bus_tag}({ts_str}) {id_str} {kind}{flags} [{dlc}] {bytes_str} | {ascii_str}\n"
 
 
+class DiskCache:
+    """
+    SQLite-based disk cache for CAN frames when PostgreSQL is unavailable.
+    Stores frames in a single table, supports batch operations.
+    """
+    DEFAULT_PATH = Path.home() / ".candor-server-cache.db"
+
+    def __init__(self, path: Optional[str] = None, max_mb: int = 1000):
+        self.path = Path(path) if path else self.DEFAULT_PATH
+        self.max_bytes = max_mb * 1024 * 1024
+        self._log = log.getChild("cache")
+        self._conn: sqlite3.Connection = self._init_db()
+        self._closed = False
+
+    def _init_db(self) -> sqlite3.Connection:
+        """Initialise database and create table if needed."""
+        conn = sqlite3.connect(str(self.path), check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS frames (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                extended INTEGER NOT NULL,
+                is_fd INTEGER NOT NULL,
+                arb_id INTEGER NOT NULL,
+                dlc INTEGER NOT NULL,
+                data BLOB NOT NULL,
+                bus INTEGER NOT NULL,
+                dir TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+        return conn
+
+    def write_batch(self, rows: List[tuple]) -> int:
+        """
+        Write a batch of frame rows to cache.
+        Each row: (ts_dt, extended, is_fd, arb_id, id_hex, dlc, data, bus, dir)
+        Returns number of rows written.
+        """
+        if not rows:
+            return 0
+
+        # Convert datetime to float timestamp for storage
+        converted = []
+        for row in rows:
+            ts_dt, extended, is_fd, arb_id, _id_hex, dlc, data, bus, dir_ = row
+            ts_float = ts_dt.timestamp() if hasattr(ts_dt, 'timestamp') else float(ts_dt)
+            converted.append((ts_float, int(extended), int(is_fd), arb_id, dlc, data, bus, dir_))
+
+        self._conn.executemany(
+            "INSERT INTO frames (ts, extended, is_fd, arb_id, dlc, data, bus, dir) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            converted
+        )
+        self._conn.commit()
+        return len(converted)
+
+    def read_batch(self, limit: int = 500) -> Tuple[List[int], List[tuple]]:
+        """
+        Read a batch of frames from cache (oldest first).
+        Returns (ids, rows) where rows match PostgresWriter format:
+        (ts_dt, extended, is_fd, arb_id, id_hex, dlc, data, bus, dir)
+        """
+        cur = self._conn.execute(
+            "SELECT id, ts, extended, is_fd, arb_id, dlc, data, bus, dir FROM frames ORDER BY id LIMIT ?",
+            (limit,)
+        )
+        ids = []
+        rows = []
+        for row in cur.fetchall():
+            id_, ts, extended, is_fd, arb_id, dlc, data, bus, dir_ = row
+            ts_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+            ids.append(id_)
+            rows.append((ts_dt, bool(extended), bool(is_fd), arb_id, None, dlc, data, bus, dir_))
+        return ids, rows
+
+    def delete_batch(self, ids: List[int]):
+        """Delete frames by ID after successful write to PostgreSQL."""
+        if not ids:
+            return
+        placeholders = ",".join("?" * len(ids))
+        self._conn.execute(f"DELETE FROM frames WHERE id IN ({placeholders})", ids)
+        self._conn.commit()
+
+    def count(self) -> int:
+        """Return number of cached frames."""
+        cur = self._conn.execute("SELECT COUNT(*) FROM frames")
+        return cur.fetchone()[0]
+
+    def is_empty(self) -> bool:
+        """Check if cache has no frames."""
+        cur = self._conn.execute("SELECT 1 FROM frames LIMIT 1")
+        return cur.fetchone() is None
+
+    def size_bytes(self) -> int:
+        """Return approximate size of cache file in bytes."""
+        try:
+            return self.path.stat().st_size
+        except OSError:
+            return 0
+
+    def is_full(self) -> bool:
+        """Check if cache has exceeded max size."""
+        return self.size_bytes() >= self.max_bytes
+
+    def clear(self):
+        """Delete all cached frames and vacuum."""
+        self._conn.execute("DELETE FROM frames")
+        self._conn.execute("VACUUM")
+        self._conn.commit()
+
+    def close(self):
+        """Close database connection."""
+        if not self._closed:
+            self._conn.close()
+            self._closed = True
+
+    def delete_file(self):
+        """Delete cache file (call after close)."""
+        try:
+            self.path.unlink(missing_ok=True)
+            # Also remove WAL and SHM files
+            Path(str(self.path) + "-wal").unlink(missing_ok=True)
+            Path(str(self.path) + "-shm").unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 class PostgresWriter:
     """
     Background batcher calling your import function.
@@ -215,6 +346,8 @@ class PostgresWriter:
         queue_max: int = 50000,
         default_dir: str = "rx",
         stats_interval: float = 10.0,
+        cache_path: Optional[str] = None,
+        cache_max_mb: int = 1000,
     ):
         if not dsn:
             raise ValueError("Postgres DSN is required")
@@ -228,10 +361,22 @@ class PostgresWriter:
         self._alive = True
         self._log = log.getChild("pg")
 
+        # --- disk cache for resilience ---
+        self._disk_cache = DiskCache(path=cache_path, max_mb=cache_max_mb)
+        self._db_unavailable = False
+        self._draining_cache = False
+
+        # Check for existing cached frames from previous session
+        cached_count = self._disk_cache.count()
+        if cached_count > 0:
+            self._log.warning("Found %d cached frames from previous session, will drain on connect", cached_count)
+
         # --- metrics ---
         self.count_enqueued = 0
         self.count_written = 0
         self.count_dropped = 0
+        self.count_cached = 0
+        self.count_cache_recovered = 0
         self._last_full_log = 0.0
         self._last_bucket = -1  # -1, 80, 95, 100
         self._t0 = time.time()
@@ -282,17 +427,26 @@ class PostgresWriter:
             self.q.put_nowait(())  # wake worker
         except Exception:
             pass
-        self._thread.join(timeout=2.0)
-        if getattr(self, "_conn", None):
-            self._final_flush()
-        try:
-            self._close_conn()
-        except Exception:
-            pass
+        self._thread.join(timeout=5.0)  # Give more time for shutdown flush
+
+        # If worker didn't flush (hung or timed out), emergency flush queue to disk
+        if not self.q.empty():
+            self._emergency_flush_to_disk()
+
+        # Worker handles final flush via _shutdown_flush()
         if self.stats_interval > 0:
             # no need to join stats thread strictly; it's daemon
             pass
-        self._log.info("closed")
+
+        # Ensure disk cache is closed
+        if not self._disk_cache._closed:
+            self._disk_cache.close()
+
+        # Log final stats
+        cache_count = self._disk_cache.count() if not self._disk_cache._closed else 0
+        self._log.info("closed: wrote=%d cached=%d recovered=%d dropped=%d pending_in_cache=%d",
+                      self.count_written, self.count_cached, self.count_cache_recovered,
+                      self.count_dropped, cache_count)
 
     # -------- internals --------
     def _connect(self):
@@ -303,6 +457,9 @@ class PostgresWriter:
         self._conn = psycopg2.connect(self.dsn, application_name="candor-server")
         self._conn.autocommit = False
         self._cur = self._conn.cursor()
+        # Set statement timeout so blocked writes fail fast and trigger disk cache fallback
+        # 10 seconds should be generous for normal batch inserts
+        self._cur.execute("SET statement_timeout = '10s'")
         # Use execute_values for batch inserts - much faster than executemany
         # Template matches the row tuple order from enqueue()
         self._sql = f"SELECT {self.func}(v._ts, v._extended, v._is_fd, v._id, v._id_hex, v._dlc, v._data_bytes, v._bus, v._dir) FROM (VALUES %s) AS v(_ts, _extended, _is_fd, _id, _id_hex, _dlc, _data_bytes, _bus, _dir)"
@@ -322,14 +479,50 @@ class PostgresWriter:
 
     def _worker(self):
         backoff = 0.5
+        batch: List[tuple] = []
         while self._alive:
             try:
+                # Try to connect if not connected
                 if not getattr(self, "_conn", None):
                     self._connect()
                     backoff = 0.5
+                    if self._db_unavailable:
+                        self._db_unavailable = False
+                        self._log.info("database connection restored")
 
+                # Priority 1: Drain disk cache first (strict temporal ordering)
+                cache_empty = self._disk_cache.is_empty()
+                self._log.debug("cache check: is_empty=%s, _draining_cache=%s", cache_empty, self._draining_cache)
+                if not cache_empty:
+                    if not self._draining_cache:
+                        self._draining_cache = True
+                        self._log.info("draining %d cached frames to database", self._disk_cache.count())
+
+                    ids, batch = self._disk_cache.read_batch(self.batch_size)
+                    self._log.debug("read_batch returned %d ids, %d rows", len(ids), len(batch))
+                    if batch:
+                        self._log.debug("executing batch insert for %d cached frames", len(batch))
+                        self._execute_values(self._cur, self._sql, batch, template=self._template)
+                        self._conn.commit()
+                        self._disk_cache.delete_batch(ids)
+                        self.count_written += len(batch)
+                        self.count_cache_recovered += len(batch)
+                        self._log.debug("batch committed, cache_recovered=%d", self.count_cache_recovered)
+                        continue  # Keep draining cache
+
+                    # Cache is now empty
+                    self._draining_cache = False
+                    self._log.info("cache drain complete, deleting cache file")
+                    self._disk_cache.close()
+                    self._disk_cache.delete_file()
+                    # Reinitialise for future use
+                    self._disk_cache = DiskCache(
+                        path=str(self._disk_cache.path),
+                        max_mb=self._disk_cache.max_bytes // (1024 * 1024)
+                    )
+
+                # Priority 2: Process in-memory queue
                 batch = []
-                # block briefly for first item
                 try:
                     item = self.q.get(timeout=self.flush_interval)
                     if item and len(item) == 9:
@@ -337,7 +530,6 @@ class PostgresWriter:
                 except Empty:
                     pass
 
-                # drain quickly
                 while len(batch) < self.batch_size:
                     try:
                         item = self.q.get_nowait()
@@ -357,19 +549,66 @@ class PostgresWriter:
             except Exception as e:
                 self._log.error("write error: %s", e)
                 self._close_conn()
+
+                # DB unavailable - cache the batch to disk instead of losing it
+                if not self._db_unavailable:
+                    self._db_unavailable = True
+                    self._log.warning("database unavailable, caching frames to disk")
+
+                # Write any pending batch to disk cache
+                if batch:
+                    self._write_to_cache(batch)
+                    batch = []
+
+                # Drain in-memory queue to disk to prevent overflow
+                self._drain_queue_to_cache()
+
                 time.sleep(backoff)
                 backoff = min(backoff * 2.0, 10.0)
 
         # on shutdown, try to flush remaining
-        try:
-            if getattr(self, "_conn", None):
-                self._final_flush()
-        except Exception as e:
-            self._log.error("final flush error: %s", e)
-        finally:
-            self._close_conn()
+        self._shutdown_flush()
 
-    def _final_flush(self):
+    def _write_to_cache(self, batch: List[tuple]):
+        """Write a batch to disk cache, respecting size limit."""
+        if self._disk_cache.is_full():
+            self._log.error("disk cache full (%d MB), dropping %d frames",
+                           self._disk_cache.max_bytes // (1024 * 1024), len(batch))
+            self.count_dropped += len(batch)
+            return
+
+        try:
+            written = self._disk_cache.write_batch(batch)
+            self.count_cached += written
+        except Exception as e:
+            self._log.error("disk cache write error: %s", e)
+            self.count_dropped += len(batch)
+
+    def _drain_queue_to_cache(self):
+        """Drain in-memory queue to disk cache while DB is unavailable."""
+        drained = 0
+        batch = []
+        while True:
+            try:
+                item = self.q.get_nowait()
+            except Empty:
+                break
+            if item and len(item) == 9:
+                batch.append(item)
+                if len(batch) >= self.batch_size:
+                    self._write_to_cache(batch)
+                    drained += len(batch)
+                    batch = []
+
+        if batch:
+            self._write_to_cache(batch)
+            drained += len(batch)
+
+        if drained > 0:
+            self._log.info("drained %d frames from queue to disk cache", drained)
+
+    def _shutdown_flush(self):
+        """Flush remaining frames on shutdown - to DB if available, else to disk."""
         remaining = []
         while True:
             try:
@@ -378,11 +617,51 @@ class PostgresWriter:
                 break
             if item and len(item) == 9:
                 remaining.append(item)
-        if remaining:
-            self._execute_values(self._cur, self._sql, remaining, template=self._template)
-            self._conn.commit()
-            self.count_written += len(remaining)
-        self._log.info("final flush complete: wrote=%d", len(remaining))
+
+        if not remaining:
+            self._close_conn()
+            return
+
+        # Try PostgreSQL first
+        if getattr(self, "_conn", None):
+            try:
+                self._execute_values(self._cur, self._sql, remaining, template=self._template)
+                self._conn.commit()
+                self.count_written += len(remaining)
+                self._log.info("shutdown: flushed %d frames to database", len(remaining))
+                self._close_conn()
+                return
+            except Exception as e:
+                self._log.error("shutdown flush to DB failed: %s", e)
+                self._close_conn()
+
+        # Fall back to disk cache
+        self._write_to_cache(remaining)
+        self._log.info("shutdown: flushed %d frames to disk cache", len(remaining))
+        self._disk_cache.close()
+
+    def _emergency_flush_to_disk(self):
+        """Emergency flush of in-memory queue to disk when worker is hung."""
+        count = 0
+        batch = []
+        while True:
+            try:
+                item = self.q.get_nowait()
+            except Empty:
+                break
+            if item and len(item) == 9:
+                batch.append(item)
+                if len(batch) >= self.batch_size:
+                    self._write_to_cache(batch)
+                    count += len(batch)
+                    batch = []
+
+        if batch:
+            self._write_to_cache(batch)
+            count += len(batch)
+
+        if count > 0:
+            self._log.warning("emergency flush: saved %d queued frames to disk cache", count)
 
     def _stats_loop(self):
         while self._alive:
@@ -391,11 +670,13 @@ class PostgresWriter:
                 size = self.q.qsize()
                 cap = self.q.maxsize or 0
                 occ = (size / cap * 100.0) if cap else 0.0
-                self._log.info(
-                    "stats queued=%d/%d (%.0f%%) enq=%d wrote=%d dropped=%d conn=%s",
-                    size, cap, occ, self.count_enqueued, self.count_written, self.count_dropped,
-                    "up" if getattr(self, "_conn", None) else "down"
-                )
+                cache_count = self._disk_cache.count() if not self._disk_cache._closed else 0
+
+                # Build stats message
+                msg = f"stats queued={size}/{cap} ({occ:.0f}%) enq={self.count_enqueued} wrote={self.count_written} dropped={self.count_dropped} conn={'up' if getattr(self, '_conn', None) else 'down'}"
+                if cache_count > 0 or self.count_cached > 0:
+                    msg += f" cached={self.count_cached} cache_recovered={self.count_cache_recovered} cache_pending={cache_count}"
+                self._log.info(msg)
             except Exception:
                 pass
 
@@ -904,7 +1185,7 @@ def apply_config_overrides(args: argparse.Namespace, cfg: dict) -> argparse.Name
     iface, host, port, bus_offset, echo_console, colour, default_dir, can_fd
 
     [postgres]
-    enable, dsn, func, batch_size, flush_interval, queue_size, dir
+    enable, dsn, func, batch_size, flush_interval, queue_size, dir, cache_path, cache_max_mb
 
     [logging]
     level, stats_interval
@@ -925,6 +1206,8 @@ def apply_config_overrides(args: argparse.Namespace, cfg: dict) -> argparse.Name
             "flush_interval": "pg_flush_interval",
             "queue_size": "pg_queue_size",
             "dir": "pg_dir",
+            "cache_path": "pg_cache_path",
+            "cache_max_mb": "pg_cache_max_mb",
         }.items():
             if cfg_key in postgres_conf:
                 setattr(args, arg_key, postgres_conf[cfg_key])
@@ -985,6 +1268,8 @@ def build_parser():
     ap.add_argument("--pg-flush-interval", type=float, default=0.5, help="DB flush interval seconds (default 0.5)")
     ap.add_argument("--pg-queue-size", type=int, default=50000, help="Max buffered frames (default 50000)")
     ap.add_argument("--pg-dir", default=None, help="Override direction per row (default: uses --default-dir)")
+    ap.add_argument("--pg-cache-path", default=None, help="Disk cache path for outages (default: ~/.candor-server-cache.db)")
+    ap.add_argument("--pg-cache-max-mb", type=int, default=1000, help="Max disk cache size in MB (default: 1000)")
 
     # Config file (TOML)
     ap.add_argument("-C", "--config", help="Path to TOML config file that OVERRIDES CLI options")
@@ -1014,6 +1299,12 @@ def main():
         if env_dsn:
             args.pg_dsn = env_dsn
 
+    # If cache path not given but env var exists, use it
+    if not args.pg_cache_path:
+        env_cache = os.getenv("PG_CACHE_PATH")
+        if env_cache:
+            args.pg_cache_path = env_cache
+
     # Optional Postgres writer
     pg_writer = None
     if args.pg_enable:
@@ -1028,6 +1319,8 @@ def main():
             queue_max=args.pg_queue_size,
             default_dir=(args.pg_dir or args.default_dir),
             stats_interval=args.stats_interval,
+            cache_path=args.pg_cache_path,
+            cache_max_mb=args.pg_cache_max_mb,
         )
 
     try:
