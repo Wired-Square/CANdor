@@ -778,10 +778,11 @@ export default function Discovery() {
 
     const setupListeners = async () => {
       // Session control events from menu (only respond when targeted)
-      const unlistenControl = await currentWindow.listen<{ action: string; targetPanelId: string | null; bookmarkId?: string }>(
+      const unlistenControl = await currentWindow.listen<{ action: string; targetPanelId: string | null; windowLabel?: string; bookmarkId?: string }>(
         "session-control",
         async (event) => {
-          const { action, targetPanelId, bookmarkId } = event.payload;
+          const { action, targetPanelId, windowLabel, bookmarkId } = event.payload;
+          if (windowLabel && windowLabel !== currentWindow.label) return;
           if (targetPanelId !== "discovery") return;
 
           switch (action) {

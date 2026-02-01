@@ -495,7 +495,7 @@ export default function MainLayout() {
       // Helper to emit session-control with current active panel from store
       const emitSessionControl = (action: string) => {
         const targetPanelId = useFocusStore.getState().focusedPanelId;
-        currentWindow.emit("session-control", { action, targetPanelId });
+        currentWindow.emit("session-control", { action, targetPanelId, windowLabel: currentWindow.label });
       };
 
       // Session control events - emit to focused app
@@ -541,6 +541,7 @@ export default function MainLayout() {
         currentWindow.emit("session-control", {
           action: "jump-to-bookmark",
           targetPanelId,
+          windowLabel: currentWindow.label,
           bookmarkId: event.payload,
         });
       });

@@ -202,10 +202,11 @@ export default function Transmit() {
     const currentWindow = getCurrentWebviewWindow();
 
     const setupListeners = async () => {
-      const unlistenControl = await currentWindow.listen<{ action: string; targetPanelId: string | null }>(
+      const unlistenControl = await currentWindow.listen<{ action: string; targetPanelId: string | null; windowLabel?: string }>(
         "session-control",
         (event) => {
-          const { action, targetPanelId } = event.payload;
+          const { action, targetPanelId, windowLabel } = event.payload;
+          if (windowLabel && windowLabel !== currentWindow.label) return;
           if (targetPanelId !== "transmit") return;
 
           switch (action) {
