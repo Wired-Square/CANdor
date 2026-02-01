@@ -164,6 +164,8 @@ export interface SerialProtocolConfig {
   byte_order?: "little" | "big";
   /** Global header length in bytes (required when header fields are defined) */
   header_length?: number;
+  /** Maximum frame length in bytes (default: 64). Safety limit for malformed framing. */
+  max_frame_length?: number;
   /** Named header fields - masks over header bytes (ID field is used for frame matching) */
   fields?: Record<string, SerialHeaderField>;
   /** Protocol-level checksum configuration (applies to all frames) */
@@ -177,7 +179,6 @@ export interface SerialConfig {
   protocol: "serial";
   frame_id?: string;             // Unique identifier for this frame
   delimiter?: number[];          // Byte sequence for raw framing (only when encoding=raw)
-  max_length?: number;           // Maximum frame length
   // NOTE: encoding comes from SerialProtocolConfig ([frame.serial.config]), not here
 }
 

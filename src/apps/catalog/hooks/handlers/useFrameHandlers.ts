@@ -71,6 +71,7 @@ export function useFrameHandlers({
   const metaFields = useCatalogEditorStore((s) => s.forms.meta);
   const serialHeaderFields = useCatalogEditorStore((s) => s.forms.serialHeaderFields);
   const serialHeaderLength = useCatalogEditorStore((s) => s.forms.serialHeaderLength);
+  const serialMaxFrameLength = useCatalogEditorStore((s) => s.forms.serialMaxFrameLength);
   const serialChecksum = useCatalogEditorStore((s) => s.forms.serialChecksum);
   const setIdFields = useCatalogEditorStore((s) => s.setCanFrameForm);
   const setNodeName = useCatalogEditorStore((s) => s.setNodeName);
@@ -292,7 +293,6 @@ export function useFrameHandlers({
           protocol: "serial" as const,
           frame_id: node.metadata?.frameId ?? node.key,
           delimiter: node.metadata?.delimiter,
-          max_length: node.metadata?.maxLength,
         };
         break;
       }
@@ -615,6 +615,7 @@ export function useFrameHandlers({
           encoding: serialEncoding,
           byte_order: serialByteOrder,
           header_length: serialHeaderLength,
+          max_frame_length: serialMaxFrameLength,
           fields,
           checksum: serialChecksum ?? undefined,
         });
@@ -707,6 +708,7 @@ export function useFrameHandlers({
         encoding: serialEncoding,
         byte_order: serialByteOrder,
         header_length: serialHeaderLength,
+        max_frame_length: serialMaxFrameLength,
         fields,
         checksum: serialChecksum ?? undefined,
       });

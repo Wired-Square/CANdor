@@ -42,7 +42,6 @@ const serialHandler: ProtocolHandler<SerialConfig> = {
         protocol: "serial",
         frame_id: key,
         delimiter: value.delimiter,
-        max_length: value.max_length,
         // encoding NOT stored here - comes from [frame.serial.config]
       },
       inherited: {
@@ -64,11 +63,6 @@ const serialHandler: ProtocolHandler<SerialConfig> = {
     // Delimiter (for raw encoding)
     if (config.delimiter && config.delimiter.length > 0) {
       obj.delimiter = config.delimiter;
-    }
-
-    // Max length
-    if (config.max_length !== undefined) {
-      obj.max_length = config.max_length;
     }
 
     if (base.transmitter) {
@@ -103,11 +97,21 @@ const serialHandler: ProtocolHandler<SerialConfig> = {
     const frameId = config.frame_id?.trim() ?? "";
     if (!frameId) {
       errors.push({ field: "frame_id", message: "Frame identifier is required" });
-    } else if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(frameId)) {
-      errors.push({
-        field: "frame_id",
-        message: "Frame identifier must be a valid identifier (letters, numbers, underscores, starting with letter or underscore)",
-      });
+    } else {
+      // Accept either:
+      // 1. Hex values like 0xFDE0 (will be quoted in TOML)
+      // 2. Plain decimal numbers (will be quoted in TOML)
+      // 3. Standard identifiers (bare keys in TOML)
+      const isHex = /^0x[0-9a-fA-F]+$/i.test(frameId);
+      const isDec = /^\d+$/.test(frameId);
+      const isIdent = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(frameId);
+
+      if (!isHex && !isDec && !isIdent) {
+        errors.push({
+          field: "frame_id",
+          message: 'Frame identifier must be hex like "0x123", a decimal number, or a valid identifier',
+        });
+      }
     }
 
     // Check for duplicates
@@ -138,16 +142,6 @@ const serialHandler: ProtocolHandler<SerialConfig> = {
       }
     }
 
-    // Validate max_length
-    if (config.max_length !== undefined) {
-      if (!Number.isInteger(config.max_length) || config.max_length < 1) {
-        errors.push({
-          field: "max_length",
-          message: "Max length must be a positive integer",
-        });
-      }
-    }
-
     return errors;
   },
 
@@ -155,7 +149,6 @@ const serialHandler: ProtocolHandler<SerialConfig> = {
     protocol: "serial",
     frame_id: "",
     delimiter: undefined,
-    max_length: undefined,
     // encoding NOT here - comes from [frame.serial.config]
   }),
 

@@ -327,6 +327,11 @@ function parseSerialConfig(parsed: any): SerialProtocolConfig | undefined {
     config.header_length = configSection.header_length;
   }
 
+  // max_frame_length is optional (default: 64 in backend)
+  if (typeof configSection.max_frame_length === "number") {
+    config.max_frame_length = configSection.max_frame_length;
+  }
+
   // Parse [meta.serial.checksum] subsection
   const checksum = parseSerialChecksumConfig(configSection.checksum);
   if (checksum) {
@@ -639,7 +644,6 @@ function objectToTree(obj: any, parentPath: string[], meta: MetaFields | null, c
             metadata.encoding = defaults.serialEncoding;
             metadata.frameId = serialFrameConfig.frame_id;
             metadata.delimiter = serialFrameConfig.delimiter;
-            metadata.maxLength = serialFrameConfig.max_length;
           }
 
           frameChildren.push({

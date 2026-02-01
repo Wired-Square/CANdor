@@ -305,6 +305,11 @@ export function upsertSerialConfigToml(toml: string, config: SerialProtocolConfi
     configObj.header_length = config.header_length;
   }
 
+  // max_frame_length is optional (default: 64 in backend)
+  if (config.max_frame_length !== undefined && config.max_frame_length > 0) {
+    configObj.max_frame_length = config.max_frame_length;
+  }
+
   // Serialize header fields if present (new mask-based format)
   // Note: mask values are stored as hex strings with a marker prefix
   // that gets converted to hex literals in tomlStringify
@@ -692,7 +697,6 @@ export interface UpsertSerialFrameParams {
   frameId: string;
   length?: number;
   delimiter?: number[];
-  maxLength?: number;
   transmitter?: string;
   interval?: number;
   notes?: string | string[];
@@ -711,7 +715,6 @@ export function upsertSerialFrameToml(toml: string, p: UpsertSerialFrameParams):
     protocol: "serial",
     frame_id: p.frameId,
     delimiter: p.delimiter,
-    max_length: p.maxLength,
     // NOTE: encoding is NOT here - it's in [meta.serial]
   };
 
