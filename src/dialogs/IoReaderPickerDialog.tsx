@@ -43,6 +43,7 @@ import {
   type Protocol,
 } from '../api/io';
 import { getAllFavorites, type TimeRangeFavorite } from "../utils/favorites";
+import type { TimeBounds } from "../components/TimeBoundsInput";
 
 // Import extracted components
 import { BufferList } from "./io-reader-picker";
@@ -55,7 +56,6 @@ import GvretBusConfig from "./io-reader-picker/GvretBusConfig";
 import SingleBusConfig from "./io-reader-picker/SingleBusConfig";
 import {
   localToIsoWithOffset,
-  getLocalTimezoneAbbr,
   CSV_EXTERNAL_ID,
   INGEST_SESSION_ID,
   isRealtimeProfile,
@@ -229,15 +229,15 @@ export default function IoReaderPickerDialog({
   // Validation error for incompatible profile selection
   const [validationError, setValidationError] = useState<string | null>(null);
 
-  // Time range and limit state for recorded sources
-  const [startTime, setStartTime] = useState<string>("");
-  const [endTime, setEndTime] = useState<string>("");
-  const [maxFrames, setMaxFrames] = useState<string>("");
+  // Time bounds state for recorded sources (combined start/end/maxFrames/timezone)
+  const [timeBounds, setTimeBounds] = useState<TimeBounds>({
+    startTime: "",
+    endTime: "",
+    maxFrames: undefined,
+    timezoneMode: "local",
+  });
   const [bookmarks, setBookmarks] = useState<TimeRangeFavorite[]>([]);
   const [selectedSpeed, setSelectedSpeed] = useState(1); // Default to 1x realtime with pacing
-  // Timezone mode: "local" (default) or "utc"
-  const [timezoneMode, setTimezoneMode] = useState<"local" | "utc">("local");
-  const localTzAbbr = useMemo(() => getLocalTimezoneAbbr(), []);
 
   // Framing configuration for serial sources
   const [framingConfig, setFramingConfig] = useState<FramingConfig | null>(null);
@@ -329,9 +329,12 @@ export default function IoReaderPickerDialog({
         }
       }).catch(console.error);
       // Reset options when dialog opens
-      setStartTime("");
-      setEndTime("");
-      setMaxFrames("");
+      setTimeBounds({
+        startTime: "",
+        endTime: "",
+        maxFrames: undefined,
+        timezoneMode: "local",
+      });
       // Speed 0 means unlimited (ingest mode) - not valid for Watch, so default to 1x
       setSelectedSpeed(externalIngestSpeed && externalIngestSpeed > 0 ? externalIngestSpeed : 1);
       setFramingConfig(null);
@@ -692,20 +695,23 @@ export default function IoReaderPickerDialog({
     // Add time range for recorded sources
     // Convert datetime-local values based on timezone mode
     if (!isCheckedRealtime) {
-      if (startTime) {
+      if (timeBounds.startTime) {
         // If UTC mode, the user entered UTC time - append Z
         // If Local mode, convert to ISO with timezone offset so PostgreSQL interprets correctly
-        opts.startTime = timezoneMode === "utc" ? `${startTime}:00Z` : localToIsoWithOffset(startTime);
+        opts.startTime = timeBounds.timezoneMode === "utc"
+          ? `${timeBounds.startTime}:00Z`
+          : localToIsoWithOffset(timeBounds.startTime);
       }
-      if (endTime) {
-        opts.endTime = timezoneMode === "utc" ? `${endTime}:00Z` : localToIsoWithOffset(endTime);
+      if (timeBounds.endTime) {
+        opts.endTime = timeBounds.timezoneMode === "utc"
+          ? `${timeBounds.endTime}:00Z`
+          : localToIsoWithOffset(timeBounds.endTime);
       }
     }
 
     // Add max frames limit for all sources
-    const maxFramesNum = maxFrames ? parseInt(maxFrames, 10) : undefined;
-    if (maxFramesNum && maxFramesNum > 0) {
-      opts.maxFrames = maxFramesNum;
+    if (timeBounds.maxFrames && timeBounds.maxFrames > 0) {
+      opts.maxFrames = timeBounds.maxFrames;
     }
 
     // Add framing configuration for serial sources
@@ -821,14 +827,10 @@ export default function IoReaderPickerDialog({
     handleMultiWatchClick();
   };
 
-  // Handle bookmark selection - fills in time range and max frames
-  // Bookmarks are stored in local time format (from microsToDatetimeLocal)
-  const handleSelectBookmark = (bookmark: TimeRangeFavorite) => {
-    setStartTime(bookmark.startTime);
-    setEndTime(bookmark.endTime);
-    setMaxFrames(bookmark.maxFrames !== undefined ? String(bookmark.maxFrames) : "");
-    setTimezoneMode("local"); // Bookmarks use local time
-  };
+  // Handle time bounds change from TimeBoundsInput
+  const handleTimeBoundsChange = useCallback((bounds: TimeBounds) => {
+    setTimeBounds(bounds);
+  }, []);
 
   // Stop ingesting
   const handleStopIngest = async () => {
@@ -936,11 +938,13 @@ export default function IoReaderPickerDialog({
     setSelectedBufferId(null);
 
     // Reset ingest options
-    setStartTime("");
-    setEndTime("");
-    setMaxFrames("");
+    setTimeBounds({
+      startTime: "",
+      endTime: "",
+      maxFrames: undefined,
+      timezoneMode: "local",
+    });
     setSelectedSpeed(1);
-    setTimezoneMode("local");
 
     // Reset framing and filter config
     setFramingConfig(null);
@@ -1322,19 +1326,11 @@ export default function IoReaderPickerDialog({
                 checkedReaderId={checkedReaderId}
                 checkedProfile={checkedProfile}
                 isIngesting={isIngesting}
-                startTime={startTime}
-                endTime={endTime}
-                onStartTimeChange={setStartTime}
-                onEndTimeChange={setEndTime}
-                timezoneMode={timezoneMode}
-                localTzAbbr={localTzAbbr}
-                onTimezoneModeChange={setTimezoneMode}
-                maxFrames={maxFrames}
-                onMaxFramesChange={setMaxFrames}
+                timeBounds={timeBounds}
+                onTimeBoundsChange={handleTimeBoundsChange}
                 selectedSpeed={selectedSpeed}
                 onSpeedChange={handleSpeedChange}
                 profileBookmarks={profileBookmarks}
-                onSelectBookmark={handleSelectBookmark}
               />
 
               {/* Only show FramingOptions/FilterOptions for bytes buffer - per-interface framing is now in SingleBusConfig */}

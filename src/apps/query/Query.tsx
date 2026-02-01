@@ -15,6 +15,7 @@ import type { CatalogMetadata } from "../../api/catalog";
 import { listCatalogs } from "../../api/catalog";
 import { getFavoritesForProfile, addFavorite, type TimeRangeFavorite } from "../../utils/favorites";
 import { loadCatalog } from "../../utils/catalogParser";
+import type { TimeBounds } from "../../components/TimeBoundsInput";
 import AppLayout from "../../components/AppLayout";
 import AppTabView, { type TabDefinition, type ProtocolBadge } from "../../components/AppTabView";
 import QueryTopBar from "./views/QueryTopBar";
@@ -45,14 +46,20 @@ export default function Query() {
   const catalogPath = useQueryStore((s) => s.catalogPath);
   const setCatalogPath = useQueryStore((s) => s.setCatalogPath);
   const setParsedCatalog = useQueryStore((s) => s.setParsedCatalog);
-  const selectedFavouriteId = useQueryStore((s) => s.selectedFavouriteId);
-  const setSelectedFavouriteId = useQueryStore((s) => s.setSelectedFavouriteId);
 
   // Catalog state
   const [catalogs, setCatalogs] = useState<CatalogMetadata[]>([]);
 
-  // Favourites state
+  // Favourites state (bookmarks)
   const [favourites, setFavourites] = useState<TimeRangeFavorite[]>([]);
+
+  // Time bounds state (for query filtering)
+  const [timeBounds, setTimeBounds] = useState<TimeBounds>({
+    startTime: "",
+    endTime: "",
+    maxFrames: undefined,
+    timezoneMode: "local",
+  });
 
   // Computed values
   const queueCount = queue.length;
@@ -224,13 +231,10 @@ export default function Query() {
     [setCatalogPath]
   );
 
-  // Handle favourite selection for time bounds
-  const handleFavouriteSelect = useCallback(
-    (id: string | null) => {
-      setSelectedFavouriteId(id);
-    },
-    [setSelectedFavouriteId]
-  );
+  // Handle time bounds change
+  const handleTimeBoundsChange = useCallback((bounds: TimeBounds) => {
+    setTimeBounds(bounds);
+  }, []);
 
   // Handle queue item selection
   const handleSelectQuery = useCallback(
@@ -377,8 +381,8 @@ export default function Query() {
             profileId={ioProfile}
             disabled={!ioProfile}
             favourites={favourites}
-            selectedFavouriteId={selectedFavouriteId}
-            onFavouriteSelect={handleFavouriteSelect}
+            timeBounds={timeBounds}
+            onTimeBoundsChange={handleTimeBoundsChange}
           />
         )}
         {activeTab === "queue" && (

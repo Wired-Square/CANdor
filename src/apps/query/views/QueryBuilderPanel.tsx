@@ -4,7 +4,7 @@
 // and context window settings. Supports favourite-based time bounds.
 
 import { useCallback, useState, useEffect, useMemo } from "react";
-import { ListPlus, Bookmark } from "lucide-react";
+import { ListPlus } from "lucide-react";
 import {
   useQueryStore,
   QUERY_TYPE_INFO,
@@ -15,6 +15,7 @@ import {
 import type { ResolvedSignal } from "../../../utils/catalogParser";
 import { useSettingsStore } from "../../settings/stores/settingsStore";
 import type { TimeRangeFavorite } from "../../../utils/favorites";
+import TimeBoundsInput, { type TimeBounds } from "../../../components/TimeBoundsInput";
 import { primaryButtonBase, buttonBase } from "../../../styles/buttonStyles";
 import { inputBase } from "../../../styles/inputStyles";
 import { labelSmallMuted, monoBody } from "../../../styles/typography";
@@ -25,16 +26,16 @@ interface Props {
   profileId: string | null;
   disabled?: boolean;
   favourites: TimeRangeFavorite[];
-  selectedFavouriteId: string | null;
-  onFavouriteSelect: (id: string | null) => void;
+  timeBounds: TimeBounds;
+  onTimeBoundsChange: (bounds: TimeBounds) => void;
 }
 
 export default function QueryBuilderPanel({
   profileId,
   disabled = false,
   favourites,
-  selectedFavouriteId,
-  onFavouriteSelect,
+  timeBounds,
+  onTimeBoundsChange,
 }: Props) {
   // Store selectors
   const queryType = useQueryStore((s) => s.queryType);
@@ -52,12 +53,6 @@ export default function QueryBuilderPanel({
   const setContextWindow = useQueryStore((s) => s.setContextWindow);
   const enqueueQuery = useQueryStore((s) => s.enqueueQuery);
   const setSelectedSignal = useQueryStore((s) => s.setSelectedSignal);
-
-  // Get selected favourite for display
-  const selectedFavourite = useMemo(
-    () => favourites.find((f) => f.id === selectedFavouriteId) ?? null,
-    [favourites, selectedFavouriteId]
-  );
 
   // Catalog-derived data: sorted frames list
   const catalogFrames = useMemo(() => {
@@ -169,36 +164,9 @@ export default function QueryBuilderPanel({
   const handleAddToQueue = useCallback(() => {
     if (!profileId) return;
 
-    // Enqueue with optional favourite for time bounds and limit override
-    enqueueQuery(profileId, selectedFavourite, limitOverride);
-  }, [profileId, selectedFavourite, limitOverride, enqueueQuery]);
-
-  // Handle favourite selection change
-  const handleFavouriteChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
-      const value = e.target.value;
-      onFavouriteSelect(value || null);
-    },
-    [onFavouriteSelect]
-  );
-
-  // Format time range for display
-  const formatTimeRange = useCallback((startTime: string, endTime: string) => {
-    try {
-      const start = new Date(startTime);
-      const end = new Date(endTime);
-      const formatDate = (d: Date) => {
-        const month = (d.getMonth() + 1).toString().padStart(2, "0");
-        const day = d.getDate().toString().padStart(2, "0");
-        const hours = d.getHours().toString().padStart(2, "0");
-        const minutes = d.getMinutes().toString().padStart(2, "0");
-        return `${month}-${day} ${hours}:${minutes}`;
-      };
-      return `${formatDate(start)} → ${formatDate(end)}`;
-    } catch {
-      return `${startTime} → ${endTime}`;
-    }
-  }, []);
+    // Enqueue with time bounds directly (no longer using favourite object)
+    enqueueQuery(profileId, timeBounds, limitOverride);
+  }, [profileId, timeBounds, limitOverride, enqueueQuery]);
 
   // Handle query type change
   const handleQueryTypeChange = useCallback(
@@ -407,13 +375,13 @@ export default function QueryBuilderPanel({
       ? ` AND extended = ${queryParams.isExtended}`
       : "";
 
-    // Format time bounds if selected
+    // Format time bounds if set
     let timeConditions = "";
-    if (selectedFavourite?.startTime) {
-      timeConditions += `\n     AND ts >= '${selectedFavourite.startTime}'::timestamptz`;
+    if (timeBounds.startTime) {
+      timeConditions += `\n     AND ts >= '${timeBounds.startTime}'::timestamptz`;
     }
-    if (selectedFavourite?.endTime) {
-      timeConditions += `\n     AND ts < '${selectedFavourite.endTime}'::timestamptz`;
+    if (timeBounds.endTime) {
+      timeConditions += `\n     AND ts < '${timeBounds.endTime}'::timestamptz`;
     }
 
     if (queryType === "byte_changes") {
@@ -478,7 +446,7 @@ LIMIT ${limitOverride.toLocaleString()}`;
     }
 
     return `-- Query type "${queryType}" not yet implemented`;
-  }, [queryType, queryParams, selectedFavourite, limitOverride]);
+  }, [queryType, queryParams, timeBounds, limitOverride]);
 
   return (
     <div className="flex flex-col h-full">
@@ -771,36 +739,16 @@ LIMIT ${limitOverride.toLocaleString()}`;
           </div>
         </div>
 
-        {/* Time Range from Favourite */}
+        {/* Time Bounds */}
         <div className={`${bgSurface} ${borderDefault} rounded-lg p-2`}>
-          <div className={`${flexRowGap2} mb-1`}>
-            <Bookmark className={iconSm} />
-            <label className={`text-xs font-medium ${textSecondary}`}>Time Bounds</label>
-          </div>
-          <select
-            value={selectedFavouriteId ?? ""}
-            onChange={handleFavouriteChange}
+          <label className={`text-xs font-medium ${textSecondary} mb-2 block`}>Time Bounds</label>
+          <TimeBoundsInput
+            value={timeBounds}
+            onChange={onTimeBoundsChange}
+            bookmarks={favourites}
+            showBookmarks={true}
             disabled={disabled}
-            className={`${inputBase} w-full disabled:opacity-50 disabled:cursor-not-allowed`}
-          >
-            <option value="">All time (no bounds)</option>
-            {favourites.map((fav) => (
-              <option key={fav.id} value={fav.id}>
-                {fav.name}
-              </option>
-            ))}
-          </select>
-          {selectedFavourite && (
-            <div className={`text-xs ${textMuted} mt-1`}>
-              {formatTimeRange(selectedFavourite.startTime, selectedFavourite.endTime)}
-              {selectedFavourite.maxFrames && ` · max ${selectedFavourite.maxFrames} frames`}
-            </div>
-          )}
-          {favourites.length === 0 && (
-            <p className={`text-xs ${textMuted} mt-1 italic`}>
-              No favourites saved for this profile
-            </p>
-          )}
+          />
         </div>
 
         {/* SQL Query Preview */}

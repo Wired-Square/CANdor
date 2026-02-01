@@ -108,16 +108,12 @@ export default function Settings() {
     initDuplicateCatalogForm: forms.initDuplicateCatalogForm,
     initEditCatalogForm: forms.initEditCatalogForm,
     bookmarkName: forms.bookmarkName,
-    bookmarkStartTime: forms.bookmarkStartTime,
-    bookmarkEndTime: forms.bookmarkEndTime,
-    bookmarkMaxFrames: forms.bookmarkMaxFrames,
+    bookmarkTimeBounds: forms.bookmarkTimeBounds,
     resetBookmarkForm: forms.resetBookmarkForm,
     initEditBookmarkForm: forms.initEditBookmarkForm,
     newBookmarkProfileId: forms.newBookmarkProfileId,
     newBookmarkName: forms.newBookmarkName,
-    newBookmarkStartTime: forms.newBookmarkStartTime,
-    newBookmarkEndTime: forms.newBookmarkEndTime,
-    newBookmarkMaxFrames: forms.newBookmarkMaxFrames,
+    newBookmarkTimeBounds: forms.newBookmarkTimeBounds,
     resetNewBookmarkForm: forms.resetNewBookmarkForm,
     initNewBookmarkForm: forms.initNewBookmarkForm,
     timeRangeCapableProfiles,
@@ -342,13 +338,9 @@ export default function Settings() {
       <EditBookmarkDialog
         isOpen={dialogs.editBookmark}
         name={forms.bookmarkName}
-        startTime={forms.bookmarkStartTime}
-        endTime={forms.bookmarkEndTime}
-        maxFrames={forms.bookmarkMaxFrames}
+        timeBounds={forms.bookmarkTimeBounds}
         onChangeName={forms.setBookmarkName}
-        onChangeStartTime={forms.setBookmarkStartTime}
-        onChangeEndTime={forms.setBookmarkEndTime}
-        onChangeMaxFrames={forms.setBookmarkMaxFrames}
+        onChangeTimeBounds={forms.setBookmarkTimeBounds}
         onCancel={handlers.handleCancelEditBookmark}
         onSave={handlers.handleConfirmEditBookmark}
       />
@@ -359,14 +351,10 @@ export default function Settings() {
         availableProfiles={timeRangeCapableProfiles}
         profileId={forms.newBookmarkProfileId}
         name={forms.newBookmarkName}
-        startTime={forms.newBookmarkStartTime}
-        endTime={forms.newBookmarkEndTime}
-        maxFrames={forms.newBookmarkMaxFrames}
+        timeBounds={forms.newBookmarkTimeBounds}
         onChangeProfileId={forms.setNewBookmarkProfileId}
         onChangeName={forms.setNewBookmarkName}
-        onChangeStartTime={forms.setNewBookmarkStartTime}
-        onChangeEndTime={forms.setNewBookmarkEndTime}
-        onChangeMaxFrames={forms.setNewBookmarkMaxFrames}
+        onChangeTimeBounds={forms.setNewBookmarkTimeBounds}
         onCancel={handlers.handleCancelCreateBookmark}
         onCreate={handlers.handleConfirmCreateBookmark}
       />

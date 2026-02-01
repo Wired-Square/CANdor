@@ -1,22 +1,18 @@
 // ui/src/dialogs/AddBookmarkDialog.tsx
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Dialog from "../components/Dialog";
 import Input from "../components/forms/Input";
 import { DialogFooter } from "../components/forms/DialogFooter";
-import { labelSmall, helpText } from "../styles";
-import { useSettingsStore } from "../apps/settings/stores/settingsStore";
-import TimezoneBadge, {
-  type TimezoneMode,
-  convertDatetimeLocal,
-} from "../components/TimezoneBadge";
+import { labelSmall } from "../styles";
+import TimeBoundsInput, { type TimeBounds } from "../components/TimeBoundsInput";
 
 type Props = {
   isOpen: boolean;
   frameId: number;
   frameTime: string; // datetime-local format
   onClose: () => void;
-  onSave: (name: string, startTime: string, endTime: string) => void;
+  onSave: (name: string, startTime: string, endTime: string, maxFrames?: number) => void;
 };
 
 export default function AddBookmarkDialog({
@@ -27,31 +23,33 @@ export default function AddBookmarkDialog({
   onSave,
 }: Props) {
   const [name, setName] = useState("");
-  const [startTime, setStartTime] = useState("");
-  const [endTime, setEndTime] = useState("");
-  const [timezoneMode, setTimezoneMode] = useState<TimezoneMode>("default");
-  const defaultTz = useSettingsStore((s) => s.display.timezone);
+  const [timeBounds, setTimeBounds] = useState<TimeBounds>({
+    startTime: "",
+    endTime: "",
+    maxFrames: undefined,
+    timezoneMode: "local",
+  });
 
   // Reset form when dialog opens with new frame
   useEffect(() => {
     if (isOpen) {
       setName(`Frame 0x${frameId.toString(16).toUpperCase()}`);
-      setStartTime(frameTime);
-      setEndTime("");
-      setTimezoneMode("default");
+      setTimeBounds({
+        startTime: frameTime,
+        endTime: "",
+        maxFrames: undefined,
+        timezoneMode: "local",
+      });
     }
   }, [isOpen, frameId, frameTime]);
 
-  const handleTimezoneChange = (newMode: TimezoneMode) => {
-    // Convert times to new timezone
-    setStartTime(convertDatetimeLocal(startTime, timezoneMode, newMode, defaultTz));
-    setEndTime(convertDatetimeLocal(endTime, timezoneMode, newMode, defaultTz));
-    setTimezoneMode(newMode);
-  };
+  const handleTimeBoundsChange = useCallback((bounds: TimeBounds) => {
+    setTimeBounds(bounds);
+  }, []);
 
   const handleSave = () => {
-    if (!name.trim() || !startTime) return;
-    onSave(name.trim(), startTime, endTime);
+    if (!name.trim() || !timeBounds.startTime) return;
+    onSave(name.trim(), timeBounds.startTime, timeBounds.endTime, timeBounds.maxFrames);
     onClose();
   };
 
@@ -75,43 +73,19 @@ export default function AddBookmarkDialog({
             />
           </div>
 
-          {/* From time */}
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <label className={labelSmall}>From</label>
-              <TimezoneBadge mode={timezoneMode} onChange={handleTimezoneChange} />
-            </div>
-            <Input
-              variant="simple"
-              type="datetime-local"
-              step="1"
-              value={startTime}
-              onChange={(e) => setStartTime(e.target.value)}
-            />
-          </div>
-
-          {/* To time (optional) */}
-          <div className="space-y-1">
-            <label className={labelSmall}>To (optional)</label>
-            <Input
-              variant="simple"
-              type="datetime-local"
-              step="1"
-              value={endTime}
-              onChange={(e) => setEndTime(e.target.value)}
-              min={startTime}
-            />
-            <p className={helpText}>
-              Leave empty to bookmark just the start time
-            </p>
-          </div>
+          {/* Time bounds */}
+          <TimeBoundsInput
+            value={timeBounds}
+            onChange={handleTimeBoundsChange}
+            showBookmarks={false}
+          />
         </div>
 
         <DialogFooter
           onCancel={onClose}
           onConfirm={handleSave}
           confirmLabel="Save Bookmark"
-          confirmDisabled={!name.trim() || !startTime}
+          confirmDisabled={!name.trim() || !timeBounds.startTime}
         />
       </div>
     </Dialog>

@@ -11,6 +11,7 @@ import {
   type BookmarkHandlers,
 } from './handlers/useBookmarkHandlers';
 import type { IOProfile } from '../stores/settingsStore';
+import type { TimeBounds } from '../../../components/TimeBoundsInput';
 
 export interface UseSettingsHandlersParams {
   // Form state from useSettingsForms
@@ -24,9 +25,7 @@ export interface UseSettingsHandlersParams {
 
   // Bookmark form (editing)
   bookmarkName: string;
-  bookmarkStartTime: string;
-  bookmarkEndTime: string;
-  bookmarkMaxFrames: string;
+  bookmarkTimeBounds: TimeBounds;
   resetBookmarkForm: () => void;
   initEditBookmarkForm: (
     name: string,
@@ -38,9 +37,7 @@ export interface UseSettingsHandlersParams {
   // New bookmark form (creating)
   newBookmarkProfileId: string;
   newBookmarkName: string;
-  newBookmarkStartTime: string;
-  newBookmarkEndTime: string;
-  newBookmarkMaxFrames: string;
+  newBookmarkTimeBounds: TimeBounds;
   resetNewBookmarkForm: () => void;
   initNewBookmarkForm: (defaultProfileId: string) => void;
   timeRangeCapableProfiles: IOProfile[];
@@ -66,16 +63,12 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): Settings
   // Bookmark handlers
   const bookmarkHandlers = useBookmarkHandlers({
     bookmarkName: params.bookmarkName,
-    bookmarkStartTime: params.bookmarkStartTime,
-    bookmarkEndTime: params.bookmarkEndTime,
-    bookmarkMaxFrames: params.bookmarkMaxFrames,
+    bookmarkTimeBounds: params.bookmarkTimeBounds,
     resetBookmarkForm: params.resetBookmarkForm,
     initEditBookmarkForm: params.initEditBookmarkForm,
     newBookmarkProfileId: params.newBookmarkProfileId,
     newBookmarkName: params.newBookmarkName,
-    newBookmarkStartTime: params.newBookmarkStartTime,
-    newBookmarkEndTime: params.newBookmarkEndTime,
-    newBookmarkMaxFrames: params.newBookmarkMaxFrames,
+    newBookmarkTimeBounds: params.newBookmarkTimeBounds,
     resetNewBookmarkForm: params.resetNewBookmarkForm,
     initNewBookmarkForm: params.initNewBookmarkForm,
     timeRangeCapableProfiles: params.timeRangeCapableProfiles,

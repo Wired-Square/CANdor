@@ -15,7 +15,7 @@ import {
   type DatabaseActivity,
   type DatabaseActivityResult,
 } from "../../../api/dbquery";
-import type { TimeRangeFavorite } from "../../../utils/favorites";
+import type { TimeBounds } from "../../../components/TimeBoundsInput";
 import { useSettingsStore } from "../../settings/stores/settingsStore";
 import type { ParsedCatalog } from "../../../utils/catalogParser";
 
@@ -134,12 +134,13 @@ export const CONTEXT_PRESETS: { label: string; beforeMs: number; afterMs: number
 /** Queue item status */
 export type QueryStatus = "pending" | "running" | "completed" | "error";
 
-/** Time bounds from favourite for query */
+/** Time bounds for query (from manual entry or bookmark) */
 export interface QueryTimeBounds {
   startTime: string;
   endTime: string;
   maxFrames?: number;
-  favouriteName: string;
+  /** Display name (from bookmark, if selected) */
+  favouriteName?: string;
 }
 
 /** A queued query with its configuration and results */
@@ -268,7 +269,7 @@ interface QueryState {
   reset: () => void;
 
   // Queue actions
-  enqueueQuery: (profileId: string, favourite?: TimeRangeFavorite | null, resultLimit?: number) => string;
+  enqueueQuery: (profileId: string, timeBounds?: TimeBounds | null, resultLimit?: number) => string;
   updateQueueItem: (id: string, updates: Partial<QueuedQuery>) => void;
   removeQueueItem: (id: string) => void;
   clearQueue: () => void;
@@ -378,18 +379,19 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     }),
 
   // Queue actions
-  enqueueQuery: (profileId: string, favourite?: TimeRangeFavorite | null, resultLimit?: number) => {
+  enqueueQuery: (profileId: string, inputBounds?: TimeBounds | null, resultLimit?: number) => {
     const { queryType, queryParams } = get();
     const id = `query_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
-    const timeBounds: QueryTimeBounds | undefined = favourite
-      ? {
-          startTime: favourite.startTime,
-          endTime: favourite.endTime,
-          maxFrames: favourite.maxFrames,
-          favouriteName: favourite.name,
-        }
-      : undefined;
+    // Convert TimeBounds to QueryTimeBounds (only if times are set)
+    const timeBounds: QueryTimeBounds | undefined =
+      inputBounds?.startTime || inputBounds?.endTime
+        ? {
+            startTime: inputBounds.startTime,
+            endTime: inputBounds.endTime,
+            maxFrames: inputBounds.maxFrames,
+          }
+        : undefined;
 
     const displayName = generateQueryDisplayName(queryType, queryParams, timeBounds);
 

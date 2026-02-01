@@ -1,24 +1,16 @@
 // ui/src/apps/settings/dialogs/EditBookmarkDialog.tsx
-import { useState, useEffect } from "react";
+
 import Dialog from "../../../components/Dialog";
 import { Input, FormField, SecondaryButton, PrimaryButton } from "../../../components/forms";
 import { h2 } from "../../../styles";
-import { useSettingsStore } from "../stores/settingsStore";
-import TimezoneBadge, {
-  type TimezoneMode,
-  convertDatetimeLocal,
-} from "../../../components/TimezoneBadge";
+import TimeBoundsInput, { type TimeBounds } from "../../../components/TimeBoundsInput";
 
 type EditBookmarkDialogProps = {
   isOpen: boolean;
   name: string;
-  startTime: string;
-  endTime: string;
-  maxFrames: string;
+  timeBounds: TimeBounds;
   onChangeName: (name: string) => void;
-  onChangeStartTime: (time: string) => void;
-  onChangeEndTime: (time: string) => void;
-  onChangeMaxFrames: (maxFrames: string) => void;
+  onChangeTimeBounds: (bounds: TimeBounds) => void;
   onCancel: () => void;
   onSave: () => void;
 };
@@ -26,33 +18,12 @@ type EditBookmarkDialogProps = {
 export default function EditBookmarkDialog({
   isOpen,
   name,
-  startTime,
-  endTime,
-  maxFrames,
+  timeBounds,
   onChangeName,
-  onChangeStartTime,
-  onChangeEndTime,
-  onChangeMaxFrames,
+  onChangeTimeBounds,
   onCancel,
   onSave,
 }: EditBookmarkDialogProps) {
-  const [timezoneMode, setTimezoneMode] = useState<TimezoneMode>("default");
-  const defaultTz = useSettingsStore((s) => s.display.timezone);
-
-  // Reset timezone mode when dialog closes
-  useEffect(() => {
-    if (!isOpen) {
-      setTimezoneMode("default");
-    }
-  }, [isOpen]);
-
-  const handleTimezoneChange = (newMode: TimezoneMode) => {
-    // Convert times to new timezone
-    onChangeStartTime(convertDatetimeLocal(startTime, timezoneMode, newMode, defaultTz));
-    onChangeEndTime(convertDatetimeLocal(endTime, timezoneMode, newMode, defaultTz));
-    setTimezoneMode(newMode);
-  };
-
   return (
     <Dialog isOpen={isOpen} maxWidth="max-w-md">
       <div className="p-6">
@@ -68,44 +39,11 @@ export default function EditBookmarkDialog({
             />
           </FormField>
 
-          <FormField
-            label={
-              <span className="flex items-center gap-2">
-                From
-                <TimezoneBadge mode={timezoneMode} onChange={handleTimezoneChange} />
-              </span>
-            }
-            variant="default"
-          >
-            <Input
-              variant="default"
-              type="datetime-local"
-              step="1"
-              value={startTime}
-              onChange={(e) => onChangeStartTime(e.target.value)}
-            />
-          </FormField>
-
-          <FormField label="To" variant="default">
-            <Input
-              variant="default"
-              type="datetime-local"
-              step="1"
-              value={endTime}
-              onChange={(e) => onChangeEndTime(e.target.value)}
-            />
-          </FormField>
-
-          <FormField label="Max Frames" variant="default">
-            <Input
-              variant="default"
-              type="number"
-              min={0}
-              placeholder="No limit"
-              value={maxFrames}
-              onChange={(e) => onChangeMaxFrames(e.target.value)}
-            />
-          </FormField>
+          <TimeBoundsInput
+            value={timeBounds}
+            onChange={onChangeTimeBounds}
+            showBookmarks={false}
+          />
         </div>
 
         <div className="flex justify-end gap-3 mt-6">

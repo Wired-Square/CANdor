@@ -7,13 +7,12 @@ import {
   type TimeRangeFavorite,
 } from '../../../../utils/favorites';
 import { useSettingsStore, type IOProfile } from '../../stores/settingsStore';
+import type { TimeBounds } from '../../../../components/TimeBoundsInput';
 
 export interface UseBookmarkHandlersParams {
   // Form state from useSettingsForms (editing)
   bookmarkName: string;
-  bookmarkStartTime: string;
-  bookmarkEndTime: string;
-  bookmarkMaxFrames: string;
+  bookmarkTimeBounds: TimeBounds;
   resetBookmarkForm: () => void;
   initEditBookmarkForm: (
     name: string,
@@ -24,9 +23,7 @@ export interface UseBookmarkHandlersParams {
   // Form state from useSettingsForms (creating)
   newBookmarkProfileId: string;
   newBookmarkName: string;
-  newBookmarkStartTime: string;
-  newBookmarkEndTime: string;
-  newBookmarkMaxFrames: string;
+  newBookmarkTimeBounds: TimeBounds;
   resetNewBookmarkForm: () => void;
   initNewBookmarkForm: (defaultProfileId: string) => void;
   // Available profiles for creating bookmarks
@@ -35,16 +32,12 @@ export interface UseBookmarkHandlersParams {
 
 export function useBookmarkHandlers({
   bookmarkName,
-  bookmarkStartTime,
-  bookmarkEndTime,
-  bookmarkMaxFrames,
+  bookmarkTimeBounds,
   resetBookmarkForm,
   initEditBookmarkForm,
   newBookmarkProfileId,
   newBookmarkName,
-  newBookmarkStartTime,
-  newBookmarkEndTime,
-  newBookmarkMaxFrames,
+  newBookmarkTimeBounds,
   resetNewBookmarkForm,
   initNewBookmarkForm,
   timeRangeCapableProfiles,
@@ -76,14 +69,11 @@ export function useBookmarkHandlers({
     if (!bookmark) return;
 
     try {
-      const maxFramesValue =
-        bookmarkMaxFrames === '' ? undefined : Number(bookmarkMaxFrames);
-
       await updateFavorite(bookmark.id, {
         name: bookmarkName,
-        startTime: bookmarkStartTime,
-        endTime: bookmarkEndTime,
-        maxFrames: maxFramesValue,
+        startTime: bookmarkTimeBounds.startTime,
+        endTime: bookmarkTimeBounds.endTime,
+        maxFrames: bookmarkTimeBounds.maxFrames,
       });
 
       await loadBookmarks();
@@ -138,20 +128,17 @@ export function useBookmarkHandlers({
 
   // Confirm creation
   const handleConfirmCreateBookmark = async () => {
-    if (!newBookmarkProfileId || !newBookmarkName.trim() || !newBookmarkStartTime) {
+    if (!newBookmarkProfileId || !newBookmarkName.trim() || !newBookmarkTimeBounds.startTime) {
       return;
     }
 
     try {
-      const maxFramesValue =
-        newBookmarkMaxFrames === '' ? undefined : Number(newBookmarkMaxFrames);
-
       await addFavorite(
         newBookmarkName.trim(),
         newBookmarkProfileId,
-        newBookmarkStartTime,
-        newBookmarkEndTime,
-        maxFramesValue
+        newBookmarkTimeBounds.startTime,
+        newBookmarkTimeBounds.endTime,
+        newBookmarkTimeBounds.maxFrames
       );
 
       await loadBookmarks();
