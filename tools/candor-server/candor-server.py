@@ -300,7 +300,7 @@ class PostgresWriter:
         from psycopg2.extras import execute_values
         self._psycopg2 = psycopg2
         self._execute_values = execute_values
-        self._conn = psycopg2.connect(self.dsn)
+        self._conn = psycopg2.connect(self.dsn, application_name="candor-server")
         self._conn.autocommit = False
         self._cur = self._conn.cursor()
         # Use execute_values for batch inserts - much faster than executemany
