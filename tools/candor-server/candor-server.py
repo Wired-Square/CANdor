@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+"""
+SocketCAN to TCP GVRET bridge server for CANdor.
+
+This server bridges SocketCAN interfaces to TCP clients using the GVRET protocol,
+enabling remote CAN bus access from CANdor or other GVRET-compatible tools.
+Optionally ingests frames to PostgreSQL for logging and analysis.
+"""
 
 import argparse
 import logging
@@ -15,8 +22,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from queue import Queue, Full, Empty
+from typing import Dict, List, Optional, Tuple
+
 from pyroute2 import IPRoute
-from typing import Dict, List, Tuple, Optional
 
 log = logging.getLogger("candor")
 
@@ -68,6 +76,7 @@ def _colour_yellow(s: str, enable: bool) -> str:
     return f"\x1b[33m{s}\x1b[0m" if enable else s
 
 def detect_bitrates(iface="can0", default=500000):
+    """Detect nominal and data bitrates for a CAN interface via netlink."""
     ipr = IPRoute()
     try:
         idx = ipr.link_lookup(ifname=iface)[0]
@@ -255,7 +264,8 @@ class DiskCache:
             converted.append((ts_float, int(extended), int(is_fd), arb_id, dlc, data, bus, dir_))
 
         self._conn.executemany(
-            "INSERT INTO frames (ts, extended, is_fd, arb_id, dlc, data, bus, dir) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO frames (ts, extended, is_fd, arb_id, dlc, data, bus, dir) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             converted
         )
         self._conn.commit()
@@ -268,7 +278,8 @@ class DiskCache:
         (ts_dt, extended, is_fd, arb_id, id_hex, dlc, data, bus, dir)
         """
         cur = self._conn.execute(
-            "SELECT id, ts, extended, is_fd, arb_id, dlc, data, bus, dir FROM frames ORDER BY id LIMIT ?",
+            "SELECT id, ts, extended, is_fd, arb_id, dlc, data, bus, dir "
+            "FROM frames ORDER BY id LIMIT ?",
             (limit,)
         )
         ids = []
@@ -369,7 +380,10 @@ class PostgresWriter:
         # Check for existing cached frames from previous session
         cached_count = self._disk_cache.count()
         if cached_count > 0:
-            self._log.warning("Found %d cached frames from previous session, will drain on connect", cached_count)
+            self._log.warning(
+                "Found %d cached frames from previous session, will drain on connect",
+                cached_count
+            )
 
         # --- metrics ---
         self.count_enqueued = 0
@@ -393,6 +407,7 @@ class PostgresWriter:
 
     def enqueue(self, ts: float, can_id: int, dlc: int, data: bytes, bus: int,
                 dir_: Optional[str] = None, is_fd: bool = False):
+        """Queue a CAN frame for batch insertion to PostgreSQL."""
         extended = bool(can_id & CAN_EFF_FLAG)
         arb_id = can_id & (CAN_EFF_MASK if extended else CAN_SFF_MASK)
         # For FD frames, use DLC mapping; for classic, cap at 8
@@ -422,6 +437,7 @@ class PostgresWriter:
             self._log_queue_full()
 
     def close(self):
+        """Shut down the writer, flushing remaining frames to DB or disk cache."""
         self._alive = False
         try:
             self.q.put_nowait(())  # wake worker
@@ -462,8 +478,15 @@ class PostgresWriter:
         self._cur.execute("SET statement_timeout = '10s'")
         # Use execute_values for batch inserts - much faster than executemany
         # Template matches the row tuple order from enqueue()
-        self._sql = f"SELECT {self.func}(v._ts, v._extended, v._is_fd, v._id, v._id_hex, v._dlc, v._data_bytes, v._bus, v._dir) FROM (VALUES %s) AS v(_ts, _extended, _is_fd, _id, _id_hex, _dlc, _data_bytes, _bus, _dir)"
-        self._template = "(%s::timestamptz, %s::boolean, %s::boolean, %s::integer, %s::text, %s::smallint, %s::bytea, %s::integer, %s::text)"
+        self._sql = (
+            f"SELECT {self.func}(v._ts, v._extended, v._is_fd, v._id, v._id_hex, "
+            "v._dlc, v._data_bytes, v._bus, v._dir) FROM (VALUES %s) "
+            "AS v(_ts, _extended, _is_fd, _id, _id_hex, _dlc, _data_bytes, _bus, _dir)"
+        )
+        self._template = (
+            "(%s::timestamptz, %s::boolean, %s::boolean, %s::integer, %s::text, "
+            "%s::smallint, %s::bytea, %s::integer, %s::text)"
+        )
         self._log.info("connected")
 
     def _close_conn(self):
@@ -492,11 +515,17 @@ class PostgresWriter:
 
                 # Priority 1: Drain disk cache first (strict temporal ordering)
                 cache_empty = self._disk_cache.is_empty()
-                self._log.debug("cache check: is_empty=%s, _draining_cache=%s", cache_empty, self._draining_cache)
+                self._log.debug(
+                    "cache check: is_empty=%s, _draining_cache=%s",
+                    cache_empty, self._draining_cache
+                )
                 if not cache_empty:
                     if not self._draining_cache:
                         self._draining_cache = True
-                        self._log.info("draining %d cached frames to database", self._disk_cache.count())
+                        self._log.info(
+                            "draining %d cached frames to database",
+                            self._disk_cache.count()
+                        )
 
                     ids, batch = self._disk_cache.read_batch(self.batch_size)
                     self._log.debug("read_batch returned %d ids, %d rows", len(ids), len(batch))
@@ -507,7 +536,10 @@ class PostgresWriter:
                         self._disk_cache.delete_batch(ids)
                         self.count_written += len(batch)
                         self.count_cache_recovered += len(batch)
-                        self._log.debug("batch committed, cache_recovered=%d", self.count_cache_recovered)
+                        self._log.debug(
+                            "batch committed, cache_recovered=%d",
+                            self.count_cache_recovered
+                        )
                         continue  # Keep draining cache
 
                     # Cache is now empty
@@ -673,18 +705,30 @@ class PostgresWriter:
                 cache_count = self._disk_cache.count() if not self._disk_cache._closed else 0
 
                 # Build stats message
-                msg = f"stats queued={size}/{cap} ({occ:.0f}%) enq={self.count_enqueued} wrote={self.count_written} dropped={self.count_dropped} conn={'up' if getattr(self, '_conn', None) else 'down'}"
+                conn_status = 'up' if getattr(self, '_conn', None) else 'down'
+                msg = (
+                    f"stats queued={size}/{cap} ({occ:.0f}%) "
+                    f"enq={self.count_enqueued} wrote={self.count_written} "
+                    f"dropped={self.count_dropped} conn={conn_status}"
+                )
                 if cache_count > 0 or self.count_cached > 0:
-                    msg += f" cached={self.count_cached} cache_recovered={self.count_cache_recovered} cache_pending={cache_count}"
+                    msg += (
+                        f" cached={self.count_cached} "
+                        f"cache_recovered={self.count_cache_recovered} "
+                        f"cache_pending={cache_count}"
+                    )
                 self._log.info(msg)
             except Exception:
                 pass
 
     def _bucket_for_ratio(self, ratio):
         # return threshold bucket 80 / 95 / 100 or -1
-        if ratio >= 1.0: return 100
-        if ratio >= 0.95: return 95
-        if ratio >= 0.80: return 80
+        if ratio >= 1.0:
+            return 100
+        if ratio >= 0.95:
+            return 95
+        if ratio >= 0.80:
+            return 80
         return -1
 
     def _maybe_warn_thresholds(self):
@@ -694,7 +738,7 @@ class PostgresWriter:
         size = self.q.qsize()
         ratio = size / cap
         bucket = self._bucket_for_ratio(ratio)
-        if bucket != -1 and bucket != self._last_bucket:
+        if bucket not in (-1, self._last_bucket):
             self._last_bucket = bucket
             self._log.warning("queue high water mark: %d%% (size=%d cap=%d)", bucket, size, cap)
         elif bucket == -1 and self._last_bucket != -1:
@@ -707,7 +751,10 @@ class PostgresWriter:
         if now - self._last_full_log >= 5.0:  # rate-limit spam
             size = self.q.qsize()
             cap = self.q.maxsize or 0
-            self._log.error("queue FULL: size=%d cap=%d dropped_total=%d", size, cap, self.count_dropped)
+            self._log.error(
+                "queue FULL: size=%d cap=%d dropped_total=%d",
+                size, cap, self.count_dropped
+            )
             self._last_full_log = now
 
 
@@ -723,7 +770,10 @@ class GVRETClient:
       F1 09 : KEEPALIVE
       F1 0C : GET_NUMBUSES
     """
-    def __init__(self, conn: socket.socket, bus_count: int, bus_speeds: Tuple[int, ...], tx_func=None):
+    def __init__(
+        self, conn: socket.socket, bus_count: int, bus_speeds: Tuple[int, ...],
+        tx_func=None
+    ):
         self.conn = conn
         self.addr = conn.getpeername()
         self.binary = False
@@ -740,21 +790,26 @@ class GVRETClient:
 
     def _send(self, b: bytes):
         with self.lock:
-            try: self.conn.sendall(b)
-            except Exception: self.close()
+            try:
+                self.conn.sendall(b)
+            except Exception:
+                self.close()
 
     def reply_dev_info(self):
-        # F1 07 <build:2 LE><eeprom_ver:1><file_type:1><auto_start:1><singlewire:1>
+        """Send GVRET device info response (F1 07)."""
         build = 400
         eeprom_ver = 1
         file_type = 0
         auto_start = 0
         singlewire = 0
-        payload = build.to_bytes(2, "little") + bytes([eeprom_ver, file_type, auto_start, singlewire])
+        payload = (
+            build.to_bytes(2, "little")
+            + bytes([eeprom_ver, file_type, auto_start, singlewire])
+        )
         self._send(b"\xF1\x07" + payload)
 
     def reply_canbus_params(self):
-        # GVRET: F1 06 <CAN0_flags><CAN0_speed:4><CAN1_flags><CAN1_speed:4>
+        """Send GVRET CAN bus parameters response (F1 06)."""
         # Advertise up to two buses in this legacy field (extra buses are still
         # visible via F1 0C bus count; many tools handle >2 via other queries).
         n = self.bus_count
@@ -777,14 +832,16 @@ class GVRETClient:
         self._send(b"\xF1\x06" + payload)
 
     def reply_num_buses(self):
+        """Send GVRET bus count response (F1 0C)."""
         self._send(b"\xF1\x0C" + bytes([self.bus_count & 0xFF]))
 
     def reply_timebase(self):
+        """Send GVRET timebase response (F1 01)."""
         us = int((time.monotonic() - self.t0) * 1_000_000) & 0xFFFFFFFF
         self._send(b"\xF1\x01" + us.to_bytes(4, "little"))
 
     def reply_keepalive(self):
-        # Spec says reply “DE AD” after F1 09
+        """Send GVRET keepalive response (F1 09)."""
         self._send(b"\xF1\x09\xDE\xAD")
 
     def _rx_loop(self):
@@ -892,6 +949,7 @@ class GVRETClient:
         return True
 
     def send_frame(self, can_id: int, bus: int, data: bytes, is_fd: bool = False):
+        """Send a CAN frame to the client in GVRET binary format."""
         if not self.binary:
             return
 
@@ -928,12 +986,18 @@ class GVRETClient:
         self._send(payload)
 
     def close(self):
-        if not self.alive: return
+        """Close the client connection."""
+        if not self.alive:
+            return
         self.alive = False
-        try: self.conn.shutdown(socket.SHUT_RDWR)
-        except Exception: pass
-        try: self.conn.close()
-        except Exception: pass
+        try:
+            self.conn.shutdown(socket.SHUT_RDWR)
+        except Exception:
+            pass
+        try:
+            self.conn.close()
+        except Exception:
+            pass
 
 
 class CanTcpServer:
@@ -976,7 +1040,10 @@ class CanTcpServer:
                 s.setblocking(False)
                 self.can_socks.append(s)
             except PermissionError as e:
-                log.error("Permission denied opening %s. Run with sudo or grant CAP_NET_RAW: %s", ifn, e)
+                log.error(
+                    "Permission denied opening %s. Run with sudo or grant CAP_NET_RAW: %s",
+                    ifn, e
+                )
                 raise
         if not self.can_socks:
             raise RuntimeError("Failed to open any CAN sockets")
@@ -1005,11 +1072,14 @@ class CanTcpServer:
         # Format ifaces with bus numbers: can0[0],can1[1] etc.
         iface_bus_strs = [f"{ifn}[{self.bus_offset + i}]" for i, ifn in enumerate(self.ifaces)]
         mode_str = "GVRET+FD" if self.can_fd else "GVRET"
-        log.info("Listening on %s:%d  mode=%s  ifaces=%s  rates=%s%s%s",
+        drates_str = ""
+        if any(self.bus_data_speeds):
+            drates_str = "  drates=" + ",".join(str(d or 0) for d in self.bus_data_speeds)
+        pg_str = "  [PG ingest enabled]" if self.pg_writer else ""
+        log.info(
+            "Listening on %s:%d  mode=%s  ifaces=%s  rates=%s%s%s",
             self.host, self.port, mode_str, ",".join(iface_bus_strs),
-            ",".join(str(s) for s in self.bus_speeds),
-            "  drates=" + ",".join(str(d or 0) for d in self.bus_data_speeds) if any(self.bus_data_speeds) else "",
-            "  [PG ingest enabled]" if self.pg_writer else ""
+            ",".join(str(s) for s in self.bus_speeds), drates_str, pg_str
         )
 
     # ---- accept/drop ----
@@ -1039,7 +1109,7 @@ class CanTcpServer:
     def _tx_can(self, bus: int, can_id: int, data: bytes, is_fd: bool = False):
         # Route TX to the selected bus - subtract offset to get socket index
         sock_idx = bus - self.bus_offset
-        if not (0 <= sock_idx < len(self.can_socks)):
+        if not 0 <= sock_idx < len(self.can_socks):
             return
 
         data_len = len(data)
@@ -1075,6 +1145,7 @@ class CanTcpServer:
 
     # ---- main loop ----
     def run(self):
+        """Run the main event loop, handling CAN frames and TCP clients."""
         while True:
             # Check for new TCP connections and CAN frames in one select call
             read_fds = [self.srv] + self.can_socks
@@ -1116,7 +1187,7 @@ class CanTcpServer:
 
                     # Unpack frame header
                     if is_fd_frame:
-                        # struct canfd_frame: can_id (u32), len (u8), flags (u8), 2 reserved, 64 data
+                        # canfd_frame: can_id (u32), len (u8), flags (u8), 2 reserved, 64 data
                         can_id, data_len, fd_flags = struct.unpack_from("<IBB", frame, 0)
                         data = frame[8:8 + data_len]
                         dlc = len_to_dlc(data_len)
@@ -1130,10 +1201,11 @@ class CanTcpServer:
                     # optional console echo
                     if self.echo_console:
                         try:
-                            sys.stdout.write(
-                                format_candump_line(frame, color_ascii=self.colour, t0_us=self.t0_us,
-                                                   bus_idx=bus_idx, is_fd=is_fd_frame)
+                            line = format_candump_line(
+                                frame, color_ascii=self.colour, t0_us=self.t0_us,
+                                bus_idx=bus_idx, is_fd=is_fd_frame
                             )
+                            sys.stdout.write(line)
                             sys.stdout.flush()
                         except Exception:
                             pass
@@ -1168,6 +1240,7 @@ class CanTcpServer:
 
 
 def load_config(path: Optional[str]) -> dict:
+    """Load configuration from a TOML file."""
     if not path:
         return {}
     if not os.path.exists(path):
@@ -1185,13 +1258,18 @@ def apply_config_overrides(args: argparse.Namespace, cfg: dict) -> argparse.Name
     iface, host, port, bus_offset, echo_console, colour, default_dir, can_fd
 
     [postgres]
-    enable, dsn, func, batch_size, flush_interval, queue_size, dir, cache_path, cache_max_mb
+    enable, dsn, func, batch_size, flush_interval, queue_size, dir, cache_path,
+    cache_max_mb
 
     [logging]
     level, stats_interval
     """
     server_conf = cfg.get("server", {})
-    for cfg_key in ("iface", "host", "port", "bus_offset", "echo_console", "colour", "default_dir", "can_fd"):
+    server_keys = (
+        "iface", "host", "port", "bus_offset", "echo_console", "colour",
+        "default_dir", "can_fd"
+    )
+    for cfg_key in server_keys:
         if cfg_key in server_conf:
             setattr(args, cfg_key, server_conf[cfg_key])
 
@@ -1222,6 +1300,7 @@ def apply_config_overrides(args: argparse.Namespace, cfg: dict) -> argparse.Name
     return args
 
 def build_parser():
+    """Build and parse command-line arguments."""
     ap = argparse.ArgumentParser(description="SocketCAN → TCP GVRET server")
 
     # Server / IO
@@ -1261,15 +1340,33 @@ def build_parser():
         help="Seconds between periodic stats logs (default: 10s; 0 disables)")
 
     # PostgreSQL ingest
-    ap.add_argument("--pg-enable", action="store_true", help="Enable Postgres ingest using import function")
-    ap.add_argument("--pg-dsn", help="Postgres DSN, e.g. postgresql://user:pass@host:5432/db")
-    ap.add_argument("--pg-func", default="public.ingest_can_frame", help="Qualified ingest function name")
-    ap.add_argument("--pg-batch-size", type=int, default=500, help="DB batch size (default 500)")
-    ap.add_argument("--pg-flush-interval", type=float, default=0.5, help="DB flush interval seconds (default 0.5)")
-    ap.add_argument("--pg-queue-size", type=int, default=50000, help="Max buffered frames (default 50000)")
-    ap.add_argument("--pg-dir", default=None, help="Override direction per row (default: uses --default-dir)")
-    ap.add_argument("--pg-cache-path", default=None, help="Disk cache path for outages (default: ~/.candor-server-cache.db)")
-    ap.add_argument("--pg-cache-max-mb", type=int, default=1000, help="Max disk cache size in MB (default: 1000)")
+    ap.add_argument(
+        "--pg-enable", action="store_true",
+        help="Enable Postgres ingest using import function")
+    ap.add_argument(
+        "--pg-dsn",
+        help="Postgres DSN, e.g. postgresql://user:pass@host:5432/db")
+    ap.add_argument(
+        "--pg-func", default="public.ingest_can_frame",
+        help="Qualified ingest function name")
+    ap.add_argument(
+        "--pg-batch-size", type=int, default=500,
+        help="DB batch size (default 500)")
+    ap.add_argument(
+        "--pg-flush-interval", type=float, default=0.5,
+        help="DB flush interval seconds (default 0.5)")
+    ap.add_argument(
+        "--pg-queue-size", type=int, default=50000,
+        help="Max buffered frames (default 50000)")
+    ap.add_argument(
+        "--pg-dir", default=None,
+        help="Override direction per row (default: uses --default-dir)")
+    ap.add_argument(
+        "--pg-cache-path", default=None,
+        help="Disk cache path for outages (default: ~/.candor-server-cache.db)")
+    ap.add_argument(
+        "--pg-cache-max-mb", type=int, default=1000,
+        help="Max disk cache size in MB (default: 1000)")
 
     # Config file (TOML)
     ap.add_argument("-C", "--config", help="Path to TOML config file that OVERRIDES CLI options")
@@ -1277,6 +1374,7 @@ def build_parser():
     return ap.parse_args()
 
 def main():
+    """Entry point for the candor-server."""
     args = build_parser()
 
     # Handle SIGTERM (from kill, systemd, etc.) same as Ctrl+C
@@ -1347,4 +1445,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
