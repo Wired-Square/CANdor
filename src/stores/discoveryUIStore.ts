@@ -10,6 +10,7 @@ import { formatFrameId } from '../utils/frameIds';
 import { normalizeMeta } from '../utils/catalogMeta';
 import type { FrameInfo } from './discoveryFrameStore';
 import { useDiscoveryToolboxStore } from './discoveryToolboxStore';
+import { useSessionStore } from './sessionStore';
 import type { PlaybackSpeed } from '../components/TimeController';
 
 // Re-export PlaybackSpeed for backwards compatibility
@@ -25,7 +26,6 @@ export type FrameMetadata = {
 
 interface DiscoveryUIState {
   // General UI state
-  error: string | null;
   maxBuffer: number;
   renderBuffer: number;
   ioProfile: string | null;
@@ -38,12 +38,6 @@ interface DiscoveryUIState {
   // Time range
   startTime: string;
   endTime: string;
-
-  // Error dialog state
-  showErrorDialog: boolean;
-  errorDialogTitle: string;
-  errorDialogMessage: string;
-  errorDialogDetails: string | null;
 
   // Save dialog state
   showSaveDialog: boolean;
@@ -60,11 +54,6 @@ interface DiscoveryUIState {
   // CAN frame view display options
   showAsciiColumn: boolean;
   showBusColumn: boolean;
-
-  // Actions - Error handling
-  setError: (error: string | null) => void;
-  showError: (title: string, message: string, details?: string) => void;
-  closeErrorDialog: () => void;
 
   // Actions - UI settings
   setMaxBuffer: (value: number) => void;
@@ -107,7 +96,6 @@ interface DiscoveryUIState {
 
 export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
   // Initial state
-  error: null,
   maxBuffer: 100000,
   renderBuffer: 20,
   ioProfile: null,
@@ -116,10 +104,6 @@ export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
   currentFrameIndex: null,
   startTime: '',
   endTime: '',
-  showErrorDialog: false,
-  errorDialogTitle: '',
-  errorDialogMessage: '',
-  errorDialogDetails: null,
   showSaveDialog: false,
   saveMetadata: {
     name: 'Discovered Frames',
@@ -134,27 +118,6 @@ export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
   framesViewActiveTab: 'frames',
   showAsciiColumn: false,
   showBusColumn: false,
-
-  // Error handling
-  setError: (error) => set({ error }),
-
-  showError: (title, message, details) => {
-    set({
-      showErrorDialog: true,
-      errorDialogTitle: title,
-      errorDialogMessage: message,
-      errorDialogDetails: details || null,
-    });
-  },
-
-  closeErrorDialog: () => {
-    set({
-      showErrorDialog: false,
-      errorDialogTitle: '',
-      errorDialogMessage: '',
-      errorDialogDetails: null,
-    });
-  },
 
   // UI settings
   setMaxBuffer: (value) => {
@@ -201,7 +164,7 @@ export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
     const { saveMetadata, serialConfig } = get();
 
     if (!decoderDir) {
-      set({ error: 'Decoder directory is not set in settings.' });
+      useSessionStore.getState().showAppError('Save Error', 'Decoder directory is not set in settings.');
       return;
     }
 

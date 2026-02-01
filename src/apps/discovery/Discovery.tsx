@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useSettings, getDisplayFrameIdFormat, getSaveFrameIdFormat } from "../../hooks/useSettings";
 import { useIOSessionManager, type SessionReconfigurationInfo } from '../../hooks/useIOSessionManager';
 import { useFocusStore } from '../../stores/focusStore';
+import { useSessionStore } from '../../stores/sessionStore';
 import { useDiscoveryStore, type FrameMessage, type PlaybackSpeed } from "../../stores/discoveryStore";
 import { useDiscoveryUIStore } from "../../stores/discoveryUIStore";
 import { useDiscoveryHandlers } from "./hooks/useDiscoveryHandlers";
@@ -17,7 +18,6 @@ import DiscoveryFramesView from "./views/DiscoveryFramesView";
 import SerialDiscoveryView from "./views/SerialDiscoveryView";
 import SaveFramesDialog from "../../dialogs/SaveFramesDialog";
 import DecoderInfoDialog from "../../dialogs/DecoderInfoDialog";
-import ErrorDialog from "../../dialogs/ErrorDialog";
 import AddBookmarkDialog from "../../dialogs/AddBookmarkDialog";
 import AnalysisProgressDialog from "./dialogs/AnalysisProgressDialog";
 import ConfirmDeleteDialog from "../../dialogs/ConfirmDeleteDialog";
@@ -53,10 +53,6 @@ export default function Discovery() {
   const playbackSpeed = useDiscoveryStore((state) => state.playbackSpeed);
   const showSaveDialog = useDiscoveryStore((state) => state.showSaveDialog);
   const saveMetadata = useDiscoveryStore((state) => state.saveMetadata);
-  const showErrorDialog = useDiscoveryStore((state) => state.showErrorDialog);
-  const errorDialogTitle = useDiscoveryStore((state) => state.errorDialogTitle);
-  const errorDialogMessage = useDiscoveryStore((state) => state.errorDialogMessage);
-  const errorDialogDetails = useDiscoveryStore((state) => state.errorDialogDetails);
   const startTime = useDiscoveryStore((state) => state.startTime);
   const endTime = useDiscoveryStore((state) => state.endTime);
   const currentTime = useDiscoveryStore((state) => state.currentTime);
@@ -71,9 +67,10 @@ export default function Discovery() {
 
   const setShowBusColumn = useDiscoveryUIStore((state) => state.setShowBusColumn);
 
+  // Global error dialog
+  const showAppError = useSessionStore((state) => state.showAppError);
+
   // Zustand store actions
-  const showError = useDiscoveryStore((state) => state.showError);
-  const closeErrorDialog = useDiscoveryStore((state) => state.closeErrorDialog);
   const addFrames = useDiscoveryStore((state) => state.addFrames);
   const clearBuffer = useDiscoveryStore((state) => state.clearBuffer);
   const clearFramePicker = useDiscoveryStore((state) => state.clearFramePicker);
@@ -239,8 +236,8 @@ export default function Discovery() {
   }, [addSerialBytes, incrementBackendByteCount]);
 
   const handleError = useCallback((error: string) => {
-    showError("Stream Error", "An error occurred while streaming CAN data.", error);
-  }, [showError]);
+    showAppError("Stream Error", "An error occurred while streaming CAN data.", error);
+  }, [showAppError]);
 
   const handleTimeUpdate = useCallback((position: PlaybackPosition) => {
     updateCurrentTime(position.timestamp_us / 1_000_000);
@@ -717,7 +714,7 @@ export default function Discovery() {
     addSerialBytes,
     setSerialConfig,
     setFramingConfig,
-    showError,
+    showError: showAppError,
     openSaveDialog,
     saveFrames,
     setActiveSelectionSet,
@@ -970,14 +967,6 @@ export default function Discovery() {
         onChange={updateSaveMetadata}
         onCancel={closeSaveDialog}
         onSave={handlers.handleSaveFrames}
-      />
-
-      <ErrorDialog
-        isOpen={showErrorDialog}
-        title={errorDialogTitle}
-        message={errorDialogMessage}
-        details={errorDialogDetails || undefined}
-        onClose={closeErrorDialog}
       />
 
       <AddBookmarkDialog

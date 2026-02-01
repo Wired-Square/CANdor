@@ -70,7 +70,6 @@ type CombinedDiscoveryState = {
   bufferMode: { enabled: boolean; totalFrames: number };
 
   // UI store
-  error: string | null;
   maxBuffer: number;
   renderBuffer: number;
   ioProfile: string | null;
@@ -79,10 +78,6 @@ type CombinedDiscoveryState = {
   currentFrameIndex: number | null;
   startTime: string;
   endTime: string;
-  showErrorDialog: boolean;
-  errorDialogTitle: string;
-  errorDialogMessage: string;
-  errorDialogDetails: string | null;
   showSaveDialog: boolean;
   saveMetadata: FrameMetadata;
   serialConfig: import('../utils/frameExport').SerialFrameConfig | null;
@@ -112,9 +107,6 @@ type CombinedDiscoveryState = {
   showInfoView: boolean;
 
   // Combined actions
-  setError: (error: string | null) => void;
-  showError: (title: string, message: string, details?: string) => void;
-  closeErrorDialog: () => void;
   addFrames: (newFrames: FrameMessage[], skipFramePicker?: boolean) => void;
   clearBuffer: () => void;
   clearFramePicker: () => void;
@@ -217,7 +209,6 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     bufferMode: frameStore.bufferMode,
 
     // UI store state
-    error: uiStore.error,
     maxBuffer: uiStore.maxBuffer,
     renderBuffer: uiStore.renderBuffer,
     ioProfile: uiStore.ioProfile,
@@ -226,10 +217,6 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     currentFrameIndex: uiStore.currentFrameIndex,
     startTime: uiStore.startTime,
     endTime: uiStore.endTime,
-    showErrorDialog: uiStore.showErrorDialog,
-    errorDialogTitle: uiStore.errorDialogTitle,
-    errorDialogMessage: uiStore.errorDialogMessage,
-    errorDialogDetails: uiStore.errorDialogDetails,
     showSaveDialog: uiStore.showSaveDialog,
     saveMetadata: uiStore.saveMetadata,
     serialConfig: uiStore.serialConfig,
@@ -287,9 +274,6 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     setFrameInfoFromBuffer: frameStore.setFrameInfoFromBuffer,
 
     // UI store actions
-    setError: uiStore.setError,
-    showError: uiStore.showError,
-    closeErrorDialog: uiStore.closeErrorDialog,
     setMaxBuffer: uiStore.setMaxBuffer,
     setRenderBuffer: uiStore.setRenderBuffer,
     setIoProfile: uiStore.setIoProfile,
