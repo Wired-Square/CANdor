@@ -14,6 +14,9 @@ import type {
 export interface ProtocolDefaults {
   default_interval?: number;
   default_endianness?: "little" | "big";
+  // CAN config from [meta.can]
+  default_extended?: boolean;
+  default_fd?: boolean;
   // Modbus config from [frame.modbus.config]
   modbusDeviceAddress?: number;
   modbusRegisterBase?: 0 | 1;
@@ -31,6 +34,8 @@ export interface ParsedFrame<T extends ProtocolConfig = ProtocolConfig> {
     length?: boolean;
     transmitter?: boolean;
     interval?: boolean;
+    extended?: boolean;      // CAN-specific
+    fd?: boolean;            // CAN-specific
     deviceAddress?: boolean; // Modbus-specific
     registerBase?: boolean;  // Modbus-specific
   };
@@ -78,6 +83,8 @@ export interface ProtocolHandler<T extends ProtocolConfig = ProtocolConfig> {
       length?: boolean;
       transmitter?: boolean;
       interval?: boolean;
+      extended?: boolean;
+      fd?: boolean;
       deviceAddress?: boolean;
       registerBase?: boolean;
     }

@@ -117,8 +117,10 @@ export interface CatalogEditorState {
     nodeNotes: string;
     muxCaseValue: string;
     muxCaseNotes: string;
-    canDefaultEndianness: "little" | "big";  // For CAN config - stored in [frame.can.config]
-    canDefaultInterval: number | undefined;   // For CAN config - stored in [frame.can.config]
+    canDefaultEndianness: "little" | "big";  // For CAN config - stored in [meta.can]
+    canDefaultInterval: number | undefined;   // For CAN config - stored in [meta.can]
+    canDefaultExtended: boolean | undefined;  // For CAN config - default to 29-bit extended IDs
+    canDefaultFd: boolean | undefined;        // For CAN config - default to CAN FD frames
     canFrameIdMask: string;           // For CAN config - hex string like "0x1FFFFF00"
     canHeaderFields: CanHeaderFieldEntry[];  // For CAN config - header fields extracted from CAN ID
     serialEncoding: SerialEncoding;  // For new catalog dialog - stored in [frame.serial.config]
@@ -212,6 +214,8 @@ export interface CatalogEditorState {
   setMuxCaseNotes: (notes: string) => void;
   setCanDefaultEndianness: (endianness: "little" | "big") => void;
   setCanDefaultInterval: (interval: number | undefined) => void;
+  setCanDefaultExtended: (extended: boolean | undefined) => void;
+  setCanDefaultFd: (fd: boolean | undefined) => void;
   setCanFrameIdMask: (mask: string) => void;
   setCanHeaderFields: (fields: CanHeaderFieldEntry[]) => void;
   setSerialEncoding: (encoding: SerialEncoding) => void;
@@ -327,8 +331,10 @@ export const useCatalogEditorStore = create<CatalogEditorState>((set, get) => ({
     nodeNotes: '',
     muxCaseValue: '',
     muxCaseNotes: '',
-    canDefaultEndianness: 'little',   // Default for new catalogs - stored in [frame.can.config]
-    canDefaultInterval: undefined,     // Default for new catalogs - stored in [frame.can.config]
+    canDefaultEndianness: 'little',   // Default for new catalogs - stored in [meta.can]
+    canDefaultInterval: undefined,     // Default for new catalogs - stored in [meta.can]
+    canDefaultExtended: undefined,     // Default for new catalogs - undefined = auto-detect from ID
+    canDefaultFd: undefined,           // Default for new catalogs - undefined = classic CAN
     canFrameIdMask: '',       // Empty = no mask
     canHeaderFields: [],      // Empty = no header fields
     serialEncoding: 'slip',  // Default for new catalogs
@@ -629,6 +635,12 @@ export const useCatalogEditorStore = create<CatalogEditorState>((set, get) => ({
 
   setCanDefaultInterval: (canDefaultInterval) =>
     set((state) => ({ forms: { ...state.forms, canDefaultInterval } })),
+
+  setCanDefaultExtended: (canDefaultExtended) =>
+    set((state) => ({ forms: { ...state.forms, canDefaultExtended } })),
+
+  setCanDefaultFd: (canDefaultFd) =>
+    set((state) => ({ forms: { ...state.forms, canDefaultFd } })),
 
   setCanFrameIdMask: (canFrameIdMask) =>
     set((state) => ({ forms: { ...state.forms, canFrameIdMask } })),

@@ -169,6 +169,16 @@ function parseCanConfig(parsed: any): CanProtocolConfig | undefined {
     config.frame_id_mask = configSection.frame_id_mask;
   }
 
+  // default_extended is optional (default: false = 11-bit standard)
+  if (typeof configSection.default_extended === "boolean") {
+    config.default_extended = configSection.default_extended;
+  }
+
+  // default_fd is optional (default: false = classic CAN)
+  if (typeof configSection.default_fd === "boolean") {
+    config.default_fd = configSection.default_fd;
+  }
+
   // Parse header fields from [meta.can.fields]
   const fields = parseCanHeaderFields(configSection.fields);
   if (fields) {
@@ -425,9 +435,11 @@ function objectToTree(obj: any, parentPath: string[], meta: MetaFields | null, c
 
       // Build defaults from protocol configs for handlers
       const defaults: ProtocolDefaults = {
-        // CAN config from [frame.can.config]
+        // CAN config from [meta.can]
         default_interval: canConfig?.default_interval,
         default_endianness: canConfig?.default_endianness,
+        default_extended: canConfig?.default_extended,
+        default_fd: canConfig?.default_fd,
         // Modbus config from [frame.modbus.config]
         modbusDeviceAddress: modbusConfig?.device_address,
         modbusRegisterBase: modbusConfig?.register_base,
@@ -629,6 +641,9 @@ function objectToTree(obj: any, parentPath: string[], meta: MetaFields | null, c
             metadata.isMirror = !!canConfig.mirror_of;
             metadata.mirrorOf = canConfig.mirror_of;
             metadata.extended = canConfig.extended;
+            metadata.extendedInherited = parsed.inherited.extended;
+            metadata.fd = canConfig.fd;
+            metadata.fdInherited = parsed.inherited.fd;
             metadata.bus = canConfig.bus;
           } else if (protocol === "modbus") {
             const modbusConfig = parsed.config as import("./types").ModbusConfig;

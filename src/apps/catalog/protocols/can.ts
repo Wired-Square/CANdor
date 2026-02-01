@@ -23,6 +23,32 @@ const canHandler: ProtocolHandler<CANConfig> = {
     let interval = value.tx?.interval ?? value.tx?.interval_ms;
     let intervalInherited = false;
 
+    // Resolve extended: frame explicit > catalog default > auto-detect from ID
+    let extended: boolean | undefined;
+    let extendedInherited = false;
+    if (typeof value.extended === 'boolean') {
+      extended = value.extended;
+    } else if (typeof defaults.default_extended === 'boolean') {
+      extended = defaults.default_extended;
+      extendedInherited = true;
+    } else {
+      // Auto-detect from ID value
+      const numId = key.startsWith('0x') ? parseInt(key, 16) : parseInt(key, 10);
+      extended = !isNaN(numId) && numId > 0x7ff;
+      extendedInherited = true;  // Mark as inherited since it's auto-detected
+    }
+
+    // Resolve fd: frame explicit > catalog default > false
+    let fd: boolean | undefined;
+    let fdInherited = false;
+    if (typeof value.fd === 'boolean') {
+      fd = value.fd;
+    } else if (typeof defaults.default_fd === 'boolean') {
+      fd = defaults.default_fd;
+      fdInherited = true;
+    }
+    // If neither set, fd remains undefined (classic CAN)
+
     const isCopy = !!value.copy;
     const copyFrom = value.copy;
     const isMirror = !!value.mirror_of;
@@ -121,7 +147,8 @@ const canHandler: ProtocolHandler<CANConfig> = {
       config: {
         protocol: "can",
         id: key,
-        extended: value.extended,
+        extended,
+        fd,
         bus: value.bus,
         copy: copyFrom,
         mirror_of: mirrorOf,
@@ -130,6 +157,8 @@ const canHandler: ProtocolHandler<CANConfig> = {
         length: lengthInherited,
         transmitter: transmitterInherited,
         interval: intervalInherited,
+        extended: extendedInherited,
+        fd: fdInherited,
       },
     };
   },
@@ -157,8 +186,12 @@ const canHandler: ProtocolHandler<CANConfig> = {
     }
 
     // CAN-specific fields
-    if (config.extended) {
+    if (config.extended !== undefined && !omitInherited?.extended) {
       obj.extended = config.extended;
+    }
+
+    if (config.fd !== undefined && !omitInherited?.fd) {
+      obj.fd = config.fd;
     }
 
     if (config.bus !== undefined) {
@@ -234,7 +267,8 @@ const canHandler: ProtocolHandler<CANConfig> = {
   getDefaultConfig: () => ({
     protocol: "can",
     id: "",
-    extended: false,
+    extended: undefined,
+    fd: undefined,
     bus: undefined,
     copy: undefined,
     mirror_of: undefined,

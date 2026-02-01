@@ -65,6 +65,10 @@ export type CanConfigSectionProps = {
   setDefaultEndianness: (endianness: "little" | "big") => void;
   defaultInterval: number | undefined;
   setDefaultInterval: (interval: number | undefined) => void;
+  defaultExtended: boolean | undefined;
+  setDefaultExtended: (extended: boolean | undefined) => void;
+  defaultFd: boolean | undefined;
+  setDefaultFd: (fd: boolean | undefined) => void;
   frameIdMask: string;
   setFrameIdMask: (mask: string) => void;
   headerFields: CanHeaderFieldEntry[];
@@ -82,6 +86,10 @@ export default function CanConfigSection({
   setDefaultEndianness,
   defaultInterval,
   setDefaultInterval,
+  defaultExtended,
+  setDefaultExtended,
+  defaultFd,
+  setDefaultFd,
   frameIdMask,
   setFrameIdMask,
   headerFields,
@@ -278,6 +286,53 @@ export default function CanConfigSection({
             <p className={`mt-1 ${caption}`}>
               Default transmit interval for frames
             </p>
+          </div>
+
+          {/* Default Extended ID and CAN FD row */}
+          <div className="grid grid-cols-2 gap-4">
+            {/* Default Extended ID */}
+            <div>
+              <label className={`block ${textMedium} mb-2`}>
+                Default Extended ID <span className="text-slate-400 text-xs font-normal">(optional)</span>
+              </label>
+              <select
+                value={defaultExtended === undefined ? "auto" : defaultExtended ? "true" : "false"}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setDefaultExtended(val === "auto" ? undefined : val === "true");
+                }}
+                className={`w-full px-4 py-2 bg-[var(--bg-secondary)] border border-[color:var(--border-input)] rounded-lg text-[color:var(--text-primary)] ${focusRing}`}
+              >
+                <option value="auto">Auto-detect from ID</option>
+                <option value="false">No (11-bit standard)</option>
+                <option value="true">Yes (29-bit extended)</option>
+              </select>
+              <p className={`mt-1 ${caption}`}>
+                Default ID type for frames without explicit setting
+              </p>
+            </div>
+
+            {/* Default CAN FD */}
+            <div>
+              <label className={`block ${textMedium} mb-2`}>
+                Default CAN FD <span className="text-slate-400 text-xs font-normal">(optional)</span>
+              </label>
+              <select
+                value={defaultFd === undefined ? "auto" : defaultFd ? "true" : "false"}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setDefaultFd(val === "auto" ? undefined : val === "true");
+                }}
+                className={`w-full px-4 py-2 bg-[var(--bg-secondary)] border border-[color:var(--border-input)] rounded-lg text-[color:var(--text-primary)] ${focusRing}`}
+              >
+                <option value="auto">Classic CAN (default)</option>
+                <option value="false">No (Classic CAN)</option>
+                <option value="true">Yes (CAN FD)</option>
+              </select>
+              <p className={`mt-1 ${caption}`}>
+                Default to CAN FD frames (64-byte payload, BRS)
+              </p>
+            </div>
           </div>
 
           {/* Frame ID Mask */}
@@ -535,8 +590,10 @@ export default function CanConfigSection({
       {/* Collapsed preview when configured but not expanded */}
       {!isExpanded && isConfigured && (
         <div className={`px-4 py-2 ${caption} border-t border-[color:var(--border-default)]`}>
-          Endianness: {defaultEndianness}
+          Byte order: {defaultEndianness}
           {defaultInterval !== undefined && ` • Interval: ${defaultInterval}ms`}
+          {defaultExtended !== undefined && ` • Extended: ${defaultExtended ? "Yes" : "No"}`}
+          {defaultFd !== undefined && ` • FD: ${defaultFd ? "Yes" : "No"}`}
           {frameIdMask && ` • Mask: ${frameIdMask}`}
           {headerFields.length > 0 && ` • ${headerFields.length} header field(s)`}
         </div>

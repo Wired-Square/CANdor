@@ -40,6 +40,8 @@ export function useFileHandlers({ settings, saveFrameIdFormat }: UseFileHandlers
   const modbusRegisterBase = useCatalogEditorStore((s) => s.forms.modbusRegisterBase);
   const canDefaultEndianness = useCatalogEditorStore((s) => s.forms.canDefaultEndianness);
   const canDefaultInterval = useCatalogEditorStore((s) => s.forms.canDefaultInterval);
+  const canDefaultExtended = useCatalogEditorStore((s) => s.forms.canDefaultExtended);
+  const canDefaultFd = useCatalogEditorStore((s) => s.forms.canDefaultFd);
 
   const openDialog = useCatalogEditorStore((s) => s.openDialog);
   const closeDialog = useCatalogEditorStore((s) => s.closeDialog);
@@ -92,6 +94,8 @@ export function useFileHandlers({ settings, saveFrameIdFormat }: UseFileHandlers
         content = upsertCanConfigToml(content, {
           default_endianness: canDefaultEndianness,
           default_interval: canDefaultInterval,
+          default_extended: canDefaultExtended,
+          default_fd: canDefaultFd,
         });
       } else if (selectedProtocol === "modbus") {
         content = upsertModbusConfigToml(content, {

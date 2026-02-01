@@ -196,6 +196,16 @@ export function getCanConfig(toml: string): CanProtocolConfig | null {
     config.frame_id_mask = configSection.frame_id_mask;
   }
 
+  // default_extended is optional (default: undefined = auto-detect from ID)
+  if (typeof configSection.default_extended === "boolean") {
+    config.default_extended = configSection.default_extended;
+  }
+
+  // default_fd is optional (default: undefined = classic CAN)
+  if (typeof configSection.default_fd === "boolean") {
+    config.default_fd = configSection.default_fd;
+  }
+
   // Header fields are parsed elsewhere (in toml.ts), not here
 
   return config;
@@ -217,6 +227,16 @@ export function upsertCanConfigToml(toml: string, config: CanProtocolConfig): st
 
   if (config.default_interval !== undefined) {
     configObj.default_interval = config.default_interval;
+  }
+
+  // Store default_extended if explicitly set
+  if (config.default_extended !== undefined) {
+    configObj.default_extended = config.default_extended;
+  }
+
+  // Store default_fd if explicitly set
+  if (config.default_fd !== undefined) {
+    configObj.default_fd = config.default_fd;
   }
 
   // Store frame_id_mask as hex marker string

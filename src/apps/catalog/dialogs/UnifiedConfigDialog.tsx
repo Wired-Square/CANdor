@@ -35,6 +35,10 @@ export default function UnifiedConfigDialog({
   const setCanDefaultEndianness = useCatalogEditorStore((s) => s.setCanDefaultEndianness);
   const canDefaultInterval = useCatalogEditorStore((s) => s.forms.canDefaultInterval);
   const setCanDefaultInterval = useCatalogEditorStore((s) => s.setCanDefaultInterval);
+  const canDefaultExtended = useCatalogEditorStore((s) => s.forms.canDefaultExtended);
+  const setCanDefaultExtended = useCatalogEditorStore((s) => s.setCanDefaultExtended);
+  const canDefaultFd = useCatalogEditorStore((s) => s.forms.canDefaultFd);
+  const setCanDefaultFd = useCatalogEditorStore((s) => s.setCanDefaultFd);
   const canFrameIdMask = useCatalogEditorStore((s) => s.forms.canFrameIdMask);
   const setCanFrameIdMask = useCatalogEditorStore((s) => s.setCanFrameIdMask);
   const canHeaderFields = useCatalogEditorStore((s) => s.forms.canHeaderFields);
@@ -95,6 +99,8 @@ export default function UnifiedConfigDialog({
     // Set defaults
     setCanDefaultEndianness("little");
     setCanDefaultInterval(undefined);
+    setCanDefaultExtended(undefined);
+    setCanDefaultFd(undefined);
     setCanFrameIdMask("");
     setCanHeaderFields([]);
   };
@@ -201,6 +207,10 @@ export default function UnifiedConfigDialog({
               setDefaultEndianness={setCanDefaultEndianness}
               defaultInterval={canDefaultInterval}
               setDefaultInterval={setCanDefaultInterval}
+              defaultExtended={canDefaultExtended}
+              setDefaultExtended={setCanDefaultExtended}
+              defaultFd={canDefaultFd}
+              setDefaultFd={setCanDefaultFd}
               frameIdMask={canFrameIdMask}
               setFrameIdMask={setCanFrameIdMask}
               headerFields={canHeaderFields}

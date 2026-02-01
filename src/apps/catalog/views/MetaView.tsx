@@ -89,7 +89,7 @@ export default function MetaView({
         >
           {canConfig && (
             <div className="text-xs text-[color:var(--text-muted)]">
-              <span>Endianness: {canConfig.default_endianness}</span>
+              <span>Byte order: {canConfig.default_endianness}</span>
               {canConfig.default_interval !== undefined && (
                 <span> • Interval: {canConfig.default_interval}ms</span>
               )}

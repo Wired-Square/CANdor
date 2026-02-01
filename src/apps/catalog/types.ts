@@ -88,6 +88,7 @@ export interface CANConfig {
   protocol: "can";
   id: string;                    // "0x123" or decimal
   extended?: boolean;            // 29-bit extended ID
+  fd?: boolean;                  // CAN FD frame (64-byte payload, BRS)
   bus?: number;                  // CAN bus index
   copy?: string;                 // Inherit metadata from another frame
   mirror_of?: string;            // Inherit ALL signals from another frame (by bit position)
@@ -126,6 +127,10 @@ export interface SerialHeaderField {
 export interface CanProtocolConfig {
   default_endianness: "little" | "big";  // Endianness for signal decoding
   default_interval?: number;              // Default transmit interval in ms
+  /** Default to 29-bit extended IDs (default: false = 11-bit standard) */
+  default_extended?: boolean;
+  /** Default to CAN FD frames (default: false = classic CAN) */
+  default_fd?: boolean;
   /** Mask applied to frame_id before matching catalog entries (e.g., 0x1FFFFF00 for J1939 to mask off source) */
   frame_id_mask?: number;
   /** Named header fields extracted from CAN ID */
@@ -212,6 +217,9 @@ export interface TomlNode {
     idValue?: string;
     // CAN-specific
     extended?: boolean;
+    extendedInherited?: boolean;
+    fd?: boolean;
+    fdInherited?: boolean;
     bus?: number;
     // Modbus-specific
     registerNumber?: number;

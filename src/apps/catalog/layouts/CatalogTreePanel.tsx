@@ -105,7 +105,7 @@ export default function CatalogTreePanel({
               <button
                 onClick={onEditConfig}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-[var(--status-success-bg)] text-[color:var(--text-green)] hover:bg-[var(--status-success-bg-hover)] transition-colors cursor-pointer"
-                title={canConfig ? `CAN config: ${canConfig.default_endianness} endian${canConfig.frame_id_mask !== undefined ? ', masked' : ''}` : "Configure CAN settings"}
+                title={canConfig ? `CAN config: ${canConfig.default_endianness}${canConfig.frame_id_mask !== undefined ? ', masked' : ''}` : "Configure CAN settings"}
               >
                 <Network className={iconXs} />
                 CAN

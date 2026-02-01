@@ -249,12 +249,15 @@ export default function QueryBuilderPanel({
     (e: React.ChangeEvent<HTMLSelectElement>) => {
       const frameId = parseInt(e.target.value, 10);
       if (!isNaN(frameId)) {
-        updateQueryParams({ frameId });
+        // Get the frame's isExtended value from the catalog
+        const frame = parsedCatalog?.frames.get(frameId);
+        const isExtended = frame?.isExtended ?? false;
+        updateQueryParams({ frameId, isExtended });
         setSelectedSignal(null); // Clear signal when frame changes
         setFrameIdText(`0x${frameId.toString(16).toUpperCase()}`);
       }
     },
-    [updateQueryParams, setSelectedSignal]
+    [updateQueryParams, setSelectedSignal, parsedCatalog]
   );
 
   // Handle catalog signal selection
@@ -321,16 +324,21 @@ export default function QueryBuilderPanel({
       const mirrorOf = mirrorEntry?.frame.mirrorOf;
       const sourceFrameId = mirrorOf ? getMirrorSourceId(mirrorOf) : null;
 
+      // Get the frame's isExtended value from the catalog
+      const frame = parsedCatalog?.frames.get(mirrorFrameId);
+      const isExtended = frame?.isExtended ?? false;
+
       updateQueryParams({
         mirrorFrameId,
         sourceFrameId: sourceFrameId ?? 0,
+        isExtended,
       });
       setMirrorFrameIdText(`0x${mirrorFrameId.toString(16).toUpperCase()}`);
       if (sourceFrameId !== null) {
         setSourceFrameIdText(`0x${sourceFrameId.toString(16).toUpperCase()}`);
       }
     },
-    [mirrorFrames, getMirrorSourceId, updateQueryParams]
+    [mirrorFrames, getMirrorSourceId, updateQueryParams, parsedCatalog]
   );
 
   // Handle tolerance change

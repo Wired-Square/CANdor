@@ -19,6 +19,8 @@ export default function CanConfigView({
   // Get values from canConfig (parsed from TOML) or fallback to node metadata
   const defaultEndianness = canConfig?.default_endianness ?? selectedNode.metadata?.properties?.default_endianness;
   const defaultInterval = canConfig?.default_interval ?? selectedNode.metadata?.properties?.default_interval;
+  const defaultExtended = canConfig?.default_extended ?? selectedNode.metadata?.properties?.default_extended;
+  const defaultFd = canConfig?.default_fd ?? selectedNode.metadata?.properties?.default_fd;
 
   return (
     <div className="space-y-6">
@@ -52,7 +54,7 @@ export default function CanConfigView({
       <div className="grid grid-cols-2 gap-4">
         <div className={`p-4 ${bgSecondary} rounded-lg`}>
           <div className={labelSmallMuted}>
-            Default Endianness
+            Default Byte Order
           </div>
           <div className={monoBody}>
             {defaultEndianness ? (
@@ -75,13 +77,43 @@ export default function CanConfigView({
             )}
           </div>
         </div>
+
+        <div className={`p-4 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>
+            Default Extended ID
+          </div>
+          <div className={monoBody}>
+            {defaultExtended === true ? (
+              "Yes (29-bit)"
+            ) : defaultExtended === false ? (
+              "No (11-bit)"
+            ) : (
+              <span className="text-slate-400">Auto-detect</span>
+            )}
+          </div>
+        </div>
+
+        <div className={`p-4 ${bgSecondary} rounded-lg`}>
+          <div className={labelSmallMuted}>
+            Default CAN FD
+          </div>
+          <div className={monoBody}>
+            {defaultFd === true ? (
+              "Yes"
+            ) : defaultFd === false ? (
+              "No (Classic CAN)"
+            ) : (
+              <span className="text-slate-400">Classic CAN</span>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Info box */}
       <div className="p-4 bg-[var(--status-info-bg)] rounded-lg border border-[color:var(--status-info-border)]">
         <p className="text-sm text-[color:var(--status-info)]">
           <strong>Note:</strong> Individual CAN frames inherit these settings.
-          Frames can override the interval but will use the default endianness for signal decoding.
+          Frames can override the interval, extended ID, and CAN FD flags but will use the default endianness for signal decoding.
         </p>
       </div>
     </div>

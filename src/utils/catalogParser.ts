@@ -27,6 +27,10 @@ export interface HeaderFieldConfig {
 export interface CanProtocolConfig {
   default_byte_order?: 'big' | 'little';
   default_interval?: number;
+  /** Default to 29-bit extended IDs (default: false = 11-bit standard) */
+  default_extended?: boolean;
+  /** Default to CAN FD frames (default: false = classic CAN) */
+  default_fd?: boolean;
   frame_id_mask?: number;
   fields?: Record<string, HeaderFieldConfig>;
 }
@@ -89,6 +93,7 @@ export interface ResolvedFrame {
   interval?: number;
   bus?: number;
   isExtended?: boolean;
+  isFd?: boolean;
   signals: ResolvedSignal[];
   mux?: MuxDef;
   mirrorOf?: string;
@@ -296,6 +301,16 @@ export function parseCanConfig(parsed: any): CanProtocolConfig | null {
   const fields = parseCanHeaderFields(configSection.fields);
   if (fields) {
     config.fields = fields;
+  }
+
+  // Parse default_extended (default: false = 11-bit standard)
+  if (typeof configSection.default_extended === 'boolean') {
+    config.default_extended = configSection.default_extended;
+  }
+
+  // Parse default_fd (default: false = classic CAN)
+  if (typeof configSection.default_fd === 'boolean') {
+    config.default_fd = configSection.default_fd;
   }
 
   return Object.keys(config).length > 0 ? config : null;
@@ -597,7 +612,26 @@ export function parseCatalogText(toml: string): ParsedCatalog {
     const resolved = resolveMirrorInheritance(body, canFrames);
 
     const len = body?.length ?? resolved.inheritedMetadata.length ?? 8;
-    const isExtended = numId > 0x7ff;
+
+    // Resolve isExtended: frame explicit > catalog default > auto-detect from ID
+    let isExtended: boolean;
+    if (typeof body?.extended === 'boolean') {
+      isExtended = body.extended;
+    } else if (typeof canConfig?.default_extended === 'boolean') {
+      isExtended = canConfig.default_extended;
+    } else {
+      isExtended = numId > 0x7ff;
+    }
+
+    // Resolve isFd: frame explicit > catalog default > false
+    let isFd: boolean;
+    if (typeof body?.fd === 'boolean') {
+      isFd = body.fd;
+    } else if (typeof canConfig?.default_fd === 'boolean') {
+      isFd = canConfig.default_fd;
+    } else {
+      isFd = false;
+    }
 
     frameMap.set(numId, {
       frameId: numId,
@@ -607,6 +641,7 @@ export function parseCatalogText(toml: string): ParsedCatalog {
       interval: body?.tx?.interval ?? body?.tx?.interval_ms ?? resolved.inheritedMetadata.interval,
       bus: body?.bus,
       isExtended,
+      isFd,
       signals: resolved.signals as SignalDef[],
       mux: resolved.mux,
       mirrorOf: resolved.mirrorOf,

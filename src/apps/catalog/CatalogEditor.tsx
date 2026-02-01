@@ -53,6 +53,8 @@ export default function CatalogEditor() {
   const setCanDefaultEndianness = useCatalogEditorStore((s) => s.setCanDefaultEndianness);
   const canDefaultInterval = useCatalogEditorStore((s) => s.forms.canDefaultInterval);
   const setCanDefaultInterval = useCatalogEditorStore((s) => s.setCanDefaultInterval);
+  const setCanDefaultExtended = useCatalogEditorStore((s) => s.setCanDefaultExtended);
+  const setCanDefaultFd = useCatalogEditorStore((s) => s.setCanDefaultFd);
   const setCanFrameIdMask = useCatalogEditorStore((s) => s.setCanFrameIdMask);
   const setCanHeaderFields = useCatalogEditorStore((s) => s.setCanHeaderFields);
   const serialEncoding = useCatalogEditorStore((s) => s.forms.serialEncoding);
@@ -241,10 +243,12 @@ export default function CatalogEditor() {
       setTreeData({ nodes: tree, canConfig, serialConfig, modbusConfig, hasCanFrames, hasSerialFrames, hasModbusFrames });
       if (meta) setMetaFields(meta);
       setAvailablePeers(peers);
-      // Store CAN config from [frame.can.config] if present
+      // Store CAN config from [meta.can] if present
       if (canConfig) {
         setCanDefaultEndianness(canConfig.default_endianness);
         setCanDefaultInterval(canConfig.default_interval);
+        setCanDefaultExtended(canConfig.default_extended);
+        setCanDefaultFd(canConfig.default_fd);
         // Convert frame_id_mask to hex string for display (or empty if not set)
         setCanFrameIdMask(canConfig.frame_id_mask !== undefined ? `0x${canConfig.frame_id_mask.toString(16).toUpperCase()}` : '');
         // Convert header fields from Record<name, field> to array form for editing
@@ -264,6 +268,8 @@ export default function CatalogEditor() {
         // Reset fields when no CAN config
         setCanFrameIdMask('');
         setCanHeaderFields([]);
+        setCanDefaultExtended(undefined);
+        setCanDefaultFd(undefined);
       }
       // Store serial config from [meta.serial] if present
       if (serialConfig?.encoding) {

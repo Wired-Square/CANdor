@@ -154,8 +154,8 @@ export default function NewCatalogDialog({
           {/* CAN-specific fields */}
           {selectedProtocol === "can" && (
             <>
-              {/* Default Endianness */}
-              <FormField label="Default Endianness" required variant="default">
+              {/* Default Byte Order */}
+              <FormField label="Default Byte Order" required variant="default">
                 <Select
                   variant="default"
                   value={canDefaultEndianness}

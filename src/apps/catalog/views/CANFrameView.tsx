@@ -169,6 +169,40 @@ export default function CANFrameView({
               )}
             </div>
           </div>
+
+          <div className={`p-4 ${bgSecondary} rounded-lg`}>
+            <div className={labelSmallMuted}>
+              Extended ID
+              {selectedNode.metadata?.extendedInherited && (
+                <span
+                  className="ml-1 text-[color:var(--status-info-text)]"
+                  title="Inherited from default_extended or auto-detected"
+                >
+                  (inherited)
+                </span>
+              )}
+            </div>
+            <div className={monoBody}>
+              {selectedNode.metadata?.extended ? "Yes (29-bit)" : "No (11-bit)"}
+            </div>
+          </div>
+
+          <div className={`p-4 ${bgSecondary} rounded-lg`}>
+            <div className={labelSmallMuted}>
+              CAN FD
+              {selectedNode.metadata?.fdInherited && (
+                <span
+                  className="ml-1 text-[color:var(--status-info-text)]"
+                  title="Inherited from default_fd"
+                >
+                  (inherited)
+                </span>
+              )}
+            </div>
+            <div className={monoBody}>
+              {selectedNode.metadata?.fd ? "Yes" : "No (Classic)"}
+            </div>
+          </div>
         </div>
       )}
 

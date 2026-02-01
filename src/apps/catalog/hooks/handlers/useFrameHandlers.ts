@@ -66,6 +66,8 @@ export function useFrameHandlers({
   const modbusRegisterBase = useCatalogEditorStore((s) => s.forms.modbusRegisterBase);
   const canDefaultEndianness = useCatalogEditorStore((s) => s.forms.canDefaultEndianness);
   const canDefaultInterval = useCatalogEditorStore((s) => s.forms.canDefaultInterval);
+  const canDefaultExtended = useCatalogEditorStore((s) => s.forms.canDefaultExtended);
+  const canDefaultFd = useCatalogEditorStore((s) => s.forms.canDefaultFd);
   const canFrameIdMask = useCatalogEditorStore((s) => s.forms.canFrameIdMask);
   const canHeaderFields = useCatalogEditorStore((s) => s.forms.canHeaderFields);
   const metaFields = useCatalogEditorStore((s) => s.forms.meta);
@@ -584,6 +586,8 @@ export function useFrameHandlers({
         newContent = upsertCanConfigToml(newContent, {
           default_endianness: canDefaultEndianness,
           default_interval: canDefaultInterval,
+          default_extended: canDefaultExtended,
+          default_fd: canDefaultFd,
           frame_id_mask: Number.isFinite(frameIdMaskNum) ? frameIdMaskNum : undefined,
           fields,
         });
@@ -765,6 +769,8 @@ export function useFrameHandlers({
       newContent = upsertCanConfigToml(newContent, {
         default_endianness: canDefaultEndianness,
         default_interval: canDefaultInterval,
+        default_extended: canDefaultExtended,
+        default_fd: canDefaultFd,
         frame_id_mask: Number.isFinite(frameIdMaskNum) ? frameIdMaskNum : undefined,
         fields,
       });
