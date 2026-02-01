@@ -13,6 +13,7 @@ import type { FrameMessage } from "../../stores/discoveryStore";
 import type { PlaybackPosition } from "../../api/io";
 import type { CatalogMetadata } from "../../api/catalog";
 import { listCatalogs } from "../../api/catalog";
+import { resolveDefaultCatalogPath } from "../../utils/catalogUtils";
 import { getFavoritesForProfile, addFavorite, type TimeRangeFavorite } from "../../utils/favorites";
 import { loadCatalog } from "../../utils/catalogParser";
 import type { TimeBounds } from "../../components/TimeBoundsInput";
@@ -111,6 +112,17 @@ export default function Query() {
     };
     loadParsedCatalog();
   }, [catalogPath, setParsedCatalog]);
+
+  // Auto-load default catalog when catalogs list and settings are available
+  useEffect(() => {
+    if (!settings?.default_catalog || catalogs.length === 0) return;
+    if (catalogPath) return; // Preserve user's manual selection
+
+    const defaultPath = resolveDefaultCatalogPath(settings.default_catalog, catalogs);
+    if (defaultPath) {
+      setCatalogPath(defaultPath);
+    }
+  }, [settings?.default_catalog, catalogs, catalogPath, setCatalogPath]);
 
   // Load favourites when profile changes
   useEffect(() => {

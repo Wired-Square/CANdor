@@ -24,6 +24,7 @@ import type { SelectionSet } from '../utils/selectionSets';
 import type { CanHeaderField, HeaderFieldFormat } from '../apps/catalog/types';
 import type { PlaybackSpeed } from '../components/TimeController';
 import { loadCatalog as loadCatalogFromPath, parseCanId } from '../utils/catalogParser';
+import { buildCatalogPath } from '../utils/catalogUtils';
 
 // Re-export for consumers that import from decoderStore
 export type { PlaybackSpeed } from '../components/TimeController';
@@ -502,12 +503,7 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
     }
 
     if (defaultCatalog) {
-      const path =
-        defaultCatalog.startsWith('/') || defaultCatalog.includes('\\')
-          ? defaultCatalog
-          : decoderDir
-          ? `${decoderDir.replace(/[\\/]+$/, '')}/${defaultCatalog}`
-          : defaultCatalog;
+      const path = buildCatalogPath(defaultCatalog, decoderDir);
       await get().loadCatalog(path);
     }
   },
