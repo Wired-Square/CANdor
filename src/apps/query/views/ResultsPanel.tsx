@@ -9,6 +9,7 @@ import {
   QUERY_TYPE_INFO,
   type ByteChangeResult,
   type FrameChangeResult,
+  type MirrorValidationResult,
   type QueuedQuery,
 } from "../stores/queryStore";
 import { useSettingsStore } from "../../settings/stores/settingsStore";
@@ -17,7 +18,7 @@ import DataViewPaginationToolbar, { FRAME_PAGE_SIZE_OPTIONS } from "../../../com
 import { iconButtonBase, buttonBase } from "../../../styles/buttonStyles";
 import { monoBody } from "../../../styles/typography";
 import { iconSm, iconMd, iconXl } from "../../../styles/spacing";
-import { borderDivider, hoverBg, textPrimary, textSecondary, textMuted, textDataAmber, textDataGreen, textDataPurple } from "../../../styles/colourTokens";
+import { borderDivider, hoverBg, textPrimary, textSecondary, textMuted, textDataAmber, textDataGreen, textDataPurple, textDanger } from "../../../styles/colourTokens";
 
 interface Props {
   selectedQuery: QueuedQuery | null;
@@ -56,7 +57,7 @@ export default function ResultsPanel({
       return { paginatedResults: [], totalPages: 0 };
     }
 
-    const allResults = results as (ByteChangeResult | FrameChangeResult)[];
+    const allResults = results as (ByteChangeResult | FrameChangeResult | MirrorValidationResult)[];
 
     // If pageSize is -1 (All), show all results
     if (pageSize === -1) {
@@ -279,7 +280,7 @@ export default function ResultsPanel({
 
 // Individual result row component
 interface ResultRowProps {
-  result: ByteChangeResult | FrameChangeResult;
+  result: ByteChangeResult | FrameChangeResult | MirrorValidationResult;
   queryType: string;
   formatTimestamp: (us: number) => string;
   formatTimestampFull: (us: number) => string;
@@ -295,9 +296,14 @@ function ResultRow({
   formatByte,
   onIngest,
 }: ResultRowProps) {
+  // Get the primary timestamp for ingest (use mirror_timestamp_us for mirror validation)
+  const primaryTimestamp = queryType === "mirror_validation"
+    ? (result as MirrorValidationResult).mirror_timestamp_us
+    : (result as ByteChangeResult | FrameChangeResult).timestamp_us;
+
   const handleIngestClick = useCallback(() => {
-    onIngest(result.timestamp_us);
-  }, [result.timestamp_us, onIngest]);
+    onIngest(primaryTimestamp);
+  }, [primaryTimestamp, onIngest]);
 
   // Render byte change result
   if (queryType === "byte_changes") {
@@ -323,6 +329,68 @@ function ResultRow({
         <button
           onClick={handleIngestClick}
           className={`${buttonBase} opacity-0 group-hover:opacity-100 transition-opacity`}
+          title="Ingest frames around this event"
+        >
+          <PlayCircle className={iconSm} />
+          <span className="text-xs">Ingest</span>
+        </button>
+      </div>
+    );
+  }
+
+  // Render mirror validation result
+  if (queryType === "mirror_validation") {
+    const mirrorResult = result as MirrorValidationResult;
+    const timeDeltaMs = Math.abs(mirrorResult.mirror_timestamp_us - mirrorResult.source_timestamp_us) / 1000;
+
+    // Format payload with mismatches highlighted
+    const formatPayloadWithMismatches = (payload: number[], mismatches: number[]) => {
+      return payload.map((byte, idx) => {
+        const hex = formatByte(byte);
+        const isMismatch = mismatches.includes(idx);
+        return (
+          <span key={idx} className={isMismatch ? textDanger : textMuted}>
+            {hex}{idx < payload.length - 1 ? " " : ""}
+          </span>
+        );
+      });
+    };
+
+    return (
+      <div className={`flex items-start gap-3 px-4 py-2 ${hoverBg} group`}>
+        {/* Timestamps */}
+        <div className="flex-shrink-0 w-36">
+          <span
+            className={`${monoBody} text-xs ${textDataAmber} block`}
+            title={formatTimestampFull(mirrorResult.mirror_timestamp_us)}
+          >
+            {formatTimestamp(mirrorResult.mirror_timestamp_us)}
+          </span>
+          <span className={`text-xs ${textMuted}`}>
+            Δ {timeDeltaMs.toFixed(1)}ms
+          </span>
+        </div>
+
+        {/* Payload comparison */}
+        <div className="flex-1 min-w-0">
+          <div className={`${monoBody} text-xs`}>
+            <span className={textSecondary}>mirror: </span>
+            {formatPayloadWithMismatches(mirrorResult.mirror_payload, mirrorResult.mismatch_indices)}
+          </div>
+          <div className={`${monoBody} text-xs`}>
+            <span className={textSecondary}>source: </span>
+            {formatPayloadWithMismatches(mirrorResult.source_payload, mirrorResult.mismatch_indices)}
+          </div>
+          <span className={`text-xs ${textMuted}`}>
+            {mirrorResult.mismatch_indices.length} byte{mirrorResult.mismatch_indices.length !== 1 ? "s" : ""} differ
+            {mirrorResult.mismatch_indices.length <= 4 && `: ${mirrorResult.mismatch_indices.join(", ")}`}
+          </span>
+        </div>
+
+        {/* Ingest button */}
+        <button
+          onClick={handleIngestClick}
+          className={`${buttonBase} opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0`}
           title="Ingest frames around this event"
         >
           <PlayCircle className={iconSm} />

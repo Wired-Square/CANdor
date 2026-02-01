@@ -14,6 +14,7 @@ import type { PlaybackPosition } from "../../api/io";
 import type { CatalogMetadata } from "../../api/catalog";
 import { listCatalogs } from "../../api/catalog";
 import { getFavoritesForProfile, addFavorite, type TimeRangeFavorite } from "../../utils/favorites";
+import { loadCatalog } from "../../utils/catalogParser";
 import AppLayout from "../../components/AppLayout";
 import AppTabView, { type TabDefinition, type ProtocolBadge } from "../../components/AppTabView";
 import QueryTopBar from "./views/QueryTopBar";
@@ -42,6 +43,7 @@ export default function Query() {
   const removeQueueItem = useQueryStore((s) => s.removeQueueItem);
   const catalogPath = useQueryStore((s) => s.catalogPath);
   const setCatalogPath = useQueryStore((s) => s.setCatalogPath);
+  const setParsedCatalog = useQueryStore((s) => s.setParsedCatalog);
   const selectedFavouriteId = useQueryStore((s) => s.selectedFavouriteId);
   const setSelectedFavouriteId = useQueryStore((s) => s.setSelectedFavouriteId);
 
@@ -82,6 +84,25 @@ export default function Query() {
     };
     loadCatalogList();
   }, [settings?.decoder_dir]);
+
+  // Load and parse catalog when path changes
+  useEffect(() => {
+    if (!catalogPath) {
+      setParsedCatalog(null);
+      return;
+    }
+
+    const loadParsedCatalog = async () => {
+      try {
+        const parsed = await loadCatalog(catalogPath);
+        setParsedCatalog(parsed);
+      } catch (e) {
+        console.error("Failed to load catalog:", e);
+        setParsedCatalog(null);
+      }
+    };
+    loadParsedCatalog();
+  }, [catalogPath, setParsedCatalog]);
 
   // Load favourites when profile changes
   useEffect(() => {
@@ -356,7 +377,6 @@ export default function Query() {
             favourites={favourites}
             selectedFavouriteId={selectedFavouriteId}
             onFavouriteSelect={handleFavouriteSelect}
-            onSwitchToQueue={() => setActiveTab("queue")}
           />
         )}
         {activeTab === "queue" && (

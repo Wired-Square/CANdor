@@ -4,14 +4,16 @@
 // results display, and query queue.
 
 import { create } from "zustand";
-import { queryByteChanges, queryFrameChanges } from "../../../api/dbquery";
+import { queryByteChanges, queryFrameChanges, queryMirrorValidation, cancelQuery } from "../../../api/dbquery";
 import type { TimeRangeFavorite } from "../../../utils/favorites";
 import { useSettingsStore } from "../../settings/stores/settingsStore";
+import type { ParsedCatalog } from "../../../utils/catalogParser";
 
 /** Available query types */
 export type QueryType =
   | "byte_changes"
   | "frame_changes"
+  | "mirror_validation"
   | "first_last"
   | "frequency"
   | "distribution"
@@ -27,6 +29,10 @@ export const QUERY_TYPE_INFO: Record<QueryType, { label: string; description: st
   frame_changes: {
     label: "Frame Changes",
     description: "Find when any byte in a frame's payload changed",
+  },
+  mirror_validation: {
+    label: "Mirror Validation",
+    description: "Find timestamps where mirror frames don't match their source",
   },
   first_last: {
     label: "First/Last Occurrence",
@@ -65,6 +71,15 @@ export interface FrameChangeResult {
   changed_indices: number[];
 }
 
+/** A single mirror validation result */
+export interface MirrorValidationResult {
+  mirror_timestamp_us: number;
+  source_timestamp_us: number;
+  mirror_payload: number[];
+  source_payload: number[];
+  mismatch_indices: number[];
+}
+
 /** Query statistics returned with results */
 export interface QueryStats {
   /** Number of rows fetched from the database */
@@ -76,14 +91,17 @@ export interface QueryStats {
 }
 
 /** Union type for query results */
-export type QueryResult = ByteChangeResult[] | FrameChangeResult[];
+export type QueryResult = ByteChangeResult[] | FrameChangeResult[] | MirrorValidationResult[];
 
 /** Query parameters */
 export interface QueryParams {
   frameId: number;
   isExtended: boolean;
   byteIndex: number;
-  // Time range is managed via session, not here
+  // Mirror validation params
+  mirrorFrameId: number;
+  sourceFrameId: number;
+  toleranceMs: number;
 }
 
 /** Context window configuration for ingesting around events */
@@ -151,15 +169,22 @@ function formatFrameId(frameId: number, isExtended: boolean): string {
 
 /** Generate a display name for a query */
 function generateQueryDisplayName(queryType: QueryType, queryParams: QueryParams, timeBounds?: QueryTimeBounds): string {
-  const frameHex = formatFrameId(queryParams.frameId, queryParams.isExtended);
   const typeLabel = QUERY_TYPE_INFO[queryType].label;
 
-  let name = `${typeLabel} - ${frameHex}`;
-  if (queryType === "byte_changes") {
-    name += ` [byte ${queryParams.byteIndex}]`;
-  }
-  if (queryParams.isExtended) {
-    name += " (ext)";
+  let name: string;
+  if (queryType === "mirror_validation") {
+    const mirrorHex = formatFrameId(queryParams.mirrorFrameId, queryParams.isExtended);
+    const sourceHex = formatFrameId(queryParams.sourceFrameId, queryParams.isExtended);
+    name = `${typeLabel} - ${mirrorHex} ↔ ${sourceHex}`;
+  } else {
+    const frameHex = formatFrameId(queryParams.frameId, queryParams.isExtended);
+    name = `${typeLabel} - ${frameHex}`;
+    if (queryType === "byte_changes") {
+      name += ` [byte ${queryParams.byteIndex}]`;
+    }
+    if (queryParams.isExtended) {
+      name += " (ext)";
+    }
   }
   if (timeBounds) {
     name += ` · ${timeBounds.favouriteName}`;
@@ -168,6 +193,15 @@ function generateQueryDisplayName(queryType: QueryType, queryParams: QueryParams
 }
 
 export { formatFrameId };
+
+/** Selected signal from catalog for query targeting */
+export interface SelectedSignal {
+  frameId: number;
+  signalName: string;
+  startBit: number;
+  bitLength: number;
+  byteIndex: number; // Derived: Math.floor(startBit / 8)
+}
 
 interface QueryState {
   // Profile state (synced with session manager)
@@ -196,6 +230,8 @@ interface QueryState {
 
   // Catalog state
   catalogPath: string | null;
+  parsedCatalog: ParsedCatalog | null;
+  selectedSignal: SelectedSignal | null;
 
   // Actions
   setIoProfile: (profile: string | null) => void;
@@ -219,12 +255,17 @@ interface QueryState {
 
   // Catalog actions
   setCatalogPath: (path: string | null) => void;
+  setParsedCatalog: (catalog: ParsedCatalog | null) => void;
+  setSelectedSignal: (signal: SelectedSignal | null) => void;
 }
 
 const initialQueryParams: QueryParams = {
   frameId: 0,
   isExtended: false,
   byteIndex: 0,
+  mirrorFrameId: 0,
+  sourceFrameId: 0,
+  toleranceMs: 50,
 };
 
 const initialContextWindow: ContextWindow = {
@@ -251,6 +292,8 @@ export const useQueryStore = create<QueryState>((set, get) => ({
 
   // Catalog state
   catalogPath: null,
+  parsedCatalog: null,
+  selectedSignal: null,
 
   // Actions
   setIoProfile: (profile) => set({ ioProfile: profile }),
@@ -293,6 +336,8 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       selectedQueryId: null,
       selectedFavouriteId: null,
       catalogPath: null,
+      parsedCatalog: null,
+      selectedSignal: null,
     }),
 
   // Queue actions
@@ -347,8 +392,18 @@ export const useQueryStore = create<QueryState>((set, get) => ({
   },
 
   removeQueueItem: (id: string) => {
+    const { queue } = get();
+    const item = queue.find((q) => q.id === id);
+
+    // If the query is running, cancel it on the backend
+    if (item?.status === "running") {
+      cancelQuery(id).catch((e) => {
+        console.warn(`Failed to cancel query ${id}:`, e);
+      });
+    }
+
     set((state) => ({
-      queue: state.queue.filter((item) => item.id !== id),
+      queue: state.queue.filter((q) => q.id !== id),
       selectedQueryId: state.selectedQueryId === id ? null : state.selectedQueryId,
     }));
   },
@@ -420,7 +475,8 @@ export const useQueryStore = create<QueryState>((set, get) => ({
             queryParams.isExtended,
             startTime,
             endTime,
-            resultLimit
+            resultLimit,
+            nextQuery.id
           );
           results = response.results;
           stats = response.stats;
@@ -434,7 +490,25 @@ export const useQueryStore = create<QueryState>((set, get) => ({
             queryParams.isExtended,
             startTime,
             endTime,
-            resultLimit
+            resultLimit,
+            nextQuery.id
+          );
+          results = response.results;
+          stats = response.stats;
+          break;
+        }
+
+        case "mirror_validation": {
+          const response = await queryMirrorValidation(
+            profileId,
+            queryParams.mirrorFrameId,
+            queryParams.sourceFrameId,
+            queryParams.isExtended,
+            queryParams.toleranceMs,
+            startTime,
+            endTime,
+            resultLimit,
+            nextQuery.id
           );
           results = response.results;
           stats = response.stats;
@@ -468,5 +542,25 @@ export const useQueryStore = create<QueryState>((set, get) => ({
   // Catalog actions
   setCatalogPath: (path: string | null) => {
     set({ catalogPath: path });
+  },
+
+  setParsedCatalog: (catalog: ParsedCatalog | null) => {
+    set({ parsedCatalog: catalog, selectedSignal: null });
+  },
+
+  setSelectedSignal: (signal: SelectedSignal | null) => {
+    if (signal) {
+      // Auto-update query params when signal is selected
+      set((state) => ({
+        selectedSignal: signal,
+        queryParams: {
+          ...state.queryParams,
+          frameId: signal.frameId,
+          byteIndex: signal.byteIndex,
+        },
+      }));
+    } else {
+      set({ selectedSignal: null });
+    }
   },
 }));

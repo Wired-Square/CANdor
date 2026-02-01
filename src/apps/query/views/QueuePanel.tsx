@@ -128,7 +128,7 @@ function QueueItem({ query, isSelected, onSelect, onRemove, formatTime }: QueueI
   return (
     <div
       onClick={handleClick}
-      className={`flex items-center gap-3 px-4 py-3 cursor-pointer ${hoverBg} transition-colors ${
+      className={`group flex items-center gap-3 px-4 py-3 cursor-pointer ${hoverBg} transition-colors ${
         isSelected ? "ring-2 ring-inset ring-blue-500/50 bg-blue-500/5" : ""
       }`}
     >
@@ -163,9 +163,8 @@ function QueueItem({ query, isSelected, onSelect, onRemove, formatTime }: QueueI
       {/* Remove button */}
       <button
         onClick={handleRemove}
-        disabled={isRunning}
-        className={`${iconButtonBase} opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-30`}
-        title={isRunning ? "Cannot remove running query" : "Remove from queue"}
+        className={`${iconButtonBase} opacity-0 group-hover:opacity-100 transition-opacity`}
+        title={isRunning ? "Cancel and remove query" : "Remove from queue"}
       >
         <Trash2 className={iconMd} />
       </button>

@@ -671,6 +671,8 @@ pub fn run() {
             // Database Query API (Query app)
             dbquery::db_query_byte_changes,
             dbquery::db_query_frame_changes,
+            dbquery::db_query_mirror_validation,
+            dbquery::db_cancel_query,
         ])
         // Handle window close events to prevent crashes on macOS 26.2+ (Tahoe)
         //

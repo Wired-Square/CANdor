@@ -41,6 +41,21 @@ export interface FrameChangeQueryResult {
   stats: QueryStats;
 }
 
+/** Result of a mirror validation query */
+export interface MirrorValidationResult {
+  mirror_timestamp_us: number;
+  source_timestamp_us: number;
+  mirror_payload: number[];
+  source_payload: number[];
+  mismatch_indices: number[];
+}
+
+/** Wrapper for mirror validation query results with stats */
+export interface MirrorValidationQueryResult {
+  results: MirrorValidationResult[];
+  stats: QueryStats;
+}
+
 /**
  * Query for byte changes in a specific frame.
  *
@@ -53,7 +68,8 @@ export async function queryByteChanges(
   isExtended: boolean,
   startTime?: string,
   endTime?: string,
-  limit?: number
+  limit?: number,
+  queryId?: string
 ): Promise<ByteChangeQueryResult> {
   return invoke("db_query_byte_changes", {
     profileId,
@@ -63,6 +79,7 @@ export async function queryByteChanges(
     startTime,
     endTime,
     limit,
+    queryId,
   });
 }
 
@@ -77,7 +94,8 @@ export async function queryFrameChanges(
   isExtended: boolean,
   startTime?: string,
   endTime?: string,
-  limit?: number
+  limit?: number,
+  queryId?: string
 ): Promise<FrameChangeQueryResult> {
   return invoke("db_query_frame_changes", {
     profileId,
@@ -86,5 +104,45 @@ export async function queryFrameChanges(
     startTime,
     endTime,
     limit,
+    queryId,
   });
+}
+
+/**
+ * Query for mirror validation mismatches.
+ *
+ * Compares payloads between mirror and source frames at matching timestamps
+ * (within tolerance). Returns timestamps where payloads differ.
+ */
+export async function queryMirrorValidation(
+  profileId: string,
+  mirrorFrameId: number,
+  sourceFrameId: number,
+  isExtended: boolean,
+  toleranceMs: number,
+  startTime?: string,
+  endTime?: string,
+  limit?: number,
+  queryId?: string
+): Promise<MirrorValidationQueryResult> {
+  return invoke("db_query_mirror_validation", {
+    profileId,
+    mirrorFrameId,
+    sourceFrameId,
+    isExtended,
+    toleranceMs,
+    startTime,
+    endTime,
+    limit,
+    queryId,
+  });
+}
+
+/**
+ * Cancel a running database query.
+ *
+ * Sends a cancel request to the PostgreSQL server to terminate the query.
+ */
+export async function cancelQuery(queryId: string): Promise<void> {
+  return invoke("db_cancel_query", { queryId });
 }

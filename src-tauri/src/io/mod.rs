@@ -1110,8 +1110,10 @@ const STATUS_LOG_INTERVAL_SECS: u64 = 60;
 /// Log current session status (for debugging)
 async fn log_session_status() {
     let sessions = IO_SESSIONS.lock().await;
-    if sessions.is_empty() {
-        return; // Don't log if no sessions
+    let running_queries = crate::dbquery::get_running_queries().await;
+
+    if sessions.is_empty() && running_queries.is_empty() {
+        return; // Don't log if nothing active
     }
 
     eprintln!("[session status] ========== Active Sessions ==========");
@@ -1137,6 +1139,16 @@ async fn log_session_status() {
             listener_ids,
             sources
         );
+    }
+    if !running_queries.is_empty() {
+        eprintln!("[session status] ---------- Running Queries -----------");
+        for (id, query) in running_queries {
+            let elapsed = query.started_at.elapsed().as_secs();
+            eprintln!(
+                "[session status]   '{}': type={}, profile={}, running for {}s",
+                id, query.query_type, query.profile_id, elapsed
+            );
+        }
     }
     eprintln!("[session status] =====================================");
 }

@@ -4,11 +4,97 @@
 // against PostgreSQL data sources to find historical patterns and changes.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock};
 use tauri::AppHandle;
-use tokio_postgres::NoTls;
+use tokio::sync::Mutex;
+use tokio_postgres::{CancelToken, NoTls};
 
 use crate::credentials::get_credential;
 use crate::settings::{load_settings, IOProfile};
+
+/// Information about a running query
+pub struct RunningQuery {
+    pub query_type: String,
+    pub profile_id: String,
+    pub started_at: std::time::Instant,
+    pub cancel_token: CancelToken,
+}
+
+/// Simplified view of a running query for status logging (without CancelToken)
+#[derive(Debug, Clone)]
+pub struct RunningQueryInfo {
+    pub query_type: String,
+    pub profile_id: String,
+    pub started_at: std::time::Instant,
+}
+
+/// Global state for tracking running queries
+static RUNNING_QUERIES: LazyLock<Mutex<HashMap<String, Arc<RunningQuery>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Register a query as running
+async fn register_query(id: &str, query_type: &str, profile_id: &str, cancel_token: CancelToken) {
+    let mut queries = RUNNING_QUERIES.lock().await;
+    queries.insert(
+        id.to_string(),
+        Arc::new(RunningQuery {
+            query_type: query_type.to_string(),
+            profile_id: profile_id.to_string(),
+            started_at: std::time::Instant::now(),
+            cancel_token,
+        }),
+    );
+}
+
+/// Unregister a query when complete
+async fn unregister_query(id: &str) {
+    let mut queries = RUNNING_QUERIES.lock().await;
+    queries.remove(id);
+}
+
+/// Get running queries for status logging
+pub async fn get_running_queries() -> Vec<(String, RunningQueryInfo)> {
+    let queries = RUNNING_QUERIES.lock().await;
+    queries
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                RunningQueryInfo {
+                    query_type: v.query_type.clone(),
+                    profile_id: v.profile_id.clone(),
+                    started_at: v.started_at,
+                },
+            )
+        })
+        .collect()
+}
+
+/// Cancel a running database query
+#[tauri::command]
+pub async fn db_cancel_query(query_id: String) -> Result<(), String> {
+    let query = {
+        let queries = RUNNING_QUERIES.lock().await;
+        queries.get(&query_id).cloned()
+    };
+
+    if let Some(query) = query {
+        println!("[dbquery] Cancelling query: {}", query_id);
+        query
+            .cancel_token
+            .cancel_query(NoTls)
+            .await
+            .map_err(|e| format!("Failed to cancel query: {}", e))?;
+        println!("[dbquery] Query cancelled: {}", query_id);
+
+        // Remove from running queries
+        unregister_query(&query_id).await;
+        Ok(())
+    } else {
+        Err(format!("Query not found: {}", query_id))
+    }
+}
 
 /// Result of a byte change query
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +135,23 @@ pub struct ByteChangeQueryResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FrameChangeQueryResult {
     pub results: Vec<FrameChangeResult>,
+    pub stats: QueryStats,
+}
+
+/// Result of a mirror validation query
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MirrorValidationResult {
+    pub mirror_timestamp_us: i64,
+    pub source_timestamp_us: i64,
+    pub mirror_payload: Vec<u8>,
+    pub source_payload: Vec<u8>,
+    pub mismatch_indices: Vec<usize>,
+}
+
+/// Wrapper for mirror validation query results with stats
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MirrorValidationQueryResult {
+    pub results: Vec<MirrorValidationResult>,
     pub stats: QueryStats,
 }
 
@@ -149,9 +252,12 @@ pub async fn db_query_byte_changes(
     start_time: Option<String>,
     end_time: Option<String>,
     limit: Option<u32>,
+    query_id: Option<String>,
 ) -> Result<ByteChangeQueryResult, String> {
     let query_start = std::time::Instant::now();
     let result_limit = limit.unwrap_or(10000);
+    let query_id = query_id.unwrap_or_else(|| format!("byte_changes_{}", query_start.elapsed().as_nanos()));
+
     println!("[dbquery] db_query_byte_changes called with profile_id='{}', frame_id={}, byte_index={}, is_extended={}, limit={}",
         profile_id, frame_id, byte_index, is_extended, result_limit);
 
@@ -190,6 +296,10 @@ pub async fn db_query_byte_changes(
             println!("[dbquery] Connection failed: {:?}", e);
             format!("Failed to connect to database: {}", e)
         })?;
+
+    // Get cancel token before spawning connection handler
+    let cancel_token = client.cancel_token();
+    register_query(&query_id, "byte_changes", &profile_id, cancel_token).await;
 
     // Spawn connection handler
     tokio::spawn(async move {
@@ -283,6 +393,8 @@ pub async fn db_query_byte_changes(
     println!("[dbquery] byte_changes: frame=0x{:X} byte={} ext={} | {} changes, {}ms",
         frame_id, byte_index, is_extended, results.len(), execution_time_ms);
 
+    unregister_query(&query_id).await;
+
     Ok(ByteChangeQueryResult {
         stats: QueryStats {
             rows_scanned,
@@ -305,9 +417,12 @@ pub async fn db_query_frame_changes(
     start_time: Option<String>,
     end_time: Option<String>,
     limit: Option<u32>,
+    query_id: Option<String>,
 ) -> Result<FrameChangeQueryResult, String> {
     let query_start = std::time::Instant::now();
     let result_limit = limit.unwrap_or(10000);
+    let query_id = query_id.unwrap_or_else(|| format!("frame_changes_{}", query_start.elapsed().as_nanos()));
+
     println!("[dbquery] db_query_frame_changes called with profile_id='{}', frame_id={}, is_extended={}, limit={}",
         profile_id, frame_id, is_extended, result_limit);
 
@@ -344,6 +459,10 @@ pub async fn db_query_frame_changes(
             println!("[dbquery] Connection failed: {:?}", e);
             format!("Failed to connect to database: {}", e)
         })?;
+
+    // Get cancel token before spawning connection handler
+    let cancel_token = client.cancel_token();
+    register_query(&query_id, "frame_changes", &profile_id, cancel_token).await;
 
     // Spawn connection handler
     tokio::spawn(async move {
@@ -446,7 +565,190 @@ pub async fn db_query_frame_changes(
     println!("[dbquery] frame_changes: frame=0x{:X} ext={} | {} changes, {}ms",
         frame_id, is_extended, results.len(), execution_time_ms);
 
+    unregister_query(&query_id).await;
+
     Ok(FrameChangeQueryResult {
+        stats: QueryStats {
+            rows_scanned,
+            results_count: results.len(),
+            execution_time_ms,
+        },
+        results,
+    })
+}
+
+/// Query for mirror validation mismatches
+///
+/// Compares payloads between mirror and source frames at matching timestamps
+/// (within tolerance). Returns timestamps where payloads differ.
+#[tauri::command]
+pub async fn db_query_mirror_validation(
+    app: AppHandle,
+    profile_id: String,
+    mirror_frame_id: u32,
+    source_frame_id: u32,
+    is_extended: bool,
+    tolerance_ms: u32,
+    start_time: Option<String>,
+    end_time: Option<String>,
+    limit: Option<u32>,
+    query_id: Option<String>,
+) -> Result<MirrorValidationQueryResult, String> {
+    let query_start = std::time::Instant::now();
+    let result_limit = limit.unwrap_or(10000);
+    let query_id = query_id.unwrap_or_else(|| format!("mirror_validation_{}", query_start.elapsed().as_nanos()));
+
+    println!("[dbquery] db_query_mirror_validation called with profile_id='{}', mirror=0x{:X}, source=0x{:X}, tolerance={}ms, limit={}",
+        profile_id, mirror_frame_id, source_frame_id, tolerance_ms, result_limit);
+
+    // Load settings to get profile
+    let settings = load_settings(app).await.map_err(|e| format!("Failed to load settings: {}", e))?;
+
+    let profile = find_profile(&settings, &profile_id)
+        .ok_or_else(|| format!("Profile not found: {}", profile_id))?;
+
+    println!("[dbquery] Found profile: id='{}', kind='{}', name='{}'",
+        profile.id, profile.kind, profile.name);
+
+    if profile.kind != "postgres" {
+        return Err("Profile is not a PostgreSQL profile".to_string());
+    }
+
+    // Get password and connect
+    let password = get_profile_password(&profile);
+    let conn_str = build_connection_string(&profile, password);
+
+    let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
+        .await
+        .map_err(|e| format!("Failed to connect to database: {}", e))?;
+
+    // Get cancel token before spawning connection handler
+    let cancel_token = client.cancel_token();
+    register_query(&query_id, "mirror_validation", &profile_id, cancel_token).await;
+
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("PostgreSQL connection error: {}", e);
+        }
+    });
+
+    // Build query - join mirror and source frames by timestamp proximity
+    let mirror_id_i32 = mirror_frame_id as i32;
+    let source_id_i32 = source_frame_id as i32;
+    let is_extended_int: i32 = if is_extended { 1 } else { 0 };
+    let tolerance_ms_i32 = tolerance_ms as i32;
+
+    let mut query = String::from(
+        r#"
+        WITH mirror_frames AS (
+            SELECT ts, data_bytes
+            FROM public.can_frame
+            WHERE id = $1::int4 AND extended = ($3::int4 != 0)
+        "#
+    );
+
+    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![
+        &mirror_id_i32,
+        &source_id_i32,
+        &is_extended_int,
+        &tolerance_ms_i32,
+    ];
+
+    // Add time bounds to mirror_frames CTE
+    if let Some(ref start) = start_time {
+        let idx = params.len() + 1;
+        query.push_str(&format!(" AND ts >= (${}::text)::timestamptz", idx));
+        params.push(start as &(dyn tokio_postgres::types::ToSql + Sync));
+    }
+    if let Some(ref end) = end_time {
+        let idx = params.len() + 1;
+        query.push_str(&format!(" AND ts < (${}::text)::timestamptz", idx));
+        params.push(end as &(dyn tokio_postgres::types::ToSql + Sync));
+    }
+
+    query.push_str(
+        r#"
+        ),
+        source_frames AS (
+            SELECT ts, data_bytes
+            FROM public.can_frame
+            WHERE id = $2::int4 AND extended = ($3::int4 != 0)
+        "#
+    );
+
+    // Add same time bounds to source_frames CTE
+    if let Some(ref start) = start_time {
+        let idx = params.iter().position(|p| std::ptr::eq(*p, start as &(dyn tokio_postgres::types::ToSql + Sync))).unwrap() + 1;
+        query.push_str(&format!(" AND ts >= (${}::text)::timestamptz", idx));
+    }
+    if let Some(ref end) = end_time {
+        let idx = params.iter().position(|p| std::ptr::eq(*p, end as &(dyn tokio_postgres::types::ToSql + Sync))).unwrap() + 1;
+        query.push_str(&format!(" AND ts < (${}::text)::timestamptz", idx));
+    }
+
+    query.push_str(&format!(
+        r#"
+        )
+        SELECT
+            (EXTRACT(EPOCH FROM m.ts) * 1000000)::float8 as mirror_ts,
+            (EXTRACT(EPOCH FROM s.ts) * 1000000)::float8 as source_ts,
+            m.data_bytes as mirror_payload,
+            s.data_bytes as source_payload
+        FROM mirror_frames m
+        JOIN source_frames s
+            ON ABS(EXTRACT(EPOCH FROM (m.ts - s.ts)) * 1000) < $4::int4
+        WHERE m.data_bytes IS DISTINCT FROM s.data_bytes
+        ORDER BY m.ts
+        LIMIT {}
+        "#,
+        result_limit
+    ));
+
+    println!("[dbquery] Executing mirror validation query");
+
+    let rows = client
+        .query(&query, &params)
+        .await
+        .map_err(|e| format!("Query failed: {}", e))?;
+
+    let rows_scanned = rows.len();
+    println!("[dbquery] Query returned {} mismatch rows", rows_scanned);
+
+    // Parse results and compute mismatch indices
+    let mut results = Vec::new();
+    for row in &rows {
+        let mirror_timestamp_us: f64 = row.get("mirror_ts");
+        let source_timestamp_us: f64 = row.get("source_ts");
+        let mirror_payload: Vec<u8> = row.get("mirror_payload");
+        let source_payload: Vec<u8> = row.get("source_payload");
+
+        // Compute mismatch indices
+        let mut mismatch_indices = Vec::new();
+        let max_len = mirror_payload.len().max(source_payload.len());
+        for i in 0..max_len {
+            let mirror_byte = mirror_payload.get(i).copied().unwrap_or(0);
+            let source_byte = source_payload.get(i).copied().unwrap_or(0);
+            if mirror_byte != source_byte {
+                mismatch_indices.push(i);
+            }
+        }
+
+        results.push(MirrorValidationResult {
+            mirror_timestamp_us: mirror_timestamp_us as i64,
+            source_timestamp_us: source_timestamp_us as i64,
+            mirror_payload,
+            source_payload,
+            mismatch_indices,
+        });
+    }
+
+    let execution_time_ms = query_start.elapsed().as_millis() as u64;
+    println!("[dbquery] mirror_validation: mirror=0x{:X} source=0x{:X} | {} mismatches, {}ms",
+        mirror_frame_id, source_frame_id, results.len(), execution_time_ms);
+
+    unregister_query(&query_id).await;
+
+    Ok(MirrorValidationQueryResult {
         stats: QueryStats {
             rows_scanned,
             results_count: results.len(),
