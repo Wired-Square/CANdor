@@ -267,6 +267,30 @@ export const dialogOptionButton =
   "flex items-center justify-center gap-2 flex-1 px-3 py-2 text-sm font-medium rounded-lg bg-[var(--bg-surface)] text-[color:var(--text-secondary)] hover:brightness-95 transition-all";
 
 // =============================================================================
+// Launcher Button Styles (for dashboard watermark)
+// =============================================================================
+
+/**
+ * Launcher button - responsive square button for app launcher grid
+ * Use for: Dashboard/watermark app launcher buttons
+ * Compose with colour classes: e.g., `${launcherButton} bg-purple-500/10 hover:bg-purple-500/20`
+ */
+export const launcherButton =
+  "flex flex-col items-center justify-center gap-1.5 min-w-16 w-20 aspect-square rounded-xl transition-colors";
+
+/**
+ * Launcher button label - small text below icon
+ */
+export const launcherButtonLabel =
+  "text-xs text-[color:var(--text-secondary)] font-ubuntu truncate max-w-full px-1";
+
+/**
+ * Launcher grid container - responsive flex grid for launcher buttons
+ */
+export const launcherGrid =
+  "flex flex-wrap justify-center gap-2 px-4";
+
+// =============================================================================
 // State Utilities
 // =============================================================================
 

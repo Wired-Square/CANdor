@@ -14,9 +14,10 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { storeGet, storeSet } from "../api/store";
-import { Settings as SettingsIcon, Search, Activity, FileText, Calculator, Send } from "lucide-react";
+import { Settings as SettingsIcon, Search, Activity, FileText, Calculator, Send, DatabaseZap } from "lucide-react";
 import { icon2xl } from "../styles/spacing";
 import { bgPrimary, textPrimary, textSecondary, textTertiary } from "../styles/colourTokens";
+import { launcherButton, launcherButtonLabel, launcherGrid } from "../styles/buttonStyles";
 import "dockview-react/dist/styles/dockview.css";
 import LogoMenu, { type PanelId } from "./LogoMenu";
 import AppTab from "./AppTab";
@@ -164,7 +165,7 @@ function Watermark(_props: IWatermarkPanelProps) {
         </p>
 
         {/* App launcher buttons */}
-        <div className="flex gap-4 mt-8">
+        <div className={`${launcherGrid} mt-8`}>
           <WatermarkAppButton
             icon={Search}
             label="Discovery"
@@ -201,6 +202,13 @@ function Watermark(_props: IWatermarkPanelProps) {
             onClick={() => openPanel("frame-calculator")}
           />
           <WatermarkAppButton
+            icon={DatabaseZap}
+            label="Query"
+            color="text-amber-400"
+            bgColor="bg-amber-500/10 hover:bg-amber-500/20"
+            onClick={() => openPanel("query")}
+          />
+          <WatermarkAppButton
             icon={SettingsIcon}
             label="Settings"
             color="text-orange-400"
@@ -226,10 +234,10 @@ function WatermarkAppButton({ icon: Icon, label, color, bgColor, onClick }: Wate
   return (
     <button
       onClick={onClick}
-      className={`flex flex-col items-center gap-2 p-4 rounded-xl ${bgColor} transition-colors`}
+      className={`${launcherButton} ${bgColor}`}
     >
       <Icon className={`${icon2xl} ${color}`} />
-      <span className={`text-sm ${textSecondary} font-ubuntu`}>{label}</span>
+      <span className={launcherButtonLabel}>{label}</span>
     </button>
   );
 }

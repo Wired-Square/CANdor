@@ -6,6 +6,7 @@ All notable changes to CANdor will be documented in this file.
 
 ### Added
 
+- **Query App in Dashboard Launcher**: Query app now appears in the dashboard launcher screen alongside other apps. Added global launcher button styles (`launcherButton`, `launcherButtonLabel`, `launcherGrid`) in `buttonStyles.ts` for consistent, responsive app launcher buttons.
 - **Buffer-First Frame Display**: Discovery app now uses a buffer-first approach for frame display, improving UI responsiveness with large frame counts. Features include:
   - Backend tail fetch API (`get_buffer_frames_tail`) for efficient latest-N-frames retrieval
   - `useBufferFrameView` hook provides unified interface for streaming (tail poll) and stopped (pagination) modes
@@ -80,10 +81,17 @@ All notable changes to CANdor will be documented in this file.
 
 ### Fixed
 
-- **IO Picker Controls After Detach**: Fixed IO picker showing "Rejoin" button and "Multi-Bus" indicator after detaching from a session with a buffer copy. When an app detaches and receives a buffer copy, the controls now correctly show the buffer instead of session-related actions. Changes include:
+- **IO Picker Controls After Detach**: Fixed IO picker showing "Rejoin" button and "Multi-Bus" indicator after detaching from a session with a buffer copy. The session shape now distinguishes between:
+  - **Play**: Actively streaming, appending to buffer
+  - **Stop**: Session alive, buffer finalised but owned by session
+  - **Detach (with buffer)**: App receives buffer COPY, leaves session, views standalone buffer (no session relationship, no "Rejoin" option)
+  - **Detach (no buffer)**: App in "detached" state, can rejoin the session
+
+  When an app detaches and receives a buffer copy, the controls now correctly show the buffer instead of session-related actions. Changes include:
   - `handleDetach` now explicitly sets `isDetached=false` when detaching with a buffer
   - `detachWithBufferCopy` now clears `multiBusMode` and `multiBusProfiles` state
   - `ReaderButton` now prioritises buffer display over multi-bus indicators
+- **Discovery Cross-App Buffer Loading**: Fixed Discovery automatically loading buffers from other apps' sessions (e.g., Decoder streaming would populate Discovery's frame list). The `BUFFER_CHANGED` listener now checks buffer ownership and only processes buffers belonging to Discovery's current session or orphaned buffers.
 - **Menu Session Picker Opens in All Windows**: Fixed session picker dialog opening in all windows when the same app (e.g., Discovery) was open in multiple windows. Now only the focused window responds to menu commands. Added `windowLabel` to session-control events to scope them to the originating window.
 - **Query App Menu Integration**: Query app now responds to the Select Source menu command (Cmd+I) to open the IO picker.
 - **Session Buffers Not Orphaned on Destroy**: Fixed buffers disappearing when sessions were destroyed. Buffers owned by a session are now orphaned (ownership cleared) when the session is destroyed, making them available for replay in the IO picker's Buffers section.
