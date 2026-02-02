@@ -273,6 +273,7 @@ async fn create_main_window(app: AppHandle, label: String) -> Result<(), String>
                 .min_inner_size(config.min_width, config.min_height)
                 .center()
                 .disable_drag_drop_handler()
+                .accept_first_mouse(true)
                 .build()
             {
                 eprintln!("[create_main_window] Failed to create window '{}': {}", label_for_window, e);

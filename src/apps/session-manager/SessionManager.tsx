@@ -3,7 +3,7 @@
 // Visual session manager with Node-RED style interface showing sessions,
 // sources, and listeners as interconnected nodes.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useMemo } from "react";
 import { ReactFlowProvider } from "@xyflow/react";
 import {
   listActiveSessions,
@@ -16,19 +16,42 @@ import {
 } from "../../api/io";
 import { useSettings } from "../../hooks/useSettings";
 import { useSessionManagerStore } from "./stores/sessionManagerStore";
+import { useSessionLogStore } from "./stores/sessionLogStore";
+import { useSessionLogSubscription } from "./hooks/useSessionLogSubscription";
 import AppLayout from "../../components/AppLayout";
+import AppTabView, { type TabDefinition } from "../../components/AppTabView";
 import SessionTopBar from "./views/SessionTopBar";
 import SessionCanvas from "./views/SessionCanvas";
 import SessionDetailPanel from "./views/SessionDetailPanel";
+import SessionLogView from "./views/SessionLogView";
 
 export default function SessionManager() {
   const { settings } = useSettings();
   const [sessions, setSessions] = useState<ActiveSessionInfo[]>([]);
+  const [activeTab, setActiveTab] = useState<string>("visual");
   const autoRefresh = useSessionManagerStore((s) => s.autoRefresh);
   const refreshIntervalMs = useSessionManagerStore((s) => s.refreshIntervalMs);
   const setIsRefreshing = useSessionManagerStore((s) => s.setIsRefreshing);
+  const logEntryCount = useSessionLogStore((s) => s.entries.length);
+
+  // Initialise session log subscription
+  useSessionLogSubscription();
 
   const profiles = settings?.io_profiles ?? [];
+
+  // Tab definitions
+  const tabs: TabDefinition[] = useMemo(
+    () => [
+      { id: "visual", label: "Visual" },
+      {
+        id: "log",
+        label: "Log",
+        count: logEntryCount > 0 ? logEntryCount : undefined,
+        countColor: "gray" as const,
+      },
+    ],
+    [logEntryCount]
+  );
 
   // Fetch sessions
   const fetchSessions = useCallback(async () => {
@@ -108,25 +131,36 @@ export default function SessionManager() {
         />
       }
     >
-      <div className="flex h-full">
-        {/* Main canvas */}
-        <div className="flex-1 h-full">
-          <ReactFlowProvider>
-            <SessionCanvas sessions={sessions} profiles={profiles} />
-          </ReactFlowProvider>
-        </div>
+      <AppTabView
+        tabs={tabs}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        protocolLabel="Sessions"
+        contentArea={{ wrap: false }}
+      >
+        {activeTab === "visual" && (
+          <div className="flex h-full">
+            {/* Main canvas */}
+            <div className="flex-1 h-full">
+              <ReactFlowProvider>
+                <SessionCanvas sessions={sessions} profiles={profiles} />
+              </ReactFlowProvider>
+            </div>
 
-        {/* Detail panel */}
-        <SessionDetailPanel
-          sessions={sessions}
-          profiles={profiles}
-          onStartSession={handleStartSession}
-          onStopSession={handleStopSession}
-          onPauseSession={handlePauseSession}
-          onResumeSession={handleResumeSession}
-          onDestroySession={handleDestroySession}
-        />
-      </div>
+            {/* Detail panel */}
+            <SessionDetailPanel
+              sessions={sessions}
+              profiles={profiles}
+              onStartSession={handleStartSession}
+              onStopSession={handleStopSession}
+              onPauseSession={handlePauseSession}
+              onResumeSession={handleResumeSession}
+              onDestroySession={handleDestroySession}
+            />
+          </div>
+        )}
+        {activeTab === "log" && <SessionLogView />}
+      </AppTabView>
     </AppLayout>
   );
 }

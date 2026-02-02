@@ -6,6 +6,13 @@ All notable changes to CANdor will be documented in this file.
 
 ### Added
 
+- **Session Manager Log Tab**: Session Manager app now has Visual and Log tabs. The Log tab provides development debugging with:
+  - Timestamped session lifecycle events (created, destroyed, state changes)
+  - Stream events (ended, complete, error, suspended, resuming)
+  - Listener count and speed changes
+  - Filterable by event type, session ID, or search text
+  - Auto-scroll with manual pause, clear button, and entry count display
+- **macOS Click-Through**: Windows now accept clicks while unfocused on macOS. A single click on an unfocused window will both focus it and trigger the clicked element, eliminating the need for a separate focus click.
 - **Session Manager App**: New visual session management app with Node-RED style interface showing IO sessions as interactive nodes. Features include:
   - Source nodes (left): IO profiles feeding sessions, colour-coded by type (purple for realtime, green for recorded)
   - Session nodes (centre): Show session state (running/stopped/paused), listener count, buffer info, and device type

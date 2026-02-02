@@ -111,6 +111,8 @@ export async function openWindow(
     center: skipCenter ? false : (config.center ?? true),
     resizable: config.resizable ?? true,
     url,
+    // macOS: Allow clicks on unfocused windows to both focus and trigger the action
+    acceptFirstMouse: true,
   });
 
   return window;
