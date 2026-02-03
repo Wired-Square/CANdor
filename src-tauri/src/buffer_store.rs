@@ -136,7 +136,7 @@ pub fn create_buffer_inactive(buffer_type: BufferType, name: String) -> String {
 fn create_buffer_internal(buffer_type: BufferType, name: String, set_streaming: bool) -> String {
     let mut registry = BUFFER_REGISTRY.write().unwrap();
 
-    let id = format!("buffer_{}", registry.next_id);
+    let id = format!("buf_{}", registry.next_id);
     registry.next_id += 1;
 
     let created_at = std::time::SystemTime::now()
@@ -341,25 +341,44 @@ pub fn orphan_buffer(buffer_id: &str) -> Result<(), String> {
     }
 }
 
+/// Info about an orphaned buffer for event emission
+#[derive(Clone, Debug, Serialize)]
+pub struct OrphanedBufferInfo {
+    pub buffer_id: String,
+    pub buffer_name: String,
+    pub buffer_type: BufferType,
+    pub count: usize,
+}
+
 /// Orphan all buffers owned by a specific session.
-/// Called when a session is destroyed.
-pub fn orphan_buffers_for_session(session_id: &str) {
+/// Called when a session is destroyed or restarted.
+/// Returns list of orphaned buffer info for event emission.
+pub fn orphan_buffers_for_session(session_id: &str) -> Vec<OrphanedBufferInfo> {
     let mut registry = BUFFER_REGISTRY.write().unwrap();
-    let mut orphaned_count = 0;
+    let mut orphaned = Vec::new();
 
     for buffer in registry.buffers.values_mut() {
         if buffer.metadata.owning_session_id.as_deref() == Some(session_id) {
             buffer.metadata.owning_session_id = None;
-            orphaned_count += 1;
+            orphaned.push(OrphanedBufferInfo {
+                buffer_id: buffer.metadata.id.clone(),
+                buffer_name: buffer.metadata.name.clone(),
+                buffer_type: buffer.metadata.buffer_type.clone(),
+                count: buffer.metadata.count,
+            });
         }
     }
 
-    if orphaned_count > 0 {
+    if !orphaned.is_empty() {
         eprintln!(
-            "[BufferStore] Orphaned {} buffer(s) for destroyed session '{}'",
-            orphaned_count, session_id
+            "[BufferStore] Orphaned {} buffer(s) for session '{}': {:?}",
+            orphaned.len(),
+            session_id,
+            orphaned.iter().map(|o| &o.buffer_id).collect::<Vec<_>>()
         );
     }
+
+    orphaned
 }
 
 /// Get the buffer ID owned by a session (if any).
@@ -413,7 +432,7 @@ pub fn copy_buffer(source_buffer_id: &str, new_name: String) -> Result<String, S
     // Now create the new buffer with write lock
     let mut registry = BUFFER_REGISTRY.write().unwrap();
 
-    let id = format!("buffer_{}", registry.next_id);
+    let id = format!("buf_{}", registry.next_id);
     registry.next_id += 1;
 
     let created_at = std::time::SystemTime::now()

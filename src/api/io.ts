@@ -223,6 +223,8 @@ export interface CreateIOSessionOptions {
   emitRawBytes?: boolean;
   /** Bus number override for single-bus devices (0-7) */
   busOverride?: number;
+  /** Listener ID for session logging (e.g., "discovery", "decoder") */
+  listenerId?: string;
 }
 
 /**
@@ -265,6 +267,8 @@ export async function createIOSession(
     emit_raw_bytes: options.emitRawBytes,
     // Bus override for single-bus devices
     bus_override: options.busOverride,
+    // Listener ID for session logging
+    listener_id: options.listenerId,
   });
 }
 
@@ -638,6 +642,24 @@ export async function switchSessionToBufferReplay(
   return invoke("switch_session_to_buffer_replay", { session_id: sessionId, speed });
 }
 
+/**
+ * Resume a session from buffer playback back to live streaming.
+ * This is the reverse of switchSessionToBufferReplay.
+ * It recreates the original reader from the stored profile configuration,
+ * orphans the current buffer (preserving data for later viewing), and starts
+ * streaming into a fresh buffer.
+ *
+ * Only supported for realtime devices (gvret, slcan, gs_usb, socketcan).
+ * Returns an error for timeline sources (postgres, csv, mqtt).
+ *
+ * @param sessionId The session ID
+ */
+export async function resumeSessionToLive(
+  sessionId: string
+): Promise<IOCapabilities> {
+  return invoke("resume_session_to_live", { session_id: sessionId });
+}
+
 // ============================================================================
 // Transmission Types and Functions
 // ============================================================================
@@ -995,6 +1017,8 @@ export interface CreateMultiSourceSessionOptions {
   sessionId: string;
   /** Array of source configurations */
   sources: MultiSourceInput[];
+  /** Listener ID for session logging (e.g., "discovery", "decoder") */
+  listenerId?: string;
 }
 
 /**
@@ -1042,6 +1066,7 @@ export async function createMultiSourceSession(
   return invoke("create_multi_source_session", {
     session_id: options.sessionId,
     sources: rustSources,
+    listener_id: options.listenerId,
   });
 }
 
