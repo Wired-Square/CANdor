@@ -519,6 +519,17 @@ pub struct StateChangePayload {
     pub buffer_id: Option<String>,
 }
 
+/// Payload emitted when joiner count changes
+#[derive(Clone, Debug, Serialize)]
+pub struct JoinerCountChangedPayload {
+    /// New total listener count
+    pub count: usize,
+    /// The listener that triggered the change (if known)
+    pub listener_id: Option<String>,
+    /// Whether the listener joined or left ("joined" | "left" | null for sync)
+    pub change: Option<String>,
+}
+
 /// Trait for all IO devices (CAN adapters, serial ports, replay sources, etc.)
 #[async_trait]
 pub trait IODevice: Send + Sync {
@@ -656,8 +667,19 @@ fn emit_state_change(app: &AppHandle, session_id: &str, previous: &IOState, curr
 }
 
 /// Emit a joiner count change event for a session
-fn emit_joiner_count_change(app: &AppHandle, session_id: &str, joiner_count: usize) {
-    emit_to_session(app, "joiner-count-changed", session_id, joiner_count);
+fn emit_joiner_count_change(
+    app: &AppHandle,
+    session_id: &str,
+    joiner_count: usize,
+    listener_id: Option<&str>,
+    change: Option<&str>,
+) {
+    let payload = JoinerCountChangedPayload {
+        count: joiner_count,
+        listener_id: listener_id.map(|s| s.to_string()),
+        change: change.map(|s| s.to_string()),
+    };
+    emit_to_session(app, "joiner-count-changed", session_id, payload);
 }
 
 /// Emit a speed change event for a session
@@ -771,6 +793,35 @@ pub fn emit_to_session<S: Serialize + Clone>(
     let _ = app.emit(&scoped_event, payload);
 }
 
+/// Payload for global session lifecycle events (emitted to all windows)
+#[derive(Clone, Debug, Serialize)]
+pub struct SessionLifecyclePayload {
+    /// The session ID
+    pub session_id: String,
+    /// Event type: "created" or "destroyed"
+    pub event_type: String,
+    /// Device type (e.g., "gvret_tcp", "multi_source") - only for "created"
+    pub device_type: Option<String>,
+    /// Current state - only for "created"
+    pub state: Option<String>,
+    /// Number of listeners
+    pub listener_count: usize,
+    /// Source profile IDs
+    pub source_profile_ids: Vec<String>,
+    /// The listener ID that created the session (only for "created")
+    pub creator_listener_id: Option<String>,
+}
+
+/// Emit a global session lifecycle event to all windows.
+/// This event is NOT scoped to a session ID - it broadcasts to all windows.
+pub fn emit_session_lifecycle(app: &AppHandle, payload: SessionLifecyclePayload) {
+    eprintln!(
+        "[lifecycle_event] Emitting '{}' for session '{}' (profiles: {:?})",
+        payload.event_type, payload.session_id, payload.source_profile_ids
+    );
+    let _ = app.emit("session-lifecycle", payload);
+}
+
 /// Emit a session error event and store it for later retrieval.
 ///
 /// This is the preferred way to emit errors - it both:
@@ -855,6 +906,94 @@ pub fn emit_stream_ended(
     );
 }
 
+/// Payload for buffer-orphaned event
+#[derive(Clone, Debug, Serialize)]
+pub struct BufferOrphanedPayload {
+    pub buffer_id: String,
+    pub buffer_name: String,
+    pub buffer_type: String,
+    pub count: usize,
+}
+
+/// Emit buffer-orphaned event when buffers are made available for standalone use.
+pub fn emit_buffer_orphaned(app: &AppHandle, session_id: &str, orphaned: Vec<crate::buffer_store::OrphanedBufferInfo>) {
+    use crate::buffer_store::BufferType;
+
+    for info in orphaned {
+        let type_str = match info.buffer_type {
+            BufferType::Frames => "frames",
+            BufferType::Bytes => "bytes",
+        };
+        let payload = BufferOrphanedPayload {
+            buffer_id: info.buffer_id.clone(),
+            buffer_name: info.buffer_name,
+            buffer_type: type_str.to_string(),
+            count: info.count,
+        };
+        emit_to_session(app, "buffer-orphaned", session_id, payload);
+    }
+}
+
+/// Payload for buffer-created event
+#[derive(Clone, Debug, Serialize)]
+pub struct BufferCreatedPayload {
+    pub buffer_id: String,
+    pub buffer_name: String,
+    pub buffer_type: String,
+}
+
+/// Emit buffer-created event when a new buffer is created for a session.
+pub fn emit_buffer_created(app: &AppHandle, session_id: &str, buffer_id: &str, buffer_name: &str, buffer_type: &str) {
+    let payload = BufferCreatedPayload {
+        buffer_id: buffer_id.to_string(),
+        buffer_name: buffer_name.to_string(),
+        buffer_type: buffer_type.to_string(),
+    };
+    emit_to_session(app, "buffer-created", session_id, payload);
+}
+
+/// Payload for device-connected event
+#[derive(Clone, Debug, Serialize)]
+pub struct DeviceConnectedPayload {
+    pub device_type: String,
+    pub address: String,
+    pub bus_number: Option<u8>,
+}
+
+/// Emit device-connected event when a device successfully connects.
+pub fn emit_device_connected(app: &AppHandle, session_id: &str, device_type: &str, address: &str, bus_number: Option<u8>) {
+    let payload = DeviceConnectedPayload {
+        device_type: device_type.to_string(),
+        address: address.to_string(),
+        bus_number,
+    };
+    emit_to_session(app, "device-connected", session_id, payload);
+}
+
+/// Payload for device-probe event (global, not session-scoped)
+#[derive(Clone, Debug, Serialize)]
+pub struct DeviceProbePayload {
+    /// Profile ID that was probed
+    pub profile_id: String,
+    /// Device type (e.g., "gvret", "slcan", "gs_usb")
+    pub device_type: String,
+    /// Device address (e.g., "192.168.1.1:23", "/dev/ttyUSB0")
+    pub address: String,
+    /// Whether the probe was successful
+    pub success: bool,
+    /// Whether this was a cached result
+    pub cached: bool,
+    /// Number of buses available (on success)
+    pub bus_count: u8,
+    /// Error message (on failure)
+    pub error: Option<String>,
+}
+
+/// Emit device-probe event when a device probe completes (global event).
+pub fn emit_device_probe(app: &AppHandle, payload: DeviceProbePayload) {
+    let _ = app.emit("device-probe", payload);
+}
+
 /// Result of creating or joining a session
 #[derive(Clone, Debug, Serialize)]
 pub struct CreateSessionResult {
@@ -917,7 +1056,7 @@ pub async fn create_session(
                 );
 
                 // Emit joiner count change
-                emit_joiner_count_change(&existing.app, &session_id, existing.listeners.len());
+                emit_joiner_count_change(&existing.app, &session_id, existing.listeners.len(), Some(&lid), Some("joined"));
             }
             listener_count = existing.listeners.len();
         } else {
@@ -959,6 +1098,9 @@ pub async fn create_session(
     }
 
     let listener_count = listeners.len().max(1);
+    let device_type = device.device_type().to_string();
+    let state = device.state();
+    let app_for_event = app.clone();
     let session = IOSession {
         device,
         app,
@@ -968,6 +1110,20 @@ pub async fn create_session(
     };
 
     sessions.insert(session_id.clone(), session);
+
+    // Emit global session lifecycle event (to all windows)
+    // Use get_session_profile_ids() to get actual profile IDs (not display names)
+    // Profile tracking is registered before create_session() is called
+    let source_profile_ids = crate::sessions::get_session_profile_ids(&session_id);
+    emit_session_lifecycle(&app_for_event, SessionLifecyclePayload {
+        session_id: session_id.clone(),
+        event_type: "created".to_string(),
+        device_type: Some(device_type),
+        state: Some(format!("{:?}", state)),
+        listener_count,
+        source_profile_ids,
+        creator_listener_id: listener_id,
+    });
 
     CreateSessionResult {
         capabilities,
@@ -1021,8 +1177,8 @@ pub async fn join_session(session_id: &str) -> Result<JoinSessionResult, String>
     let joiner_count = session.joiner_count;
     let app = session.app.clone();
 
-    // Emit joiner count change event to all listeners
-    emit_joiner_count_change(&app, session_id, joiner_count);
+    // Emit joiner count change event to all listeners (legacy join - no listener ID)
+    emit_joiner_count_change(&app, session_id, joiner_count, None, Some("joined"));
 
     // Get active buffer info
     let (buffer_id, buffer_type) = match crate::buffer_store::get_active_buffer_id() {
@@ -1055,8 +1211,8 @@ pub async fn leave_session(session_id: &str) -> Result<usize, String> {
         let joiner_count = session.joiner_count;
         let app = session.app.clone();
 
-        // Emit joiner count change event to remaining listeners
-        emit_joiner_count_change(&app, session_id, joiner_count);
+        // Emit joiner count change event to remaining listeners (legacy leave - no listener ID)
+        emit_joiner_count_change(&app, session_id, joiner_count, None, Some("left"));
 
         // If no joiners left, stop the session to prevent emitting to destroyed WebViews
         if joiner_count == 0 {
@@ -1122,8 +1278,8 @@ pub async fn cleanup_stale_listeners() -> Vec<(String, usize, usize)> {
                     session_id, old_count, after_count
                 );
 
-                // Emit joiner count change
-                emit_joiner_count_change(&session.app, session_id, after_count);
+                // Emit joiner count change (sync - no specific listener)
+                emit_joiner_count_change(&session.app, session_id, after_count, None, None);
 
                 // If no listeners left, stop the session
                 if after_count == 0 {
@@ -1362,12 +1518,14 @@ pub async fn resume_session_fresh(session_id: &str) -> Result<IOState, String> {
     let old_buffer_id = buffer_store::get_buffer_for_session(session_id);
 
     // Orphan the old buffer (makes it standalone, data preserved)
-    buffer_store::orphan_buffers_for_session(session_id);
+    let orphaned = buffer_store::orphan_buffers_for_session(session_id);
+    emit_buffer_orphaned(&session.app, session_id, orphaned);
 
     // Create a new buffer for the session
     let timestamp = chrono::Local::now().format("%H%M%S").to_string();
     let buffer_name = format!("{}-{}", session_id, timestamp);
-    let new_buffer_id = buffer_store::create_buffer(buffer_store::BufferType::Frames, buffer_name);
+    let new_buffer_id = buffer_store::create_buffer(buffer_store::BufferType::Frames, buffer_name.clone());
+    emit_buffer_created(&session.app, session_id, &new_buffer_id, &buffer_name, "frames");
 
     // Assign the new buffer to this session
     if let Err(e) = buffer_store::set_buffer_owner(&new_buffer_id, session_id) {
@@ -1573,11 +1731,29 @@ pub async fn update_session_direction(session_id: &str, reverse: bool) -> Result
 pub async fn switch_to_buffer_replay(app: &AppHandle, session_id: &str, speed: f64) -> Result<IOCapabilities, String> {
     // Get the session's owned buffer
     let buffer_id = crate::buffer_store::get_buffer_for_session(session_id)
-        .ok_or_else(|| format!("No buffer found for session '{}'", session_id))?;
+        .ok_or_else(|| {
+            // Log all buffers for debugging
+            let buffers = crate::buffer_store::list_buffers();
+            eprintln!(
+                "[io] switch_to_buffer_replay: No buffer found for session '{}'. Available buffers:",
+                session_id
+            );
+            for buf in &buffers {
+                eprintln!(
+                    "  - {} (owner: {:?}, count: {})",
+                    buf.id,
+                    buf.owning_session_id,
+                    buf.count
+                );
+            }
+            format!("No buffer found for session '{}'", session_id)
+        })?;
 
+    // Log buffer details
+    let buffer_count = crate::buffer_store::get_buffer_count(&buffer_id);
     eprintln!(
-        "[io] switch_to_buffer_replay: session='{}', buffer='{}', speed={}",
-        session_id, buffer_id, speed
+        "[io] switch_to_buffer_replay: session='{}', buffer='{}', frames={}, speed={}",
+        session_id, buffer_id, buffer_count, speed
     );
 
     let mut sessions = IO_SESSIONS.lock().await;
@@ -1587,6 +1763,9 @@ pub async fn switch_to_buffer_replay(app: &AppHandle, session_id: &str, speed: f
 
     // Stop the current reader
     let _ = session.device.stop().await;
+
+    // Set this buffer as the active buffer so getBufferMetadata() returns correct data
+    let _ = crate::buffer_store::set_active_buffer(&buffer_id);
 
     // Create a new BufferReader that reads from the session's buffer
     let new_reader = BufferReader::new_with_buffer(
@@ -1610,15 +1789,98 @@ pub async fn switch_to_buffer_replay(app: &AppHandle, session_id: &str, speed: f
     Ok(capabilities)
 }
 
+/// Resume a session from buffer playback back to live streaming.
+/// This replaces the BufferReader with a new live reader (passed in from the caller
+/// who creates it from profile config). The session stays alive and all listeners
+/// remain connected.
+///
+/// Steps:
+/// 1. Stop the current reader (BufferReader)
+/// 2. Orphan the current buffer (data preserved for later viewing)
+/// 3. Create a fresh buffer for the new live stream
+/// 4. Replace session.device with the new live reader
+/// 5. Start the new reader
+pub async fn resume_to_live_session(
+    session_id: &str,
+    new_reader: Box<dyn IODevice>,
+) -> Result<IOCapabilities, String> {
+    eprintln!(
+        "[io] resume_to_live_session: session='{}' switching from buffer to live",
+        session_id
+    );
+
+    let mut sessions = IO_SESSIONS.lock().await;
+    let session = sessions
+        .get_mut(session_id)
+        .ok_or_else(|| format!("Session '{}' not found", session_id))?;
+
+    // Stop the current reader (BufferReader)
+    let _ = session.device.stop().await;
+
+    // Get the current buffer ID before the reader orphans it
+    let old_buffer_id = buffer_store::get_buffer_for_session(session_id);
+
+    // Note: We don't create a buffer here - the reader's start() method handles
+    // buffer creation (including orphaning old buffers). This avoids creating
+    // an intermediary buffer that would immediately get orphaned.
+
+    // Get capabilities before replacing
+    let capabilities = new_reader.capabilities();
+
+    // Replace the device with the new live reader
+    session.device = new_reader;
+
+    // Start the new reader
+    session.device.start().await?;
+
+    let state = session.device.state();
+    emit_state_change(&session.app, session_id, &IOState::Stopped, &state);
+
+    // Get the new buffer ID created by the reader's start() method
+    let new_buffer_id = buffer_store::get_buffer_for_session(session_id);
+
+    eprintln!(
+        "[io] resume_to_live_session: session='{}' now back in live mode with buffer '{:?}'",
+        session_id, new_buffer_id
+    );
+
+    // Emit session-resuming event so apps clear their frame lists
+    if let Some(ref buffer_id) = new_buffer_id {
+        emit_to_session(
+            &session.app,
+            "session-resuming",
+            session_id,
+            SessionResumingPayload {
+                new_buffer_id: buffer_id.clone(),
+                orphaned_buffer_id: old_buffer_id,
+            },
+        );
+    }
+
+    Ok(capabilities)
+}
+
 /// Destroy a reader session
 pub async fn destroy_session(session_id: &str) -> Result<(), String> {
     let mut sessions = IO_SESSIONS.lock().await;
     if let Some(mut session) = sessions.remove(session_id) {
+        // Emit lifecycle event before stopping
+        let source_profile_ids = crate::sessions::get_session_profile_ids(session_id);
+        emit_session_lifecycle(&session.app, SessionLifecyclePayload {
+            session_id: session_id.to_string(),
+            event_type: "destroyed".to_string(),
+            device_type: None,
+            state: None,
+            listener_count: 0,
+            source_profile_ids,
+            creator_listener_id: None,
+        });
         // Stop the reader before destroying
         let _ = session.device.stop().await;
+        // Orphan any buffers owned by this session (emit event before losing app handle)
+        let orphaned = crate::buffer_store::orphan_buffers_for_session(session_id);
+        emit_buffer_orphaned(&session.app, session_id, orphaned);
     }
-    // Orphan any buffers owned by this session so they remain available
-    crate::buffer_store::orphan_buffers_for_session(session_id);
     // Clear the closing flag now that the session is fully destroyed
     clear_session_closing(session_id);
     // Clear any stored startup error
@@ -1808,7 +2070,7 @@ pub async fn register_listener(session_id: &str, listener_id: &str) -> Result<Re
         );
 
         // Emit joiner count change
-        emit_joiner_count_change(&session.app, session_id, session.listeners.len());
+        emit_joiner_count_change(&session.app, session_id, session.listeners.len(), Some(listener_id), Some("joined"));
     }
 
     // Get buffer info
@@ -1858,12 +2120,23 @@ pub async fn unregister_listener(session_id: &str, listener_id: &str) -> Result<
             );
 
             // Emit joiner count change
-            emit_joiner_count_change(&app, session_id, remaining);
+            emit_joiner_count_change(&app, session_id, remaining, Some(listener_id), Some("left"));
 
             // If no listeners left, stop and destroy the session
             if remaining == 0 {
                 eprintln!("[reader] Session '{}' has no listeners left, destroying", session_id);
                 let _ = session.device.stop().await;
+                // Emit lifecycle event before removing
+                let source_profile_ids = crate::sessions::get_session_profile_ids(session_id);
+                emit_session_lifecycle(&app, SessionLifecyclePayload {
+                    session_id: session_id.to_string(),
+                    event_type: "destroyed".to_string(),
+                    device_type: None,
+                    state: None,
+                    listener_count: 0,
+                    source_profile_ids,
+                    creator_listener_id: None,
+                });
                 // Remove from the session map (we already hold the lock)
                 sessions.remove(session_id);
                 // Clear any closing flag
@@ -1959,6 +2232,17 @@ pub async fn reinitialize_session_if_safe(
 
     // Safe to reinitialize - destroy the session
     if let Some(mut session) = sessions.remove(session_id) {
+        // Emit lifecycle event before stopping
+        let source_profile_ids = crate::sessions::get_session_profile_ids(session_id);
+        emit_session_lifecycle(&session.app, SessionLifecyclePayload {
+            session_id: session_id.to_string(),
+            event_type: "destroyed".to_string(),
+            device_type: None,
+            state: None,
+            listener_count: 0,
+            source_profile_ids,
+            creator_listener_id: None,
+        });
         let _ = session.device.stop().await;
     }
     clear_session_closing(session_id);

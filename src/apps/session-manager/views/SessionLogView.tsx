@@ -3,13 +3,16 @@
 // Log view component showing session events for development debugging.
 // Features filter bar, scrollable table, and auto-scroll.
 
-import { useEffect, useRef, useMemo, useCallback } from "react";
+import { useEffect, useRef, useMemo, useCallback, useState } from "react";
 import {
   Trash2,
   Filter,
   Search,
   ChevronDown,
   ArrowDownToLine,
+  User,
+  Copy,
+  Check,
 } from "lucide-react";
 import {
   useSessionLogStore,
@@ -52,10 +55,37 @@ export default function SessionLogView() {
   const uniqueSessionIds = useUniqueSessionIds();
   const filter = useSessionLogStore((s) => s.filter);
   const autoScroll = useSessionLogStore((s) => s.autoScroll);
+  const showProfileColumn = useSessionLogStore((s) => s.showProfileColumn);
   const setFilter = useSessionLogStore((s) => s.setFilter);
   const setAutoScroll = useSessionLogStore((s) => s.setAutoScroll);
+  const setShowProfileColumn = useSessionLogStore((s) => s.setShowProfileColumn);
   const clearEntries = useSessionLogStore((s) => s.clearEntries);
   const totalCount = useSessionLogStore((s) => s.entries.length);
+
+  // Copy state
+  const [copied, setCopied] = useState(false);
+
+  // Copy log entries to clipboard
+  const handleCopy = useCallback(async () => {
+    const lines = entries.map((entry) => {
+      const time = formatTime(entry.timestamp);
+      const event = EVENT_TYPE_LABELS[entry.eventType];
+      const session = entry.sessionId ?? "-";
+      const profile = entry.profileName ?? "-";
+      const details = entry.details;
+      return `${time}\t${event}\t${session}\t${profile}\t${details}`;
+    });
+    const header = "Time\tEvent\tSession\tProfile\tDetails";
+    const text = [header, ...lines].join("\n");
+
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      console.error("Failed to copy log:", e);
+    }
+  }, [entries]);
 
   // Auto-scroll to bottom when new entries arrive
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -138,16 +168,19 @@ export default function SessionLogView() {
           "stream-ended",
           "stream-complete",
           "session-error",
+          "speed-changed",
+          "session-mode",
         ] as SessionLogEventType[],
       },
       {
         label: "Status",
         types: [
-          "listener-count-changed",
-          "speed-changed",
-          "session-suspended",
-          "session-resuming",
           "session-reconfigured",
+          "session-stats",
+          "buffer-orphaned",
+          "buffer-created",
+          "device-connected",
+          "device-probe",
         ] as SessionLogEventType[],
       },
     ],
@@ -155,7 +188,7 @@ export default function SessionLogView() {
   );
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col flex-1 min-h-0">
       {/* Filter Bar */}
       <div
         className={`flex items-center gap-3 px-3 py-2 border-b ${borderDefault} ${bgSurface}`}
@@ -238,6 +271,17 @@ export default function SessionLogView() {
         {/* Spacer */}
         <div className="flex-1" />
 
+        {/* Profile Column Toggle */}
+        <button
+          onClick={() => setShowProfileColumn(!showProfileColumn)}
+          className={`p-1 rounded ${hoverBg} ${
+            showProfileColumn ? "text-blue-400" : textMuted
+          }`}
+          title={showProfileColumn ? "Hide profile column" : "Show profile column"}
+        >
+          <User className="w-4 h-4" />
+        </button>
+
         {/* Entry Count */}
         <span className={`text-xs ${textMuted}`}>
           {entries.length === totalCount
@@ -262,6 +306,15 @@ export default function SessionLogView() {
           <ArrowDownToLine className="w-4 h-4" />
         </button>
 
+        {/* Copy Button */}
+        <button
+          onClick={handleCopy}
+          className={`p-1 rounded ${hoverBg} ${copied ? "text-green-400" : textMuted}`}
+          title="Copy log to clipboard"
+        >
+          {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+        </button>
+
         {/* Clear Button */}
         <button
           onClick={clearEntries}
@@ -276,7 +329,7 @@ export default function SessionLogView() {
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className={`flex-1 overflow-auto ${bgDataView}`}
+        className={`flex-1 overflow-auto pb-4 ${bgDataView}`}
       >
         {entries.length === 0 ? (
           <div className={`flex items-center justify-center h-full ${textMuted}`}>
@@ -295,12 +348,14 @@ export default function SessionLogView() {
                 <th className={`px-2 py-1.5 text-left font-medium ${textMuted} w-[90px]`}>
                   Event
                 </th>
-                <th className={`px-2 py-1.5 text-left font-medium ${textMuted} w-[140px]`}>
+                <th className={`px-2 py-1.5 text-left font-medium ${textMuted} w-[120px]`}>
                   Session
                 </th>
-                <th className={`px-2 py-1.5 text-left font-medium ${textMuted} w-[120px]`}>
-                  Profile
-                </th>
+                {showProfileColumn && (
+                  <th className={`px-2 py-1.5 text-left font-medium ${textMuted} w-[140px]`}>
+                    Profile
+                  </th>
+                )}
                 <th className={`px-2 py-1.5 text-left font-medium ${textMuted}`}>
                   Details
                 </th>
@@ -316,20 +371,23 @@ export default function SessionLogView() {
                     {formatTime(entry.timestamp)}
                   </td>
                   <td className="px-2 py-1">
-                    <span
-                      className={`inline-block px-1.5 py-0.5 rounded text-[10px] ${
-                        EVENT_TYPE_COLOURS[entry.eventType]
-                      }`}
-                    >
+                    <span className={EVENT_TYPE_COLOURS[entry.eventType]}>
                       {EVENT_TYPE_LABELS[entry.eventType]}
                     </span>
                   </td>
-                  <td className={`px-2 py-1 font-mono ${textSecondary}`}>
+                  <td
+                    className={`px-2 py-1 font-mono ${textSecondary} cursor-default`}
+                    title={entry.profileName ? `Profile: ${entry.profileName}` : undefined}
+                  >
                     {truncateSessionId(entry.sessionId)}
                   </td>
-                  <td className={`px-2 py-1 ${textSecondary}`}>
-                    {entry.profileName ?? entry.profileId ?? "-"}
-                  </td>
+                  {showProfileColumn && (
+                    <td className={`px-2 py-1 ${textSecondary}`}>
+                      <span className="max-w-[130px] truncate block">
+                        {entry.profileName ?? "-"}
+                      </span>
+                    </td>
+                  )}
                   <td className={`px-2 py-1 ${textPrimary}`}>
                     {entry.details}
                   </td>

@@ -5,6 +5,14 @@
 
 import { create } from "zustand";
 import { nanoid } from "nanoid";
+import {
+  badgeSmallSuccess,
+  badgeSmallDanger,
+  badgeSmallWarning,
+  badgeSmallInfo,
+  badgeSmallPurple,
+  badgeSmallNeutral,
+} from "../../../styles";
 
 // ============================================================================
 // Types
@@ -20,11 +28,14 @@ export type SessionLogEventType =
   | "stream-ended"
   | "stream-complete"
   | "session-error"
-  | "listener-count-changed"
   | "speed-changed"
-  | "session-suspended"
-  | "session-resuming"
-  | "session-reconfigured";
+  | "session-mode"
+  | "session-reconfigured"
+  | "session-stats"
+  | "buffer-orphaned"
+  | "buffer-created"
+  | "device-connected"
+  | "device-probe";
 
 /** A single log entry */
 export interface LogEntry {
@@ -65,6 +76,7 @@ export interface SessionLogState {
   // UI
   filter: LogFilter;
   autoScroll: boolean;
+  showProfileColumn: boolean;
 
   // Actions
   addEntry: (entry: Omit<LogEntry, "id" | "timestamp">) => void;
@@ -72,6 +84,7 @@ export interface SessionLogState {
   setFilter: (filter: Partial<LogFilter>) => void;
   setMaxEntries: (max: number) => void;
   setAutoScroll: (enabled: boolean) => void;
+  setShowProfileColumn: (show: boolean) => void;
 }
 
 // ============================================================================
@@ -88,6 +101,7 @@ export const useSessionLogStore = create<SessionLogState>((set) => ({
     searchText: "",
   },
   autoScroll: true,
+  showProfileColumn: true,
 
   // Actions
   addEntry: (entry) => {
@@ -98,6 +112,19 @@ export const useSessionLogStore = create<SessionLogState>((set) => ({
     };
 
     set((state) => {
+      // Dedupe: skip if we have a recent entry with same sessionId, eventType, and appName (within 100ms)
+      // This handles React StrictMode double-mounting and multiple sources logging the same event
+      const recent = state.entries[state.entries.length - 1];
+      if (
+        recent &&
+        recent.sessionId === newEntry.sessionId &&
+        recent.eventType === newEntry.eventType &&
+        recent.appName === newEntry.appName &&
+        newEntry.timestamp - recent.timestamp < 100
+      ) {
+        return state; // Skip duplicate
+      }
+
       const entries = [...state.entries, newEntry];
       // Trim to max entries
       if (entries.length > state.maxEntries) {
@@ -122,6 +149,8 @@ export const useSessionLogStore = create<SessionLogState>((set) => ({
   },
 
   setAutoScroll: (enabled) => set({ autoScroll: enabled }),
+
+  setShowProfileColumn: (show) => set({ showProfileColumn: show }),
 }));
 
 // ============================================================================
@@ -186,28 +215,34 @@ export const EVENT_TYPE_LABELS: Record<SessionLogEventType, string> = {
   "stream-ended": "Ended",
   "stream-complete": "Complete",
   "session-error": "Error",
-  "listener-count-changed": "Listeners",
   "speed-changed": "Speed",
-  "session-suspended": "Suspended",
-  "session-resuming": "Resuming",
+  "session-mode": "Mode",
   "session-reconfigured": "Reconfigured",
+  "session-stats": "Stats",
+  "buffer-orphaned": "Buffer",
+  "buffer-created": "Buffer",
+  "device-connected": "Connected",
+  "device-probe": "Probe",
 };
 
-/** Colour classes for event type badges (using CSS variables) */
+/** Badge classes for event types (using standard badge styles) */
 export const EVENT_TYPE_COLOURS: Record<SessionLogEventType, string> = {
-  "session-created": "bg-[var(--bg-success)] text-[color:var(--text-success)]",
-  "session-joined": "bg-[var(--bg-info)] text-[color:var(--text-info)]",
-  "session-left": "bg-[var(--bg-warning)] text-[color:var(--text-warning)]",
-  "session-destroyed": "bg-[var(--bg-danger)] text-[color:var(--text-danger)]",
-  "state-change": "bg-[var(--bg-info)] text-[color:var(--text-info)]",
-  "stream-ended": "bg-[var(--bg-warning)] text-[color:var(--text-warning)]",
-  "stream-complete": "bg-[var(--bg-success)] text-[color:var(--text-success)]",
-  "session-error": "bg-[var(--bg-danger)] text-[color:var(--text-danger)]",
-  "listener-count-changed": "bg-[var(--bg-info)] text-[color:var(--text-info)]",
-  "speed-changed": "bg-[var(--bg-info)] text-[color:var(--text-info)]",
-  "session-suspended": "bg-[var(--bg-warning)] text-[color:var(--text-warning)]",
-  "session-resuming": "bg-[var(--bg-success)] text-[color:var(--text-success)]",
-  "session-reconfigured": "bg-[var(--bg-info)] text-[color:var(--text-info)]",
+  "session-created": badgeSmallSuccess,
+  "session-joined": badgeSmallInfo,
+  "session-left": badgeSmallWarning,
+  "session-destroyed": badgeSmallDanger,
+  "state-change": badgeSmallInfo,
+  "stream-ended": badgeSmallWarning,
+  "stream-complete": badgeSmallSuccess,
+  "session-error": badgeSmallDanger,
+  "speed-changed": badgeSmallInfo,
+  "session-mode": badgeSmallPurple,
+  "session-reconfigured": badgeSmallInfo,
+  "session-stats": `${badgeSmallNeutral} border border-[color:var(--border-default)]`,
+  "buffer-orphaned": badgeSmallPurple,
+  "buffer-created": badgeSmallSuccess,
+  "device-connected": badgeSmallSuccess,
+  "device-probe": badgeSmallInfo,
 };
 
 /** All event types for filter dropdown */
@@ -220,9 +255,12 @@ export const ALL_EVENT_TYPES: SessionLogEventType[] = [
   "stream-ended",
   "stream-complete",
   "session-error",
-  "listener-count-changed",
   "speed-changed",
-  "session-suspended",
-  "session-resuming",
+  "session-mode",
   "session-reconfigured",
+  "session-stats",
+  "buffer-orphaned",
+  "buffer-created",
+  "device-connected",
+  "device-probe",
 ];

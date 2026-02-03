@@ -32,6 +32,8 @@ pub enum SourceMessage {
     Error(usize, String),
     /// Transmit channel is ready (source_index, transmit_sender)
     TransmitReady(usize, TransmitSender),
+    /// Source connected successfully (source_index, device_type, address, bus_number)
+    Connected(usize, String, String, Option<u8>),
 }
 
 // ============================================================================
