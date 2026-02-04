@@ -65,6 +65,7 @@ export interface UseDecoderHandlersParams {
   isPaused: boolean;
   isStreaming: boolean;
   sessionReady: boolean;
+  isBufferMode?: boolean;
   capabilities: IOCapabilities | null;
   currentFrameIndex?: number | null;
   currentTimestampUs?: number | null;
@@ -193,6 +194,7 @@ export function useDecoderHandlers(params: UseDecoderHandlersParams): DecoderHan
     isPaused: params.isPaused,
     isStreaming: params.isStreaming,
     sessionReady: params.sessionReady,
+    isBufferMode: params.isBufferMode,
     currentFrameIndex: params.currentFrameIndex,
     currentTimestampUs: params.currentTimestampUs,
     selectedFrameIds: params.selectedFrames,

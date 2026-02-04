@@ -67,7 +67,7 @@ type CombinedDiscoveryState = {
   selectedFrames: Set<number>;
   seenIds: Set<number>;
   streamStartTimeUs: number | null;
-  bufferMode: { enabled: boolean; totalFrames: number };
+  bufferMode: { enabled: boolean; totalFrames: number; viewMode: "pagination" | "playback" };
 
   // UI store
   maxBuffer: number;
@@ -134,6 +134,7 @@ type CombinedDiscoveryState = {
   deselectAllFrames: () => void;
   enableBufferMode: (totalFrames: number) => void;
   disableBufferMode: () => void;
+  setBufferViewMode: (mode: "pagination" | "playback") => void;
   setFrameInfoFromBuffer: (frameInfoList: Array<{
     frame_id: number;
     max_dlc: number;
@@ -271,6 +272,7 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     },
     enableBufferMode: frameStore.enableBufferMode,
     disableBufferMode: frameStore.disableBufferMode,
+    setBufferViewMode: frameStore.setBufferViewMode,
     setFrameInfoFromBuffer: frameStore.setFrameInfoFromBuffer,
 
     // UI store actions

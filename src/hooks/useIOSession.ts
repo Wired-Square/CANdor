@@ -117,6 +117,12 @@ export interface UseIOSessionResult {
   streamEndedReason: "complete" | "stopped" | "disconnected" | "error" | null;
   /** Current playback speed (null until set, 1 = realtime, 0 = unlimited) */
   speed: number | null;
+  /** Current playback position (centralised for all apps sharing this session) */
+  playbackPosition: PlaybackPosition | null;
+  /** Convenience: playbackPosition?.timestamp_us */
+  currentTimeUs: number | null;
+  /** Convenience: playbackPosition?.frame_index */
+  currentFrameIndex: number | null;
 
   // Actions
   /** Start the reader */
@@ -771,6 +777,9 @@ export function useIOSession(
     stoppedExplicitly: session?.stoppedExplicitly ?? false,
     streamEndedReason: session?.streamEndedReason ?? null,
     speed: session?.speed ?? null,
+    playbackPosition: session?.playbackPosition ?? null,
+    currentTimeUs: session?.playbackPosition?.timestamp_us ?? null,
+    currentFrameIndex: session?.playbackPosition?.frame_index ?? null,
     start,
     stop,
     leave,

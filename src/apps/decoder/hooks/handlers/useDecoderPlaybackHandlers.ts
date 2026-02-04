@@ -20,6 +20,7 @@ export interface UseDecoderPlaybackHandlersParams {
   isPaused: boolean;
   isStreaming: boolean;
   sessionReady: boolean;
+  isBufferMode?: boolean;
 
   // Current position (for step operations)
   currentFrameIndex?: number | null;
@@ -47,6 +48,7 @@ export function useDecoderPlaybackHandlers({
   isPaused,
   isStreaming,
   sessionReady,
+  isBufferMode,
   currentFrameIndex,
   currentTimestampUs,
   selectedFrameIds,
@@ -65,6 +67,7 @@ export function useDecoderPlaybackHandlers({
     isPaused,
     isStreaming,
     sessionReady,
+    isBufferMode,
     currentFrameIndex,
     currentTimestampUs,
     selectedFrameIds,

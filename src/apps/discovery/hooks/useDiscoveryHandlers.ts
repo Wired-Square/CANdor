@@ -40,6 +40,9 @@ export interface UseDiscoveryHandlersParams {
   ioProfile: string | null;
   sourceProfileId: string | null;
   playbackSpeed: PlaybackSpeed;
+  /** Buffer mode from session manager - used for play/resume logic */
+  sessionIsBufferMode: boolean;
+  /** Buffer mode from discovery store - used for UI display */
   bufferModeEnabled: boolean;
   bufferModeTotalFrames: number;
 
@@ -156,25 +159,14 @@ export type DiscoveryHandlers = DiscoverySessionHandlers &
   };
 
 export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): DiscoveryHandlers {
-  // Session handlers
+  // Session handlers (IO profile change, ingest, multi-bus, join)
   const sessionHandlers = useDiscoverySessionHandlers({
-    sessionId: params.sessionId,
-    isStreaming: params.isStreaming,
-    isPaused: params.isPaused,
-    sessionReady: params.sessionReady,
-    currentFrameIndex: params.currentFrameIndex,
-    currentTimestampUs: params.currentTimestampUs,
-    selectedFrameIds: params.selectedFrames,
     setSourceProfileId: params.setSourceProfileId,
     setShowBusColumn: params.setShowBusColumn,
-    start: params.start,
-    pause: params.pause,
-    resume: params.resume,
     watchSingleSource: params.watchSingleSource,
     watchMultiSource: params.watchMultiSource,
     ingestSingleSource: params.ingestSingleSource,
     ingestMultiSource: params.ingestMultiSource,
-    stopWatch: params.stopWatch,
     selectProfile: params.selectProfile,
     selectMultipleProfiles: params.selectMultipleProfiles,
     joinSession: params.joinSession,
@@ -193,27 +185,43 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     addSerialBytes: params.addSerialBytes,
     setSerialConfig: params.setSerialConfig,
     setFramingConfig: params.setFramingConfig,
-    resetWatchFrameCount: params.resetWatchFrameCount,
     showError: params.showError,
     setBufferMetadata: params.setBufferMetadata,
     closeIoReaderPicker: params.closeIoReaderPicker,
   });
 
-  // Playback handlers
+  // Playback handlers (uses shared usePlaybackHandlers for play/pause/stop consistency)
   const playbackHandlers = useDiscoveryPlaybackHandlers({
+    // Session state for shared handlers
+    sessionId: params.sessionId,
+    start: params.start,
+    stop: params.stopWatch,
+    pause: params.pause,
+    resume: params.resume,
+    setSpeed: params.setSpeed,
+    setTimeRange: params.setTimeRange,
+    isPaused: params.isPaused,
+    isStreaming: params.isStreaming,
+    sessionReady: params.sessionReady,
+    isBufferMode: params.sessionIsBufferMode,
+    currentFrameIndex: params.currentFrameIndex,
+    currentTimestampUs: params.currentTimestampUs,
+    selectedFrameIds: params.selectedFrames,
+    // Time range state
     startTime: params.startTime,
     endTime: params.endTime,
     pendingSpeed: params.pendingSpeed,
     setPendingSpeed: params.setPendingSpeed,
     setActiveBookmarkId: params.setActiveBookmarkId,
+    // Store actions
     setPlaybackSpeed: params.setPlaybackSpeed,
     updateCurrentTime: params.updateCurrentTime,
+    setCurrentFrameIndex: params.setCurrentFrameIndex,
     setStartTime: params.setStartTime,
     setEndTime: params.setEndTime,
     clearBuffer: params.clearBuffer,
     clearFramePicker: params.clearFramePicker,
-    setSpeed: params.setSpeed,
-    setTimeRange: params.setTimeRange,
+    resetWatchFrameCount: params.resetWatchFrameCount,
     closeSpeedChangeDialog: params.closeSpeedChangeDialog,
   });
 

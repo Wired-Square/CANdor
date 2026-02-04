@@ -1,6 +1,6 @@
 // ui/src/apps/discovery/views/DiscoveryFramesView.tsx
 import React, { useEffect, useRef, useMemo, memo, useState, useCallback } from "react";
-import { FileText, Network } from "lucide-react";
+import { FileText, Network, Play, LayoutList } from "lucide-react";
 import { iconSm, flexRowGap2 } from "../../../styles/spacing";
 import { formatIsoUs, formatHumanUs, renderDeltaNode } from "../../../utils/timeFormat";
 import { useDiscoveryStore } from "../../../stores/discoveryStore";
@@ -57,6 +57,9 @@ type Props = {
   // Whether the data source is recorded (e.g., PostgreSQL, CSV) vs live
   isRecorded?: boolean;
 
+  // Whether in buffer mode (from session manager - used for timeline controls visibility)
+  isBufferMode?: boolean;
+
   // Playback controls (for buffer replay)
   playbackState?: PlaybackState;
   playbackDirection?: "forward" | "backward";
@@ -94,6 +97,7 @@ function DiscoveryFramesView({
   onScrub,
   bufferMetadata,
   isRecorded = false,
+  isBufferMode = false,
   playbackState = "paused",
   playbackDirection = "forward",
   capabilities,
@@ -112,6 +116,7 @@ function DiscoveryFramesView({
   const setRenderBuffer = useDiscoveryStore((s) => s.setRenderBuffer);
   const selectedFrames = useDiscoveryStore((s) => s.selectedFrames);
   const bufferMode = useDiscoveryStore((s) => s.bufferMode);
+  const setBufferViewMode = useDiscoveryStore((s) => s.setBufferViewMode);
   const toolboxResults = useDiscoveryStore((s) => s.toolbox);
 
   // Use buffer-first hook when bufferId is available
@@ -567,11 +572,12 @@ function DiscoveryFramesView({
         disabled: false,
       };
     }
-    // Legacy buffer mode: use buffer metadata for time range
-    if (bufferMode.enabled && bufferMetadata?.start_time_us != null && bufferMetadata?.end_time_us != null) {
-      const currentPos = isStreaming
-        ? (currentTimeUs ?? bufferMetadata.start_time_us)
-        : (bufferModeFrames.length > 0 ? bufferModeFrames[0].timestamp_us : bufferMetadata.start_time_us);
+    // Buffer mode: use buffer metadata for time range
+    // Check both local bufferMode.enabled AND isBufferMode from session (for cross-app stops)
+    // Show buffer timeline in buffer mode regardless of streaming state (buffer reader can be running or paused)
+    if ((bufferMode.enabled || isBufferMode) && bufferMetadata?.start_time_us != null && bufferMetadata?.end_time_us != null) {
+      // Use currentTimeUs from session for playback position tracking
+      const currentPos = currentTimeUs ?? bufferMetadata.start_time_us;
       return {
         show: true,
         minTimeUs: bufferMetadata.start_time_us,
@@ -593,11 +599,13 @@ function DiscoveryFramesView({
       };
     }
     return { show: false, minTimeUs: 0, maxTimeUs: 0, currentTimeUs: 0, onScrub: () => {}, disabled: true };
-  }, [useBufferFirstMode, bufferFrameView.timeRange, bufferMode.enabled, isStreaming, bufferMetadata, bufferModeFrames, frames, currentTimeUs, visibleFrames, handleBufferFirstScrub, handleBufferScrub, handleNormalScrub]);
+  }, [useBufferFirstMode, bufferFrameView.timeRange, bufferMode.enabled, isBufferMode, isStreaming, bufferMetadata, frames, currentTimeUs, visibleFrames, handleBufferFirstScrub, handleBufferScrub, handleNormalScrub]);
 
   // Auto-navigate to the page containing the current frame during playback
+  // This works for buffer playback (where currentFrameIndex is set from session playback position)
+  // During live streaming, currentFrameIndex is null so this effect doesn't run
   useEffect(() => {
-    if (currentFrameIndex == null || isStreaming || renderBuffer === -1) return;
+    if (currentFrameIndex == null || renderBuffer === -1) return;
 
     const pageSizeForCalc = renderBuffer;
     const pageStart = effectiveCurrentPageRef.current * pageSizeForCalc;
@@ -608,7 +616,7 @@ function DiscoveryFramesView({
       const targetPage = Math.floor(currentFrameIndex / pageSizeForCalc);
       setCurrentPageStable(targetPage);
     }
-  }, [currentFrameIndex, setCurrentPageStable, renderBuffer, isStreaming]);
+  }, [currentFrameIndex, setCurrentPageStable, renderBuffer]);
 
   // Calculate which row to highlight based on current frame index
   // Returns the index within visibleFrames, or null if current frame is not visible
@@ -682,6 +690,20 @@ function DiscoveryFramesView({
   // Tab bar controls only shown on frames tab
   const tabBarControls = activeTab === 'frames' ? (
     <div className="flex items-center gap-1">
+      {/* View mode toggle (pagination vs playback) - only shown when buffer is available */}
+      {(isBufferMode || bufferMode.enabled) && (
+        <button
+          onClick={() => setBufferViewMode(bufferMode.viewMode === 'pagination' ? 'playback' : 'pagination')}
+          className={`p-1.5 rounded transition-colors ${
+            bufferMode.viewMode === 'playback'
+              ? 'bg-green-600 text-white hover:bg-green-500'
+              : `${bgSurface} ${textSecondary} hover:brightness-95`
+          }`}
+          title={bufferMode.viewMode === 'playback' ? 'Switch to pagination mode' : 'Switch to playback mode'}
+        >
+          {bufferMode.viewMode === 'playback' ? <Play className={iconSm} /> : <LayoutList className={iconSm} />}
+        </button>
+      )}
       <button
         onClick={toggleShowBusColumn}
         className={`p-1.5 rounded transition-colors ${
@@ -708,21 +730,24 @@ function DiscoveryFramesView({
   ) : undefined;
 
   // Playback controls for toolbar center
+  // In buffer mode, buffer reader always supports seek, speed control, pause, and reverse
+  // Show playback controls whenever in buffer mode (playing or paused)
+  const inBufferPlaybackMode = isBufferMode || bufferMode.enabled;
   const playbackControls = onPlay && onPause ? (
     <PlaybackControls
       playbackState={playbackState}
       playbackDirection={playbackDirection}
-      isReady={bufferMode.enabled || isRecorded}
-      canPause={capabilities?.can_pause ?? false}
-      supportsSeek={capabilities?.supports_seek ?? false}
-      supportsSpeedControl={capabilities?.supports_speed_control ?? false}
-      supportsReverse={capabilities?.supports_reverse ?? false}
+      isReady={inBufferPlaybackMode || isRecorded}
+      canPause={inBufferPlaybackMode || (capabilities?.can_pause ?? false)}
+      supportsSeek={inBufferPlaybackMode || (capabilities?.supports_seek ?? false)}
+      supportsSpeedControl={inBufferPlaybackMode || (capabilities?.supports_speed_control ?? false)}
+      supportsReverse={inBufferPlaybackMode || (capabilities?.supports_reverse ?? false)}
       playbackSpeed={playbackSpeed}
       minTimeUs={timelineProps.minTimeUs}
       maxTimeUs={timelineProps.maxTimeUs}
       currentTimeUs={timelineProps.currentTimeUs}
       currentFrameIndex={currentFrameIndex}
-      totalFrames={bufferMode.enabled ? bufferMode.totalFrames : undefined}
+      totalFrames={(isBufferMode || bufferMode.enabled) ? (bufferMetadata?.count ?? bufferMode.totalFrames) : undefined}
       onPlay={onPlay}
       onPlayBackward={onPlayBackward}
       onPause={onPause}

@@ -115,6 +115,8 @@ export interface UseIOSessionManagerOptions {
   onTimeUpdate?: (position: PlaybackPosition) => void;
   /** Callback when stream ends */
   onStreamEnded?: (payload: StreamEndedPayload) => void;
+  /** Callback when session is suspended (stopped with buffer available) */
+  onSuspended?: (payload: import("../api/io").SessionSuspendedPayload) => void;
   /** Callback when buffer playback completes */
   onStreamComplete?: () => void;
   /** Callback when playback speed changes (from any listener on this session) */
@@ -186,6 +188,12 @@ export interface UseIOSessionManagerResult {
   capabilities: IOCapabilities | null;
   /** Number of joiners */
   joinerCount: number;
+  /** Current playback position (centralised for all apps sharing this session) */
+  playbackPosition: PlaybackPosition | null;
+  /** Convenience: playbackPosition?.timestamp_us */
+  currentTimeUs: number | null;
+  /** Convenience: playbackPosition?.frame_index */
+  currentFrameIndex: number | null;
 
   // ---- Detach/Rejoin State ----
   /** Whether detached from session */
@@ -370,6 +378,7 @@ export function useIOSessionManager(
     onError,
     onTimeUpdate,
     onStreamEnded,
+    onSuspended,
     onStreamComplete,
     onSpeedChange,
     setPlaybackSpeed: setPlaybackSpeedProp,
@@ -551,6 +560,7 @@ export function useIOSessionManager(
     onError,
     onTimeUpdate,
     onStreamEnded: handleStreamEndedWithIngest,
+    onSuspended,
     onStreamComplete,
     onSpeedChange,
     onReconfigure: handleReconfigure,
@@ -720,6 +730,10 @@ export function useIOSessionManager(
     sessionId: string,
     sourceProfileIds?: string[]
   ) => {
+    // Clear frontend state before joining (fixes frame count showing stale data)
+    onBeforeWatch?.();
+    resetWatchFrameCount();
+
     await joinMultiSourceSession({
       sessionId,
       listenerId: appName,
@@ -732,7 +746,7 @@ export function useIOSessionManager(
     setMultiBusMode(false); // Use single-session mode when joining
     setIsDetached(false);
     await session.rejoin(sessionId);
-  }, [appName, session, setIoProfile, setMultiBusProfiles, setMultiBusMode]);
+  }, [appName, session, setIoProfile, setMultiBusProfiles, setMultiBusMode, onBeforeWatch, resetWatchFrameCount]);
 
   // ---- Session Switching Methods ----
 
@@ -1265,6 +1279,9 @@ export function useIOSessionManager(
     sessionReady,
     capabilities,
     joinerCount,
+    playbackPosition: session.playbackPosition,
+    currentTimeUs: session.currentTimeUs,
+    currentFrameIndex: session.currentFrameIndex,
 
     // Detach/Rejoin/Leave/Destroy
     isDetached,

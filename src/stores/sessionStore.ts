@@ -264,6 +264,8 @@ export interface Session {
   streamEndedReason: "complete" | "stopped" | "disconnected" | "error" | null;
   /** Current playback speed (null until set, 1 = realtime, 0 = unlimited) */
   speed: number | null;
+  /** Current playback position (centralised for all apps sharing this session) */
+  playbackPosition: PlaybackPosition | null;
 }
 
 /** Options for creating a session */
@@ -540,9 +542,11 @@ async function setupSessionEventListeners(
   unlistenFunctions.push(unlistenError);
 
   // Playback time (Buffer reader, PostgreSQL reader)
+  // Store position in session state for centralised access by all apps
   const unlistenPlaybackTime = await listen<PlaybackPosition>(
     `playback-time:${sessionId}`,
     (event) => {
+      updateSession(sessionId, { playbackPosition: event.payload });
       invokeCallbacks(eventListeners, "onTimeUpdate", event.payload);
     }
   );
@@ -892,6 +896,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             stoppedExplicitly: false,
             streamEndedReason: null,
             speed: null,
+            playbackPosition: null,
           };
           set((s) => ({
             sessions: { ...s.sessions, [sessionId]: errorSession },
@@ -1028,6 +1033,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         stoppedExplicitly: existingSession?.stoppedExplicitly ?? false,
         streamEndedReason: existingSession?.streamEndedReason ?? null,
         speed: existingSession?.speed ?? null,
+        playbackPosition: existingSession?.playbackPosition ?? null,
       };
 
       return {

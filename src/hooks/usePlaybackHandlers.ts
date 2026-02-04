@@ -22,6 +22,7 @@ export interface UsePlaybackHandlersParams {
   isPaused: boolean;
   isStreaming: boolean;
   sessionReady: boolean;
+  isBufferMode?: boolean;
 
   // Current position (for step operations) - need either frame index or timestamp
   currentFrameIndex?: number | null;
@@ -49,6 +50,7 @@ export function usePlaybackHandlers({
   isPaused,
   isStreaming,
   sessionReady,
+  isBufferMode,
   currentFrameIndex,
   currentTimestampUs,
   selectedFrameIds,
@@ -69,6 +71,9 @@ export function usePlaybackHandlers({
     if (isPaused) {
       await resume();
     } else if (!isStreaming && sessionReady) {
+      // In buffer mode, start() begins buffer playback (reader is stopped, not paused)
+      // In live mode, start() begins live capture
+      // Either way, we call start() when not streaming
       onBeforeStart?.();
       await start();
     }
@@ -87,6 +92,9 @@ export function usePlaybackHandlers({
     if (isPaused) {
       await resume();
     } else if (!isStreaming && sessionReady) {
+      // In buffer mode, start() begins buffer playback (reader is stopped, not paused)
+      // In live mode, start() begins live capture
+      // Either way, we call start() when not streaming
       onBeforeStart?.();
       await start();
     }

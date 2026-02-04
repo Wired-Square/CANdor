@@ -408,6 +408,15 @@ export default function Decoder() {
     }
   }, [setStartTime, setEndTime, setActiveBookmarkId]);
 
+  // Handle session suspended (from any app sharing this session)
+  // This fetches buffer metadata so Decoder can show timeline controls
+  const handleSessionSuspended = useCallback(async (payload: import("../../api/io").SessionSuspendedPayload) => {
+    if (payload.buffer_count > 0) {
+      const meta = await getBufferMetadata();
+      setBufferMetadata(meta);
+    }
+  }, []);
+
   // Use the IO session manager hook - manages session lifecycle, ingest, multi-bus, and derived state
   const manager = useIOSessionManager({
     appName: "decoder",
@@ -420,6 +429,7 @@ export default function Decoder() {
     onFrames: handleFrames,
     onError: handleError,
     onTimeUpdate: handleTimeUpdate,
+    onSuspended: handleSessionSuspended,
     onStreamEnded: handleStreamEnded,
     onStreamComplete: handleStreamComplete,
     onSpeedChange: handleSessionSpeedChange,
@@ -451,6 +461,9 @@ export default function Decoder() {
     isBufferMode,
     capabilities,
     joinerCount,
+    // Centralised playback position (from session store)
+    currentTimeUs: sessionCurrentTimeUs,
+    currentFrameIndex: sessionCurrentFrameIndex,
     handleLeave,
     // Watch state
     watchFrameCount,
@@ -500,6 +513,20 @@ export default function Decoder() {
   // Has buffer data available for replay - only relevant when in buffer mode
   const hasBufferData = isBufferMode && (bufferAvailable || (bufferMetadata?.count ?? 0) > 0);
 
+  // Fetch buffer metadata when joining a session already in buffer mode
+  // This handles the case where another app stopped the session before we joined
+  useEffect(() => {
+    if (isBufferMode && !isStreaming && !bufferMetadata && sessionId) {
+      getBufferMetadata().then(meta => {
+        if (meta) {
+          setBufferMetadata(meta);
+        }
+      }).catch(err => {
+        console.warn('[Decoder] Failed to fetch buffer metadata:', err);
+      });
+    }
+  }, [isBufferMode, isStreaming, bufferMetadata, sessionId]);
+
   // Use the orchestrator hook for all handlers
   const handlers = useDecoderHandlers({
     // Session actions (low-level, for buffer reinitialize and playback)
@@ -517,6 +544,7 @@ export default function Decoder() {
     isPaused,
     isStreaming,
     sessionReady: isReady,
+    isBufferMode,
     capabilities,
     currentFrameIndex,
     currentTimestampUs: currentTime !== null ? currentTime * 1_000_000 : null,
@@ -982,8 +1010,8 @@ export default function Decoder() {
           onEndTimeChange={handlers.handleEndTimeChange}
           minTimeUs={bufferMetadata?.start_time_us}
           maxTimeUs={bufferMetadata?.end_time_us}
-          currentTimeUs={currentTime !== null ? currentTime * 1_000_000 : null}
-          currentFrameIndex={currentFrameIndex}
+          currentTimeUs={sessionCurrentTimeUs}
+          currentFrameIndex={sessionCurrentFrameIndex}
           totalFrames={bufferMetadata?.count}
           onScrub={handlers.handleScrub}
           signalColours={{

@@ -184,9 +184,31 @@ export default function Discovery() {
   }, [showAppError]);
 
   const handleTimeUpdate = useCallback((position: PlaybackPosition) => {
+    // Update local store for backward compatibility (components that still read from store)
     updateCurrentTime(position.timestamp_us / 1_000_000);
     setCurrentFrameIndex(position.frame_index);
   }, [updateCurrentTime, setCurrentFrameIndex]);
+
+  // Handle session suspended (from any app sharing this session)
+  // This fetches buffer metadata and frame info so Discovery can show timeline controls
+  const handleSessionSuspended = useCallback(async (payload: import("../../api/io").SessionSuspendedPayload) => {
+    if (payload.buffer_count > 0) {
+      const meta = await getBufferMetadata();
+      if (meta) {
+        setBufferMetadata(meta);
+        enableBufferMode(meta.count);
+
+        // Fetch frame info from backend buffer (populates frame picker)
+        try {
+          const frameInfoList = await getBufferFrameInfo();
+          console.log(`[Discovery] Session suspended - loaded ${frameInfoList.length} unique frame IDs from buffer`);
+          setFrameInfoFromBuffer(frameInfoList);
+        } catch (err) {
+          console.warn('[Discovery] Failed to fetch frame info after suspend:', err);
+        }
+      }
+    }
+  }, [enableBufferMode, setFrameInfoFromBuffer]);
 
   const handleSessionSpeedChange = useCallback((speed: number) => {
     setPlaybackSpeed(speed as PlaybackSpeed);
@@ -313,6 +335,7 @@ export default function Discovery() {
     onBytes: handleBytes,
     onError: handleError,
     onTimeUpdate: handleTimeUpdate,
+    onSuspended: handleSessionSuspended,
     onSpeedChange: handleSessionSpeedChange,
     // Session switching callbacks
     setPlaybackSpeed: (speed: number) => setPlaybackSpeed(speed as PlaybackSpeed),
@@ -338,9 +361,13 @@ export default function Discovery() {
     isStopped,
     canReturnToLive,
     isRealtime,
+    isBufferMode,
     sessionReady,
     capabilities,
     joinerCount,
+    // Centralised playback position (from session store)
+    currentTimeUs: sessionCurrentTimeUs,
+    currentFrameIndex: sessionCurrentFrameIndex,
     handleLeave,
     // Watch state (used by ioPickerProps hook)
     resetWatchFrameCount,
@@ -374,6 +401,30 @@ export default function Discovery() {
   } = session;
 
   // Note: isStreaming, isPaused, isStopped, isRealtime are now provided by useIOSessionManager
+
+  // Fetch buffer metadata and frame info when joining a session already in buffer mode
+  // This handles the case where another app stopped the session before we joined
+  useEffect(() => {
+    if (isBufferMode && !isStreaming && !bufferMetadata && sessionId) {
+      (async () => {
+        try {
+          // Fetch buffer metadata
+          const meta = await getBufferMetadata();
+          if (meta) {
+            setBufferMetadata(meta);
+            enableBufferMode(meta.count);
+
+            // Fetch frame info from backend buffer (populates frame picker)
+            const frameInfoList = await getBufferFrameInfo();
+            console.log(`[Discovery] Loaded ${frameInfoList.length} unique frame IDs from buffer`);
+            setFrameInfoFromBuffer(frameInfoList);
+          }
+        } catch (err) {
+          console.warn('[Discovery] Failed to fetch buffer data:', err);
+        }
+      })();
+    }
+  }, [isBufferMode, isStreaming, bufferMetadata, sessionId, enableBufferMode, setFrameInfoFromBuffer]);
 
   // Centralised IO picker handlers - ensures consistent behavior with other apps
   const ioPickerProps = useIOPickerHandlers({
@@ -503,6 +554,7 @@ export default function Discovery() {
     ioProfile,
     sourceProfileId,
     playbackSpeed,
+    sessionIsBufferMode: isBufferMode,
     bufferModeEnabled: bufferMode.enabled,
     bufferModeTotalFrames: bufferMode.totalFrames,
 
@@ -793,16 +845,17 @@ export default function Discovery() {
             onEndTimeChange={handlers.handleEndTimeChange}
             maxBuffer={maxBuffer}
             onMaxBufferChange={setMaxBuffer}
-            currentTimeUs={currentTime !== null ? currentTime * 1_000_000 : null}
+            currentTimeUs={sessionCurrentTimeUs}
             onScrub={handlers.handleScrub}
             bufferMetadata={bufferMetadata}
             isRecorded={isRecorded}
+            isBufferMode={isBufferMode}
             // Playback controls
             playbackState={isStreaming && !isPaused ? "playing" : "paused"}
             playbackDirection={playbackDirection}
             capabilities={capabilities}
             playbackSpeed={playbackSpeed}
-            currentFrameIndex={currentFrameIndex}
+            currentFrameIndex={sessionCurrentFrameIndex}
             onFrameSelect={async (frameIndex, timestampUs) => {
               setCurrentFrameIndex(frameIndex);
               updateCurrentTime(timestampUs / 1_000_000);
@@ -810,7 +863,7 @@ export default function Discovery() {
                 await seek(timestampUs);
               }
             }}
-            onPlay={() => { setPlaybackDirection("forward"); handlers.handlePlayForward(); }}
+            onPlay={() => { setPlaybackDirection("forward"); handlers.handlePlay(); }}
             onPlayBackward={() => { setPlaybackDirection("backward"); handlers.handlePlayBackward(); }}
             onPause={handlers.handlePause}
             onStepBackward={handlers.handleStepBackward}

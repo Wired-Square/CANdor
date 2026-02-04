@@ -105,6 +105,7 @@ All notable changes to CANdor will be documented in this file.
 
 ### Changed
 
+- **Centralised Playback Handlers**: Discovery now uses the shared `usePlaybackHandlers` hook for play/pause/stop/step operations, ensuring consistent behaviour with Decoder. This removes ~140 lines of duplicate playback logic from Discovery's session handlers and consolidates all playback state management in a single location.
 - **Simplified Session Controls**: Replaced the complex detach/rejoin pattern with a single "Leave" action:
   - Stop no longer auto-leaves the session (session stays alive for resume)
   - Sessions are destroyed when the last listener leaves via heartbeat cleanup
@@ -121,6 +122,12 @@ All notable changes to CANdor will be documented in this file.
 
 ### Fixed
 
+- **Discovery Playback Controls During Live Streaming**: Fixed playback controls (play/pause/step buttons) incorrectly appearing in Discovery while the session was actively streaming. Controls now only appear after stopping in buffer mode.
+- **Discovery Timeline Negative Times During Streaming**: Fixed the timeline scrubber showing negative time values during live streaming. The timeline now only renders when in buffer mode with valid buffer metadata.
+- **Discovery Session Indicator Colour Mismatch**: Fixed session indicator showing blue (info) in Discovery while Decoder showed green (running) for the same session in buffer mode. Discovery now uses `isBufferMode` from the session manager (same source as Decoder) instead of local store state, ensuring consistent status display across apps.
+- **Buffer Mode Play Button Error**: Fixed "Reader is not paused" error when clicking play in buffer mode. The buffer reader is in "stopped" state (not "paused") after suspending, so the play handler now correctly calls `start()` to begin buffer playback instead of `resume()` which only works for paused readers.
+- **Discovery Buffer Playback Controls Disappearing**: Fixed playback controls (play/pause/step) disappearing when buffer playback starts in Discovery. The controls were incorrectly hidden when `isStreaming` became true, but buffer playback IS streaming from the buffer. Removed the `!isStreaming` requirement from `inBufferPlaybackMode`.
+- **Discovery Timeline Not Updating During Buffer Playback**: Fixed the timeline scrubber not moving during buffer playback in Discovery. The timeline position now correctly uses the session's `currentTimeUs` and updates in real-time as the buffer plays. Also fixed page auto-navigation to follow the current frame during buffer playback.
 - **Window Creation Race Condition**: Fixed race condition where multiple concurrent calls to create the main window could result in duplicate window creation attempts.
 - **IO Picker Controls After Detach**: Fixed IO picker showing "Rejoin" button and "Multi-Bus" indicator after detaching from a session with a buffer copy. The session shape now distinguishes between:
   - **Play**: Actively streaming, appending to buffer

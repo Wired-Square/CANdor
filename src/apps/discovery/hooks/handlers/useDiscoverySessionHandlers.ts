@@ -1,44 +1,27 @@
 // ui/src/apps/discovery/hooks/handlers/useDiscoverySessionHandlers.ts
 //
-// Session-related handlers for Discovery: start, stop, resume, detach, rejoin, multi-bus, IO profile change.
+// Session-related handlers for Discovery: IO profile change, ingest, multi-bus, join session.
 // Delegates session orchestration to useIOSessionManager methods; only adds Discovery-specific logic
-// (serial config, framing config, buffer cleanup, playback controls).
+// (serial config, framing config, buffer cleanup).
+// Note: Playback handlers (play/pause/stop/step) are in useDiscoveryPlaybackHandlers.
 
 import { useCallback } from "react";
 import type { IngestOptions } from "../../../../dialogs/IoReaderPickerDialog";
 import type { IngestOptions as ManagerIngestOptions } from "../../../../hooks/useIOSessionManager";
 import { getBufferFrameInfo, setActiveBuffer, type BufferMetadata } from "../../../../api/buffer";
-import { stepBufferFrame, updateReaderDirection } from "../../../../api/io";
 import { isBufferProfileId } from "../../../../hooks/useIOSessionManager";
 import { useBufferSession } from "../../../../hooks/useBufferSession";
 
 export interface UseDiscoverySessionHandlersParams {
-  // Session manager state (for playback controls)
-  sessionId: string;
-  isStreaming: boolean;
-  isPaused: boolean;
-  sessionReady: boolean;
-
-  // Current position (for step operations)
-  currentFrameIndex?: number | null;
-  currentTimestampUs?: number | null;
-
-  // Selected frame IDs for filtering step operations
-  selectedFrameIds?: Set<number>;
-
-  // Session actions (for playback controls)
+  // Session actions
   setSourceProfileId: (profileId: string | null) => void;
   setShowBusColumn: (show: boolean) => void;
-  start: () => Promise<void>;
-  pause: () => Promise<void>;
-  resume: () => Promise<void>;
 
   // Manager session switching methods
   watchSingleSource: (profileId: string, options: ManagerIngestOptions, reinitializeOptions?: Record<string, unknown>) => Promise<void>;
   watchMultiSource: (profileIds: string[], options: ManagerIngestOptions) => Promise<void>;
   ingestSingleSource: (profileId: string, options: ManagerIngestOptions) => Promise<void>;
   ingestMultiSource: (profileIds: string[], options: ManagerIngestOptions) => Promise<void>;
-  stopWatch: () => Promise<void>;
   selectProfile: (profileId: string | null) => void;
   selectMultipleProfiles: (profileIds: string[]) => void;
   joinSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
@@ -59,7 +42,6 @@ export interface UseDiscoverySessionHandlersParams {
   addSerialBytes: (entries: { byte: number; timestampUs: number }[]) => void;
   setSerialConfig: (config: any) => void;
   setFramingConfig: (config: any) => void;
-  resetWatchFrameCount: () => void;
   showError: (title: string, message: string, details?: string) => void;
 
   // Buffer state
@@ -70,23 +52,12 @@ export interface UseDiscoverySessionHandlersParams {
 }
 
 export function useDiscoverySessionHandlers({
-  sessionId,
-  isStreaming,
-  isPaused,
-  sessionReady,
-  currentFrameIndex,
-  currentTimestampUs,
-  selectedFrameIds,
   setSourceProfileId,
   setShowBusColumn,
-  start,
-  pause,
-  resume,
   watchSingleSource,
   watchMultiSource,
   ingestSingleSource,
   ingestMultiSource,
-  stopWatch,
   selectProfile,
   selectMultipleProfiles,
   joinSession,
@@ -105,7 +76,6 @@ export function useDiscoverySessionHandlers({
   addSerialBytes: _addSerialBytes,
   setSerialConfig,
   setFramingConfig,
-  resetWatchFrameCount,
   showError,
   setBufferMetadata,
   closeIoReaderPicker,
@@ -330,132 +300,6 @@ export function useDiscoverySessionHandlers({
     selectMultipleProfiles(profileIds);
   }, [selectMultipleProfiles]);
 
-  // Handle play/resume button click
-  const handlePlay = useCallback(async () => {
-    console.log(`[DiscoverySessionHandlers] handlePlay - isPaused=${isPaused}, isStreaming=${isStreaming}, sessionReady=${sessionReady}`);
-    if (isPaused) {
-      console.log(`[DiscoverySessionHandlers] handlePlay - resuming...`);
-      await resume();
-      console.log(`[DiscoverySessionHandlers] handlePlay - resume complete`);
-    } else if (isStreaming) {
-      console.log("[DiscoverySessionHandlers] Ignoring play request - already streaming");
-    } else if (!sessionReady) {
-      console.log("[DiscoverySessionHandlers] Ignoring play request - session not ready");
-    } else {
-      console.log(`[DiscoverySessionHandlers] handlePlay - starting...`);
-      resetWatchFrameCount();
-      await start();
-      console.log(`[DiscoverySessionHandlers] handlePlay - start complete`);
-    }
-  }, [isPaused, isStreaming, sessionReady, resume, start, resetWatchFrameCount]);
-
-  // Handle play backwards button click
-  const handlePlayBackward = useCallback(async () => {
-    console.log(`[DiscoverySessionHandlers] handlePlayBackward - isPaused=${isPaused}, isStreaming=${isStreaming}, sessionReady=${sessionReady}`);
-
-    // Set direction to reverse before starting/resuming
-    try {
-      await updateReaderDirection(sessionId, true);
-      console.log(`[DiscoverySessionHandlers] handlePlayBackward - direction set to reverse`);
-    } catch (e) {
-      console.error(`[DiscoverySessionHandlers] handlePlayBackward - failed to set direction:`, e);
-      return;
-    }
-
-    if (isPaused) {
-      console.log(`[DiscoverySessionHandlers] handlePlayBackward - resuming...`);
-      await resume();
-      console.log(`[DiscoverySessionHandlers] handlePlayBackward - resume complete`);
-    } else if (isStreaming) {
-      console.log("[DiscoverySessionHandlers] Already streaming in reverse direction");
-    } else if (!sessionReady) {
-      console.log("[DiscoverySessionHandlers] Ignoring play backward request - session not ready");
-    } else {
-      console.log(`[DiscoverySessionHandlers] handlePlayBackward - starting...`);
-      resetWatchFrameCount();
-      await start();
-      console.log(`[DiscoverySessionHandlers] handlePlayBackward - start complete`);
-    }
-  }, [sessionId, isPaused, isStreaming, sessionReady, resume, start, resetWatchFrameCount]);
-
-  // Handle play forward button click (reset direction to forward)
-  const handlePlayForward = useCallback(async () => {
-    console.log(`[DiscoverySessionHandlers] handlePlayForward - setting direction to forward`);
-
-    // Set direction to forward
-    try {
-      await updateReaderDirection(sessionId, false);
-      console.log(`[DiscoverySessionHandlers] handlePlayForward - direction set to forward`);
-    } catch (e) {
-      console.error(`[DiscoverySessionHandlers] handlePlayForward - failed to set direction:`, e);
-      // Continue anyway - forward is the default
-    }
-
-    // Then call the regular handlePlay logic
-    if (isPaused) {
-      await resume();
-    } else if (!isStreaming && sessionReady) {
-      resetWatchFrameCount();
-      await start();
-    }
-  }, [sessionId, isPaused, isStreaming, sessionReady, resume, start, resetWatchFrameCount]);
-
-  // Handle stop button click
-  const handleStop = useCallback(async () => {
-    console.log(`[DiscoverySessionHandlers] handleStop - calling stopWatch...`);
-    await stopWatch();
-    console.log(`[DiscoverySessionHandlers] handleStop - stop complete`);
-  }, [stopWatch]);
-
-  // Handle pause button click
-  const handlePause = useCallback(async () => {
-    await pause();
-  }, [pause]);
-
-  // Handle step backward (one frame earlier, respecting filter)
-  const handleStepBackward = useCallback(async () => {
-    // Need to be not actively playing and have some position info (frame index or timestamp)
-    // Allow stepping when paused OR when not streaming (e.g., buffer loaded but not started)
-    const isPlaying = isStreaming && !isPaused;
-    if (isPlaying || (currentFrameIndex == null && currentTimestampUs == null)) return;
-    try {
-      // Convert Set to array for the API call, only if we have a selection
-      const filter = selectedFrameIds && selectedFrameIds.size > 0
-        ? Array.from(selectedFrameIds)
-        : undefined;
-      const result = await stepBufferFrame(sessionId, currentFrameIndex ?? null, currentTimestampUs ?? null, true, filter);
-      // Update the store immediately with the new frame index and timestamp
-      if (result != null) {
-        setCurrentFrameIndex?.(result.frame_index);
-        updateCurrentTime?.(result.timestamp_us / 1_000_000);
-      }
-    } catch (e) {
-      console.error("[DiscoverySessionHandlers] Failed to step backward:", e);
-    }
-  }, [sessionId, isStreaming, isPaused, currentFrameIndex, currentTimestampUs, selectedFrameIds, setCurrentFrameIndex, updateCurrentTime]);
-
-  // Handle step forward (one frame later, respecting filter)
-  const handleStepForward = useCallback(async () => {
-    // Need to be not actively playing and have some position info (frame index or timestamp)
-    // Allow stepping when paused OR when not streaming (e.g., buffer loaded but not started)
-    const isPlaying = isStreaming && !isPaused;
-    if (isPlaying || (currentFrameIndex == null && currentTimestampUs == null)) return;
-    try {
-      // Convert Set to array for the API call, only if we have a selection
-      const filter = selectedFrameIds && selectedFrameIds.size > 0
-        ? Array.from(selectedFrameIds)
-        : undefined;
-      const result = await stepBufferFrame(sessionId, currentFrameIndex ?? null, currentTimestampUs ?? null, false, filter);
-      // Update the store immediately with the new frame index and timestamp
-      if (result != null) {
-        setCurrentFrameIndex?.(result.frame_index);
-        updateCurrentTime?.(result.timestamp_us / 1_000_000);
-      }
-    } catch (e) {
-      console.error("[DiscoverySessionHandlers] Failed to step forward:", e);
-    }
-  }, [sessionId, isStreaming, isPaused, currentFrameIndex, currentTimestampUs, selectedFrameIds, setCurrentFrameIndex, updateCurrentTime]);
-
   // Handle joining an existing session from the IO picker dialog
   const handleJoinSession = useCallback(async (
     profileId: string,
@@ -470,18 +314,14 @@ export function useDiscoverySessionHandlers({
     closeIoReaderPicker();
   }, [joinSession, setShowBusColumn, closeIoReaderPicker]);
 
+  // Note: handlePlay, handlePlayBackward, handleStop, handlePause, handleStepBackward, handleStepForward
+  // are now provided by useDiscoveryPlaybackHandlers (via shared usePlaybackHandlers)
+
   return {
     handleIoProfileChange,
     handleDialogStartIngest,
     handleDialogStartMultiIngest,
     handleSelectMultiple,
-    handlePlay,
-    handlePlayBackward,
-    handlePlayForward,
-    handleStop,
-    handlePause,
-    handleStepBackward,
-    handleStepForward,
     handleJoinSession,
   };
 }

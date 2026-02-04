@@ -1,13 +1,39 @@
 // ui/src/apps/discovery/hooks/handlers/useDiscoveryPlaybackHandlers.ts
 //
 // Playback-related handlers for Discovery: play, pause, stop, speed change, scrub, time range.
+// Uses shared usePlaybackHandlers for play/pause/stop/step consistency with Decoder.
 
 import { useCallback } from "react";
+import { usePlaybackHandlers } from "../../../../hooks/usePlaybackHandlers";
 import type { PlaybackSpeed } from "../../../../stores/discoveryStore";
 import { localToUtc } from "../../../../utils/timeFormat";
 
 export interface UseDiscoveryPlaybackHandlersParams {
-  // State
+  // Session ID for direction control
+  sessionId: string;
+
+  // Session actions (for shared playback handlers)
+  start: () => Promise<void>;
+  stop: () => Promise<void>;
+  pause: () => Promise<void>;
+  resume: () => Promise<void>;
+  setSpeed: (speed: number) => Promise<void>;
+  setTimeRange: (start: string, end: string) => Promise<void>;
+
+  // Reader state
+  isPaused: boolean;
+  isStreaming: boolean;
+  sessionReady: boolean;
+  isBufferMode?: boolean;
+
+  // Current position (for step operations)
+  currentFrameIndex?: number | null;
+  currentTimestampUs?: number | null;
+
+  // Selected frame IDs for filtering step operations
+  selectedFrameIds?: Set<number>;
+
+  // Time range state
   startTime: string;
   endTime: string;
   pendingSpeed: PlaybackSpeed | null;
@@ -19,20 +45,34 @@ export interface UseDiscoveryPlaybackHandlersParams {
   // Store actions
   setPlaybackSpeed: (speed: PlaybackSpeed) => void;
   updateCurrentTime: (time: number) => void;
+  setCurrentFrameIndex?: (index: number) => void;
   setStartTime: (time: string) => void;
   setEndTime: (time: string) => void;
   clearBuffer: () => void;
   clearFramePicker: () => void;
 
-  // Session actions
-  setSpeed: (speed: number) => Promise<void>;
-  setTimeRange: (start: string, end: string) => Promise<void>;
+  // Discovery-specific: reset frame count before starting
+  resetWatchFrameCount: () => void;
 
   // Dialog controls
   closeSpeedChangeDialog: () => void;
 }
 
 export function useDiscoveryPlaybackHandlers({
+  sessionId,
+  start,
+  stop,
+  pause,
+  resume,
+  setSpeed,
+  setTimeRange,
+  isPaused,
+  isStreaming,
+  sessionReady,
+  isBufferMode,
+  currentFrameIndex,
+  currentTimestampUs,
+  selectedFrameIds,
   startTime,
   endTime,
   pendingSpeed,
@@ -40,15 +80,38 @@ export function useDiscoveryPlaybackHandlers({
   setActiveBookmarkId,
   setPlaybackSpeed,
   updateCurrentTime,
+  setCurrentFrameIndex,
   setStartTime,
   setEndTime,
   clearBuffer,
   clearFramePicker,
-  setSpeed,
-  setTimeRange,
+  resetWatchFrameCount,
   closeSpeedChangeDialog,
 }: UseDiscoveryPlaybackHandlersParams) {
-  // Handle speed change
+  // Use shared playback handlers for play/pause/stop/step consistency
+  const sharedHandlers = usePlaybackHandlers({
+    sessionId,
+    start,
+    stop,
+    pause,
+    resume,
+    setSpeed,
+    isPaused,
+    isStreaming,
+    sessionReady,
+    isBufferMode,
+    currentFrameIndex,
+    currentTimestampUs,
+    selectedFrameIds,
+    setPlaybackSpeed,
+    updateCurrentTime,
+    setCurrentFrameIndex,
+    onBeforeStart: () => {
+      resetWatchFrameCount();
+    },
+  });
+
+  // Handle speed change (overrides shared handler to match Discovery's implementation)
   const handleSpeedChange = useCallback(async (speed: number) => {
     setPlaybackSpeed(speed as PlaybackSpeed);
     await setSpeed(speed);
@@ -99,6 +162,14 @@ export function useDiscoveryPlaybackHandlers({
   }, [updateCurrentTime]);
 
   return {
+    // From shared handlers
+    handlePlay: sharedHandlers.handlePlay,
+    handlePlayBackward: sharedHandlers.handlePlayBackward,
+    handleStop: sharedHandlers.handleStop,
+    handlePause: sharedHandlers.handlePause,
+    handleStepBackward: sharedHandlers.handleStepBackward,
+    handleStepForward: sharedHandlers.handleStepForward,
+    // Discovery-specific handlers
     handleSpeedChange,
     confirmSpeedChange,
     cancelSpeedChange,
