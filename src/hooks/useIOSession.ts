@@ -422,6 +422,9 @@ export function useIOSession(
             newState === "error" && event.payload.current.startsWith("error:")
               ? event.payload.current.slice(6)
               : null;
+          // Clear expectedStateRef so this state update takes effect
+          // (expectedStateRef is only used during the brief reinitialize window)
+          expectedStateRef.current = null;
           setLocalState((prev) =>
             prev
               ? { ...prev, ioState: newState, errorMessage, isReady: true }
@@ -468,6 +471,8 @@ export function useIOSession(
       const unlistenComplete = await listen<boolean>(
         `stream-complete:${effectiveSessionId}`,
         () => {
+          // Clear expectedStateRef so this state update takes effect
+          expectedStateRef.current = null;
           setLocalState((prev) =>
             prev ? { ...prev, ioState: "stopped" } : null
           );
@@ -480,6 +485,8 @@ export function useIOSession(
         `stream-ended:${effectiveSessionId}`,
         (event) => {
           const payload = event.payload;
+          // Clear expectedStateRef so this state update takes effect
+          expectedStateRef.current = null;
           setLocalState((prev) =>
             prev
               ? {
@@ -507,6 +514,8 @@ export function useIOSession(
         `session-suspended:${effectiveSessionId}`,
         (event) => {
           const payload = event.payload;
+          // Clear expectedStateRef so this state update takes effect
+          expectedStateRef.current = null;
           setLocalState((prev) =>
             prev
               ? {
@@ -532,6 +541,8 @@ export function useIOSession(
       const unlistenResuming = await listen<SessionResumingPayload>(
         `session-resuming:${effectiveSessionId}`,
         (event) => {
+          // Clear expectedStateRef so this state update takes effect
+          expectedStateRef.current = null;
           setLocalState((prev) =>
             prev
               ? {

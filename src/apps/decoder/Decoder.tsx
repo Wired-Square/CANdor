@@ -662,6 +662,39 @@ export default function Decoder() {
   }, [isFocused, bookmarkProfileId]);
 
   // Listen for session control menu commands
+  // Refs for menu command handlers to avoid stale closures and effect re-runs
+  const menuStateRef = useRef({
+    isPaused,
+    isStopped,
+    isStreaming,
+    isReady,
+    resume,
+    start,
+    pause,
+    stopWatch,
+    handlers,
+    dialogs,
+    bookmarkProfileId,
+    jumpToBookmark,
+  });
+  // Keep ref in sync with current values
+  menuStateRef.current = {
+    isPaused,
+    isStopped,
+    isStreaming,
+    isReady,
+    resume,
+    start,
+    pause,
+    stopWatch,
+    handlers,
+    dialogs,
+    bookmarkProfileId,
+    jumpToBookmark,
+  };
+
+  // Listen for session control menu commands
+  // Uses ref to access current state without re-running effect on every state change
   useEffect(() => {
     const currentWindow = getCurrentWebviewWindow();
 
@@ -674,44 +707,47 @@ export default function Decoder() {
           if (windowLabel && windowLabel !== currentWindow.label) return;
           if (targetPanelId !== "decoder") return;
 
+          // Access current state via ref to avoid stale closures
+          const state = menuStateRef.current;
+
           switch (action) {
             case "play":
-              if (isPaused) {
-                resume();
-              } else if (isStopped && isReady) {
-                start();
+              if (state.isPaused) {
+                state.resume();
+              } else if (state.isStopped && state.isReady) {
+                state.start();
               }
               break;
             case "pause":
-              if (isStreaming && !isPaused) {
-                pause();
+              if (state.isStreaming && !state.isPaused) {
+                state.pause();
               }
               break;
             case "stop":
               // Pause frame delivery (like timeline Pause button)
-              if (isStreaming && !isPaused) {
-                pause();
+              if (state.isStreaming && !state.isPaused) {
+                state.pause();
               }
               break;
             case "stopAll":
               // Stop this app's watch (like top bar Stop button)
-              if (isStreaming) {
-                stopWatch();
+              if (state.isStreaming) {
+                state.stopWatch();
               }
               break;
             case "clear":
-              handlers.handleClear();
+              state.handlers.handleClear();
               break;
             case "picker":
-              dialogs.ioReaderPicker.open();
+              state.dialogs.ioReaderPicker.open();
               break;
             case "jump-to-bookmark":
               // Jump to bookmark from menu (use sourceProfileId for recorded sources)
-              if (bookmarkId && bookmarkProfileId) {
-                const bookmarks = await getFavoritesForProfile(bookmarkProfileId);
+              if (bookmarkId && state.bookmarkProfileId) {
+                const bookmarks = await getFavoritesForProfile(state.bookmarkProfileId);
                 const bookmark = bookmarks.find((b) => b.id === bookmarkId);
                 if (bookmark) {
-                  await jumpToBookmark(bookmark);
+                  await state.jumpToBookmark(bookmark);
                 }
               }
               break;
@@ -728,7 +764,7 @@ export default function Decoder() {
     return () => {
       cleanup.then((fn) => fn());
     };
-  }, [isPaused, isStopped, isStreaming, isReady, resume, start, pause, stop, stopWatch, handlers, dialogs]);
+  }, []); // Empty deps - effect runs once, uses ref for current values
 
   // Note: Watch state is cleared automatically by useIOSessionManager when streaming stops
 

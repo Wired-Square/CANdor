@@ -132,6 +132,17 @@ impl IODevice for PostgresReader {
 
         let app = self.app.clone();
         let session_id = self.reader_state.session_id.clone();
+
+        // Create buffer synchronously BEFORE spawning task (matches MultiSource pattern)
+        // This prevents double buffer creation when resume_session_fresh() is called,
+        // and ensures buffer exists before any frames are emitted.
+        let orphaned = buffer_store::orphan_buffers_for_session(&session_id);
+        emit_buffer_orphaned(&app, &session_id, orphaned);
+
+        let buffer_id = buffer_store::create_buffer(BufferType::Frames, session_id.clone());
+        emit_buffer_created(&app, &session_id, &buffer_id, &session_id, "frames");
+        let _ = buffer_store::set_buffer_owner(&buffer_id, &session_id);
+
         let config = self.config.clone();
         let options = self.options.clone();
         let control = self.reader_state.control.clone();
@@ -198,7 +209,7 @@ impl IODevice for PostgresReader {
         self.options.end = end;
 
         // Start a new stream (this will orphan old buffer and create new one)
-        // The start() method handles buffer creation via spawn_postgres_stream
+        // The start() method creates the buffer synchronously before spawning the task
         self.start().await
     }
 }
@@ -216,17 +227,14 @@ fn spawn_postgres_stream(
             run_postgres_stream(app_handle.clone(), session_id.clone(), config, options, control)
                 .await
         {
+            // run_postgres_stream emits stream-ended on error paths before returning Err,
+            // so we only need to emit session-error for additional context.
             emit_to_session(
                 &app_handle,
                 "session-error",
                 &session_id,
                 format!("PostgreSQL error: {}", e),
             );
-            // Ensure stream-ended is emitted on error (run_postgres_stream may have already emitted it)
-            // Check if streaming flag is still set (indicates stream-ended wasn't emitted yet)
-            if buffer_store::is_streaming() {
-                emit_stream_ended(&app_handle, &session_id, "error", "PostgreSQL");
-            }
         }
     })
 }
@@ -238,16 +246,8 @@ async fn run_postgres_stream(
     options: PostgresReaderOptions,
     control: TimelineControl,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Orphan any existing buffer owned by this session (e.g., from a previous bookmark jump)
-    // This makes the old buffer selectable in "Orphaned Buffers" while creating a fresh one
-    let orphaned = buffer_store::orphan_buffers_for_session(&session_id);
-    emit_buffer_orphaned(&app_handle, &session_id, orphaned);
-
-    // Create a new frame buffer for this PostgreSQL session (named after session ID)
-    let buffer_id = buffer_store::create_buffer(BufferType::Frames, session_id.clone());
-    emit_buffer_created(&app_handle, &session_id, &buffer_id, &session_id, "frames");
-    // Assign buffer ownership to this session
-    let _ = buffer_store::set_buffer_owner(&buffer_id, &session_id);
+    // Buffer is created synchronously in start() before this task is spawned.
+    // This prevents double buffer creation when resume_session_fresh() is called.
 
     // Track stream end reason
     let mut stream_reason = "complete";
@@ -282,6 +282,10 @@ async fn run_postgres_stream(
 
     // Build query based on source type
     let query = build_query(&options);
+    eprintln!(
+        "[PostgreSQL:{}] Query: {}",
+        session_id, query
+    );
 
     // Start a transaction for the cursor
     let transaction = match client.transaction().await {
@@ -383,6 +387,7 @@ async fn run_postgres_stream(
     }
 
     if frame_queue.is_empty() {
+        eprintln!("[PostgreSQL:{}] No frames returned from query", session_id);
         emit_stream_ended(&app_handle, &session_id, stream_reason, "PostgreSQL");
         return Ok(());
     }
@@ -626,18 +631,21 @@ async fn run_postgres_stream(
         emit_frames(&app_handle, &session_id, batch_buffer);
     }
 
-    // Check if we were stopped by user
+    // Only emit stream-ended for natural completion or error, not for cancellation.
+    // When cancelled (user clicked Stop), suspend_session() will emit session-suspended.
+    // This prevents double event emission that confuses the frontend.
     if control.is_cancelled() {
-        stream_reason = "stopped";
+        eprintln!(
+            "[PostgreSQL:{}] Stream cancelled by user (fetched: {}, emitted: {})",
+            session_id, total_fetched, total_emitted
+        );
+    } else {
+        eprintln!(
+            "[PostgreSQL:{}] Stream ended (reason: {}, fetched: {}, emitted: {})",
+            session_id, stream_reason, total_fetched, total_emitted
+        );
+        emit_stream_ended(&app_handle, &session_id, stream_reason, "PostgreSQL");
     }
-
-    eprintln!(
-        "[PostgreSQL:{}] Stream ended (reason: {}, fetched: {}, emitted: {})",
-        session_id, stream_reason, total_fetched, total_emitted
-    );
-
-    // Emit stream-ended event
-    emit_stream_ended(&app_handle, &session_id, stream_reason, "PostgreSQL");
 
     Ok(())
 }
@@ -667,9 +675,10 @@ fn build_where_clause(options: &PostgresReaderOptions) -> String {
 fn build_query(options: &PostgresReaderOptions) -> String {
     let where_clause = build_where_clause(options);
     // Always include a LIMIT to help the query planner choose an index scan.
-    // Without a LIMIT, PostgreSQL may plan for a full table scan even with cursors.
-    // 10 million rows is ~2.7 hours at 1000 fps - more than enough for any session.
-    const DEFAULT_CURSOR_LIMIT: i64 = 10_000_000;
+    // Without a LIMIT or with a very large LIMIT, PostgreSQL may plan for a full
+    // table scan even with cursors, causing long query planning delays.
+    // 1M rows = ~16 minutes at 1000 fps - sufficient for most analysis sessions.
+    const DEFAULT_CURSOR_LIMIT: i64 = 1_000_000;
     let limit_clause = match options.limit {
         Some(n) if n > 0 => format!(" LIMIT {}", n),
         _ => format!(" LIMIT {}", DEFAULT_CURSOR_LIMIT),

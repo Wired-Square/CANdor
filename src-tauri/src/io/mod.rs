@@ -1485,7 +1485,7 @@ pub async fn suspend_session(session_id: &str) -> Result<IOState, String> {
 
 /// Resume a suspended session with a fresh buffer.
 /// The old buffer is orphaned (becomes available for standalone viewing).
-/// A new buffer is created for the session and streaming starts.
+/// A new buffer is created by the device's start() method.
 /// Returns the confirmed state after the operation.
 pub async fn resume_session_fresh(session_id: &str) -> Result<IOState, String> {
     let mut sessions = IO_SESSIONS.lock().await;
@@ -1503,39 +1503,23 @@ pub async fn resume_session_fresh(session_id: &str) -> Result<IOState, String> {
         ));
     }
 
-    // Get the current buffer ID before orphaning
+    // Get the current buffer ID before the device orphans it
     let old_buffer_id = buffer_store::get_buffer_for_session(session_id);
 
-    // Orphan the old buffer (makes it standalone, data preserved)
-    let orphaned = buffer_store::orphan_buffers_for_session(session_id);
-    emit_buffer_orphaned(&session.app, session_id, orphaned);
-
-    // Create a new buffer for the session
-    let timestamp = chrono::Local::now().format("%H%M%S").to_string();
-    let buffer_name = format!("{}-{}", session_id, timestamp);
-    let new_buffer_id = buffer_store::create_buffer(buffer_store::BufferType::Frames, buffer_name.clone());
-    emit_buffer_created(&session.app, session_id, &new_buffer_id, &buffer_name, "frames");
-
-    // Assign the new buffer to this session
-    if let Err(e) = buffer_store::set_buffer_owner(&new_buffer_id, session_id) {
-        eprintln!(
-            "[reader] resume_session_fresh - failed to set buffer owner: {}",
-            e
-        );
-    }
-
     // Emit session-resuming event so apps clear their frame lists
+    // Note: The device's start() will orphan old buffer and create new one
     emit_to_session(
         &session.app,
         "session-resuming",
         session_id,
         SessionResumingPayload {
-            new_buffer_id: new_buffer_id.clone(),
+            new_buffer_id: String::new(), // Will be set by device's start()
             orphaned_buffer_id: old_buffer_id,
         },
     );
 
-    // Start the device
+    // Start the device - this will orphan old buffer and create new one
+    // Timeline readers (PostgreSQL, CSV, Buffer) handle buffer creation in start()
     session.device.start().await?;
 
     let current = session.device.state();
@@ -1544,8 +1528,8 @@ pub async fn resume_session_fresh(session_id: &str) -> Result<IOState, String> {
     }
 
     eprintln!(
-        "[reader] resume_session_fresh('{}') - old buffer orphaned, new buffer '{}' created",
-        session_id, new_buffer_id
+        "[reader] resume_session_fresh('{}') - device started with fresh buffer",
+        session_id
     );
 
     Ok(current)
