@@ -19,12 +19,11 @@ use crate::{
         GvretDeviceInfo, probe_gvret_tcp, probe_gvret_usb,
         MqttConfig, MqttReader,
         MultiSourceReader, SourceConfig,
-        Parity, PostgresConfig, PostgresReader, PostgresReaderOptions, PostgresSourceType,
+        PostgresConfig, PostgresReader, PostgresReaderOptions, PostgresSourceType,
         CanTransmitFrame, TransmitResult,
         emit_device_probe, DeviceProbePayload,
     },
     profile_tracker,
-    io::serial::{FrameIdConfig, FramingEncoding},
     settings::{self, AppSettings, IOProfile},
 };
 use once_cell::sync::Lazy;
@@ -388,18 +387,6 @@ pub async fn create_reader_session(
     speed: Option<f64>,
     limit: Option<i64>,
     file_path: Option<String>,
-    // Framing configuration for serial readers
-    framing_encoding: Option<String>,
-    delimiter: Option<Vec<u8>>,
-    max_frame_length: Option<usize>,
-    frame_id_start_byte: Option<i32>,
-    frame_id_bytes: Option<u8>,
-    frame_id_big_endian: Option<bool>,
-    source_address_start_byte: Option<i32>,
-    source_address_bytes: Option<u8>,
-    source_address_big_endian: Option<bool>,
-    min_frame_length: Option<usize>,
-    emit_raw_bytes: Option<bool>,
     // Bus override for single-bus devices (overrides profile config)
     bus_override: Option<u8>,
     // Listener ID (for session logging)
@@ -606,7 +593,6 @@ pub async fn create_reader_session(
                 password,
                 topic,
                 client_id: None,
-                display_name: Some(profile.name.clone()),
             };
 
             Box::new(MqttReader::new(app.clone(), session_id.clone(), config))

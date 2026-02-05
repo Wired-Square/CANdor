@@ -781,9 +781,23 @@ export default function Discovery() {
       };
     };
 
-    const cleanup = setupListeners();
+    let cleanupFn: (() => void) | null = null;
+    let mounted = true;
+
+    setupListeners().then((fn) => {
+      if (mounted) {
+        cleanupFn = fn;
+      } else {
+        // Component unmounted before listeners were set up - clean up immediately
+        fn();
+      }
+    });
+
     return () => {
-      cleanup.then((fn) => fn());
+      mounted = false;
+      if (cleanupFn) {
+        cleanupFn();
+      }
     };
   }, [isPaused, isStopped, isStreaming, sessionReady, resume, resumeWithNewBuffer, pause, stop, stopWatch, handlers, currentTime, dialogs]);
 

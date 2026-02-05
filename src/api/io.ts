@@ -792,6 +792,8 @@ export async function unregisterSessionListener(
   sessionId: string,
   listenerId: string
 ): Promise<number> {
+  console.log(`[unregisterSessionListener] session=${sessionId}, listener=${listenerId}`);
+  console.log(`[unregisterSessionListener] stack:`, new Error().stack);
   return invoke("unregister_session_listener", {
     session_id: sessionId,
     listener_id: listenerId,
@@ -856,6 +858,8 @@ export async function setSessionListenerActive(
   listenerId: string,
   isActive: boolean
 ): Promise<void> {
+  console.log(`[setSessionListenerActive] session=${sessionId}, listener=${listenerId}, isActive=${isActive}`);
+  console.log(`[setSessionListenerActive] stack:`, new Error().stack);
   return invoke("set_session_listener_active", {
     session_id: sessionId,
     listener_id: listenerId,

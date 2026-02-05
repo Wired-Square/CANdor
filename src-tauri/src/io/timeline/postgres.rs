@@ -320,8 +320,12 @@ async fn run_postgres_stream(
     );
 
     // Start a transaction for the cursor
+    eprintln!("[PostgreSQL:{}] Starting transaction...", session_id);
     let transaction = match client.transaction().await {
-        Ok(tx) => tx,
+        Ok(tx) => {
+            eprintln!("[PostgreSQL:{}] Transaction started", session_id);
+            tx
+        }
         Err(e) => {
             stream_reason = "error";
             emit_stream_ended(&app_handle, &session_id, stream_reason, "PostgreSQL");
@@ -330,8 +334,12 @@ async fn run_postgres_stream(
     };
 
     // Create a portal (cursor) for streaming results
+    eprintln!("[PostgreSQL:{}] Binding query to portal...", session_id);
     let portal = match transaction.bind(&query, &[]).await {
-        Ok(p) => p,
+        Ok(p) => {
+            eprintln!("[PostgreSQL:{}] Portal bound successfully", session_id);
+            p
+        }
         Err(e) => {
             stream_reason = "error";
             emit_stream_ended(&app_handle, &session_id, stream_reason, "PostgreSQL");
@@ -368,15 +376,21 @@ async fn run_postgres_stream(
         batch_size: i32,
         target_size: usize,
         source_type: &PostgresSourceType,
+        session_id: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        eprintln!("[PostgreSQL:{}] refill_buffer: starting, queue_len={}, target={}, batch_size={}",
+            session_id, frame_queue.len(), target_size, batch_size);
         while frame_queue.len() < target_size && !*db_exhausted {
+            eprintln!("[PostgreSQL:{}] refill_buffer: fetching batch from portal...", session_id);
             let rows = transaction
                 .query_portal(portal, batch_size)
                 .await
                 .map_err(|e| format!("Failed to fetch from cursor: {}", e))?;
+            eprintln!("[PostgreSQL:{}] refill_buffer: got {} rows", session_id, rows.len());
 
             if rows.is_empty() {
                 *db_exhausted = true;
+                eprintln!("[PostgreSQL:{}] refill_buffer: database exhausted", session_id);
                 break;
             }
 
@@ -391,7 +405,9 @@ async fn run_postgres_stream(
                     }
                 }
             }
+            eprintln!("[PostgreSQL:{}] refill_buffer: queue now has {} frames", session_id, frame_queue.len());
         }
+        eprintln!("[PostgreSQL:{}] refill_buffer: complete, total_fetched={}", session_id, total_fetched);
         Ok(())
     }
 
@@ -406,6 +422,7 @@ async fn run_postgres_stream(
         options.batch_size,
         BUFFER_SIZE,
         &options.source_type,
+        &session_id,
     )
     .await
     {
@@ -512,6 +529,7 @@ async fn run_postgres_stream(
                 options.batch_size,
                 BUFFER_SIZE,
                 &options.source_type,
+                &session_id,
             )
             .await?;
         }

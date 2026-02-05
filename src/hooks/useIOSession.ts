@@ -308,6 +308,10 @@ export function useIOSession(
   const currentSessionIdRef = useRef<string | null>(null);
   // Listener ID is the app name for clarity in debugging
   const listenerIdRef = useRef<string>(appName);
+  // Track if we're currently leaving to prevent double-leave
+  const isLeavingRef = useRef(false);
+  // Track when session was created/joined to prevent immediate leave (click-through protection)
+  const sessionCreatedAtRef = useRef<number>(0);
 
   // Store callbacks in refs to keep them current
   const callbacksRef = useRef({
@@ -555,7 +559,11 @@ export function useIOSession(
     return () => {
       cancelled = true;
       for (const unlisten of unlistenFns) {
-        unlisten();
+        try {
+          unlisten();
+        } catch {
+          // Ignore - event may have already been unlistened
+        }
       }
     };
   }, [effectiveSessionId, appName]);
@@ -665,6 +673,7 @@ export function useIOSession(
 
         // Mark setup as complete and track current session
         setupCompleteRef.current = true;
+        sessionCreatedAtRef.current = Date.now();
         console.log(`[useIOSession:${appName}] setup() - updating currentSessionIdRef from '${currentSessionIdRef.current}' to '${effectiveSessionId}'`);
         currentSessionIdRef.current = effectiveSessionId;
         console.log(`[useIOSession:${appName}] setup() complete, setupComplete=true, currentSessionIdRef='${currentSessionIdRef.current}'`);
@@ -691,6 +700,7 @@ export function useIOSession(
       console.log(`[useIOSession:${appName}]   currentSessionIdRef: ${currentSessionIdRef.current}`);
       console.log(`[useIOSession:${appName}]   setupCompleteRef.current: ${setupCompleteRef.current}`);
       console.log(`[useIOSession:${appName}]   isMountedRef.current: ${isMountedRef.current}`);
+      console.log(`[useIOSession:${appName}]   cleanup triggered at:`, new Error().stack);
 
       // Mark component as unmounted immediately
       isMountedRef.current = false;
@@ -787,23 +797,41 @@ export function useIOSession(
 
   const leave = useCallback(async () => {
     console.log(`[useIOSession:${appName}] leave() called, effectiveSessionId=${effectiveSessionId}, currentSessionIdRef=${currentSessionIdRef.current}`);
+    console.log(`[useIOSession:${appName}] leave() triggered from:`, new Error().stack);
     if (!effectiveSessionId) {
       console.log(`[useIOSession:${appName}] leave() - no effectiveSessionId, returning`);
       return;
     }
-    // First, mark listener as inactive in Rust so it stops receiving frames immediately
-    // This is done before clearing callbacks to prevent race conditions
-    try {
-      console.log(`[useIOSession:${appName}] leave() - marking listener inactive...`);
-      await setSessionListenerActive(effectiveSessionId, listenerIdRef.current, false);
-    } catch {
-      // Ignore - session may not exist
+    // Prevent multiple concurrent leave calls
+    if (isLeavingRef.current) {
+      console.log(`[useIOSession:${appName}] leave() - already leaving, skipping`);
+      return;
     }
-    console.log(`[useIOSession:${appName}] leave() - clearing callbacks...`);
-    clearCallbacks(effectiveSessionId, listenerIdRef.current);
-    console.log(`[useIOSession:${appName}] leave() - calling leaveSession...`);
-    await leaveSession(effectiveSessionId, listenerIdRef.current);
-    console.log(`[useIOSession:${appName}] leave() - complete`);
+    // Prevent immediate leave after session creation (click-through protection)
+    // This prevents accidental leave when dialog closes and click propagates
+    const timeSinceCreation = Date.now() - sessionCreatedAtRef.current;
+    if (timeSinceCreation < 500) {
+      console.log(`[useIOSession:${appName}] leave() - session just created (${timeSinceCreation}ms ago), skipping to prevent click-through`);
+      return;
+    }
+    isLeavingRef.current = true;
+    try {
+      // First, mark listener as inactive in Rust so it stops receiving frames immediately
+      // This is done before clearing callbacks to prevent race conditions
+      try {
+        console.log(`[useIOSession:${appName}] leave() - marking listener inactive...`);
+        await setSessionListenerActive(effectiveSessionId, listenerIdRef.current, false);
+      } catch {
+        // Ignore - session may not exist
+      }
+      console.log(`[useIOSession:${appName}] leave() - clearing callbacks...`);
+      clearCallbacks(effectiveSessionId, listenerIdRef.current);
+      console.log(`[useIOSession:${appName}] leave() - calling leaveSession...`);
+      await leaveSession(effectiveSessionId, listenerIdRef.current);
+      console.log(`[useIOSession:${appName}] leave() - complete`);
+    } finally {
+      isLeavingRef.current = false;
+    }
   }, [appName, effectiveSessionId, leaveSession, clearCallbacks]);
 
   const pause = useCallback(async () => {
@@ -1039,7 +1067,9 @@ export function useIOSession(
         }
 
         // Mark setup as complete for the new session
+        console.log(`[useIOSession:${appName}] reinitialize() - setting setupCompleteRef=true for session ${targetSessionId}`);
         setupCompleteRef.current = true;
+        sessionCreatedAtRef.current = Date.now();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         callbacksRef.current.onError?.(msg);

@@ -45,8 +45,6 @@ pub struct MqttConfig {
     pub topic: String,
     /// Client ID (auto-generated if None)
     pub client_id: Option<String>,
-    /// Display name for the reader
-    pub display_name: Option<String>,
 }
 
 impl Default for MqttConfig {
@@ -58,7 +56,6 @@ impl Default for MqttConfig {
             password: None,
             topic: "candor/#".to_string(),
             client_id: None,
-            display_name: None,
         }
     }
 }

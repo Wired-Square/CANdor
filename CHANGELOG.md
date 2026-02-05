@@ -11,6 +11,7 @@ All notable changes to CANdor will be documented in this file.
 ### Removed
 
 - **Dead Code Cleanup**: Removed unused `orphan_buffer` function from buffer store. Removed `SerialConfig`, `SerialFramingConfig`, and `SerialReader` which were unreachable since serial is classified as a realtime device and routes through `MultiSourceReader::single_source()`.
+- **Rust Backend Dead Code**: Removed unused imports (`Parity`, `FrameIdConfig`, `FramingEncoding`) and 11 unused parameters from `create_reader_session` command that were never wired through. Removed unused `realtime_serial()` function from `IOCapabilities`. Removed unused `display_name` field from `MqttConfig`.
 
 ### Added
 

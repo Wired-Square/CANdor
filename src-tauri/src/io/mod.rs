@@ -40,6 +40,7 @@ pub use gs_usb::GsUsbConfig;
 pub use gvret::{BusMapping, GvretDeviceInfo, probe_gvret_tcp, probe_gvret_usb};
 pub use multi_source::{MultiSourceReader, SourceConfig};
 pub use mqtt::{MqttConfig, MqttReader};
+#[allow(unused_imports)]
 pub use serial::Parity;
 
 // Error types
@@ -335,32 +336,6 @@ impl IOCapabilities {
                 emits_frames: true,
                 emits_bytes: false,
             }),
-        }
-    }
-
-    /// Create capabilities for a real-time serial source.
-    ///
-    /// Defaults:
-    /// - Real-time streaming with pause support
-    /// - Serial transmit enabled
-    /// - Emits raw bytes (client-side framing)
-    pub fn realtime_serial() -> Self {
-        Self {
-            can_pause: true,
-            supports_time_range: false,
-            is_realtime: true,
-            supports_speed_control: false,
-            supports_seek: false,
-            supports_reverse: false,
-            can_transmit: false,
-            can_transmit_serial: true,
-            supports_canfd: false,
-            supports_extended_id: false,
-            supports_rtr: false,
-            available_buses: vec![],
-            emits_raw_bytes: false, // Set via with_emits_raw_bytes()
-            traits: None,
-            data_streams: None, // Derived from emits_raw_bytes via get_data_streams()
         }
     }
 
