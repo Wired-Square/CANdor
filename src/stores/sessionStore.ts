@@ -150,6 +150,14 @@ function flushPendingFrames() {
     const eventListeners = eventListenersMap[sessionId];
     if (!eventListeners) continue;
 
+    // Check if any callbacks are registered before consuming frames
+    // This prevents losing frames when they arrive before registerCallbacks() is called
+    if (eventListeners.callbacks.size === 0) {
+      // No callbacks registered yet - keep frames pending, reschedule flush
+      scheduleFlush(false);
+      continue;
+    }
+
     const frames = pending.frames;
     const listeners = pending.activeListeners;
 

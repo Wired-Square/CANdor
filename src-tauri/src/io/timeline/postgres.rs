@@ -165,30 +165,11 @@ impl IODevice for PostgresReader {
         end: Option<String>,
     ) -> Result<(), String> {
         let state = self.reader_state.state();
-        let session_id = self.reader_state.session_id();
-        eprintln!(
-            "[PostgreSQL:{}] set_time_range called - state: {:?}, start: {:?}, end: {:?}",
-            session_id,
-            state,
-            start,
-            end
-        );
         if state == IOState::Running || state == IOState::Paused {
-            eprintln!(
-                "[PostgreSQL:{}] Cannot change time range while streaming (state: {:?})",
-                session_id,
-                state
-            );
             return Err("Cannot change time range while streaming".to_string());
         }
-        self.options.start = start.clone();
-        self.options.end = end.clone();
-        eprintln!(
-            "[PostgreSQL:{}] Time range updated - start: {:?}, end: {:?}",
-            session_id,
-            start,
-            end
-        );
+        self.options.start = start;
+        self.options.end = end;
         Ok(())
     }
 
@@ -209,30 +190,16 @@ impl IODevice for PostgresReader {
         start: Option<String>,
         end: Option<String>,
     ) -> Result<(), String> {
-        let session_id = self.reader_state.session_id.clone();
-        eprintln!(
-            "[PostgreSQL:{}] reconfigure called - start: {:?}, end: {:?}",
-            session_id, start, end
-        );
-
         // Stop the current stream (this cancels and awaits the task)
         self.reader_state.stop().await;
-        eprintln!("[PostgreSQL:{}] Stream stopped for reconfigure", session_id);
 
         // Update the time range options
-        self.options.start = start.clone();
-        self.options.end = end.clone();
-        eprintln!(
-            "[PostgreSQL:{}] Time range updated - start: {:?}, end: {:?}",
-            session_id, start, end
-        );
+        self.options.start = start;
+        self.options.end = end;
 
         // Start a new stream (this will orphan old buffer and create new one)
         // The start() method handles buffer creation via spawn_postgres_stream
-        self.start().await?;
-        eprintln!("[PostgreSQL:{}] Reconfigure complete - new stream started", session_id);
-
-        Ok(())
+        self.start().await
     }
 }
 
@@ -304,28 +271,21 @@ async fn run_postgres_stream(
         }
     };
 
-    // Spawn connection handler
-    tokio::spawn(async move {
+    // Spawn connection handler - this task handles the TCP I/O
+    // IMPORTANT: Use tauri::async_runtime::spawn to match the main stream task's runtime
+    let conn_session_id = session_id.clone();
+    tauri::async_runtime::spawn(async move {
         if let Err(e) = connection.await {
-            eprintln!("PostgreSQL connection error: {}", e);
+            eprintln!("[PostgreSQL:{}] Connection error: {}", conn_session_id, e);
         }
     });
 
     // Build query based on source type
     let query = build_query(&options);
 
-    eprintln!(
-        "[PostgreSQL:{}] Executing query with cursor: {}",
-        session_id, query
-    );
-
     // Start a transaction for the cursor
-    eprintln!("[PostgreSQL:{}] Starting transaction...", session_id);
     let transaction = match client.transaction().await {
-        Ok(tx) => {
-            eprintln!("[PostgreSQL:{}] Transaction started", session_id);
-            tx
-        }
+        Ok(tx) => tx,
         Err(e) => {
             stream_reason = "error";
             emit_stream_ended(&app_handle, &session_id, stream_reason, "PostgreSQL");
@@ -334,23 +294,14 @@ async fn run_postgres_stream(
     };
 
     // Create a portal (cursor) for streaming results
-    eprintln!("[PostgreSQL:{}] Binding query to portal...", session_id);
     let portal = match transaction.bind(&query, &[]).await {
-        Ok(p) => {
-            eprintln!("[PostgreSQL:{}] Portal bound successfully", session_id);
-            p
-        }
+        Ok(p) => p,
         Err(e) => {
             stream_reason = "error";
             emit_stream_ended(&app_handle, &session_id, stream_reason, "PostgreSQL");
             return Err(format!("Failed to bind query: {}", e).into());
         }
     };
-
-    eprintln!(
-        "[PostgreSQL:{}] Cursor created, starting frame-by-frame streaming...",
-        session_id
-    );
 
     // Buffer settings
     const BUFFER_SIZE: usize = 2000; // Keep 2000 frames in buffer
@@ -378,19 +329,22 @@ async fn run_postgres_stream(
         source_type: &PostgresSourceType,
         session_id: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        eprintln!("[PostgreSQL:{}] refill_buffer: starting, queue_len={}, target={}, batch_size={}",
-            session_id, frame_queue.len(), target_size, batch_size);
         while frame_queue.len() < target_size && !*db_exhausted {
-            eprintln!("[PostgreSQL:{}] refill_buffer: fetching batch from portal...", session_id);
+            let fetch_start = std::time::Instant::now();
+
             let rows = transaction
                 .query_portal(portal, batch_size)
                 .await
                 .map_err(|e| format!("Failed to fetch from cursor: {}", e))?;
-            eprintln!("[PostgreSQL:{}] refill_buffer: got {} rows", session_id, rows.len());
+
+            let fetch_elapsed = fetch_start.elapsed();
+            if fetch_elapsed.as_secs() > 5 {
+                eprintln!("[PostgreSQL:{}] Slow query: {} rows in {:?}. Consider adding an index on 'ts' or using a time filter.",
+                    session_id, rows.len(), fetch_elapsed);
+            }
 
             if rows.is_empty() {
                 *db_exhausted = true;
-                eprintln!("[PostgreSQL:{}] refill_buffer: database exhausted", session_id);
                 break;
             }
 
@@ -405,14 +359,11 @@ async fn run_postgres_stream(
                     }
                 }
             }
-            eprintln!("[PostgreSQL:{}] refill_buffer: queue now has {} frames", session_id, frame_queue.len());
         }
-        eprintln!("[PostgreSQL:{}] refill_buffer: complete, total_fetched={}", session_id, total_fetched);
         Ok(())
     }
 
     // Initial buffer fill
-    eprintln!("[PostgreSQL:{}] Initial buffer fill...", session_id);
     if let Err(e) = refill_buffer(
         &transaction,
         &portal,
@@ -432,16 +383,9 @@ async fn run_postgres_stream(
     }
 
     if frame_queue.is_empty() {
-        eprintln!("[PostgreSQL:{}] No frames to emit", session_id);
         emit_stream_ended(&app_handle, &session_id, stream_reason, "PostgreSQL");
         return Ok(());
     }
-
-    eprintln!(
-        "[PostgreSQL:{}] Initial fill complete: {} frames buffered",
-        session_id,
-        frame_queue.len()
-    );
 
     // Get stream start time from first frame (absolute timestamp in seconds)
     let stream_start_secs = frame_queue
@@ -463,8 +407,8 @@ async fn run_postgres_stream(
     let mut last_pacing_check = std::time::Instant::now();
 
     eprintln!(
-        "[PostgreSQL:{}] Starting stream (limit: {:?}, speed: {}x, frames buffered: {})",
-        session_id, options.limit, options.speed, frame_queue.len()
+        "[PostgreSQL:{}] Streaming (speed: {}x)",
+        session_id, options.speed
     );
 
     loop {
@@ -472,7 +416,6 @@ async fn run_postgres_stream(
         // Draining buffered frames during cancellation can race with window close
         // and cause crashes on macOS 26.2+ (WebKit::WebPageProxy::dispatchSetObscuredContentInsets)
         if control.is_cancelled() {
-            eprintln!("[PostgreSQL:{}] Stream cancelled, stopping immediately (discarding {} buffered frames)", session_id, frame_queue.len());
             break;
         }
 
@@ -485,11 +428,6 @@ async fn run_postgres_stream(
         // Check if pacing is enabled (speed > 0)
         let is_pacing = control.is_pacing_enabled();
         let current_speed = control.read_speed();
-
-        // Log pacing state changes periodically (every 1000 frames)
-        if total_emitted % 1000 == 0 {
-            eprintln!("[PostgreSQL:{}] frame {} - is_pacing: {}, speed: {}x", session_id, total_emitted, is_pacing, current_speed);
-        }
 
         // Check for speed change and reset timing baseline if needed
         if is_pacing && (current_speed - last_speed).abs() > 0.001 {
@@ -539,7 +477,6 @@ async fn run_postgres_stream(
             Some(f) => f,
             None => {
                 if db_exhausted {
-                    eprintln!("[PostgreSQL:{}] All frames emitted", session_id);
                     break;
                 }
                 // Buffer empty but DB not exhausted - wait and try again
@@ -729,9 +666,13 @@ fn build_where_clause(options: &PostgresReaderOptions) -> String {
 /// Build SQL query based on source type
 fn build_query(options: &PostgresReaderOptions) -> String {
     let where_clause = build_where_clause(options);
+    // Always include a LIMIT to help the query planner choose an index scan.
+    // Without a LIMIT, PostgreSQL may plan for a full table scan even with cursors.
+    // 10 million rows is ~2.7 hours at 1000 fps - more than enough for any session.
+    const DEFAULT_CURSOR_LIMIT: i64 = 10_000_000;
     let limit_clause = match options.limit {
         Some(n) if n > 0 => format!(" LIMIT {}", n),
-        _ => String::new(),
+        _ => format!(" LIMIT {}", DEFAULT_CURSOR_LIMIT),
     };
 
     let (table, columns) = match options.source_type {

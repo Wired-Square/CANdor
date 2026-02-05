@@ -20,7 +20,14 @@ import { useSessionStore } from "../stores/sessionStore";
 // Module-level map to track sessions being reinitialized.
 // This persists across re-renders and prevents the effect from
 // trying to openSession while reinitialize() is in progress.
-const reinitializingSessions = new Map<string, boolean>();
+// The value is a timestamp of when reinitialize completed, used to
+// skip effect state updates for a short window after reinitialize.
+const reinitializingSessions = new Map<string, number | true>();
+
+// Grace period (ms) after reinitialize completes during which effects
+// should skip resetting localState. This prevents race conditions where
+// the effects run after setIoProfile() triggers a re-render.
+const REINITIALIZE_GRACE_PERIOD_MS = 300;
 import {
   setSessionListenerActive,
   getIOSessionState,
@@ -312,6 +319,9 @@ export function useIOSession(
   const isLeavingRef = useRef(false);
   // Track when session was created/joined to prevent immediate leave (click-through protection)
   const sessionCreatedAtRef = useRef<number>(0);
+  // Track the expected state from reinitialize - used to return correct state before React commits the update
+  // This is needed because Zustand updates (setIoProfile) trigger re-renders before React state (setLocalState) is committed
+  const expectedStateRef = useRef<{ sessionId: string; state: LocalSessionState } | null>(null);
 
   // Store callbacks in refs to keep them current
   const callbacksRef = useRef({
@@ -388,7 +398,12 @@ export function useIOSession(
           });
         } else {
           // Session doesn't exist yet - will be created by openSession below
-          setLocalState(null);
+          // BUT: don't clear state if reinitialize just set it (grace period)
+          const reinitValue = reinitializingSessions.get(effectiveSessionId);
+          const inGracePeriod = typeof reinitValue === "number" && Date.now() - reinitValue < REINITIALIZE_GRACE_PERIOD_MS;
+          if (!inGracePeriod) {
+            setLocalState(null);
+          }
         }
       } catch (e) {
         console.log(`[useIOSession:${appName}] Failed to query backend state:`, e);
@@ -587,8 +602,15 @@ export function useIOSession(
       return;
     }
 
-    if (reinitializingSessions.get(effectiveSessionId)) {
+    const reinitValue = reinitializingSessions.get(effectiveSessionId);
+    if (reinitValue === true) {
+      // Reinitialize in progress - skip
       console.log(`[useIOSession:${appName}] reinitializing in progress for session '${effectiveSessionId}', skipping effect setup`);
+      return;
+    }
+    if (typeof reinitValue === "number" && Date.now() - reinitValue < REINITIALIZE_GRACE_PERIOD_MS) {
+      // Within grace period after reinitialize - skip since reinitialize already set up state
+      console.log(`[useIOSession:${appName}] within reinitialize grace period for session '${effectiveSessionId}', skipping effect setup`);
       return;
     }
 
@@ -1040,7 +1062,7 @@ export function useIOSession(
             getReaderSessionJoinerCount(targetSessionId),
           ]);
           if (state && caps) {
-            setLocalState({
+            const newState: LocalSessionState = {
               ioState: getStateType(state),
               capabilities: caps,
               errorMessage: state.type === "Error" ? state.message : null,
@@ -1059,7 +1081,11 @@ export function useIOSession(
               streamEndedReason: null,
               speed: opts?.speed ?? null,
               playbackPosition: null,
-            });
+            };
+            // Store in ref BEFORE calling setLocalState - this ensures the ref is available
+            // immediately, even before React commits the state update
+            expectedStateRef.current = { sessionId: targetSessionId, state: newState };
+            setLocalState(newState);
             console.log(`[useIOSession:${appName}] reinitialize() - local state updated: ioState=${getStateType(state)}`);
           }
         } catch (e) {
@@ -1074,7 +1100,16 @@ export function useIOSession(
         const msg = e instanceof Error ? e.message : String(e);
         callbacksRef.current.onError?.(msg);
       } finally {
-        reinitializingSessions.delete(targetSessionId);
+        // Set timestamp to mark end of reinitialize - effects will skip during grace period
+        const completedAt = Date.now();
+        reinitializingSessions.set(targetSessionId, completedAt);
+        // Schedule cleanup after grace period
+        setTimeout(() => {
+          // Only delete if timestamp hasn't changed (no new reinitialize started)
+          if (reinitializingSessions.get(targetSessionId) === completedAt) {
+            reinitializingSessions.delete(targetSessionId);
+          }
+        }, REINITIALIZE_GRACE_PERIOD_MS + 50);
       }
     },
     [appName, effectiveSessionId, effectiveProfileName, reinitializeSession, registerCallbacks, clearCallbacks, leaveSession]
@@ -1151,27 +1186,35 @@ export function useIOSession(
   );
 
   // Derive values from local state (queried from backend, updated via events)
+  // Use expectedStateRef if it matches the current session - this handles the race condition
+  // where setIoProfile() triggers a re-render before setLocalState() is committed
+  const effectiveState = (
+    expectedStateRef.current?.sessionId === effectiveSessionId
+      ? expectedStateRef.current.state
+      : localState
+  );
+
   return {
     sessionId: effectiveSessionId,
     actualSessionId: effectiveSessionId, // Same as sessionId now (kept for backwards compat)
-    capabilities: localState?.capabilities ?? null,
-    state: localState?.ioState ?? "stopped",
-    isReady: localState?.isReady ?? false,
-    errorMessage: localState?.errorMessage ?? null,
-    bufferAvailable: localState?.buffer?.available ?? false,
-    bufferId: localState?.buffer?.id ?? null,
-    bufferType: localState?.buffer?.type ?? null,
-    bufferCount: localState?.buffer?.count ?? 0,
-    bufferOwningSessionId: localState?.buffer?.owningSessionId ?? null,
-    bufferStartTimeUs: localState?.buffer?.startTimeUs ?? null,
-    bufferEndTimeUs: localState?.buffer?.endTimeUs ?? null,
-    joinerCount: localState?.listenerCount ?? 0,
-    stoppedExplicitly: localState?.stoppedExplicitly ?? false,
-    streamEndedReason: localState?.streamEndedReason ?? null,
-    speed: localState?.speed ?? null,
-    playbackPosition: localState?.playbackPosition ?? null,
-    currentTimeUs: localState?.playbackPosition?.timestamp_us ?? null,
-    currentFrameIndex: localState?.playbackPosition?.frame_index ?? null,
+    capabilities: effectiveState?.capabilities ?? null,
+    state: effectiveState?.ioState ?? "stopped",
+    isReady: effectiveState?.isReady ?? false,
+    errorMessage: effectiveState?.errorMessage ?? null,
+    bufferAvailable: effectiveState?.buffer?.available ?? false,
+    bufferId: effectiveState?.buffer?.id ?? null,
+    bufferType: effectiveState?.buffer?.type ?? null,
+    bufferCount: effectiveState?.buffer?.count ?? 0,
+    bufferOwningSessionId: effectiveState?.buffer?.owningSessionId ?? null,
+    bufferStartTimeUs: effectiveState?.buffer?.startTimeUs ?? null,
+    bufferEndTimeUs: effectiveState?.buffer?.endTimeUs ?? null,
+    joinerCount: effectiveState?.listenerCount ?? 0,
+    stoppedExplicitly: effectiveState?.stoppedExplicitly ?? false,
+    streamEndedReason: effectiveState?.streamEndedReason ?? null,
+    speed: effectiveState?.speed ?? null,
+    playbackPosition: effectiveState?.playbackPosition ?? null,
+    currentTimeUs: effectiveState?.playbackPosition?.timestamp_us ?? null,
+    currentFrameIndex: effectiveState?.playbackPosition?.frame_index ?? null,
     start,
     stop,
     leave,

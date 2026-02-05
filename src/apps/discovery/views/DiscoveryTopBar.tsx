@@ -5,6 +5,7 @@ import type { IOProfile } from "../../../types/common";
 import type { BufferMetadata } from "../../../api/buffer";
 import AppTopBar from "../../../components/AppTopBar";
 import { buttonBase, iconButtonBase } from "../../../styles/buttonStyles";
+import { isBufferProfileId } from "../../../hooks/useIOSessionManager";
 import { iconMd, iconSm } from "../../../styles/spacing";
 
 type Props = {
@@ -80,7 +81,7 @@ export default function DiscoveryTopBar({
   isStreaming,
   multiBusProfiles = [],
   ioState,
-  isRealtime = true,
+  isRealtime: _isRealtime = true,
   onStopWatch,
   isStopped = false,
   onResume,
@@ -127,7 +128,7 @@ export default function DiscoveryTopBar({
         isStreaming,
         isStopped, // Show Resume in both realtime and buffer mode (to return to live)
         supportsTimeRange,
-        onStop: isRealtime ? onStopWatch : undefined, // Hide Stop when in buffer mode
+        onStop: !isBufferProfileId(ioProfile) ? onStopWatch : undefined, // Hide Stop only in buffer mode
         onResume, // Always show Resume when stopped (resumeFresh handles live return)
         onLeave,
         onOpenBookmarkPicker,

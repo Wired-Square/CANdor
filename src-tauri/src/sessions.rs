@@ -407,7 +407,8 @@ pub async fn create_reader_session(
 
     // Create the appropriate reader based on profile kind
     // Real-time devices (gvret, slcan, gs_usb, socketcan) use MultiSourceReader for unified handling
-    let reader: Box<dyn IODevice> = if is_realtime_device(&profile.kind) {
+    let is_realtime = is_realtime_device(&profile.kind);
+    let reader: Box<dyn IODevice> = if is_realtime {
         // Use MultiSourceReader for all real-time devices (unified path)
         let source_config = create_source_config_from_profile(&profile, bus_override)
             .ok_or_else(|| format!("Failed to create source config for profile '{}'", profile.id))?;
@@ -679,10 +680,7 @@ pub async fn get_reader_session_joiner_count(session_id: String) -> Result<usize
 /// Returns the confirmed state after the operation.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn start_reader_session(session_id: String) -> Result<IOState, String> {
-    eprintln!("[tauri cmd] start_reader_session('{}') called", session_id);
-    let result = start_session(&session_id).await;
-    eprintln!("[tauri cmd] start_reader_session('{}') result: {:?}", session_id, result);
-    result
+    start_session(&session_id).await
 }
 
 /// Stop a reader session

@@ -75,8 +75,9 @@ export function ReaderButton({
   } else if (selectedProfile) {
     displayName = selectedProfile.name;
   } else if (ioProfile) {
-    // No matching profile - show the session ID (e.g., "t_8852db")
+    // No matching profile - ioProfile is the session ID (e.g., "t_8852db")
     displayName = ioProfile;
+    sessionIdInDisplayName = true; // Don't show sessionId separately
   } else {
     displayName = "No reader";
   }

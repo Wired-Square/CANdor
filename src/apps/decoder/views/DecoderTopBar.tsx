@@ -8,6 +8,7 @@ import type { PlaybackSpeed } from "../../../components/TimeController";
 import type { BufferMetadata } from "../../../api/buffer";
 import AppTopBar from "../../../components/AppTopBar";
 import { buttonBase, iconButtonBase, toggleButtonClass } from "../../../styles/buttonStyles";
+import { isBufferProfileId } from "../../../hooks/useIOSessionManager";
 
 type Props = {
   // Catalog selection
@@ -97,7 +98,7 @@ export default function DecoderTopBar({
   sessionId,
   multiBusProfiles = [],
   ioState,
-  isRealtime = true,
+  isRealtime: _isRealtime = true,
   speed,
   supportsSpeed = false,
   isStreaming = false,
@@ -159,7 +160,7 @@ export default function DecoderTopBar({
         isStreaming,
         isStopped, // Show Resume in both realtime and buffer mode (to return to live)
         supportsTimeRange,
-        onStop: isRealtime ? onStopStream : undefined, // Hide Stop when in buffer mode
+        onStop: !isBufferProfileId(ioProfile) ? onStopStream : undefined, // Hide Stop only in buffer mode
         onResume, // Always show Resume when stopped (resumeFresh handles live return)
         onLeave,
         onOpenBookmarkPicker,

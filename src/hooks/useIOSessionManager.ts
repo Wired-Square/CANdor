@@ -568,12 +568,17 @@ export function useIOSessionManager(
   const isStreaming = !isDetached && (readerState === "running" || readerState === "paused");
   const isPaused = readerState === "paused";
   const isRealtime = session.capabilities?.is_realtime === true;
-  // Buffer mode = either explicitly viewing a buffer profile OR session switched to buffer replay (not realtime)
-  const isBufferMode = isBufferProfileId(ioProfile) || (ioProfile !== null && !isRealtime);
-  // Stopped in realtime mode (ready to restart or switch to buffer)
-  const isStopped = !isDetached && readerState === "stopped" && ioProfile !== null && !isBufferProfileId(ioProfile) && isRealtime;
-  // Can return to live: in buffer mode (switched from live) and not a standalone buffer profile
-  const canReturnToLive = !isDetached && isBufferMode && !isBufferProfileId(ioProfile);
+  // Buffer mode = explicitly viewing a buffer profile (buf_N)
+  // Note: Timeline sources (postgres, csv) have is_realtime=false but are NOT buffer mode -
+  // they're actively streaming from database/file. Only BufferReader (buf_N) is buffer mode.
+  const isBufferMode = isBufferProfileId(ioProfile);
+  // Stopped with a profile selected (ready to restart)
+  // For realtime sources: can restart the live stream
+  // For timeline sources: can restart from the beginning
+  const isStopped = !isDetached && readerState === "stopped" && ioProfile !== null && !isBufferProfileId(ioProfile);
+  // Can return to live: was originally a realtime source but switched to buffer replay
+  // Detected by checking if sourceProfileId is set (preserved during buffer switch)
+  const canReturnToLive = !isDetached && isBufferMode && sourceProfileId !== null;
   const sessionReady = session.isReady;
   const capabilities = session.capabilities;
   const joinerCount = session.joinerCount;
