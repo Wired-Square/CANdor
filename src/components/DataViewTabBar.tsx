@@ -60,6 +60,10 @@ export interface DataViewTabBarProps {
   displayTime?: string | null;
   /** Whether the data source is recorded (e.g., PostgreSQL, CSV) vs live */
   isRecorded?: boolean;
+  /** Current frame index (0-based) for display */
+  frameIndex?: number | null;
+  /** Total frame count for display */
+  totalFrames?: number | null;
 
   /** Additional control buttons rendered on the right */
   controls?: ReactNode;
@@ -81,6 +85,8 @@ export default function DataViewTabBar({
   timestamp,
   displayTime,
   isRecorded = false,
+  frameIndex,
+  totalFrames,
   controls,
 }: DataViewTabBarProps) {
   return (
@@ -116,6 +122,20 @@ export default function DataViewTabBar({
             compact={true}
             allowOverride={true}
           />
+        </div>
+      )}
+
+      {/* Frame index display (for debugging/playback position) */}
+      {frameIndex != null && (
+        <div className="flex items-center gap-1 ml-2 px-1.5 py-0.5 bg-gray-700/50 rounded text-xs font-mono text-gray-400">
+          <span>Frame</span>
+          <span className="text-gray-200">{(frameIndex + 1).toLocaleString()}</span>
+          {totalFrames != null && (
+            <>
+              <span>/</span>
+              <span className="text-gray-300">{totalFrames.toLocaleString()}</span>
+            </>
+          )}
         </div>
       )}
 

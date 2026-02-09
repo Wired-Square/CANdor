@@ -531,6 +531,8 @@ export interface PlaybackPosition {
   timestamp_us: number;
   /** Current frame index (0-based) */
   frame_index: number;
+  /** Total frame count in buffer (optional, for timeline sources) */
+  frame_count?: number;
 }
 
 /**

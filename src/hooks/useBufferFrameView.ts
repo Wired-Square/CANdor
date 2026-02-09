@@ -214,6 +214,15 @@ export function useBufferFrameView(
         if (!isMounted) return;
 
         const withHex = addHexBytes(response.frames);
+        console.log('[useBufferFrameView] fetchPage result', {
+          currentPage,
+          pageSize,
+          offset,
+          responseFrameCount: response.frames.length,
+          responseTotalCount: response.total_count,
+          firstFrame: response.frames[0] ? { frameId: response.frames[0].frame_id, ts: response.frames[0].timestamp_us } : null,
+          lastFrame: response.frames[response.frames.length - 1] ? { frameId: response.frames[response.frames.length - 1].frame_id, ts: response.frames[response.frames.length - 1].timestamp_us } : null,
+        });
         setFrames(withHex);
         setTotalCount(response.total_count);
       } catch (e) {
@@ -232,11 +241,12 @@ export function useBufferFrameView(
     };
   }, [bufferId, isStreaming, isBufferPlayback, currentPage, pageSize, selectedFrames]);
 
-  // Navigate to timestamp (for timeline scrub)
+  // Navigate to timestamp (for timeline scrub and step following)
   const navigateToTimestamp = useCallback(
     async (timeUs: number) => {
-      // Allow navigation when stopped or during buffer playback
-      if (!bufferId || (isStreaming && !isBufferPlayback)) return;
+      // Only require a valid bufferId - let callers decide when navigation is appropriate
+      // This allows navigation when paused (isStreaming=true but stepping through frames)
+      if (!bufferId) return;
 
       try {
         // Ensure integer timestamp (backend expects u64)
@@ -246,12 +256,13 @@ export function useBufferFrameView(
           selectedIdsRef.current
         );
         const targetPage = Math.floor(offset / pageSizeRef.current);
+        console.log('[useBufferFrameView] navigateToTimestamp', { timeUs: timeUsInt, offset, targetPage, pageSize: pageSizeRef.current });
         setCurrentPage(targetPage);
       } catch (e) {
         console.error("[useBufferFrameView] timestamp navigation error:", e);
       }
     },
-    [bufferId, isStreaming, isBufferPlayback]
+    [bufferId]
   );
 
   // Track previous selection to detect actual changes

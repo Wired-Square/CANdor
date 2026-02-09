@@ -75,6 +75,12 @@ type Props = {
   onSpeedChange?: (speed: PlaybackSpeed) => void;
   /** Frame-based seeking (preferred for buffer playback) */
   onFrameChange?: (frameIndex: number) => void;
+  /** Whether a timeline source is actively streaming (e.g., PostgreSQL fetching) */
+  isLiveStreaming?: boolean;
+  /** Whether the timeline stream is paused (separate from buffer playback pause) */
+  isStreamPaused?: boolean;
+  /** Called to resume a paused timeline stream */
+  onResumeStream?: () => void;
 };
 
 function DiscoveryFramesView({
@@ -113,6 +119,9 @@ function DiscoveryFramesView({
   onStepForward,
   onSpeedChange,
   onFrameChange,
+  isLiveStreaming = false,
+  isStreamPaused = false,
+  onResumeStream,
 }: Props) {
 
   const renderBuffer = useDiscoveryStore((s) => s.renderBuffer);
@@ -138,7 +147,8 @@ function DiscoveryFramesView({
     pageSize: renderBuffer === -1 ? 1000 : renderBuffer,
     tailSize: renderBuffer === -1 ? 100 : renderBuffer,
     pollIntervalMs: 200,
-    isBufferPlayback: isBufferMode,
+    // Use pagination mode when: in buffer mode, OR when stream is paused
+    isBufferPlayback: isBufferMode || isStreamPaused,
   });
 
   // Tab state for CAN frames view - stored in UI store so analysis can switch to it
@@ -484,13 +494,46 @@ function DiscoveryFramesView({
     effectiveCurrentPage = currentPage;
     const pageSize = renderBuffer === -1 ? Math.max(1, filteredCount) : renderBuffer;
     effectiveTotalPages = filteredCount > 0 && pageSize > 0 ? Math.ceil(filteredCount / pageSize) : 1;
-  } else if (isStreaming) {
-    // Streaming mode
+  } else if (isStreaming && !isStreamPaused) {
+    // Active streaming mode (not paused) - show tail, no pagination
     const result = streamingResult ?? { visibleFrames: [], filteredCount: -1 };
     visibleFrames = result.visibleFrames;
     filteredCount = result.filteredCount;
     effectiveCurrentPage = currentPage;
     effectiveTotalPages = 1;
+  } else if (isStreamPaused) {
+    // Paused stream mode - use buffer frame view for pagination
+    // Fall back to streaming result if hook doesn't have data yet (e.g., bufferId not available)
+    if (bufferFrameView.frames.length > 0 || bufferFrameView.totalCount > 0) {
+      visibleFrames = bufferFrameView.frames;
+      filteredCount = bufferFrameView.totalCount;
+      effectiveCurrentPage = bufferFrameView.currentPage;
+      effectiveTotalPages = bufferFrameView.totalPages;
+      isBufferFirstLoading = bufferFrameView.isLoading;
+    } else if (frames.length > 0) {
+      // Fallback: use frames prop with pagination support
+      const pageSize = renderBuffer === -1 ? 1000 : renderBuffer;
+      effectiveTotalPages = Math.max(1, Math.ceil(frames.length / pageSize));
+      // Clamp currentPage to valid range
+      effectiveCurrentPage = Math.min(Math.max(0, currentPage), effectiveTotalPages - 1);
+      // Get frames for current page
+      const startIdx = effectiveCurrentPage * pageSize;
+      const endIdx = Math.min(startIdx + pageSize, frames.length);
+      const pageFrames = frames.slice(startIdx, endIdx);
+      visibleFrames = pageFrames.map(frame => ({
+        ...frame,
+        hexBytes: frame.bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase()),
+      }));
+      filteredCount = frames.length;
+      isBufferFirstLoading = false;
+    } else {
+      // No data available
+      visibleFrames = [];
+      filteredCount = 0;
+      effectiveCurrentPage = 0;
+      effectiveTotalPages = 1;
+      isBufferFirstLoading = false;
+    }
   } else {
     // Stopped mode: use deferred result
     const result = deferredResult ?? { visibleFrames: [], filteredCount: 0 };
@@ -501,11 +544,26 @@ function DiscoveryFramesView({
     effectiveTotalPages = filteredCount > 0 && pageSize > 0 ? Math.ceil(filteredCount / pageSize) : 1;
   }
 
+  // Calculate the actual start index for frame tooltips
+  // Now all modes use proper pagination, so this is always effectiveCurrentPage * pageSize
+  const effectivePageSize = renderBuffer === -1 ? 1000 : renderBuffer;
+  const effectivePageStartIndex = effectiveCurrentPage * effectivePageSize;
+
   // Use refs to avoid infinite loops in useEffect when using effectiveCurrentPage
   const effectiveCurrentPageRef = useRef(effectiveCurrentPage);
   useEffect(() => {
     effectiveCurrentPageRef.current = effectiveCurrentPage;
   }, [effectiveCurrentPage]);
+
+  // Auto-navigate to page containing currentFrameIndex when stepping
+  useEffect(() => {
+    if (currentFrameIndex == null || !isStreamPaused) return;
+    const pageSize = renderBuffer === -1 ? 1000 : renderBuffer;
+    const targetPage = Math.floor(currentFrameIndex / pageSize);
+    if (targetPage !== effectiveCurrentPageRef.current && targetPage >= 0 && targetPage < effectiveTotalPages) {
+      setCurrentPageStable(targetPage);
+    }
+  }, [currentFrameIndex, isStreamPaused, renderBuffer, effectiveTotalPages, setCurrentPageStable]);
 
   // Ensure frames are always sorted by timestamp ascending (oldest at top)
   // regardless of playback direction. Track if we reversed for index mapping.
@@ -631,44 +689,68 @@ function DiscoveryFramesView({
   }, [useBufferFirstMode, bufferFrameView.timeRange, bufferMode.enabled, isBufferMode, isStreaming, bufferMetadata, frames, currentTimeUs, visibleFrames, handleBufferFirstScrub, handleBufferScrub, handleNormalScrub]);
 
   // Auto-navigate to the page containing the current frame during playback
-  // This works for buffer playback (where currentFrameIndex is set from session playback position)
-  // During live streaming, currentFrameIndex is null so this effect doesn't run
+  // Uses timestamp-based navigation since frames may be filtered
+  // During live streaming, currentTimeUs changes frequently so we skip navigation
   useEffect(() => {
-    if (currentFrameIndex == null) return;
+    if (currentTimeUs == null || isStreaming) return;
 
-    // In playback mode (renderBuffer === -1), use the hook's page size (1000), otherwise use renderBuffer
-    const pageSizeForCalc = renderBuffer === -1 ? 1000 : renderBuffer;
-    const pageStart = effectiveCurrentPageRef.current * pageSizeForCalc;
-    const pageEnd = pageStart + pageSizeForCalc - 1;
+    // Check if the current timestamp is within the visible frames' time range
+    if (visibleFrames.length === 0) return;
 
-    // If current frame is not on this page, navigate to the correct page
-    if (currentFrameIndex < pageStart || currentFrameIndex > pageEnd) {
-      const targetPage = Math.floor(currentFrameIndex / pageSizeForCalc);
-      setCurrentPageStable(targetPage);
+    const firstTs = visibleFrames[0].timestamp_us;
+    const lastTs = visibleFrames[visibleFrames.length - 1].timestamp_us;
+
+    // If current time is outside the visible range, navigate to the correct page
+    if (currentTimeUs < firstTs || currentTimeUs > lastTs) {
+      // Use the hook's navigateToTimestamp to find the correct page
+      hookNavigateToTimestampRef.current(currentTimeUs);
     }
-  }, [currentFrameIndex, setCurrentPageStable, renderBuffer]);
+  }, [currentTimeUs, isStreaming, visibleFrames]);
 
-  // Calculate which row to highlight based on current frame index
+  // Calculate which row to highlight based on current timestamp
+  // Since frames can be filtered, we find the matching frame by timestamp rather than index
   // Returns the index within visibleFrames, or null if current frame is not visible
   const highlightedRowIndex = useMemo(() => {
-    if (currentFrameIndex == null || visibleFrames.length === 0) return null;
+    if (currentTimeUs == null || visibleFrames.length === 0) return null;
 
-    // In playback mode (renderBuffer === -1), use the hook's page size (1000) to match auto-navigate
-    const pageSizeForCalc = renderBuffer === -1 ? 1000 : renderBuffer;
-    const pageStart = effectiveCurrentPage * pageSizeForCalc;
-    const pageEnd = pageStart + visibleFrames.length - 1;
+    // Find the frame in visibleFrames that matches the current timestamp
+    // Use exact match first, then fall back to closest match
+    let matchIndex = visibleFrames.findIndex(f => f.timestamp_us === currentTimeUs);
 
-    // Check if current frame is on this page
-    if (currentFrameIndex >= pageStart && currentFrameIndex <= pageEnd) {
-      let rowIndex = currentFrameIndex - pageStart;
-      // If frames were reversed for display, flip the index
-      if (framesWereReversed) {
-        rowIndex = visibleFrames.length - 1 - rowIndex;
+    // If no exact match, find the closest frame (for scrubbing between frames)
+    if (matchIndex === -1) {
+      let closestDistance = Infinity;
+      visibleFrames.forEach((f, idx) => {
+        const distance = Math.abs(f.timestamp_us - currentTimeUs);
+        if (distance < closestDistance) {
+          closestDistance = distance;
+          matchIndex = idx;
+        }
+      });
+      // Only use closest match if it's within 1ms (1000us)
+      if (closestDistance > 1000) {
+        matchIndex = -1;
       }
-      return rowIndex;
     }
+
+    console.log('[DiscoveryFramesView] highlightedRowIndex calculation (timestamp-based)', {
+      currentTimeUs,
+      currentFrameIndex,
+      visibleFramesLength: visibleFrames.length,
+      matchIndex,
+      matchedFrame: matchIndex >= 0 ? { frameId: visibleFrames[matchIndex]?.frame_id, ts: visibleFrames[matchIndex]?.timestamp_us } : null,
+      firstFrame: visibleFrames[0] ? { frameId: visibleFrames[0].frame_id, ts: visibleFrames[0].timestamp_us } : null,
+      lastFrame: visibleFrames[visibleFrames.length - 1] ? { frameId: visibleFrames[visibleFrames.length - 1].frame_id, ts: visibleFrames[visibleFrames.length - 1].timestamp_us } : null,
+    });
+
+    if (matchIndex >= 0) {
+      console.log('[DiscoveryFramesView] highlight result', { rowIndex: matchIndex, highlightedFrame: visibleFrames[matchIndex]?.frame_id });
+      return matchIndex;
+    }
+
+    console.log('[DiscoveryFramesView] currentTimeUs not found in visibleFrames');
     return null;
-  }, [currentFrameIndex, effectiveCurrentPage, renderBuffer, visibleFrames.length, framesWereReversed]);
+  }, [currentTimeUs, visibleFrames, currentFrameIndex]);
 
   // Handle row click - convert row index to global frame index and get timestamp
   const handleRowClick = useCallback((rowIndex: number) => {
@@ -764,24 +846,27 @@ function DiscoveryFramesView({
   // Playback controls for toolbar center
   // In buffer mode, buffer reader always supports seek, speed control, pause, and reverse
   // Only show when: in buffer mode (from session), recorded source, or buffer mode enabled when NOT streaming
+  // For timeline sources (isRecorded), also show during live streaming (with only stop enabled)
   // The `bufferMode.enabled` check only applies when not streaming to avoid stale state during live streams
   const inBufferPlaybackMode = isBufferMode || (!isStreaming && bufferMode.enabled);
-  const showPlaybackControls = inBufferPlaybackMode || isRecorded;
+  const showPlaybackControls = inBufferPlaybackMode || isRecorded || isLiveStreaming;
   const playbackControls = showPlaybackControls && onPlay && onPause ? (
     <PlaybackControls
       playbackState={playbackState}
       playbackDirection={playbackDirection}
-      isReady={inBufferPlaybackMode || isRecorded}
+      isReady={inBufferPlaybackMode || isRecorded || isLiveStreaming}
       canPause={inBufferPlaybackMode || (capabilities?.can_pause ?? false)}
       supportsSeek={inBufferPlaybackMode || (capabilities?.supports_seek ?? false)}
       supportsSpeedControl={inBufferPlaybackMode || (capabilities?.supports_speed_control ?? false)}
       supportsReverse={inBufferPlaybackMode || (capabilities?.supports_reverse ?? false)}
+      isLiveStreaming={isLiveStreaming}
+      isStreamPaused={isStreamPaused}
       playbackSpeed={playbackSpeed}
       minTimeUs={timelineProps.minTimeUs}
       maxTimeUs={timelineProps.maxTimeUs}
       currentTimeUs={timelineProps.currentTimeUs}
       currentFrameIndex={currentFrameIndex}
-      totalFrames={(isBufferMode || bufferMode.enabled) ? (bufferMetadata?.count || bufferMode.totalFrames || bufferFrameView.totalCount || undefined) : undefined}
+      totalFrames={bufferFrameView.totalCount || bufferMetadata?.count || bufferMode.totalFrames || frameCount || undefined}
       onPlay={onPlay}
       onPlayBackward={onPlayBackward}
       onPause={onPause}
@@ -790,6 +875,7 @@ function DiscoveryFramesView({
       onScrub={timelineProps.onScrub}
       onFrameChange={onFrameChange}
       onSpeedChange={onSpeedChange}
+      onResumeStream={onResumeStream}
     />
   ) : null;
 
@@ -816,10 +902,10 @@ function DiscoveryFramesView({
               onPageChange: setCurrentPageStable,
               onPageSizeChange: handlePageSizeChange,
               loading: isFiltering || bufferModeLoading || isBufferFirstLoading,
-              disabled: isStreaming,
+              disabled: isStreaming && !isStreamPaused,
               leftContent: timeRangeInputs,
               centerContent: playbackControls,
-              hidePagination: isStreaming || isFiltering || bufferModeLoading || isBufferFirstLoading || bufferMode.viewMode === 'playback',
+              hidePagination: playbackState === "playing" || isFiltering || bufferModeLoading || isBufferFirstLoading,
             }
           : undefined
       }
@@ -847,12 +933,16 @@ function DiscoveryFramesView({
           displayFrameIdFormat={displayFrameIdFormat}
           formatTime={formatTime}
           onBookmark={onBookmark}
-          emptyMessage={isStreaming ? 'Waiting for frames...' : 'No frames to display'}
+          emptyMessage={
+            isStreamPaused
+              ? (isBufferFirstLoading ? 'Loading frames...' : 'No frames in buffer')
+              : (isStreaming ? 'Waiting for frames...' : 'No frames to display')
+          }
           showAscii={showAsciiColumn}
           showBus={showBusColumn}
           highlightedRowIndex={highlightedRowIndex}
           onRowClick={onFrameSelect ? handleRowClick : undefined}
-          pageStartIndex={renderBuffer === -1 ? 0 : effectiveCurrentPage * renderBuffer}
+          pageStartIndex={effectivePageStartIndex}
           framesReversed={framesWereReversed}
           pageFrameCount={visibleFrames.length}
         />

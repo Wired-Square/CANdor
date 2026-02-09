@@ -104,6 +104,7 @@ export interface UseDiscoveryHandlersParams {
   reinitialize: (profileId?: string, options?: any) => Promise<void>;
   setSpeed: (speed: number) => Promise<void>;
   setTimeRange: (start: string, end: string) => Promise<void>;
+  seek: (timestampUs: number) => Promise<void>;
   seekByFrame: (frameIndex: number) => Promise<void>;
 
   // Store actions
@@ -200,6 +201,7 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     resume: params.resume,
     setSpeed: params.setSpeed,
     setTimeRange: params.setTimeRange,
+    seek: params.seek,
     seekByFrame: params.seekByFrame,
     isPaused: params.isPaused,
     isStreaming: params.isStreaming,

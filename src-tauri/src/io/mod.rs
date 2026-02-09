@@ -108,6 +108,9 @@ pub struct PlaybackPosition {
     pub timestamp_us: i64,
     /// Current frame index (0-based)
     pub frame_index: usize,
+    /// Total frame count in buffer (optional, for timeline sources)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_count: Option<usize>,
 }
 
 /// Get current time in microseconds since UNIX epoch

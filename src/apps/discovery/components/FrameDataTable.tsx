@@ -136,15 +136,18 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
     }
   }, [frames, autoScroll, containerRef]);
 
-  // Scroll to keep highlighted row visible when stepping
+  // Scroll to keep highlighted row visible when stepping or page changes
   useEffect(() => {
     if (highlightedRowIndex != null && highlightedRowRef.current) {
-      highlightedRowRef.current.scrollIntoView({
-        behavior: 'smooth',
-        block: 'nearest',
+      // Use requestAnimationFrame to ensure DOM has updated after page change
+      requestAnimationFrame(() => {
+        highlightedRowRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'nearest',
+        });
       });
     }
-  }, [highlightedRowIndex]);
+  }, [highlightedRowIndex, frames]);
 
   // Check if any frame has source_address
   const hasSourceAddress = useMemo(() => {

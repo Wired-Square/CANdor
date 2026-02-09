@@ -121,8 +121,18 @@ export function usePlaybackHandlers({
 
   // Handle step backward (one frame earlier, respecting filter)
   const handleStepBackward = useCallback(async () => {
+    console.log('[PlaybackHandlers] handleStepBackward called', {
+      isPaused,
+      currentFrameIndex,
+      currentTimestampUs,
+      sessionId,
+    });
+
     // Need to be paused and have some position info (frame index or timestamp)
-    if (!isPaused || (currentFrameIndex == null && currentTimestampUs == null)) return;
+    if (!isPaused || (currentFrameIndex == null && currentTimestampUs == null)) {
+      console.log('[PlaybackHandlers] handleStepBackward early return - guard condition met');
+      return;
+    }
     try {
       // Convert Set to array for the API call, only if we have a selection
       const filter = selectedFrameIds && selectedFrameIds.size > 0
@@ -141,8 +151,18 @@ export function usePlaybackHandlers({
 
   // Handle step forward (one frame later, respecting filter)
   const handleStepForward = useCallback(async () => {
+    console.log('[PlaybackHandlers] handleStepForward called', {
+      isPaused,
+      currentFrameIndex,
+      currentTimestampUs,
+      sessionId,
+    });
+
     // Need to be paused and have some position info (frame index or timestamp)
-    if (!isPaused || (currentFrameIndex == null && currentTimestampUs == null)) return;
+    if (!isPaused || (currentFrameIndex == null && currentTimestampUs == null)) {
+      console.log('[PlaybackHandlers] handleStepForward early return - guard condition met');
+      return;
+    }
     try {
       // Convert Set to array for the API call, only if we have a selection
       const filter = selectedFrameIds && selectedFrameIds.size > 0

@@ -4,6 +4,18 @@ All notable changes to CANdor will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **PostgreSQL/CSV Buffer Playback Controls**: Timeline sources (PostgreSQL, CSV) now support full buffer playback controls when paused:
+  - During active streaming, only Stop button and speed control are visible
+  - Clicking Stop pauses the stream (keeps session alive) instead of stopping it
+  - When paused, all buffer controls appear: step forward/backward, skip, play/reverse, pagination
+  - New Resume Stream button (refresh icon) continues fetching from the database
+  - Frame counter shows current position with clamped display to prevent invalid states
+  - Auto-navigates to page containing current frame when stepping
+  - Highlighted row scrolls into view on page changes
+  - Backend now emits `frame_count` with `PlaybackPosition` for accurate frame totals
+
 ### Changed
 
 - **macOS Menu Name**: The macOS application menu now shows "Quit CANdor" instead of "Quit candor-ui". Renamed Cargo package from `candor-ui` to `candor` and added explicit binary name `CANdor` via `[[bin]]` section.

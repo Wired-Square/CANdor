@@ -515,6 +515,7 @@ async fn run_postgres_stream(
                 emit_to_session(&app_handle, "playback-time", &session_id, PlaybackPosition {
                     timestamp_us: playback_time_us,
                     frame_index: (total_emitted - 1) as usize, // Index of last emitted frame
+                    frame_count: Some(total_emitted as usize),
                 });
 
                 // Brief delay to allow UI event loop to process button clicks
@@ -574,6 +575,7 @@ async fn run_postgres_stream(
                 emit_to_session(&app_handle, "playback-time", &session_id, PlaybackPosition {
                     timestamp_us: playback_time_us,
                     frame_index: (total_emitted - 1) as usize,
+                    frame_count: Some(total_emitted as usize),
                 });
 
                 // Yield to allow event processing (prevents app from becoming unresponsive)
@@ -619,6 +621,7 @@ async fn run_postgres_stream(
             emit_to_session(&app_handle, "playback-time", &session_id, PlaybackPosition {
                 timestamp_us: playback_time_us,
                 frame_index: (total_emitted - 1) as usize,
+                frame_count: Some(total_emitted as usize),
             });
         }
     }

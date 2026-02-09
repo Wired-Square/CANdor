@@ -318,6 +318,7 @@ pub fn step_frame(
     emit_to_session(app, "playback-time", session_id, PlaybackPosition {
         timestamp_us: new_timestamp_us,
         frame_index: new_idx,
+        frame_count: Some(frames.len()),
     });
 
     Ok(Some(StepResult {
@@ -477,6 +478,7 @@ async fn run_buffer_stream(
                 emit_to_session(&app_handle, "playback-time", &session_id, PlaybackPosition {
                     timestamp_us: f.timestamp_us as i64,
                     frame_index: target_idx,
+                    frame_count: Some(frames.len()),
                 });
 
                 // When paused, emit a snapshot of the most recent frame for each frame ID
@@ -537,6 +539,7 @@ async fn run_buffer_stream(
                 emit_to_session(&app_handle, "playback-time", &session_id, PlaybackPosition {
                     timestamp_us: f.timestamp_us as i64,
                     frame_index: target_idx,
+                    frame_count: Some(frames.len()),
                 });
 
                 // When paused, emit a snapshot of the most recent frame for each frame ID
@@ -638,6 +641,7 @@ async fn run_buffer_stream(
                 emit_to_session(&app_handle, "playback-time", &session_id, PlaybackPosition {
                     timestamp_us: playback_time_us,
                     frame_index: actual_index,
+                    frame_count: Some(frames.len()),
                 });
 
                 tokio::time::sleep(Duration::from_millis(NO_LIMIT_YIELD_MS)).await;
@@ -688,6 +692,7 @@ async fn run_buffer_stream(
                 emit_to_session(&app_handle, "playback-time", &session_id, PlaybackPosition {
                     timestamp_us: playback_time_us,
                     frame_index: actual_index,
+                    frame_count: Some(frames.len()),
                 });
 
                 tokio::task::yield_now().await;
@@ -720,6 +725,7 @@ async fn run_buffer_stream(
             emit_to_session(&app_handle, "playback-time", &session_id, PlaybackPosition {
                 timestamp_us: playback_time_us,
                 frame_index: actual_index,
+                frame_count: Some(frames.len()),
             });
         }
     }

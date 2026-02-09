@@ -441,6 +441,7 @@ async fn run_csv_stream(
                 emit_to_session(&app_handle, "playback-time", &session_id, PlaybackPosition {
                     timestamp_us: playback_time_us,
                     frame_index: (total_emitted - 1) as usize,
+                    frame_count: Some(total_emitted as usize),
                 });
 
                 tokio::time::sleep(Duration::from_millis(NO_LIMIT_YIELD_MS)).await;
@@ -487,6 +488,7 @@ async fn run_csv_stream(
                 emit_to_session(&app_handle, "playback-time", &session_id, PlaybackPosition {
                     timestamp_us: playback_time_us,
                     frame_index: (total_emitted - 1) as usize,
+                    frame_count: Some(total_emitted as usize),
                 });
 
                 tokio::task::yield_now().await;
@@ -517,6 +519,7 @@ async fn run_csv_stream(
             emit_to_session(&app_handle, "playback-time", &session_id, PlaybackPosition {
                 timestamp_us: playback_time_us,
                 frame_index: (total_emitted - 1) as usize,
+                frame_count: Some(total_emitted as usize),
             });
         }
     }

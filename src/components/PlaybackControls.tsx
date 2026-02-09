@@ -3,7 +3,7 @@
 // Reusable playback controls for timeline readers (Buffer, CSV, PostgreSQL).
 // Used by Discovery and Decoder when viewing recorded/buffered data.
 
-import { ChevronLeft, ChevronRight, FastForward, Play, Rewind, SkipBack, SkipForward, Square } from "lucide-react";
+import { ChevronLeft, ChevronRight, FastForward, Play, RefreshCw, Rewind, SkipBack, SkipForward, Square } from "lucide-react";
 import { iconSm } from "../styles/spacing";
 import type { PlaybackSpeed } from "./TimeController";
 
@@ -23,6 +23,10 @@ export interface PlaybackControlsProps {
   supportsSpeedControl?: boolean;
   /** Whether reverse playback is supported */
   supportsReverse?: boolean;
+  /** Whether a live stream is actively fetching data (e.g., PostgreSQL streaming) */
+  isLiveStreaming?: boolean;
+  /** Whether the stream is paused (separate from buffer playback pause) */
+  isStreamPaused?: boolean;
   /** Current playback direction (only relevant when playing) */
   playbackDirection?: PlaybackDirection;
   /** Current playback speed */
@@ -48,6 +52,8 @@ export interface PlaybackControlsProps {
   /** Called for frame-based seeking (preferred for buffer playback) */
   onFrameChange?: (frameIndex: number) => void;
   onSpeedChange?: (speed: PlaybackSpeed) => void;
+  /** Called to resume a paused stream (e.g., resume PostgreSQL fetch) */
+  onResumeStream?: () => void;
 }
 
 const DEFAULT_SPEED_OPTIONS: PlaybackSpeed[] = [0.25, 0.5, 1, 2, 10, 30, 60];
@@ -65,6 +71,8 @@ export function PlaybackControls({
   supportsSeek = false,
   supportsSpeedControl = false,
   supportsReverse = false,
+  isLiveStreaming = false,
+  isStreamPaused = false,
   playbackDirection = "forward",
   playbackSpeed = 1,
   speedOptions = DEFAULT_SPEED_OPTIONS,
@@ -81,14 +89,19 @@ export function PlaybackControls({
   onScrub,
   onFrameChange,
   onSpeedChange,
+  onResumeStream,
 }: PlaybackControlsProps) {
   const isPlaying = playbackState === "playing";
   const isPaused = playbackState === "paused";
   const isPlayingForward = isPlaying && playbackDirection === "forward";
   const isPlayingBackward = isPlaying && playbackDirection === "backward";
 
+  // When live streaming, only the stop button is enabled (to pause the stream)
+  // When stream is paused, all buffer playback controls are enabled
+  const bufferControlsEnabled = !isLiveStreaming || isStreamPaused;
+
   // Only show if ready and has some control capability
-  const showControls = isReady && (supportsSeek || supportsSpeedControl || canPause || supportsReverse);
+  const showControls = isReady && (supportsSeek || supportsSpeedControl || canPause || supportsReverse || isLiveStreaming);
   if (!showControls) return null;
 
   // Whether frame-based seeking is available (preferred)
@@ -115,50 +128,50 @@ export function PlaybackControls({
     return DEFAULT_SKIP_FRAMES;
   })();
 
-  // Handler for skip to start
+  // Handler for skip to start - prefer time-based since it works with filtering
   const handleSkipToStart = () => {
-    if (canSeekByFrame) {
-      onFrameChange!(0);
-    } else if (canSeekByTime) {
+    if (canSeekByTime) {
       onScrub!(minTimeUs!);
+    } else if (canSeekByFrame) {
+      onFrameChange!(0);
     }
   };
 
-  // Handler for skip to end
+  // Handler for skip to end - prefer time-based since it works with filtering
   const handleSkipToEnd = () => {
-    if (canSeekByFrame) {
-      onFrameChange!(totalFrames! - 1);
-    } else if (canSeekByTime) {
+    if (canSeekByTime) {
       onScrub!(maxTimeUs!);
+    } else if (canSeekByFrame) {
+      onFrameChange!(totalFrames! - 1);
     }
   };
 
-  // Handler for skip back (~10 seconds)
+  // Handler for skip back (~10 seconds) - prefer time-based
   const handleSkipBack = () => {
-    if (canSeekByFrame && currentFrameIndex != null) {
-      const newFrame = Math.max(0, currentFrameIndex - framesPerSkip);
-      onFrameChange!(newFrame);
-    } else if (canSeekByTime) {
+    if (canSeekByTime) {
       const newTime = Math.max(minTimeUs!, (currentTimeUs ?? minTimeUs!) - 10_000_000);
       onScrub!(newTime);
+    } else if (canSeekByFrame && currentFrameIndex != null) {
+      const newFrame = Math.max(0, currentFrameIndex - framesPerSkip);
+      onFrameChange!(newFrame);
     }
   };
 
-  // Handler for skip forward (~10 seconds)
+  // Handler for skip forward (~10 seconds) - prefer time-based
   const handleSkipForward = () => {
-    if (canSeekByFrame && currentFrameIndex != null) {
-      const newFrame = Math.min(totalFrames! - 1, currentFrameIndex + framesPerSkip);
-      onFrameChange!(newFrame);
-    } else if (canSeekByTime) {
+    if (canSeekByTime) {
       const newTime = Math.min(maxTimeUs!, (currentTimeUs ?? minTimeUs!) + 10_000_000);
       onScrub!(newTime);
+    } else if (canSeekByFrame && currentFrameIndex != null) {
+      const newFrame = Math.min(totalFrames! - 1, currentFrameIndex + framesPerSkip);
+      onFrameChange!(newFrame);
     }
   };
 
   return (
     <div className="flex items-center gap-1">
       {/* Skip to start */}
-      {showSeekControls && (
+      {showSeekControls && bufferControlsEnabled && (
         <button
           type="button"
           onClick={handleSkipToStart}
@@ -170,7 +183,7 @@ export function PlaybackControls({
       )}
 
       {/* Skip back 10 seconds */}
-      {showSeekControls && (
+      {showSeekControls && bufferControlsEnabled && (
         <button
           type="button"
           onClick={handleSkipBack}
@@ -181,8 +194,8 @@ export function PlaybackControls({
         </button>
       )}
 
-      {/* Play backward */}
-      {supportsReverse && onPlayBackward && (
+      {/* Play backward (only when buffer controls are enabled) */}
+      {supportsReverse && onPlayBackward && bufferControlsEnabled && (
         <button
           type="button"
           onClick={onPlayBackward}
@@ -198,23 +211,23 @@ export function PlaybackControls({
         </button>
       )}
 
-      {/* Pause (shown as stop button) */}
+      {/* Pause/Stop button - pauses stream when live streaming, pauses buffer playback otherwise */}
       <button
         type="button"
         onClick={onPause}
-        disabled={isPaused}
+        disabled={isPaused && !isLiveStreaming}
         className={`p-1 rounded ${
-          isPaused
+          (isPaused && !isLiveStreaming) || (isStreamPaused && isLiveStreaming)
             ? "bg-red-600/30 text-red-400"
             : "text-red-500 hover:bg-gray-700 hover:text-red-400"
         }`}
-        title="Pause"
+        title={isLiveStreaming ? "Pause stream" : "Pause"}
       >
         <Square className={iconSm} fill="currentColor" />
       </button>
 
-      {/* Step backward (when paused and not at start) */}
-      {onStepBackward && (() => {
+      {/* Step backward (when paused and not at start, only when buffer controls enabled) */}
+      {onStepBackward && bufferControlsEnabled && (() => {
         const atStart = currentFrameIndex != null && currentFrameIndex <= 0;
         const canStep = isPaused && !atStart;
         return (
@@ -234,17 +247,17 @@ export function PlaybackControls({
         );
       })()}
 
-      {/* Frame index display (when stepping is available and we have frame info) */}
-      {(onStepBackward || onStepForward) && currentFrameIndex != null && (
+      {/* Frame index display (when stepping is available, we have frame info, and buffer controls enabled) */}
+      {bufferControlsEnabled && (onStepBackward || onStepForward) && currentFrameIndex != null && (
         <span className="px-1.5 text-xs font-mono text-gray-400 tabular-nums">
-          {totalFrames != null
-            ? `${(currentFrameIndex + 1).toLocaleString()} / ${totalFrames.toLocaleString()}`
-            : (currentFrameIndex + 1).toLocaleString()}
+          {totalFrames != null && totalFrames > 0
+            ? `${(Math.max(0, Math.min(currentFrameIndex, totalFrames - 1)) + 1).toLocaleString()} of ${totalFrames.toLocaleString()}`
+            : (Math.max(0, currentFrameIndex) + 1).toLocaleString()}
         </span>
       )}
 
-      {/* Step forward (when paused and not at end) */}
-      {onStepForward && (() => {
+      {/* Step forward (when paused and not at end, only when buffer controls enabled) */}
+      {onStepForward && bufferControlsEnabled && (() => {
         const atEnd = currentFrameIndex != null && totalFrames != null && currentFrameIndex >= totalFrames - 1;
         const canStep = isPaused && !atEnd;
         return (
@@ -264,23 +277,25 @@ export function PlaybackControls({
         );
       })()}
 
-      {/* Play forward */}
-      <button
-        type="button"
-        onClick={onPlay}
-        disabled={isPlayingForward}
-        className={`p-1 rounded ${
-          isPlayingForward
-            ? "bg-green-600/30 text-green-400"
-            : "text-green-500 hover:bg-gray-700 hover:text-green-400"
-        }`}
-        title={isPaused ? "Resume forward" : "Play forward"}
-      >
-        <Play className={iconSm} fill="currentColor" />
-      </button>
+      {/* Play forward (only when buffer controls enabled) */}
+      {bufferControlsEnabled && (
+        <button
+          type="button"
+          onClick={onPlay}
+          disabled={isPlayingForward}
+          className={`p-1 rounded ${
+            isPlayingForward
+              ? "bg-green-600/30 text-green-400"
+              : "text-green-500 hover:bg-gray-700 hover:text-green-400"
+          }`}
+          title={isPaused ? "Resume forward" : "Play forward"}
+        >
+          <Play className={iconSm} fill="currentColor" />
+        </button>
+      )}
 
       {/* Skip forward 10 seconds */}
-      {showSeekControls && (
+      {showSeekControls && bufferControlsEnabled && (
         <button
           type="button"
           onClick={handleSkipForward}
@@ -292,7 +307,7 @@ export function PlaybackControls({
       )}
 
       {/* Skip to end */}
-      {showSeekControls && (
+      {showSeekControls && bufferControlsEnabled && (
         <button
           type="button"
           onClick={handleSkipToEnd}
@@ -300,6 +315,18 @@ export function PlaybackControls({
           title="Skip to end"
         >
           <SkipForward className={iconSm} />
+        </button>
+      )}
+
+      {/* Resume Stream button - resumes PostgreSQL/timeline fetch after pause */}
+      {isStreamPaused && onResumeStream && (
+        <button
+          type="button"
+          onClick={onResumeStream}
+          className="p-1 rounded text-cyan-500 hover:bg-gray-700 hover:text-cyan-400"
+          title="Resume stream (continue fetching from database)"
+        >
+          <RefreshCw className={iconSm} />
         </button>
       )}
 

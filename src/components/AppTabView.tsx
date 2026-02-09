@@ -78,6 +78,10 @@ interface AppTabViewProps {
   /** @deprecated Use timestamp instead */
   displayTime?: string | null;
   isRecorded?: boolean;
+  /** Current frame index (0-based) for display */
+  frameIndex?: number | null;
+  /** Total frame count for display */
+  totalFrames?: number | null;
   /** Custom controls for the tab bar (e.g., column toggle buttons) */
   tabBarControls?: ReactNode;
 
@@ -135,6 +139,8 @@ export default function AppTabView({
   timestamp,
   displayTime,
   isRecorded = false,
+  frameIndex,
+  totalFrames,
   tabBarControls,
   // Toolbar (optional)
   toolbar,
@@ -174,6 +180,8 @@ export default function AppTabView({
         timestamp={timestamp}
         displayTime={displayTime}
         isRecorded={isRecorded}
+        frameIndex={frameIndex}
+        totalFrames={totalFrames}
         tabBarControls={tabBarControls}
         // Toolbar
         showToolbar={toolbar !== undefined}

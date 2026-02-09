@@ -156,6 +156,10 @@ export default function Discovery() {
   // Time range visibility
   const [showTimeRange] = useState(false);
 
+  // Ref to track paused state (used by callbacks that can't access manager state directly)
+  // When paused, frame emissions are from stepping - position updates, not new data
+  const isPausedRef = useRef(false);
+
   // NOTE: Auto-join buffer on mount and BUFFER_CHANGED events removed.
   // Discovery should NOT automatically join buffer sessions.
 
@@ -163,6 +167,9 @@ export default function Discovery() {
   // Note: Watch frame counting is handled by useIOSessionManager
   const handleFrames = useCallback((receivedFrames: FrameMessage[]) => {
     if (!receivedFrames || receivedFrames.length === 0) return;
+    // Only add frames when actively running (not paused). When paused, frame emissions
+    // are from stepping (position updates), not new data to accumulate.
+    if (isPausedRef.current) return;
     // In serial mode, skip frame picker updates until framing is accepted
     // The frame picker will be populated with correct IDs when acceptFraming is called
     const skipFramePicker = isSerialMode && !framingAccepted;
@@ -389,6 +396,7 @@ export default function Discovery() {
   const {
     sessionId,
     state: readerState,
+    bufferId: sessionBufferId,
     bufferType,
     bufferStartTimeUs,
     bufferEndTimeUs,
@@ -398,16 +406,23 @@ export default function Discovery() {
     resume,
     setSpeed,
     setTimeRange,
+    seek,
     seekByFrame,
     reinitialize,
   } = session;
 
   // Note: isStreaming, isPaused, isStopped, isRealtime are now provided by useIOSessionManager
 
-  // Fetch buffer metadata and frame info when joining a session already in buffer mode
-  // This handles the case where another app stopped the session before we joined
+  // Fetch buffer metadata and frame info when:
+  // - Joining a session already in buffer mode (another app stopped)
+  // - Session is paused with buffered data (for stepping through frames)
   useEffect(() => {
-    if (isBufferMode && !isStreaming && !bufferMetadata && sessionId) {
+    const shouldFetchMetadata = sessionId && !bufferMetadata && (
+      (isBufferMode && !isStreaming) ||  // Explicit buffer mode
+      (isPaused && bufferCount > 0)       // Paused with buffered frames
+    );
+
+    if (shouldFetchMetadata) {
       (async () => {
         try {
           // Fetch buffer metadata
@@ -426,7 +441,12 @@ export default function Discovery() {
         }
       })();
     }
-  }, [isBufferMode, isStreaming, bufferMetadata, sessionId, enableBufferMode, setFrameInfoFromBuffer]);
+  }, [isBufferMode, isStreaming, isPaused, bufferCount, bufferMetadata, sessionId, enableBufferMode, setFrameInfoFromBuffer]);
+
+  // Keep paused ref in sync with manager state (for callbacks that can't access manager directly)
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+  }, [isPaused]);
 
   // Centralised IO picker handlers - ensures consistent behavior with other apps
   const ioPickerProps = useIOPickerHandlers({
@@ -627,6 +647,7 @@ export default function Discovery() {
     reinitialize,
     setSpeed,
     setTimeRange,
+    seek,
     seekByFrame,
 
     // Store actions
@@ -895,7 +916,7 @@ export default function Discovery() {
         ) : (
           <DiscoveryFramesView
             frames={frames}
-            bufferId={bufferMetadata?.id ?? null}
+            bufferId={bufferMetadata?.id ?? sessionBufferId ?? null}
             protocol={protocolLabel}
             displayFrameIdFormat={displayFrameIdFormat}
             displayTimeFormat={displayTimeFormat}
@@ -910,7 +931,7 @@ export default function Discovery() {
             onEndTimeChange={handlers.handleEndTimeChange}
             maxBuffer={maxBuffer}
             onMaxBufferChange={setMaxBuffer}
-            currentTimeUs={sessionCurrentTimeUs}
+            currentTimeUs={currentTime !== null ? currentTime * 1_000_000 : sessionCurrentTimeUs}
             onScrub={handlers.handleScrub}
             bufferMetadata={effectiveBufferMetadata}
             isRecorded={isRecorded}
@@ -920,7 +941,7 @@ export default function Discovery() {
             playbackDirection={playbackDirection}
             capabilities={capabilities}
             playbackSpeed={playbackSpeed}
-            currentFrameIndex={sessionCurrentFrameIndex}
+            currentFrameIndex={currentFrameIndex !== null ? currentFrameIndex : sessionCurrentFrameIndex}
             onFrameSelect={async (frameIndex, timestampUs) => {
               setCurrentFrameIndex(frameIndex);
               updateCurrentTime(timestampUs / 1_000_000);
@@ -935,6 +956,10 @@ export default function Discovery() {
             onStepForward={handlers.handleStepForward}
             onSpeedChange={handlers.handleSpeedChange}
             onFrameChange={handlers.handleFrameChange}
+            // Timeline source streaming controls
+            isLiveStreaming={isRecorded && isStreaming && !isPaused}
+            isStreamPaused={isRecorded && isPaused}
+            onResumeStream={resume}
           />
         )}
 

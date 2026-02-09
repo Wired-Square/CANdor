@@ -19,6 +19,7 @@ export interface UseDiscoveryPlaybackHandlersParams {
   resume: () => Promise<void>;
   setSpeed: (speed: number) => Promise<void>;
   setTimeRange: (start: string, end: string) => Promise<void>;
+  seek: (timestampUs: number) => Promise<void>;
   seekByFrame: (frameIndex: number) => Promise<void>;
 
   // Reader state
@@ -67,6 +68,7 @@ export function useDiscoveryPlaybackHandlers({
   resume,
   setSpeed,
   setTimeRange,
+  seek,
   seekByFrame,
   isPaused,
   isStreaming,
@@ -159,9 +161,17 @@ export function useDiscoveryPlaybackHandlers({
   }, [setEndTime, setActiveBookmarkId, setTimeRange, startTime]);
 
   // Handle timeline scrubber position change (timestamp-based)
-  const handleScrub = useCallback((timeUs: number) => {
+  // Seeks the backend and updates local state
+  const handleScrub = useCallback(async (timeUs: number) => {
+    // Update local state immediately for responsiveness
     updateCurrentTime(timeUs / 1_000_000);
-  }, [updateCurrentTime]);
+    // Tell the session to seek to this timestamp
+    try {
+      await seek(timeUs);
+    } catch (e) {
+      console.error('[Discovery] Failed to seek to timestamp:', e);
+    }
+  }, [updateCurrentTime, seek]);
 
   // Handle frame-based position change (preferred for buffer playback)
   const handleFrameChange = useCallback(async (frameIndex: number) => {

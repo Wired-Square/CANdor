@@ -23,6 +23,10 @@ interface DataViewControllerProps {
   /** @deprecated Use timestamp instead */
   displayTime?: string | null;
   isRecorded?: boolean;
+  /** Current frame index (0-based) for display */
+  frameIndex?: number | null;
+  /** Total frame count for display */
+  totalFrames?: number | null;
   /** Custom controls to show in the tab bar (e.g., ASCII toggle button) */
   tabBarControls?: React.ReactNode;
 
@@ -77,6 +81,8 @@ export default function DataViewController({
   timestamp,
   displayTime,
   isRecorded = false,
+  frameIndex,
+  totalFrames,
   tabBarControls,
 
   // Toolbar
@@ -118,6 +124,8 @@ export default function DataViewController({
         timestamp={timestamp}
         displayTime={displayTime}
         isRecorded={isRecorded}
+        frameIndex={frameIndex}
+        totalFrames={totalFrames}
         controls={tabBarControls}
       />
 
