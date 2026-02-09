@@ -394,7 +394,6 @@ export default function Discovery() {
     bufferEndTimeUs,
     bufferCount,
     start,
-    stop,
     pause,
     resume,
     setSpeed,
@@ -515,11 +514,14 @@ export default function Discovery() {
   const protocolLabel = frames.length > 0 ? frames[0].protocol : "can";
 
   const isRecorded = useMemo(() => {
-    if (!ioProfile || !settings?.io_profiles) return false;
-    if (isBufferProfileId(ioProfile)) return true;
-    const profile = settings.io_profiles.find((p) => p.id === ioProfile);
+    // Use sourceProfileId if available (preserved during session switches),
+    // otherwise fall back to ioProfile
+    const profileId = sourceProfileId || ioProfile;
+    if (!profileId || !settings?.io_profiles) return false;
+    if (isBufferProfileId(profileId)) return true;
+    const profile = settings.io_profiles.find((p) => p.id === profileId);
     return profile?.kind === 'postgres' || profile?.kind === 'csv_file';
-  }, [ioProfile, settings?.io_profiles]);
+  }, [sourceProfileId, ioProfile, settings?.io_profiles]);
 
   // Merged buffer metadata using session values for cross-app timeline sync
   const effectiveBufferMetadata = useEffectiveBufferMetadata(

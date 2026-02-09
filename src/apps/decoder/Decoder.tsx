@@ -499,7 +499,6 @@ export default function Decoder() {
     bufferEndTimeUs,
     bufferCount,
     start,
-    stop,
     pause,
     resume,
     setSpeed,
@@ -541,7 +540,7 @@ export default function Decoder() {
     // Session actions (low-level, for buffer reinitialize and playback)
     reinitialize,
     start,
-    stop,
+    stop: stopWatch, // Use manager's stopWatch for buffer switch on timeline sources
     pause,
     resume,
     setSpeed,

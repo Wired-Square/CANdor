@@ -833,13 +833,31 @@ export function useIOSessionManager(
     streamCompletedRef.current = false;
   }, [startMultiBusSession, onBeforeMultiWatch, setPlaybackSpeedProp, resetWatchFrameCount]);
 
-  // Stop watching: suspend session (switches to buffer replay for realtime sources), clear watch state
-  // For realtime sources, this enables timeline controls for buffer playback.
-  // For timeline sources, this just stops the reader.
+  // Stop watching: suspend session, switch to buffer replay for timeline sources
+  // For realtime sources, this suspends and keeps the buffer available for later.
+  // For timeline sources (postgres, csv), this switches to buffer replay mode
+  // so users can step through the buffered frames.
   const stopWatch = useCallback(async () => {
     await session.suspend();
+
+    // For timeline sources, switch to buffer replay mode
+    // This enables playback controls (step/skip/seek)
+    if (sourceProfileId) {
+      const profile = ioProfiles.find((p) => p.id === sourceProfileId);
+      if (profile && !isRealtimeProfile(profile)) {
+        // Timeline source (postgres, csv) - switch to buffer replay
+        // Use session.switchToBufferReplay which also updates local capabilities
+        try {
+          await session.switchToBufferReplay(1.0);
+          console.log(`[IOSessionManager:${appName}] Switched to buffer replay mode after stop`);
+        } catch (e) {
+          console.error(`[IOSessionManager:${appName}] Failed to switch to buffer replay:`, e);
+        }
+      }
+    }
+
     setIsWatching(false);
-  }, [session]);
+  }, [session, sourceProfileId, ioProfiles, appName]);
 
   // Suspend session: alias for stopWatch (kept for backward compatibility)
   const suspendSession = stopWatch;

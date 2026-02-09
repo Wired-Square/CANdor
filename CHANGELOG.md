@@ -19,6 +19,10 @@ All notable changes to CANdor will be documented in this file.
 
 ### Fixed
 
+- **PostgreSQL Playback Controls Missing**: Fixed playback controls (pause/play, step, skip) not appearing for PostgreSQL and CSV sources. Three issues were fixed:
+  1. `isRecorded` detection used `ioProfile` (session ID like `t_17ab3d`) instead of `sourceProfileId` (profile ID like `io_xxx`), so PostgreSQL/CSV sources weren't detected as recorded
+  2. Capabilities weren't updated after switching to buffer replay mode, so BufferReader's `supports_seek` and other capabilities weren't visible to the UI
+  3. Stop button now switches timeline sources to buffer replay mode, enabling step/skip controls for reviewing captured frames
 - **PostgreSQL Bookmark Jump Hang**: Fixed PostgreSQL reader hanging when jumping to bookmarks. The 10 million row default LIMIT was causing expensive query planning delays even with cursors. Reduced default limit to 1 million rows (~16 minutes at 1000 fps), which avoids the query planner choosing a full table scan.
 - **Multiple Suspend Calls on Bookmark Jump**: Fixed Discovery and Decoder session-control listener effects causing multiple suspend calls (7x) when jumping to bookmarks. The useEffect had many dependencies causing it to re-run on every state change during reconfigure, creating race conditions with Tauri event listeners. Changed to use a ref pattern with empty dependency array so the effect only runs once.
 - **Stop Button Missing for PostgreSQL/CSV Sources**: Fixed Stop button not appearing when streaming from timeline sources (PostgreSQL, CSV). The button visibility incorrectly used `isRealtime` check, hiding it for all non-realtime sources. Timeline sources have `is_realtime=false` but actively stream frames and need the Stop button. Now correctly checks for buffer mode (`buf_` profile ID) instead.

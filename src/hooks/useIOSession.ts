@@ -1131,6 +1131,12 @@ export function useIOSession(
       if (!effectiveSessionId) return;
       try {
         await switchToBuffer(effectiveSessionId, speed);
+
+        // Refetch capabilities since the reader changed (BufferReader has different capabilities)
+        const caps = await getIOSessionCapabilities(effectiveSessionId);
+        if (caps) {
+          setLocalState((prev) => prev ? { ...prev, capabilities: caps } : prev);
+        }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         callbacksRef.current.onError?.(msg);
