@@ -90,6 +90,12 @@ pub struct AppSettings {
     pub theme_accent_danger: String,
     #[serde(default = "default_theme_accent_warning")]
     pub theme_accent_warning: String,
+
+    // Power management
+    #[serde(default = "default_prevent_idle_sleep")]
+    pub prevent_idle_sleep: bool,
+    #[serde(default = "default_keep_display_awake")]
+    pub keep_display_awake: bool,
 }
 
 fn default_display_frame_id_format() -> String {
@@ -188,6 +194,14 @@ fn default_theme_accent_warning() -> String {
     "#d97706".to_string() // amber-600
 }
 
+// Power management defaults
+fn default_prevent_idle_sleep() -> bool {
+    true
+}
+fn default_keep_display_awake() -> bool {
+    false
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         // Get platform-specific documents directory
@@ -239,6 +253,9 @@ impl Default for AppSettings {
             theme_accent_success: default_theme_accent_success(),
             theme_accent_danger: default_theme_accent_danger(),
             theme_accent_warning: default_theme_accent_warning(),
+            // Power management
+            prevent_idle_sleep: default_prevent_idle_sleep(),
+            keep_display_awake: default_keep_display_awake(),
         }
     }
 }

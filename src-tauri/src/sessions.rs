@@ -22,6 +22,7 @@ use crate::{
         PostgresConfig, PostgresReader, PostgresReaderOptions, PostgresSourceType,
         CanTransmitFrame, TransmitResult,
         emit_device_probe, DeviceProbePayload,
+        set_wake_settings as io_set_wake_settings,
     },
     profile_tracker,
     settings::{self, AppSettings, IOProfile},
@@ -1647,4 +1648,11 @@ pub fn get_profiles_usage(profile_ids: Vec<String>) -> Vec<ProfileUsageInfo> {
             }
         })
         .collect()
+}
+
+/// Update the wake lock settings.
+/// Called by frontend when user changes power management settings.
+#[tauri::command(rename_all = "snake_case")]
+pub fn set_wake_settings(prevent_idle_sleep: bool, keep_display_awake: bool) {
+    io_set_wake_settings(prevent_idle_sleep, keep_display_awake);
 }

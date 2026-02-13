@@ -6,6 +6,7 @@ import {
   saveSettings as saveSettingsApi,
   validateDirectory as validateDirectoryApi,
   listCatalogs,
+  setWakeSettings as setWakeSettingsApi,
 } from '../../../api';
 import { emit } from '@tauri-apps/api/event';
 import { WINDOW_EVENTS } from '../../../events/registry';
@@ -114,6 +115,9 @@ interface AppSettings {
   theme_accent_success?: string;
   theme_accent_danger?: string;
   theme_accent_warning?: string;
+  // Power management
+  prevent_idle_sleep?: boolean;
+  keep_display_awake?: boolean;
 }
 
 // Dialog types
@@ -249,6 +253,8 @@ interface SettingsState {
     defaultFrameType: DefaultFrameType;
     queryResultLimit: number;
     sessionManagerStatsInterval: number;
+    preventIdleSleep: boolean;
+    keepDisplayAwake: boolean;
   };
 
   // UI state
@@ -320,6 +326,8 @@ interface SettingsState {
   setDefaultFrameType: (type: DefaultFrameType) => void;
   setQueryResultLimit: (limit: number) => void;
   setSessionManagerStatsInterval: (interval: number) => void;
+  setPreventIdleSleep: (value: boolean) => void;
+  setKeepDisplayAwake: (value: boolean) => void;
 }
 
 // Auto-save debounce
@@ -377,6 +385,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     defaultFrameType: 'can',
     queryResultLimit: 10000,
     sessionManagerStatsInterval: 60,
+    preventIdleSleep: true,
+    keepDisplayAwake: false,
   },
 
   ui: {
@@ -530,9 +540,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           defaultFrameType: normalized.default_frame_type ?? 'can',
           queryResultLimit: normalized.query_result_limit ?? 10000,
           sessionManagerStatsInterval: normalized.session_manager_stats_interval ?? 60,
+          preventIdleSleep: normalized.prevent_idle_sleep ?? true,
+          keepDisplayAwake: normalized.keep_display_awake ?? false,
         },
         originalSettings: normalized,
       });
+
+      // Update backend wake settings cache
+      setWakeSettingsApi(
+        normalized.prevent_idle_sleep ?? true,
+        normalized.keep_display_awake ?? false
+      ).catch(console.error);
 
       // Load catalogs after we have the decoder dir
       get().loadCatalogs();
@@ -595,6 +613,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         discovery_history_buffer: general.discoveryHistoryBuffer,
         query_result_limit: general.queryResultLimit,
         session_manager_stats_interval: general.sessionManagerStatsInterval,
+        // Power management
+        prevent_idle_sleep: general.preventIdleSleep,
+        keep_display_awake: general.keepDisplayAwake,
         // Theme settings
         theme_mode: display.themeMode,
         theme_bg_primary_light: display.themeColours.bgPrimaryLight,
@@ -658,6 +679,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       discovery_history_buffer: general.discoveryHistoryBuffer,
       query_result_limit: general.queryResultLimit,
       session_manager_stats_interval: general.sessionManagerStatsInterval,
+      // Power management
+      prevent_idle_sleep: general.preventIdleSleep,
+      keep_display_awake: general.keepDisplayAwake,
       // Theme settings
       theme_mode: display.themeMode,
       theme_bg_primary_light: display.themeColours.bgPrimaryLight,
@@ -986,5 +1010,25 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       general: { ...state.general, sessionManagerStatsInterval: interval },
     }));
     scheduleSave(get().saveSettings);
+  },
+
+  setPreventIdleSleep: (value) => {
+    set((state) => ({
+      general: { ...state.general, preventIdleSleep: value },
+    }));
+    scheduleSave(get().saveSettings);
+    // Update backend cache immediately
+    const { keepDisplayAwake } = get().general;
+    setWakeSettingsApi(value, keepDisplayAwake).catch(console.error);
+  },
+
+  setKeepDisplayAwake: (value) => {
+    set((state) => ({
+      general: { ...state.general, keepDisplayAwake: value },
+    }));
+    scheduleSave(get().saveSettings);
+    // Update backend cache immediately
+    const { preventIdleSleep } = get().general;
+    setWakeSettingsApi(preventIdleSleep, value).catch(console.error);
   },
 }));

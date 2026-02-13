@@ -52,6 +52,7 @@ pub use error::IoError;
 // go through MultiSourceReader
 
 use async_trait::async_trait;
+use keepawake::{Builder as KeepAwakeBuilder, KeepAwake};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -681,6 +682,109 @@ static IO_SESSIONS: Lazy<Mutex<HashMap<String, IOSession>>> =
 /// Sessions that are currently closing (window close in progress)
 /// Uses RwLock (not async Mutex) so it can be checked synchronously in emit_to_session
 static CLOSING_SESSIONS: Lazy<RwLock<HashSet<String>>> = Lazy::new(|| RwLock::new(HashSet::new()));
+
+// ============================================================================
+// Wake Lock Management (prevents system sleep during active sessions)
+// ============================================================================
+
+/// Settings for wake lock behaviour
+#[derive(Clone, Debug)]
+pub struct WakeSettings {
+    pub prevent_idle_sleep: bool,
+    pub keep_display_awake: bool,
+}
+
+impl Default for WakeSettings {
+    fn default() -> Self {
+        Self {
+            prevent_idle_sleep: true,
+            keep_display_awake: false,
+        }
+    }
+}
+
+/// Cached wake settings (updated by frontend when settings change)
+static WAKE_SETTINGS: Lazy<RwLock<WakeSettings>> = Lazy::new(|| RwLock::new(WakeSettings::default()));
+
+/// Active wake lock guard (holds system awake while Some)
+static WAKE_LOCK: Lazy<std::sync::Mutex<Option<KeepAwake>>> =
+    Lazy::new(|| std::sync::Mutex::new(None));
+
+/// Update the cached wake settings (called by Tauri command when settings change)
+pub fn set_wake_settings(prevent_idle_sleep: bool, keep_display_awake: bool) {
+    if let Ok(mut settings) = WAKE_SETTINGS.write() {
+        settings.prevent_idle_sleep = prevent_idle_sleep;
+        settings.keep_display_awake = keep_display_awake;
+        eprintln!(
+            "[wake] Settings updated: prevent_idle_sleep={}, keep_display_awake={}",
+            prevent_idle_sleep, keep_display_awake
+        );
+    }
+}
+
+/// Update the wake lock based on current session state and settings.
+/// Called periodically by the heartbeat watchdog.
+async fn update_wake_lock() {
+    // Read current settings
+    let settings = match WAKE_SETTINGS.read() {
+        Ok(s) => s.clone(),
+        Err(_) => return,
+    };
+
+    // If both settings are disabled, ensure no wake lock is held
+    if !settings.prevent_idle_sleep && !settings.keep_display_awake {
+        if let Ok(mut guard) = WAKE_LOCK.lock() {
+            if guard.is_some() {
+                *guard = None;
+                eprintln!("[wake] Released wake lock (settings disabled)");
+            }
+        }
+        return;
+    }
+
+    // Check if any session is actively running with listeners
+    let sessions = IO_SESSIONS.lock().await;
+    let any_active = sessions.values().any(|session| {
+        matches!(session.device.state(), IOState::Running) && !session.listeners.is_empty()
+    });
+    drop(sessions);
+
+    // Update wake lock based on session state
+    if let Ok(mut guard) = WAKE_LOCK.lock() {
+        match (any_active, guard.is_some()) {
+            (true, false) => {
+                // Need to acquire wake lock
+                match KeepAwakeBuilder::default()
+                    .idle(settings.prevent_idle_sleep)
+                    .display(settings.keep_display_awake)
+                    .reason("CANdor session active")
+                    .app_name("CANdor")
+                    .app_reverse_domain("com.wiredsquare.candor")
+                    .create()
+                {
+                    Ok(lock) => {
+                        *guard = Some(lock);
+                        eprintln!(
+                            "[wake] Acquired wake lock (idle={}, display={})",
+                            settings.prevent_idle_sleep, settings.keep_display_awake
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("[wake] Failed to acquire wake lock: {:?}", e);
+                    }
+                }
+            }
+            (false, true) => {
+                // Release wake lock
+                *guard = None;
+                eprintln!("[wake] Released wake lock (no active sessions)");
+            }
+            _ => {
+                // No change needed
+            }
+        }
+    }
+}
 
 /// Startup errors for sessions (errors that occurred before any listener registered).
 /// Uses RwLock (not async Mutex) so it can be set synchronously from emit_to_session.
@@ -1355,6 +1459,9 @@ pub fn start_heartbeat_watchdog() {
                     session_id, removed, remaining
                 );
             }
+
+            // Update wake lock based on session state and settings
+            update_wake_lock().await;
 
             // Log session status every STATUS_LOG_INTERVAL_SECS
             if tick_count % status_interval == 0 {

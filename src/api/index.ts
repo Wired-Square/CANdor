@@ -10,6 +10,7 @@ export {
   getAppVersion,
   settingsPanelClosed,
   openSettingsPanel,
+  setWakeSettings,
 } from "./settings";
 
 // Catalog API

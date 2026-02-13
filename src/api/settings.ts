@@ -70,3 +70,18 @@ export async function settingsPanelClosed(): Promise<void> {
 export async function openSettingsPanel(): Promise<void> {
   await invoke("open_settings_panel");
 }
+
+/**
+ * Update the wake lock settings in the backend.
+ * This updates the cached settings that control whether the system is
+ * prevented from sleeping during active sessions.
+ */
+export async function setWakeSettings(
+  preventIdleSleep: boolean,
+  keepDisplayAwake: boolean
+): Promise<void> {
+  await invoke("set_wake_settings", {
+    prevent_idle_sleep: preventIdleSleep,
+    keep_display_awake: keepDisplayAwake,
+  });
+}

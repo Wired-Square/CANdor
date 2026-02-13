@@ -620,6 +620,8 @@ pub fn run() {
             sessions::get_profile_sessions,
             sessions::get_profile_session_count,
             sessions::get_profiles_usage,
+            // Power management API
+            sessions::set_wake_settings,
             io::get_active_listeners,
             // Buffer / CSV Import API
             buffers::import_csv_to_buffer,

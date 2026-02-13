@@ -6,6 +6,15 @@ All notable changes to CANdor will be documented in this file.
 
 ### Added
 
+- **Power Management**: Prevent system sleep/hibernation while a session is actively streaming data. Cross-platform support via the `keepawake` crate:
+  - **macOS**: IOPMAssertionCreateWithName
+  - **Windows**: SetThreadExecutionState
+  - **Linux**: D-Bus org.freedesktop.ScreenSaver + systemd Inhibitor Locks
+  - Two settings in Settings → General → Power Management:
+    - "Prevent idle sleep during active sessions" (default: on)
+    - "Keep display awake during active sessions" (default: off)
+  - Verification: Start a session, then check `pmset -g assertions` (macOS), `powercfg /requests` (Windows), or `systemd-inhibit --list` (Linux)
+
 - **PostgreSQL/CSV Buffer Playback Controls**: Timeline sources (PostgreSQL, CSV) now support full buffer playback controls when paused:
   - During active streaming, only Stop button and speed control are visible
   - Clicking Stop pauses the stream (keeps session alive) instead of stopping it

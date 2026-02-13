@@ -81,6 +81,10 @@ export default function Settings() {
   const setDefaultFrameType = useSettingsStore((s) => s.setDefaultFrameType);
   const queryResultLimit = useSettingsStore((s) => s.general.queryResultLimit);
   const setQueryResultLimit = useSettingsStore((s) => s.setQueryResultLimit);
+  const preventIdleSleep = useSettingsStore((s) => s.general.preventIdleSleep);
+  const setPreventIdleSleep = useSettingsStore((s) => s.setPreventIdleSleep);
+  const keepDisplayAwake = useSettingsStore((s) => s.general.keepDisplayAwake);
+  const setKeepDisplayAwake = useSettingsStore((s) => s.setKeepDisplayAwake);
 
   // IO Profiles
   const ioProfiles = useSettingsStore((s) => s.ioProfiles.profiles);
@@ -202,6 +206,10 @@ export default function Settings() {
               onChangeDefaultFrameType={setDefaultFrameType}
               queryResultLimit={queryResultLimit}
               onChangeQueryResultLimit={setQueryResultLimit}
+              preventIdleSleep={preventIdleSleep}
+              onChangePreventIdleSleep={setPreventIdleSleep}
+              keepDisplayAwake={keepDisplayAwake}
+              onChangeKeepDisplayAwake={setKeepDisplayAwake}
             />
           )}
 
