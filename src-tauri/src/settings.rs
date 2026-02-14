@@ -260,6 +260,67 @@ impl Default for AppSettings {
     }
 }
 
+impl AppSettings {
+    /// Create settings with defaults using Tauri's path APIs.
+    /// This works correctly on all platforms including iOS.
+    pub fn with_defaults(app: &AppHandle) -> Result<Self, String> {
+        let documents_dir = app
+            .path()
+            .document_dir()
+            .map_err(|e| format!("Failed to get document directory: {}", e))?
+            .join("CANdor");
+
+        let decoder_path = documents_dir.join("Decoders");
+        let dump_path = documents_dir.join("Dumps");
+
+        Ok(Self {
+            config_path: "config/candor.toml".to_string(),
+            decoder_dir: decoder_path.to_string_lossy().to_string(),
+            dump_dir: dump_path.to_string_lossy().to_string(),
+            io_profiles: Vec::new(),
+            default_read_profile: None,
+            default_write_profiles: Vec::new(),
+            default_catalog: None,
+            display_frame_id_format: default_display_frame_id_format(),
+            save_frame_id_format: default_save_frame_id_format(),
+            display_time_format: default_display_time_format(),
+            signal_colour_none: default_signal_colour_none(),
+            signal_colour_low: default_signal_colour_low(),
+            signal_colour_medium: default_signal_colour_medium(),
+            signal_colour_high: default_signal_colour_high(),
+            binary_one_colour: default_binary_one_colour(),
+            display_timezone: default_display_timezone(),
+            session_manager_stats_interval: default_session_manager_stats_interval(),
+            // Theme settings
+            theme_mode: default_theme_mode(),
+            // Light mode
+            theme_bg_primary_light: default_theme_bg_primary_light(),
+            theme_bg_surface_light: default_theme_bg_surface_light(),
+            theme_text_primary_light: default_theme_text_primary_light(),
+            theme_text_secondary_light: default_theme_text_secondary_light(),
+            theme_border_default_light: default_theme_border_default_light(),
+            theme_data_bg_light: default_theme_data_bg_light(),
+            theme_data_text_primary_light: default_theme_data_text_primary_light(),
+            // Dark mode
+            theme_bg_primary_dark: default_theme_bg_primary_dark(),
+            theme_bg_surface_dark: default_theme_bg_surface_dark(),
+            theme_text_primary_dark: default_theme_text_primary_dark(),
+            theme_text_secondary_dark: default_theme_text_secondary_dark(),
+            theme_border_default_dark: default_theme_border_default_dark(),
+            theme_data_bg_dark: default_theme_data_bg_dark(),
+            theme_data_text_primary_dark: default_theme_data_text_primary_dark(),
+            // Accent colours
+            theme_accent_primary: default_theme_accent_primary(),
+            theme_accent_success: default_theme_accent_success(),
+            theme_accent_danger: default_theme_accent_danger(),
+            theme_accent_warning: default_theme_accent_warning(),
+            // Power management
+            prevent_idle_sleep: default_prevent_idle_sleep(),
+            keep_display_awake: default_keep_display_awake(),
+        })
+    }
+}
+
 fn get_settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     let app_dir = app
         .path()
@@ -272,6 +333,31 @@ fn get_settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app_dir.join("settings.json"))
 }
 
+/// Check if directory paths are stale (e.g., pointing to old iOS container UUIDs).
+/// Returns true if paths need to be regenerated.
+fn paths_are_stale(settings: &AppSettings, app: &AppHandle) -> bool {
+    // Get the current document directory
+    let current_doc_dir = match app.path().document_dir() {
+        Ok(dir) => dir,
+        Err(_) => return false, // Can't check, assume OK
+    };
+
+    let decoder_path = PathBuf::from(&settings.decoder_dir);
+
+    // On iOS, paths contain container UUIDs that change on reinstall.
+    // Check if the saved path starts with the current document directory.
+    // If not, the path is stale and needs regeneration.
+    if !decoder_path.starts_with(&current_doc_dir) {
+        eprintln!(
+            "[settings] Detected stale paths: decoder_dir {:?} doesn't start with {:?}",
+            decoder_path, current_doc_dir
+        );
+        return true;
+    }
+
+    false
+}
+
 #[tauri::command]
 pub async fn load_settings(app: AppHandle) -> Result<AppSettings, String> {
     let settings_path = get_settings_path(&app)?;
@@ -280,11 +366,25 @@ pub async fn load_settings(app: AppHandle) -> Result<AppSettings, String> {
         let content = std::fs::read_to_string(&settings_path)
             .map_err(|e| format!("Failed to read settings: {}", e))?;
 
-        serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse settings: {}", e))
+        let mut settings: AppSettings = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse settings: {}", e))?;
+
+        // Check for stale paths (e.g., old iOS container UUIDs after reinstall)
+        if paths_are_stale(&settings, &app) {
+            eprintln!("[settings] Regenerating stale directory paths");
+            let fresh_defaults = AppSettings::with_defaults(&app)?;
+            settings.decoder_dir = fresh_defaults.decoder_dir;
+            settings.dump_dir = fresh_defaults.dump_dir;
+            // Re-initialize directories and save updated settings
+            initialize_directories(&settings)?;
+            save_settings(app, settings.clone()).await?;
+        }
+
+        Ok(settings)
     } else {
         // First run: create default settings and directories
-        let settings = AppSettings::default();
+        // Use with_defaults() for iOS-compatible path resolution
+        let settings = AppSettings::with_defaults(&app)?;
         initialize_directories(&settings)?;
         save_settings(app, settings.clone()).await?;
         Ok(settings)
@@ -309,12 +409,30 @@ fn initialize_directories(settings: &AppSettings) -> Result<(), String> {
 /// Only copies files that don't already exist (never overwrites).
 pub fn install_example_decoders(app: &AppHandle, decoder_dir: &str) -> Result<u32, String> {
     let decoder_path = PathBuf::from(decoder_dir);
+    eprintln!("[settings] Decoder directory: {:?}", decoder_path);
 
-    // Resolve the bundled examples directory
-    let examples_dir = app
-        .path()
-        .resolve("examples", BaseDirectory::Resource)
-        .map_err(|e| format!("Failed to resolve examples directory: {}", e))?;
+    // Try to resolve the bundled examples directory
+    // First try BaseDirectory::Resource (works on desktop)
+    let examples_dir = match app.path().resolve("examples", BaseDirectory::Resource) {
+        Ok(path) => {
+            eprintln!("[settings] Resolved examples via Resource: {:?}", path);
+            path
+        }
+        Err(e) => {
+            eprintln!("[settings] Failed to resolve via Resource: {}", e);
+            // Fallback: try resource_dir directly (for iOS)
+            match app.path().resource_dir() {
+                Ok(resource_dir) => {
+                    let path = resource_dir.join("examples");
+                    eprintln!("[settings] Trying resource_dir fallback: {:?}", path);
+                    path
+                }
+                Err(e2) => {
+                    return Err(format!("Failed to resolve examples directory: {} / {}", e, e2));
+                }
+            }
+        }
+    };
 
     // If examples directory doesn't exist (dev mode without resources), skip silently
     if !examples_dir.exists() {

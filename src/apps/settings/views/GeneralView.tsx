@@ -18,6 +18,7 @@ type GeneralViewProps = {
   onChangePreventIdleSleep: (value: boolean) => void;
   keepDisplayAwake: boolean;
   onChangeKeepDisplayAwake: (value: boolean) => void;
+  isIOS?: boolean;
 };
 
 export default function GeneralView({
@@ -31,6 +32,7 @@ export default function GeneralView({
   onChangePreventIdleSleep,
   keepDisplayAwake,
   onChangeKeepDisplayAwake,
+  isIOS = false,
 }: GeneralViewProps) {
   return (
     <div className="space-y-6">
@@ -91,45 +93,47 @@ export default function GeneralView({
         />
       </div>
 
-      {/* Power Management Section */}
-      <div className="pt-4 border-t border-[color:var(--border-default)]">
-        <h3 className={`text-lg font-medium mb-4 ${textPrimary}`}>Power Management</h3>
-        <div className="space-y-4">
-          <label className="flex items-start gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={preventIdleSleep}
-              onChange={(e) => onChangePreventIdleSleep(e.target.checked)}
-              className="mt-1"
-            />
-            <div>
-              <span className={labelDefault}>
-                Prevent idle sleep during active sessions
-              </span>
-              <p className={helpText}>
-                Keep the system awake while a session is actively streaming data
-              </p>
-            </div>
-          </label>
+      {/* Power Management Section (hidden on iOS) */}
+      {!isIOS && (
+        <div className="pt-4 border-t border-[color:var(--border-default)]">
+          <h3 className={`text-lg font-medium mb-4 ${textPrimary}`}>Power Management</h3>
+          <div className="space-y-4">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={preventIdleSleep}
+                onChange={(e) => onChangePreventIdleSleep(e.target.checked)}
+                className="mt-1"
+              />
+              <div>
+                <span className={labelDefault}>
+                  Prevent idle sleep during active sessions
+                </span>
+                <p className={helpText}>
+                  Keep the system awake while a session is actively streaming data
+                </p>
+              </div>
+            </label>
 
-          <label className="flex items-start gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={keepDisplayAwake}
-              onChange={(e) => onChangeKeepDisplayAwake(e.target.checked)}
-              className="mt-1"
-            />
-            <div>
-              <span className={labelDefault}>
-                Keep display awake during active sessions
-              </span>
-              <p className={helpText}>
-                Prevent the display from turning off while a session is active
-              </p>
-            </div>
-          </label>
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={keepDisplayAwake}
+                onChange={(e) => onChangeKeepDisplayAwake(e.target.checked)}
+                className="mt-1"
+              />
+              <div>
+                <span className={labelDefault}>
+                  Keep display awake during active sessions
+                </span>
+                <p className={helpText}>
+                  Prevent the display from turning off while a session is active
+                </p>
+              </div>
+            </label>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

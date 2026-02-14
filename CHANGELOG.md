@@ -12,6 +12,20 @@ All notable changes to CANdor will be documented in this file.
   - Added `isIOS()` platform detection function
   - Rust backend uses `#[cfg(target_os = "ios")]` guards for platform-specific code
 
+- **iOS File Sharing**: Enabled `UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace` in iOS Info.plist. The app's Documents folder is now visible in the iOS Files app under "On My iPad/iPhone" > "CANdor", allowing users to add decoder catalogs via Files app or Finder when connected.
+
+### Fixed
+
+- **iOS Directory Path Resolution**: Fixed decoder catalogs not loading on iOS. The app now uses Tauri's `app.path().document_dir()` API instead of the `dirs` crate, which doesn't work correctly on iOS. Added `AppSettings::with_defaults(app)` for proper iOS-compatible path initialisation.
+
+- **iOS Stale Path Detection**: Fixed issue where reinstalling the iOS app would cause the app to look in old container paths. On iOS, app reinstalls create new container UUIDs, invalidating saved absolute paths. The app now detects stale paths on settings load and regenerates them automatically.
+
+### Changed
+
+- **iOS Settings Visibility**: Hide desktop-only settings on iOS:
+  - Storage section (custom directory paths) is hidden since iOS sandboxing prevents custom directory selection
+  - Power Management settings are hidden since iOS manages power independently
+
 - **Decoder Scroll Position Preservation**: The Decoder app now remembers scroll position when switching between panels (e.g., Decoder → Discovery → Decoder). Each tab (Signals, Unmatched, Filtered) maintains its own scroll position. Positions are session-only and reset on app restart.
 
 - **Power Management**: Prevent system sleep/hibernation while a session is actively streaming data. Cross-platform support via the `keepawake` crate:

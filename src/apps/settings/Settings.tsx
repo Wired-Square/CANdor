@@ -23,6 +23,7 @@ import { useSettingsStore, type SettingsSection } from './stores/settingsStore';
 import { useSettingsForms } from './hooks/useSettingsForms';
 import { useSettingsHandlers } from './hooks/useSettingsHandlers';
 import { getTimeRangeCapableProfiles } from '../../utils/profileFilters';
+import { isIOS } from '../../utils/platform';
 
 export default function Settings() {
   // Form state for dialogs
@@ -123,24 +124,29 @@ export default function Settings() {
     timeRangeCapableProfiles,
   });
 
-  // Load data on mount
+  // Sidebar collapsed state
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Platform detection for iOS-specific UI hiding
+  const [isIOSPlatform, setIsIOSPlatform] = useState(false);
+
+  // Load data on mount and detect platform
   useEffect(() => {
     loadSettings();
     loadBookmarks();
+    isIOS().then(setIsIOSPlatform);
   }, [loadSettings, loadBookmarks]);
 
-  // Sidebar items
+  // Sidebar items (Storage hidden on iOS due to sandboxing restrictions)
   const sidebarItems: SideBarItem[] = [
     { id: 'general', label: 'General', icon: Cog },
-    { id: 'locations', label: 'Storage', icon: MapPin },
+    // Hide Storage on iOS - custom directory paths aren't supported
+    ...(!isIOSPlatform ? [{ id: 'locations' as const, label: 'Storage', icon: MapPin }] : []),
     { id: 'data-io', label: 'Data IO', icon: Cable },
     { id: 'catalogs', label: 'Catalogs', icon: BookOpen },
     { id: 'bookmarks', label: 'Bookmarks', icon: Bookmark },
     { id: 'display', label: 'Display', icon: Monitor },
   ];
-
-  // Sidebar collapsed state
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // Directory picker helper
   const handlePickDirectory = async (
@@ -178,8 +184,8 @@ export default function Settings() {
 
         {/* Content Area */}
         <main className={`flex-1 min-h-0 overflow-y-auto p-6 ${bgDataView}`}>
-          {/* Locations Section */}
-          {currentSection === 'locations' && (
+          {/* Locations Section (hidden on iOS) */}
+          {currentSection === 'locations' && !isIOSPlatform && (
             <LocationsView
               decoderDir={decoderDir}
               dumpDir={dumpDir}
@@ -210,6 +216,7 @@ export default function Settings() {
               onChangePreventIdleSleep={setPreventIdleSleep}
               keepDisplayAwake={keepDisplayAwake}
               onChangeKeepDisplayAwake={setKeepDisplayAwake}
+              isIOS={isIOSPlatform}
             />
           )}
 
