@@ -267,6 +267,10 @@ interface DecoderState {
   activeSelectionSetId: string | null;
   selectionSetDirty: boolean;
 
+  // UI state (session-only, not persisted)
+  /** Scroll positions per tab (signals, unmatched, filtered) */
+  scrollPositions: Record<string, number>;
+
   // Actions - Catalog
   loadCatalog: (path: string) => Promise<void>;
   initFromSettings: (defaultCatalog?: string, decoderDir?: string, defaultReadProfile?: string | null) => Promise<void>;
@@ -324,6 +328,9 @@ interface DecoderState {
   setActiveSelectionSet: (id: string | null) => void;
   setSelectionSetDirty: (dirty: boolean) => void;
   applySelectionSet: (selectionSet: SelectionSet) => void;
+
+  // Actions - Scroll position
+  setScrollPosition: (tabId: string, position: number) => void;
 }
 
 export const useDecoderStore = create<DecoderState>((set, get) => ({
@@ -352,6 +359,7 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
   frameIdFilter: '',
   frameIdFilterSet: null,
   streamStartTimeSeconds: null,
+  scrollPositions: {},
   playbackSpeed: 1,
   currentTime: null,
   currentFrameIndex: null,
@@ -1256,5 +1264,9 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
       activeSelectionSetId: selectionSet.id,
       selectionSetDirty: false,
     });
+  },
+
+  setScrollPosition: (tabId, position) => {
+    set({ scrollPositions: { ...get().scrollPositions, [tabId]: position } });
   },
 }));

@@ -62,6 +62,9 @@ export default function Decoder() {
   // Defined locally and passed to manager so it can reset it during watch operations
   const streamCompletedRef = useRef(false);
 
+  // Ref for scroll container (for scroll position preservation)
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
   // Ingest speed setting (for dialog display)
   const [ingestSpeed, setIngestSpeed] = useState(0); // 0 = no limit
 
@@ -128,10 +131,47 @@ export default function Decoder() {
   const clearHeaderFieldFilter = useDecoderStore((state) => state.clearHeaderFieldFilter);
   const toggleAsciiGutter = useDecoderStore((state) => state.toggleAsciiGutter);
   const setFrameIdFilter = useDecoderStore((state) => state.setFrameIdFilter);
+  const scrollPositions = useDecoderStore((state) => state.scrollPositions);
+  const setScrollPosition = useDecoderStore((state) => state.setScrollPosition);
 
   const displayIdFormat = getDisplayFrameIdFormat(settings || undefined);
   const displayTimeFormat = settings?.display_time_format ?? "human";
   const decoderDir = settings?.decoder_dir ?? "";
+
+  // Scroll position preservation - throttle scroll updates to avoid excessive store updates
+  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isRestoringScrollRef = useRef(false);
+  const handleScroll = useCallback((scrollTop: number) => {
+    // Don't save scroll position while we're restoring it
+    if (isRestoringScrollRef.current) return;
+
+    if (scrollTimeoutRef.current) {
+      clearTimeout(scrollTimeoutRef.current);
+    }
+    scrollTimeoutRef.current = setTimeout(() => {
+      setScrollPosition(activeTab, scrollTop);
+    }, 100);
+  }, [activeTab, setScrollPosition]);
+
+  // Keep scroll positions ref in sync with store
+  const scrollPositionsRef = useRef(scrollPositions);
+  useEffect(() => {
+    scrollPositionsRef.current = scrollPositions;
+  }, [scrollPositions]);
+
+  // Restore scroll position when panel becomes focused or tab changes
+  useEffect(() => {
+    if (isFocused) {
+      const savedPosition = scrollPositionsRef.current[activeTab];
+      if (savedPosition !== undefined && scrollRef.current) {
+        isRestoringScrollRef.current = true;
+        scrollRef.current.scrollTop = savedPosition;
+        setTimeout(() => {
+          isRestoringScrollRef.current = false;
+        }, 50);
+      }
+    }
+  }, [isFocused, activeTab]);
 
   // Batching: accumulate frames and flush to store at limited rate
   // We store all frames (not just latest per ID) to ensure mux cases aren't lost
@@ -1077,6 +1117,8 @@ export default function Decoder() {
           showAsciiGutter={showAsciiGutter}
           frameIdFilter={frameIdFilter}
           mirrorValidation={mirrorValidation}
+          scrollRef={scrollRef}
+          onScroll={handleScroll}
         />
 
       <FramePickerDialog

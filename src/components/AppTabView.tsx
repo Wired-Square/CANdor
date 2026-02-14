@@ -4,7 +4,7 @@
 // Provides the dark-themed rounded container with tab bar, optional toolbar,
 // optional timeline, and scrollable content area.
 
-import { type ReactNode } from "react";
+import { type ReactNode, type RefObject } from "react";
 import DataViewController, {
   type TabDefinition,
   type ProtocolBadge,
@@ -58,6 +58,10 @@ interface ContentAreaConfig {
    * Defaults to true.
    */
   wrap?: boolean;
+  /** Ref to the scrollable content container for external scroll management */
+  scrollRef?: RefObject<HTMLDivElement | null>;
+  /** Callback when scroll position changes */
+  onScroll?: (scrollTop: number) => void;
 }
 
 /**
@@ -210,7 +214,17 @@ export default function AppTabView({
 
       {/* Content Area */}
       {wrapContent ? (
-        <div className={contentClasses}>{children}</div>
+        <div
+          ref={contentArea?.scrollRef}
+          onScroll={
+            contentArea?.onScroll
+              ? (e) => contentArea.onScroll!(e.currentTarget.scrollTop)
+              : undefined
+          }
+          className={contentClasses}
+        >
+          {children}
+        </div>
       ) : (
         children
       )}

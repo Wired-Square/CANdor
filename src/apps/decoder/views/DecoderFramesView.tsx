@@ -163,6 +163,11 @@ type Props = {
   frameIdFilter?: string;
   /** Mirror validation results - keyed by mirror frame ID */
   mirrorValidation?: Map<number, MirrorValidationEntry>;
+
+  /** Ref to the scrollable content container */
+  scrollRef?: React.RefObject<HTMLDivElement | null>;
+  /** Callback when scroll position changes */
+  onScroll?: (scrollTop: number) => void;
 };
 
 /**
@@ -820,6 +825,8 @@ export default function DecoderFramesView({
   showAsciiGutter = false,
   frameIdFilter: _frameIdFilter = '',
   mirrorValidation,
+  scrollRef,
+  onScroll,
 }: Props) {
   void _onToggleRawBytes; // Silence unused variable warning
   void _frameIdFilter; // Frame ID filtering is done at processing level in Decoder.tsx
@@ -1076,7 +1083,7 @@ export default function DecoderFramesView({
           : undefined
       }
       // Content area with space-y-4 for card spacing
-      contentArea={{ spaceY: true }}
+      contentArea={{ spaceY: true, scrollRef, onScroll }}
     >
         {activeTab === 'signals' ? (
           // Signals tab content

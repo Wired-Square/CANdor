@@ -6,6 +6,8 @@ All notable changes to CANdor will be documented in this file.
 
 ### Added
 
+- **Decoder Scroll Position Preservation**: The Decoder app now remembers scroll position when switching between panels (e.g., Decoder → Discovery → Decoder). Each tab (Signals, Unmatched, Filtered) maintains its own scroll position. Positions are session-only and reset on app restart.
+
 - **Power Management**: Prevent system sleep/hibernation while a session is actively streaming data. Cross-platform support via the `keepawake` crate:
   - **macOS**: IOPMAssertionCreateWithName
   - **Windows**: SetThreadExecutionState
