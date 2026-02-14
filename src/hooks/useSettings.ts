@@ -126,6 +126,9 @@ export interface AppSettings {
   theme_accent_success?: string;
   theme_accent_danger?: string;
   theme_accent_warning?: string;
+  // Power management
+  prevent_idle_sleep?: boolean;
+  keep_display_awake?: boolean;
 }
 
 /**

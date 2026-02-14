@@ -42,6 +42,7 @@ All notable changes to CANdor will be documented in this file.
 
 ### Fixed
 
+- **Power Management Settings Not Saved**: Fixed power management settings (`prevent_idle_sleep`, `keep_display_awake`) not persisting across app restarts. The settings were being saved correctly but not loaded—the `normalized` object in `loadSettings` was missing these fields, causing them to always reset to defaults on load.
 - **PostgreSQL Playback Controls Missing**: Fixed playback controls (pause/play, step, skip) not appearing for PostgreSQL and CSV sources. Three issues were fixed:
   1. `isRecorded` detection used `ioProfile` (session ID like `t_17ab3d`) instead of `sourceProfileId` (profile ID like `io_xxx`), so PostgreSQL/CSV sources weren't detected as recorded
   2. Capabilities weren't updated after switching to buffer replay mode, so BufferReader's `supports_seek` and other capabilities weren't visible to the UI

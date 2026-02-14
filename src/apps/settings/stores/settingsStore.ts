@@ -476,6 +476,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         theme_accent_success: settings.theme_accent_success || defaultThemeColours.accentSuccess,
         theme_accent_danger: settings.theme_accent_danger || defaultThemeColours.accentDanger,
         theme_accent_warning: settings.theme_accent_warning || defaultThemeColours.accentWarning,
+        // Power management
+        prevent_idle_sleep: settings.prevent_idle_sleep ?? true,
+        keep_display_awake: settings.keep_display_awake ?? false,
       };
 
       set({
