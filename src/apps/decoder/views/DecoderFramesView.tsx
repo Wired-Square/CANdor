@@ -66,6 +66,13 @@ function getAllSignals(frame: FrameDetail): SignalDef[] {
   return signals;
 }
 
+/**
+ * Convert byte to ASCII character (printable) or dot.
+ */
+function byteToAscii(b: number): string {
+  return b >= 0x20 && b <= 0x7E ? String.fromCharCode(b) : '.';
+}
+
 type Props = {
   frames: FrameDetail[];
   selectedIds: Set<number>;
@@ -283,6 +290,7 @@ function FrameCard({
   decodedFrame,
   displayFrameIdFormat,
   showRawBytes,
+  showAsciiGutter = false,
   signalColours,
   sourceAddressLabel,
   serialConfig,
@@ -295,6 +303,7 @@ function FrameCard({
   decodedFrame: DecodedFrame | undefined;
   displayFrameIdFormat: "hex" | "decimal";
   showRawBytes: boolean;
+  showAsciiGutter?: boolean;
   signalColours?: {
     none?: string;
     low?: string;
@@ -597,17 +606,24 @@ function FrameCard({
       </div>
       {/* Raw bytes on separate line */}
       {showRawBytes && rawBytes && (
-        <div className="font-mono text-xs bg-[var(--bg-surface)] px-2 py-0.5 rounded inline-block">
-          {rawBytes.map((b, idx) => (
-            <span
-              key={idx}
-              className="transition-colors duration-200"
-              style={{ color: getByteColour(idx) }}
-            >
-              {idx > 0 ? ' ' : ''}
-              {b.toString(16).toUpperCase().padStart(2, '0')}
+        <div className="font-mono text-xs bg-[var(--bg-surface)] px-2 py-0.5 rounded inline-flex gap-2">
+          <span>
+            {rawBytes.map((b, idx) => (
+              <span
+                key={idx}
+                className="transition-colors duration-200"
+                style={{ color: getByteColour(idx) }}
+              >
+                {idx > 0 ? ' ' : ''}
+                {b.toString(16).toUpperCase().padStart(2, '0')}
+              </span>
+            ))}
+          </span>
+          {showAsciiGutter && (
+            <span className={textDataYellow}>
+              {rawBytes.map(byteToAscii).join('')}
             </span>
-          ))}
+          )}
         </div>
       )}
       <div className="rounded border border-[color:var(--border-default)]">
@@ -947,11 +963,6 @@ export default function DecoderFramesView({
   // Frame ID filtering is now done at the processing level in Decoder.tsx
   // The frameIdFilter prop is kept for potential future use but not used for view filtering
 
-  // Convert byte to ASCII character (printable) or dot
-  const byteToAscii = (b: number): string => {
-    return b >= 0x20 && b <= 0x7E ? String.fromCharCode(b) : '.';
-  };
-
   // Whether timeline should be shown
   const showTimeline = hasBufferData && minTimeUs != null && maxTimeUs != null && minTimeUs < maxTimeUs;
 
@@ -1121,6 +1132,7 @@ export default function DecoderFramesView({
                     decodedFrame={filteredDecoded.get(f.id)}
                     displayFrameIdFormat={displayFrameIdFormat}
                     showRawBytes={showRawBytes}
+                    showAsciiGutter={showAsciiGutter}
                     signalColours={signalColours}
                     serialConfig={serialConfig}
                     displayTimeFormat={displayTimeFormat}
@@ -1185,6 +1197,7 @@ export default function DecoderFramesView({
                         decodedFrame={decodedFrame}
                         displayFrameIdFormat={displayFrameIdFormat}
                         showRawBytes={showRawBytes}
+                        showAsciiGutter={showAsciiGutter}
                         signalColours={signalColours}
                         sourceAddressLabel={sourceEntries.length > 1 || sourceAddress !== 0 ? sourceAddress : undefined}
                         serialConfig={serialConfig}

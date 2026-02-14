@@ -42,6 +42,7 @@ All notable changes to CANdor will be documented in this file.
 
 ### Fixed
 
+- **Decoder ASCII Gutter Not Showing**: Fixed the ASCII gutter toggle (Type icon) not displaying ASCII representation in the decoded signals view. The toggle only worked for Unmatched/Filtered tabs. Now shows ASCII next to hex bytes when "Show Raw Bytes" is enabled. Additionally, enabling the ASCII gutter now automatically enables "Show Raw Bytes" if it was off.
 - **Power Management Settings Not Saved**: Fixed power management settings (`prevent_idle_sleep`, `keep_display_awake`) not persisting across app restarts. The settings were being saved correctly but not loaded—the `normalized` object in `loadSettings` was missing these fields, causing them to always reset to defaults on load.
 - **PostgreSQL Playback Controls Missing**: Fixed playback controls (pause/play, step, skip) not appearing for PostgreSQL and CSV sources. Three issues were fixed:
   1. `isRecorded` detection used `ioProfile` (session ID like `t_17ab3d`) instead of `sourceProfileId` (profile ID like `io_xxx`), so PostgreSQL/CSV sources weren't detected as recorded

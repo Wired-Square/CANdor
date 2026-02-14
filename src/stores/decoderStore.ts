@@ -1117,7 +1117,11 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
       : { min_frame_length: length },
   })),
 
-  toggleAsciiGutter: () => set((state) => ({ showAsciiGutter: !state.showAsciiGutter })),
+  toggleAsciiGutter: () => set((state) => ({
+    showAsciiGutter: !state.showAsciiGutter,
+    // Auto-enable showRawBytes when enabling ASCII gutter (since ASCII only shows with raw bytes)
+    ...(state.showAsciiGutter ? {} : { showRawBytes: true }),
+  })),
   setFrameIdFilter: (filter) => {
     // Parse the filter string into a Set of IDs
     // Supports: single ID (0x100), comma-separated (0x100, 0x151), ranges (0x100-0x109)
