@@ -505,6 +505,7 @@ export default function Decoder() {
     currentTimeUs: sessionCurrentTimeUs,
     currentFrameIndex: sessionCurrentFrameIndex,
     handleLeave,
+    isDetached,
     // Watch state
     watchFrameCount,
     isWatching,
@@ -1032,7 +1033,7 @@ export default function Decoder() {
             onStopStream={isDecoding ? handlers.handleStopWatch : stopIngest}
             isStopped={isStopped || canReturnToLive}
             onResume={resumeWithNewBuffer}
-            onLeave={handleLeave}
+            onLeave={!isDetached ? handleLeave : undefined}
             supportsTimeRange={capabilities?.supports_time_range ?? false}
             onOpenBookmarkPicker={() => dialogs.bookmarkPicker.open()}
             frameCount={frameList.length}
