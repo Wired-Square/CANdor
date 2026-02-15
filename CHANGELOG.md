@@ -18,6 +18,8 @@ All notable changes to CANdor will be documented in this file.
 
 ### Fixed
 
+- **Timeline Source Date Display**: Fixed date not showing below time for timeline sources (PostgreSQL, CSV, Buffer) in Discovery and Decoder. Changed `isRecorded` detection to use the backend trait system (`capabilities.is_realtime === false`) instead of profile kind matching, which was unreliable.
+
 - **Leave Session Button Not Hiding**: Fixed bug where the "Leave Session" button remained visible in Decoder after leaving a session. The button now correctly hides when the session is in detached state.
 
 - **Session Switching Not Receiving Traffic**: Fixed bug where switching between GVRET profiles (or other realtime sources) would result in the second session not receiving any frames, despite Rust logs showing frames arriving. Two issues were fixed:

@@ -103,6 +103,8 @@ type Props = {
   playbackState: PlaybackState;
   playbackDirection?: "forward" | "backward";
   capabilities?: IOCapabilities | null;
+  /** Whether the data source is recorded (timeline) vs live */
+  isRecorded?: boolean;
   onPlay: () => void;
   onPlayBackward?: () => void;
   onPause: () => void;
@@ -805,6 +807,7 @@ export default function DecoderFramesView({
   playbackState,
   playbackDirection = "forward",
   capabilities,
+  isRecorded = false,
   onPlay,
   onPlayBackward,
   onPause,
@@ -1063,6 +1066,7 @@ export default function DecoderFramesView({
       isStreaming={isDecoding && !isPaused}
       timestamp={timestamp}
       displayTime={displayTime ?? undefined}
+      isRecorded={isRecorded}
       tabBarControls={tabBarControls}
       // Toolbar - show when we have time range or playback controls
       toolbar={

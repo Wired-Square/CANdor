@@ -533,15 +533,8 @@ export default function Discovery() {
 
   const protocolLabel = frames.length > 0 ? frames[0].protocol : "can";
 
-  const isRecorded = useMemo(() => {
-    // Use sourceProfileId if available (preserved during session switches),
-    // otherwise fall back to ioProfile
-    const profileId = sourceProfileId || ioProfile;
-    if (!profileId || !settings?.io_profiles) return false;
-    if (isBufferProfileId(profileId)) return true;
-    const profile = settings.io_profiles.find((p) => p.id === profileId);
-    return profile?.kind === 'postgres' || profile?.kind === 'csv_file';
-  }, [sourceProfileId, ioProfile, settings?.io_profiles]);
+  // Timeline sources (postgres, csv, buffer) have is_realtime=false in capabilities
+  const isRecorded = capabilities?.is_realtime === false;
 
   // Merged buffer metadata using session values for cross-app timeline sync
   const effectiveBufferMetadata = useEffectiveBufferMetadata(
