@@ -453,6 +453,7 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     setActiveView: toolboxStore.setActiveView,
     updateMessageOrderOptions: toolboxStore.updateMessageOrderOptions,
     updateChangesOptions: toolboxStore.updateChangesOptions,
+    updateChecksumDiscoveryOptions: toolboxStore.updateChecksumDiscoveryOptions,
     openInfoView: () => toolboxStore.openInfoView(frameStore.frameInfoMap),
     closeInfoView: toolboxStore.closeInfoView,
     resetKnowledge: toolboxStore.resetKnowledge,
@@ -556,6 +557,9 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
           break;
         case 'changes':
           await toolboxStore.runChangesAnalysis(selectedFrameData, frameInfoMap);
+          break;
+        case 'checksum-discovery':
+          await toolboxStore.runChecksumDiscoveryAnalysis(selectedFrameData);
           break;
       }
     },

@@ -1,6 +1,6 @@
 // ui/src/dialogs/ToolboxDialog.tsx
 
-import { X, ListOrdered, GitCompare, Play, Loader2, Radio, Binary } from "lucide-react";
+import { X, ListOrdered, GitCompare, Play, Loader2, Radio, Binary, ShieldCheck } from "lucide-react";
 import { iconMd, iconLg } from "../styles/spacing";
 import Dialog from "../components/Dialog";
 import { useDiscoveryStore, type ToolboxView } from "../stores/discoveryStore";
@@ -18,6 +18,7 @@ import MessageOrderToolPanel from "../apps/discovery/views/tools/MessageOrderToo
 import ChangesToolPanel from "../apps/discovery/views/tools/ChangesToolPanel";
 import SerialFramingToolPanel from "../apps/discovery/views/tools/SerialFramingToolPanel";
 import SerialPayloadToolPanel from "../apps/discovery/views/tools/SerialPayloadToolPanel";
+import ChecksumDiscoveryToolPanel from "../apps/discovery/views/tools/ChecksumDiscoveryToolPanel";
 
 type ToolConfig = {
   id: ToolboxView;
@@ -40,6 +41,12 @@ const tools: ToolConfig[] = [
     label: "Payload Change Analysis",
     description: "Detect payload variations and potential mux patterns",
     icon: GitCompare,
+  },
+  {
+    id: "checksum-discovery",
+    label: "Checksum Discovery",
+    description: "Detect checksum algorithms and CRC parameters per frame ID",
+    icon: ShieldCheck,
   },
   {
     id: "serial-framing",
@@ -221,6 +228,7 @@ export default function ToolboxDialog({
             <div className={`border-t ${borderDefault} pt-3`}>
               {activeTool === "message-order" && <MessageOrderToolPanel />}
               {activeTool === "changes" && <ChangesToolPanel />}
+              {activeTool === "checksum-discovery" && <ChecksumDiscoveryToolPanel />}
               {activeTool === "serial-framing" && <SerialFramingToolPanel bytesCount={serialBytesCount} />}
               {activeTool === "serial-payload" && <SerialPayloadToolPanel framesCount={serialFrameCount} />}
             </div>

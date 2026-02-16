@@ -8,9 +8,13 @@ import { iconLg, flexRowGap2 } from '../../../../styles/spacing';
 import Dialog from '../../../../components/Dialog';
 import { resolveByteIndexSync, type ChecksumAlgorithm } from '../../../../utils/analysis/checksums';
 import {
+  autoDetectAlgorithm,
+  calculateMatchRate,
+  type AlgorithmMatch,
+} from '../../../../utils/analysis/checksumAutoDetect';
+import {
   type ChecksumConfig,
   CHECKSUM_ALGORITHMS,
-  calculateChecksum,
   getChecksumByteCount,
 } from './serialTypes';
 import { byteToHex } from '../../../../utils/byteUtils';
@@ -43,113 +47,51 @@ export default function ChecksumExtractionDialog({
   onClear,
 }: ChecksumExtractionDialogProps) {
   const [config, setConfig] = useState<ChecksumConfig>(initialConfig ?? DEFAULT_CHECKSUM_CONFIG);
-  const [detectedAlgorithms, setDetectedAlgorithms] = useState<{ algorithm: ChecksumAlgorithm; matchCount: number }[]>([]);
+  const [detectedAlgorithms, setDetectedAlgorithms] = useState<AlgorithmMatch[]>([]);
   const [matchRate, setMatchRate] = useState<{ matches: number; total: number }>({ matches: 0, total: 0 });
 
   // Track whether we've initialized for this dialog open session
   const hasInitializedRef = useRef(false);
 
-  // Detect which algorithms match the sample frames
+  // Detect which algorithms match the sample frames using shared utility
   const detectAlgorithms = useCallback(async () => {
     if (sampleFrames.length === 0) return;
 
-    const results: { algorithm: ChecksumAlgorithm; matchCount: number }[] = [];
-
-    for (const algo of CHECKSUM_ALGORITHMS) {
-      if (algo.value === 'unknown') continue;
-
-      const byteCount = getChecksumByteCount(algo.value);
-      let matchCount = 0;
-
-      for (const frame of sampleFrames.slice(0, 20)) {
-        if (frame.length < byteCount + 1) continue;
-
-        // Get checksum position (from end)
-        const checksumStart = frame.length - byteCount;
-        const dataEnd = checksumStart;
-
-        // Calculate expected checksum
-        const data = frame.slice(0, dataEnd);
-        const expected = await calculateChecksum(algo.value, data);
-
-        // Extract actual checksum (little-endian for CRC-16, single byte for 8-bit)
-        let actual = 0;
-        if (byteCount === 1) {
-          actual = frame[checksumStart];
-        } else {
-          // Try little-endian first (more common for CRC-16)
-          actual = frame[checksumStart] | (frame[checksumStart + 1] << 8);
-        }
-
-        if (expected === actual) {
-          matchCount++;
-        } else if (byteCount === 2) {
-          // Try big-endian
-          actual = (frame[checksumStart] << 8) | frame[checksumStart + 1];
-          if (expected === actual) {
-            matchCount++;
-          }
-        }
-      }
-
-      if (matchCount > 0) {
-        results.push({ algorithm: algo.value, matchCount });
-      }
-    }
-
-    // Sort by match count descending
-    results.sort((a, b) => b.matchCount - a.matchCount);
+    const results = await autoDetectAlgorithm(sampleFrames, { maxSamples: 20 });
     setDetectedAlgorithms(results);
 
-    // Auto-select best match if found
-    if (results.length > 0 && results[0].matchCount >= sampleFrames.slice(0, 20).length * 0.8) {
-      const bestAlgo = results[0].algorithm;
-      const byteCount = getChecksumByteCount(bestAlgo);
+    // Auto-select best match if found (>= 80% match rate)
+    if (results.length > 0 && results[0].matchRate >= 80) {
+      const bestMatch = results[0];
+      const byteCount = getChecksumByteCount(bestMatch.algorithm);
       setConfig(prev => ({
         ...prev,
-        algorithm: bestAlgo,
+        algorithm: bestMatch.algorithm,
         numBytes: byteCount,
         startByte: -byteCount,
         calcEndByte: -byteCount,
+        endianness: bestMatch.endianness,
       }));
     }
   }, [sampleFrames]);
 
-  // Calculate match rate for current config
+  // Calculate match rate for current config using shared utility
   const updateMatchRate = useCallback(async () => {
     if (config.algorithm === 'unknown') {
       setMatchRate({ matches: 0, total: 0 });
       return;
     }
 
-    let matches = 0;
     const framesToCheck = sampleFrames.slice(0, 20);
+    const result = await calculateMatchRate(framesToCheck, config.algorithm, {
+      checksumStart: config.startByte,
+      checksumBytes: config.numBytes,
+      endianness: config.endianness,
+      calcStart: config.calcStartByte,
+      calcEnd: config.calcEndByte,
+    });
 
-    for (const frame of framesToCheck) {
-      const checksumStart = resolveByteIndexSync(config.startByte, frame.length);
-      const calcEnd = resolveByteIndexSync(config.calcEndByte, frame.length);
-
-      if (checksumStart >= frame.length || calcEnd > frame.length) continue;
-
-      const data = frame.slice(config.calcStartByte, calcEnd);
-      const expected = await calculateChecksum(config.algorithm, data);
-
-      // Extract actual checksum
-      let actual = 0;
-      if (config.endianness === 'little') {
-        for (let i = 0; i < config.numBytes && checksumStart + i < frame.length; i++) {
-          actual |= frame[checksumStart + i] << (8 * i);
-        }
-      } else {
-        for (let i = 0; i < config.numBytes && checksumStart + i < frame.length; i++) {
-          actual = (actual << 8) | frame[checksumStart + i];
-        }
-      }
-
-      if (expected === actual) matches++;
-    }
-
-    setMatchRate({ matches, total: framesToCheck.length });
+    setMatchRate({ matches: result.matches, total: result.total });
   }, [config, sampleFrames]);
 
   // Reset state and detect algorithms when dialog opens (only once per open)
@@ -189,26 +131,29 @@ export default function ChecksumExtractionDialog({
           <div className="bg-green-900/30 border border-green-700 rounded p-3">
             <div className="text-sm text-green-400 font-medium mb-2">Detected Algorithms:</div>
             <div className="flex flex-wrap gap-2">
-              {detectedAlgorithms.map(({ algorithm, matchCount }) => (
+              {detectedAlgorithms.map((match) => (
                 <button
-                  key={algorithm}
+                  key={`${match.algorithm}-${match.endianness}`}
                   onClick={() => {
-                    const byteCount = getChecksumByteCount(algorithm);
+                    const byteCount = getChecksumByteCount(match.algorithm);
                     setConfig(prev => ({
                       ...prev,
-                      algorithm,
+                      algorithm: match.algorithm,
                       numBytes: byteCount,
                       startByte: -byteCount,
                       calcEndByte: -byteCount,
+                      endianness: match.endianness,
                     }));
                   }}
                   className={`px-2 py-1 text-xs rounded transition-colors ${
-                    config.algorithm === algorithm
+                    config.algorithm === match.algorithm && config.endianness === match.endianness
                       ? 'bg-green-600 text-white'
                       : `${bgSurface} ${textSecondary} hover:brightness-95`
                   }`}
                 >
-                  {CHECKSUM_ALGORITHMS.find(a => a.value === algorithm)?.label} ({matchCount}/{Math.min(20, sampleFrames.length)})
+                  {CHECKSUM_ALGORITHMS.find(a => a.value === match.algorithm)?.label}
+                  {match.endianness === 'big' ? ' (BE)' : ''}
+                  {' '}({match.matchCount}/{match.totalCount})
                 </button>
               ))}
             </div>

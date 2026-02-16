@@ -86,6 +86,15 @@ pub struct ChecksumValidationResult {
     pub valid: bool,
 }
 
+/// Result of batch checksum discovery (for Tauri command response).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatchDiscoveryResult {
+    /// Number of frames that matched
+    pub match_count: usize,
+    /// Total number of frames tested
+    pub total_count: usize,
+}
+
 // ============================================================================
 // Byte Index Resolution (Negative Indexing Support)
 // ============================================================================
@@ -300,6 +309,136 @@ pub fn crc16_ccitt_checksum(data: &[u8]) -> u16 {
 }
 
 // ============================================================================
+// Parameterised CRC Functions (for Discovery)
+// ============================================================================
+
+/// Reflect (reverse) the bits of a byte.
+fn reflect8(mut value: u8) -> u8 {
+    let mut result: u8 = 0;
+    for _ in 0..8 {
+        result = (result << 1) | (value & 1);
+        value >>= 1;
+    }
+    result
+}
+
+/// Reflect (reverse) the bits of a 16-bit value.
+fn reflect16(mut value: u16) -> u16 {
+    let mut result: u16 = 0;
+    for _ in 0..16 {
+        result = (result << 1) | (value & 1);
+        value >>= 1;
+    }
+    result
+}
+
+/// CRC-8 with arbitrary parameters.
+///
+/// # Arguments
+/// * `data` - The data to calculate CRC over
+/// * `polynomial` - The CRC polynomial (e.g., 0x07 for standard CRC-8)
+/// * `init` - Initial CRC value (e.g., 0x00 or 0xFF)
+/// * `xor_out` - Final XOR value (e.g., 0x00 or 0xFF)
+/// * `reflect` - Whether to use reflected (LSB-first) mode
+pub fn crc8_parameterised(
+    data: &[u8],
+    polynomial: u8,
+    init: u8,
+    xor_out: u8,
+    reflect: bool,
+) -> u8 {
+    let mut crc = init;
+
+    if reflect {
+        // Reflected mode (LSB-first processing)
+        let reflected_poly = reflect8(polynomial);
+        for &byte in data {
+            crc ^= byte;
+            for _ in 0..8 {
+                if crc & 0x01 != 0 {
+                    crc = (crc >> 1) ^ reflected_poly;
+                } else {
+                    crc >>= 1;
+                }
+            }
+        }
+    } else {
+        // Normal mode (MSB-first processing)
+        for &byte in data {
+            crc ^= byte;
+            for _ in 0..8 {
+                if crc & 0x80 != 0 {
+                    crc = (crc << 1) ^ polynomial;
+                } else {
+                    crc <<= 1;
+                }
+            }
+        }
+    }
+
+    crc ^ xor_out
+}
+
+/// CRC-16 with arbitrary parameters.
+///
+/// # Arguments
+/// * `data` - The data to calculate CRC over
+/// * `polynomial` - The CRC polynomial (e.g., 0x8005 for CRC-16)
+/// * `init` - Initial CRC value (e.g., 0x0000 or 0xFFFF)
+/// * `xor_out` - Final XOR value (e.g., 0x0000 or 0xFFFF)
+/// * `reflect_in` - Whether to reflect input bytes
+/// * `reflect_out` - Whether to reflect the final CRC output
+pub fn crc16_parameterised(
+    data: &[u8],
+    polynomial: u16,
+    init: u16,
+    xor_out: u16,
+    reflect_in: bool,
+    reflect_out: bool,
+) -> u16 {
+    let mut crc = init;
+
+    if reflect_in {
+        // Reflected input mode (LSB-first)
+        let reflected_poly = reflect16(polynomial);
+        for &byte in data {
+            crc ^= byte as u16;
+            for _ in 0..8 {
+                if crc & 0x0001 != 0 {
+                    crc = (crc >> 1) ^ reflected_poly;
+                } else {
+                    crc >>= 1;
+                }
+            }
+        }
+    } else {
+        // Normal input mode (MSB-first)
+        for &byte in data {
+            crc ^= (byte as u16) << 8;
+            for _ in 0..8 {
+                if crc & 0x8000 != 0 {
+                    crc = (crc << 1) ^ polynomial;
+                } else {
+                    crc <<= 1;
+                }
+            }
+        }
+    }
+
+    let final_crc = if reflect_out && !reflect_in {
+        // Only reflect output if not already reflected via input processing
+        reflect16(crc)
+    } else if !reflect_out && reflect_in {
+        // Need to un-reflect if input was reflected but output shouldn't be
+        reflect16(crc)
+    } else {
+        crc
+    };
+
+    final_crc ^ xor_out
+}
+
+// ============================================================================
 // High-Level Functions
 // ============================================================================
 
@@ -503,6 +642,92 @@ pub fn validate_checksum_cmd(
 #[tauri::command]
 pub fn resolve_byte_index_cmd(index: i32, frame_length: usize) -> usize {
     resolve_byte_index(index, frame_length)
+}
+
+/// Calculate CRC-8 with arbitrary parameters.
+///
+/// # Arguments
+/// * `data` - The data to calculate CRC over
+/// * `polynomial` - The CRC polynomial (0x00-0xFF)
+/// * `init` - Initial CRC value
+/// * `xor_out` - Final XOR value
+/// * `reflect` - Whether to use reflected (LSB-first) mode
+#[tauri::command]
+pub fn crc8_parameterised_cmd(
+    data: Vec<u8>,
+    polynomial: u8,
+    init: u8,
+    xor_out: u8,
+    reflect: bool,
+) -> u8 {
+    crc8_parameterised(&data, polynomial, init, xor_out, reflect)
+}
+
+/// Calculate CRC-16 with arbitrary parameters.
+///
+/// # Arguments
+/// * `data` - The data to calculate CRC over
+/// * `polynomial` - The CRC polynomial (0x0000-0xFFFF)
+/// * `init` - Initial CRC value
+/// * `xor_out` - Final XOR value
+/// * `reflect_in` - Whether to reflect input bytes
+/// * `reflect_out` - Whether to reflect the final CRC output
+#[tauri::command]
+pub fn crc16_parameterised_cmd(
+    data: Vec<u8>,
+    polynomial: u16,
+    init: u16,
+    xor_out: u16,
+    reflect_in: bool,
+    reflect_out: bool,
+) -> u16 {
+    crc16_parameterised(&data, polynomial, init, xor_out, reflect_in, reflect_out)
+}
+
+/// Batch test a CRC configuration against multiple payloads.
+/// This is optimised for checksum discovery - tests one polynomial/config
+/// against many frames in a single IPC call.
+///
+/// # Arguments
+/// * `payloads` - Array of frame payloads to test
+/// * `expected_checksums` - Expected checksum values for each payload
+/// * `checksum_bits` - 8 for CRC-8, 16 for CRC-16
+/// * `polynomial` - The CRC polynomial to test
+/// * `init` - Initial CRC value
+/// * `xor_out` - Final XOR value
+/// * `reflect` - Whether to use reflected mode
+#[tauri::command]
+pub fn batch_test_crc_cmd(
+    payloads: Vec<Vec<u8>>,
+    expected_checksums: Vec<u16>,
+    checksum_bits: u8,
+    polynomial: u16,
+    init: u16,
+    xor_out: u16,
+    reflect: bool,
+) -> BatchDiscoveryResult {
+    let total_count = payloads.len().min(expected_checksums.len());
+    let mut match_count = 0;
+
+    for i in 0..total_count {
+        let payload = &payloads[i];
+        let expected = expected_checksums[i];
+
+        let calculated = if checksum_bits == 8 {
+            crc8_parameterised(payload, polynomial as u8, init as u8, xor_out as u8, reflect) as u16
+        } else {
+            crc16_parameterised(payload, polynomial, init, xor_out, reflect, reflect)
+        };
+
+        if calculated == expected {
+            match_count += 1;
+        }
+    }
+
+    BatchDiscoveryResult {
+        match_count,
+        total_count,
+    }
 }
 
 #[cfg(test)]

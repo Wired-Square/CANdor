@@ -8,6 +8,10 @@ import type { FrameMessage } from '../types/frame';
 import type { MessageOrderResult } from '../utils/analysis/messageOrderAnalysis';
 import type { PayloadAnalysisResult, MirrorGroup, TimestampedPayload } from '../utils/analysis/payloadAnalysis';
 import type { SerialFrameAnalysisResult, FramingDetectionResult } from '../utils/analysis/serialFrameAnalysis';
+import type {
+  ChecksumDiscoveryOptions,
+  ChecksumDiscoveryResult,
+} from '../utils/analysis/checksumDiscovery';
 import {
   type DecoderKnowledge,
   createEmptyKnowledge,
@@ -19,7 +23,7 @@ import type { FrameInfo } from './discoveryStore';
 import { useDiscoveryUIStore } from './discoveryUIStore';
 
 // Toolbox types
-export type ToolboxView = 'frames' | 'message-order' | 'changes' | 'serial-framing' | 'serial-payload';
+export type ToolboxView = 'frames' | 'message-order' | 'changes' | 'serial-framing' | 'serial-payload' | 'checksum-discovery';
 
 export type MessageOrderOptions = {
   startMessageId: number | null;
@@ -52,10 +56,12 @@ export type ToolboxState = {
   activeView: ToolboxView;
   messageOrder: MessageOrderOptions;
   changes: ChangesOptions;
+  checksumDiscovery: ChecksumDiscoveryOptions;
   messageOrderResults: MessageOrderResult | null;
   changesResults: ChangesResult | null;
   serialFramingResults: SerialFramingResult | null;
   serialPayloadResults: SerialPayloadResult | null;
+  checksumDiscoveryResults: ChecksumDiscoveryResult | null;
   isRunning: boolean;
 };
 
@@ -72,11 +78,13 @@ interface DiscoveryToolboxState {
   setActiveView: (view: ToolboxView) => void;
   updateMessageOrderOptions: (options: Partial<MessageOrderOptions>) => void;
   updateChangesOptions: (options: Partial<ChangesOptions>) => void;
+  updateChecksumDiscoveryOptions: (options: Partial<ChecksumDiscoveryOptions>) => void;
   setIsRunning: (running: boolean) => void;
   setMessageOrderResults: (results: MessageOrderResult | null) => void;
   setChangesResults: (results: ChangesResult | null) => void;
   setSerialFramingResults: (results: SerialFramingResult | null) => void;
   setSerialPayloadResults: (results: SerialPayloadResult | null) => void;
+  setChecksumDiscoveryResults: (results: ChecksumDiscoveryResult | null) => void;
   clearAnalysisResults: () => void;
 
   // Actions - Knowledge
@@ -103,6 +111,10 @@ interface DiscoveryToolboxState {
   runSerialPayloadAnalysis: (
     frames: FrameMessage[]
   ) => Promise<SerialPayloadResult>;
+
+  runChecksumDiscoveryAnalysis: (
+    frames: FrameMessage[]
+  ) => Promise<ChecksumDiscoveryResult>;
 }
 
 export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get) => ({
@@ -112,10 +124,19 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
     activeView: 'frames',
     messageOrder: { startMessageId: null },
     changes: { maxExamples: 30 },
+    checksumDiscovery: {
+      minSamples: 10,
+      minMatchRate: 95,
+      checksumPositions: [-1, -2],
+      trySimpleFirst: true,
+      bruteForceCrc16: false,
+      maxSamplesPerFrameId: 100,
+    },
     messageOrderResults: null,
     changesResults: null,
     serialFramingResults: null,
     serialPayloadResults: null,
+    checksumDiscoveryResults: null,
     isRunning: false,
   },
   knowledge: createEmptyKnowledge(),
@@ -143,6 +164,12 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
   updateChangesOptions: (options) => {
     set((state) => ({
       toolbox: { ...state.toolbox, changes: { ...state.toolbox.changes, ...options } },
+    }));
+  },
+
+  updateChecksumDiscoveryOptions: (options) => {
+    set((state) => ({
+      toolbox: { ...state.toolbox, checksumDiscovery: { ...state.toolbox.checksumDiscovery, ...options } },
     }));
   },
 
@@ -176,6 +203,12 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
     }));
   },
 
+  setChecksumDiscoveryResults: (results) => {
+    set((state) => ({
+      toolbox: { ...state.toolbox, checksumDiscoveryResults: results },
+    }));
+  },
+
   clearAnalysisResults: () => {
     set((state) => ({
       toolbox: {
@@ -184,6 +217,7 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
         changesResults: null,
         serialFramingResults: null,
         serialPayloadResults: null,
+        checksumDiscoveryResults: null,
       },
     }));
   },
@@ -399,5 +433,32 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
     }));
 
     return serialPayloadResults;
+  },
+
+  runChecksumDiscoveryAnalysis: async (frames) => {
+    const { toolbox } = get();
+
+    set((state) => ({ toolbox: { ...state.toolbox, isRunning: true } }));
+
+    // Allow React to render
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    // Lazy load analysis module
+    const { discoverChecksums } = await import('../utils/analysis/checksumDiscovery');
+
+    const checksumDiscoveryResults = await discoverChecksums(frames, toolbox.checksumDiscovery);
+
+    set((state) => ({
+      toolbox: {
+        ...state.toolbox,
+        isRunning: false,
+        checksumDiscoveryResults,
+      },
+    }));
+
+    // Switch to analysis tab to show results
+    useDiscoveryUIStore.getState().setFramesViewActiveTab('analysis');
+
+    return checksumDiscoveryResults;
   },
 }));

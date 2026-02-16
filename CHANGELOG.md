@@ -6,6 +6,14 @@ All notable changes to CANdor will be documented in this file.
 
 ### Added
 
+- **Checksum Discovery Tool**: New analysis tool in Discovery that detects checksum algorithms and CRC parameters per CAN frame ID. Features:
+  - Detects XOR, Sum8, and all standard CRC-8/CRC-16 variants
+  - Discovers arbitrary CRC polynomials, init values, final XOR, and reflection settings
+  - Tests both payload-only and frame-ID-included calculations (AUTOSAR support)
+  - Optional brute-force mode for CRC-16 (65K polynomials)
+  - Per-frame-ID results with match rate, copy-to-clipboard support
+  - Refactored serial checksum auto-detection to shared utility (`checksumAutoDetect.ts`)
+
 - **iOS Build Support (WIP)**: Initial iOS build support via Tauri 2. Desktop-only features (serial ports, USB devices, window management, menus) are conditionally compiled out on iOS. Centralised profile traits system (`src/utils/profileTraits.ts`) filters unavailable IO profile types per platform:
   - Available on iOS: GVRET TCP, MQTT, PostgreSQL, CSV File
   - Hidden on iOS: GVRET USB, Serial Port, slcan, gs_usb, SocketCAN (require serial/USB/kernel features)

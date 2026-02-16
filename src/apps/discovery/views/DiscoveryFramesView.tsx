@@ -12,6 +12,7 @@ import { PlaybackControls, type PlaybackState } from "../../../components/Playba
 import type { PlaybackSpeed } from "../../../components/TimeController";
 import ChangesResultView from "./tools/ChangesResultView";
 import MessageOrderResultView from "./tools/MessageOrderResultView";
+import ChecksumDiscoveryResultView from "./tools/ChecksumDiscoveryResultView";
 import { bgDataView, textDataSecondary, bgSurface, textMuted, textPrimary, textSecondary, borderDefault } from "../../../styles";
 import type { FrameMessage } from "../../../types/frame";
 import type { IOCapabilities } from "../../../api/io";
@@ -610,7 +611,7 @@ function DiscoveryFramesView({
   }, [frames]);
 
   // Check if we have any analysis results
-  const hasAnalysisResults = toolboxResults.changesResults !== null || toolboxResults.messageOrderResults !== null;
+  const hasAnalysisResults = toolboxResults.changesResults !== null || toolboxResults.messageOrderResults !== null || toolboxResults.checksumDiscoveryResults !== null;
 
   // Build tab definitions for shared tab bar
   const frameCount = filteredCount > 0 ? filteredCount : frames.length;
@@ -952,6 +953,7 @@ function DiscoveryFramesView({
         <div className={`flex-1 min-h-0 overflow-auto overscroll-none ${bgDataView} p-4`}>
           {toolboxResults.changesResults && <ChangesResultView />}
           {toolboxResults.messageOrderResults && <MessageOrderResultView />}
+          {toolboxResults.checksumDiscoveryResults && <ChecksumDiscoveryResultView />}
           {!hasAnalysisResults && (
             <div className={`${textDataSecondary} text-center py-8`}>
               No analysis results. Use the Toolbox to run analysis tools.

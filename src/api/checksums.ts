@@ -116,3 +116,123 @@ export async function resolveByteIndex(
     frameLength,
   });
 }
+
+// ============================================================================
+// Parameterised CRC Functions (for Discovery)
+// ============================================================================
+
+/**
+ * CRC parameters for parameterised calculation.
+ */
+export interface CrcParameters {
+  polynomial: number;
+  init: number;
+  xorOut: number;
+  reflect: boolean;
+}
+
+/**
+ * Result of batch CRC testing.
+ */
+export interface BatchDiscoveryResult {
+  matchCount: number;
+  totalCount: number;
+}
+
+/**
+ * Calculate CRC-8 with arbitrary parameters.
+ *
+ * @param data - The data to calculate CRC over
+ * @param polynomial - The CRC polynomial (0x00-0xFF)
+ * @param init - Initial CRC value
+ * @param xorOut - Final XOR value
+ * @param reflect - Whether to use reflected (LSB-first) mode
+ * @returns The calculated CRC-8 value
+ */
+export async function crc8Parameterised(
+  data: number[] | Uint8Array,
+  polynomial: number,
+  init: number,
+  xorOut: number,
+  reflect: boolean
+): Promise<number> {
+  const dataArray = data instanceof Uint8Array ? Array.from(data) : data;
+  return invoke<number>("crc8_parameterised_cmd", {
+    data: dataArray,
+    polynomial,
+    init,
+    xorOut,
+    reflect,
+  });
+}
+
+/**
+ * Calculate CRC-16 with arbitrary parameters.
+ *
+ * @param data - The data to calculate CRC over
+ * @param polynomial - The CRC polynomial (0x0000-0xFFFF)
+ * @param init - Initial CRC value
+ * @param xorOut - Final XOR value
+ * @param reflectIn - Whether to reflect input bytes
+ * @param reflectOut - Whether to reflect the final CRC output
+ * @returns The calculated CRC-16 value
+ */
+export async function crc16Parameterised(
+  data: number[] | Uint8Array,
+  polynomial: number,
+  init: number,
+  xorOut: number,
+  reflectIn: boolean,
+  reflectOut: boolean
+): Promise<number> {
+  const dataArray = data instanceof Uint8Array ? Array.from(data) : data;
+  return invoke<number>("crc16_parameterised_cmd", {
+    data: dataArray,
+    polynomial,
+    init,
+    xorOut,
+    reflectIn,
+    reflectOut,
+  });
+}
+
+/**
+ * Batch test a CRC configuration against multiple payloads.
+ * Optimised for checksum discovery - tests one polynomial/config
+ * against many frames in a single IPC call.
+ *
+ * @param payloads - Array of frame payloads to test
+ * @param expectedChecksums - Expected checksum values for each payload
+ * @param checksumBits - 8 for CRC-8, 16 for CRC-16
+ * @param polynomial - The CRC polynomial to test
+ * @param init - Initial CRC value
+ * @param xorOut - Final XOR value
+ * @param reflect - Whether to use reflected mode
+ * @returns Match statistics
+ */
+export async function batchTestCrc(
+  payloads: number[][],
+  expectedChecksums: number[],
+  checksumBits: 8 | 16,
+  polynomial: number,
+  init: number,
+  xorOut: number,
+  reflect: boolean
+): Promise<BatchDiscoveryResult> {
+  const result = await invoke<{ match_count: number; total_count: number }>(
+    "batch_test_crc_cmd",
+    {
+      payloads,
+      expectedChecksums,
+      checksumBits,
+      polynomial,
+      init,
+      xorOut,
+      reflect,
+    }
+  );
+  return {
+    matchCount: result.match_count,
+    totalCount: result.total_count,
+  };
+}

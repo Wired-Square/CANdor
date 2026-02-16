@@ -835,6 +835,9 @@ pub fn run() {
             checksums::calculate_checksum_cmd,
             checksums::validate_checksum_cmd,
             checksums::resolve_byte_index_cmd,
+            checksums::crc8_parameterised_cmd,
+            checksums::crc16_parameterised_cmd,
+            checksums::batch_test_crc_cmd,
             // Transmit API
             transmit::get_transmit_capable_profiles,
             transmit::get_profile_usage,
