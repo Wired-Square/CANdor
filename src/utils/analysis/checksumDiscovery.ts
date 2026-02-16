@@ -12,7 +12,6 @@ import {
 import {
   autoDetectAlgorithm,
   extractChecksumValue,
-  type AlgorithmMatch,
 } from './checksumAutoDetect';
 import { resolveByteIndexSync, CHECKSUM_ALGORITHMS } from './checksums';
 
@@ -639,7 +638,6 @@ async function bruteForceCrc16(
 
             // Re-extract expected checksums with correct endianness
             const expectedWithEndian = expectedChecksums.map((_, i) => {
-              const frame = dataPayloads[i];
               // This is a simplification - in reality we'd need the original frame bytes
               // For now, swap bytes if big-endian
               const le = expectedChecksums[i];

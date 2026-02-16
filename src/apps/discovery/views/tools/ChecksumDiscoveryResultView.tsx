@@ -1,13 +1,13 @@
 // ui/src/apps/discovery/views/tools/ChecksumDiscoveryResultView.tsx
 
 import { useState } from "react";
-import { ShieldCheck, ChevronDown, ChevronRight, Download, Copy, Check } from "lucide-react";
+import { ShieldCheck, ChevronDown, ChevronRight, Copy, Check } from "lucide-react";
 import { iconMd, iconSm, flexRowGap2, paddingCardSm } from "../../../../styles/spacing";
 import { cardDefault } from "../../../../styles/cardStyles";
-import { labelSmall, caption, captionMuted } from "../../../../styles/typography";
+import { caption } from "../../../../styles/typography";
 import { borderDivider, hoverLight, bgSurface, textPrimary, textSecondary, textMuted } from "../../../../styles";
 import { useDiscoveryStore } from "../../../../stores/discoveryStore";
-import { useSettings } from "../../../../hooks/useSettings";
+import { useSettings, getDisplayFrameIdFormat } from "../../../../hooks/useSettings";
 import { formatFrameId } from "../../../../utils/frameIds";
 import type { ChecksumCandidate } from "../../../../utils/analysis/checksumDiscovery";
 
@@ -83,7 +83,7 @@ export default function ChecksumDiscoveryResultView({ embedded = false }: Props)
                 key={frameId}
                 frameId={frameId}
                 candidates={candidates}
-                hexFrameIds={settings?.hex_frame_ids ?? true}
+                frameIdFormat={getDisplayFrameIdFormat(settings)}
               />
             );
           })
@@ -107,11 +107,11 @@ function Header() {
 function FrameCard({
   frameId,
   candidates,
-  hexFrameIds,
+  frameIdFormat,
 }: {
   frameId: number;
   candidates: ChecksumCandidate[];
-  hexFrameIds: boolean;
+  frameIdFormat: "hex" | "decimal";
 }) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -139,7 +139,7 @@ function FrameCard({
               <ChevronRight className={`${iconSm} ${textMuted}`} />
             )}
             <span className={`font-mono font-medium ${textPrimary}`}>
-              {formatFrameId(frameId, hexFrameIds)}
+              {formatFrameId(frameId, frameIdFormat)}
             </span>
             <span className={`${caption} ${textMuted}`}>
               {bestCandidate.totalCount} samples

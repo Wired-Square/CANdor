@@ -175,6 +175,7 @@ type CombinedDiscoveryState = {
   setActiveView: (view: import('./discoveryToolboxStore').ToolboxView) => void;
   updateMessageOrderOptions: (options: Partial<import('./discoveryToolboxStore').MessageOrderOptions>) => void;
   updateChangesOptions: (options: Partial<import('./discoveryToolboxStore').ChangesOptions>) => void;
+  updateChecksumDiscoveryOptions: (options: Partial<import('../utils/analysis/checksumDiscovery').ChecksumDiscoveryOptions>) => void;
   openInfoView: () => void;
   closeInfoView: () => void;
   resetKnowledge: () => void;

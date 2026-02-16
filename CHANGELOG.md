@@ -2,6 +2,12 @@
 
 All notable changes to CANdor will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Checksum Discovery Build Errors**: Fixed TypeScript build errors in the checksum discovery tool. Removed unused imports (`Download`, `labelSmall`, `captionMuted`, `AlgorithmMatch`), fixed incorrect `hex_frame_ids` property reference (now uses `display_frame_id_format` via `getDisplayFrameIdFormat`), corrected `formatFrameId` parameter type from `boolean` to `"hex" | "decimal"`, added missing `updateChecksumDiscoveryOptions` to combined discovery store type, and removed unused `frame` variable in CRC-16 brute-force loop.
+
 ## [0.4.0] - 2026-02-16
 
 ### Added
