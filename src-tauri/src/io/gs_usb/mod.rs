@@ -259,6 +259,12 @@ pub struct GsUsbConfig {
     pub serial: Option<String>,
     /// CAN bitrate in bits/second (e.g., 500000)
     pub bitrate: u32,
+    /// Sample point as percentage (e.g., 87.5 for 87.5%).
+    /// Common values: 75.0, 80.0, 87.5. Default is 87.5%.
+    /// Earlier sample points are more robust against oscillator jitter.
+    /// Later sample points allow longer cable lengths.
+    #[serde(default = "default_sample_point")]
+    pub sample_point: f32,
     /// Listen-only mode (no ACK, no transmit)
     pub listen_only: bool,
     /// CAN channel (usually 0)
@@ -275,6 +281,10 @@ pub struct GsUsbConfig {
     pub bus_override: Option<u8>,
 }
 
+fn default_sample_point() -> f32 {
+    87.5
+}
+
 impl Default for GsUsbConfig {
     fn default() -> Self {
         Self {
@@ -282,6 +292,7 @@ impl Default for GsUsbConfig {
             address: 0,
             serial: None,
             bitrate: 500_000,
+            sample_point: 87.5,
             listen_only: true,
             channel: 0,
             limit: None,
@@ -429,12 +440,72 @@ pub const COMMON_BITRATES: &[(u32, GsDeviceBittiming)] = &[
     ),
 ];
 
-/// Get pre-calculated timing for a common bitrate
+/// Get pre-calculated timing for a common bitrate (assumes 48MHz clock)
 pub fn get_bittiming_for_bitrate(bitrate: u32) -> Option<GsDeviceBittiming> {
     COMMON_BITRATES
         .iter()
         .find(|(rate, _)| *rate == bitrate)
         .map(|(_, timing)| *timing)
+}
+
+/// Calculate bit timing for a specific clock frequency, bitrate, and sample point.
+///
+/// Sample point calculation:
+/// - sample_point = (1 + prop_seg + phase_seg1) / (1 + prop_seg + phase_seg1 + phase_seg2)
+/// - With prop_seg=0: sample_point = (1 + seg1) / TQ
+///
+/// Common sample points: 75.0%, 80.0%, 87.5%
+///
+/// Returns None if the bitrate cannot be achieved with the given clock.
+pub fn calculate_bittiming(fclk_can: u32, bitrate: u32, sample_point: f32) -> Option<GsDeviceBittiming> {
+    // Try different TQ counts to find one that works
+    // More TQ = finer timing resolution but requires higher brp
+    for tq_per_bit in &[16u32, 20, 25, 10, 8] {
+        // Calculate brp for this TQ count
+        let brp = fclk_can / (bitrate * tq_per_bit);
+
+        // Check if brp is valid
+        if brp < 1 || brp > 1024 {
+            continue;
+        }
+
+        // Verify the timing gives acceptable bitrate (within 1% tolerance)
+        let actual_bitrate = fclk_can / (brp * tq_per_bit);
+        let error_percent = ((actual_bitrate as i64 - bitrate as i64).abs() * 100) / bitrate as i64;
+        if error_percent > 1 {
+            continue;
+        }
+
+        // Calculate segment lengths for the desired sample point
+        // sample_point = (1 + seg1) / TQ
+        // So: seg1 = (sample_point * TQ) - 1
+        let sync_plus_seg1 = ((sample_point / 100.0) * (*tq_per_bit as f32)).round() as u32;
+        let seg1 = sync_plus_seg1.saturating_sub(1);
+        let seg2 = tq_per_bit.saturating_sub(1).saturating_sub(seg1);
+
+        // Validate segment values (typical limits: seg1 1-256, seg2 1-128)
+        if seg1 < 1 || seg1 > 256 || seg2 < 1 || seg2 > 128 {
+            continue;
+        }
+
+        // SJW should be min(seg1, seg2) but capped at 128
+        let sjw = seg1.min(seg2).min(128);
+
+        return Some(GsDeviceBittiming {
+            prop_seg: 0,
+            phase_seg1: seg1,
+            phase_seg2: seg2,
+            sjw,
+            brp,
+        });
+    }
+
+    None
+}
+
+/// Calculate bit timing with default 87.5% sample point (for backward compatibility)
+pub fn calculate_bittiming_default(fclk_can: u32, bitrate: u32) -> Option<GsDeviceBittiming> {
+    calculate_bittiming(fclk_can, bitrate, 87.5)
 }
 
 // ============================================================================
@@ -473,16 +544,17 @@ pub fn get_can_setup_command(interface: String, bitrate: u32) -> String {
 
 /// Probe a gs_usb device to get its capabilities.
 /// Implemented for Windows and macOS (Linux uses SocketCAN).
+/// Uses serial number for stable device matching across USB re-enumeration.
 #[tauri::command]
-pub fn probe_gs_usb_device(bus: u8, address: u8) -> Result<GsUsbProbeResult, String> {
+pub fn probe_gs_usb_device(bus: u8, address: u8, serial: Option<String>) -> Result<GsUsbProbeResult, String> {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
-        nusb_driver::probe_device(bus, address).map_err(String::from)
+        nusb_driver::probe_device(bus, address, serial.as_deref()).map_err(String::from)
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        let _ = (bus, address);
+        let _ = (bus, address, serial);
         Err("Device probing is only available on Windows/macOS. On Linux, use ip link show to check interface status.".to_string())
     }
 }

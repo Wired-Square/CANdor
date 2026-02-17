@@ -128,14 +128,15 @@ pub fn list_devices() -> Result<Vec<GsUsbDeviceInfo>, String> {
 }
 
 /// Probe a specific gs_usb device to get its capabilities
-pub fn probe_device(bus: u8, address: u8) -> Result<GsUsbProbeResult, IoError> {
+pub fn probe_device(bus: u8, address: u8, serial: Option<&str>) -> Result<GsUsbProbeResult, IoError> {
     let device = format!("gs_usb({}:{})", bus, address);
 
     // Find the device using blocking .wait()
+    // Prefer serial number matching (stable across re-enumeration) over bus:address
     let device_info = nusb::list_devices()
         .wait()
         .map_err(|e| IoError::other(&device, format!("list USB devices: {}", e)))?
-        .find(|dev| device_matches(dev, None, bus, address))
+        .find(|dev| device_matches(dev, serial, bus, address))
         .ok_or_else(|| IoError::not_found(&device))?;
 
     // Open the device (also returns MaybeFuture)
@@ -601,7 +602,7 @@ async fn run_gs_usb_stream(
 
 /// Initialize the gs_usb device
 pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> Result<(), String> {
-    // 1. Send HOST_FORMAT
+    // 1. Send HOST_FORMAT (byte order negotiation)
     let host_format = GS_USB_HOST_FORMAT.to_le_bytes();
     interface
         .control_out(ControlOut {
@@ -609,19 +610,45 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
             recipient: Recipient::Interface,
             request: GsUsbBreq::HostFormat as u8,
             value: 1,
-            index: 0,
+            index: config.channel as u16,
             data: &host_format,
         }, CONTROL_TIMEOUT)
         .await
         .map_err(|e| format!("HOST_FORMAT failed: {:?}", e))?;
 
-    // 2. Set bit timing
-    let timing = get_bittiming_for_bitrate(config.bitrate).ok_or_else(|| {
-        format!(
-            "Unsupported bitrate {}. Supported: 10K, 20K, 50K, 100K, 125K, 250K, 500K, 750K, 1M.",
-            config.bitrate
-        )
-    })?;
+    // 2. Query BT_CONST (required by some firmware before setting bit timing)
+    // This matches the Linux gs_usb driver initialization sequence
+    let bt_const = interface
+        .control_in(ControlIn {
+            control_type: ControlType::Vendor,
+            recipient: Recipient::Interface,
+            request: GsUsbBreq::BtConst as u8,
+            value: config.channel as u16,
+            index: 0,
+            length: 40,
+        }, CONTROL_TIMEOUT)
+        .await
+        .map_err(|e| format!("BT_CONST query failed: {:?}", e))?;
+
+    // Extract device clock frequency from BT_CONST (bytes 4-7)
+    let fclk_can = if bt_const.len() >= 8 {
+        u32::from_le_bytes([bt_const[4], bt_const[5], bt_const[6], bt_const[7]])
+    } else {
+        48_000_000 // Default to 48 MHz (standard CANable)
+    };
+
+    // 3. Set bit timing - calculate based on device's actual clock frequency and sample point
+    let timing = super::calculate_bittiming(fclk_can, config.bitrate, config.sample_point)
+        .or_else(|| {
+            // Fall back to pre-calculated 48 MHz timing if calculation fails
+            get_bittiming_for_bitrate(config.bitrate)
+        })
+        .ok_or_else(|| {
+            format!(
+                "Unsupported bitrate {} with {}% sample point for {} Hz clock.",
+                config.bitrate, config.sample_point, fclk_can
+            )
+        })?;
 
     let timing_bytes = unsafe {
         std::slice::from_raw_parts(
@@ -741,6 +768,7 @@ pub async fn run_source(
     address: u8,
     serial: Option<String>,
     bitrate: u32,
+    sample_point: f32,
     listen_only: bool,
     channel: u8,
     bus_mappings: Vec<BusMapping>,
@@ -795,6 +823,7 @@ pub async fn run_source(
         address,
         serial: serial.clone(),
         bitrate,
+        sample_point,
         listen_only,
         channel,
         limit: None,

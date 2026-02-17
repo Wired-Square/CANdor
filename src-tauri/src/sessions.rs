@@ -1295,8 +1295,12 @@ pub async fn probe_device(
             let address = profile.connection.get("address")
                 .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
                 .unwrap_or(0) as u8;
+            // Serial number for stable device matching across USB re-enumeration
+            let serial = profile.connection.get("serial")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
 
-            match probe_gs_usb_device(bus, address) {
+            match probe_gs_usb_device(bus, address, serial) {
                 Ok(info) => Ok(DeviceProbeResult {
                     success: true,
                     device_type: "gs_usb".to_string(),
