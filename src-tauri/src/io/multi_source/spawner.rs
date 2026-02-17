@@ -239,6 +239,11 @@ async fn run_gs_usb_reader(
         .get("bitrate")
         .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
         .unwrap_or(500_000) as u32;
+    let sample_point = profile
+        .connection
+        .get("sample_point")
+        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(87.5) as f32;
     let listen_only = profile
         .connection
         .get("listen_only")
@@ -256,6 +261,7 @@ async fn run_gs_usb_reader(
         address,
         serial,
         bitrate,
+        sample_point,
         listen_only,
         channel,
         bus_mappings,

@@ -1177,6 +1177,19 @@ export default function IOProfileDialog({
                 </Select>
               </FormField>
 
+              {/* Sample Point */}
+              <FormField label="Sample Point" variant="default">
+                <Select
+                  variant="default"
+                  value={profileForm.connection.sample_point || "87.5"}
+                  onChange={(e) => onUpdateConnectionField("sample_point", e.target.value)}
+                >
+                  <option value="75.0">75.0%</option>
+                  <option value="80.0">80.0%</option>
+                  <option value="87.5">87.5% (recommended)</option>
+                </Select>
+              </FormField>
+
               {/* Listen-only mode */}
               <div className={flexRowGap2}>
                 <input

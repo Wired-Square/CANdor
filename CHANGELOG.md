@@ -2,6 +2,16 @@
 
 All notable changes to CANdor will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **gs_usb Sample Point Configuration**: Added configurable sample point setting to gs_usb (candleLight) profiles. Users can now select 75.0%, 80.0%, or 87.5% (default) sample point to match their CAN bus requirements. Particularly useful for CAN FD-capable devices on classic CAN buses where sample point mismatches can cause communication failures.
+
+### Fixed
+
+- **gs_usb Bit Timing for Non-Standard Clocks**: Fixed bit timing calculation for gs_usb devices with non-48 MHz clocks (e.g., CANable 2.5 with Elmue firmware uses 160 MHz). The driver now reads the device's actual clock frequency from BT_CONST and calculates appropriate timing parameters dynamically, instead of using hardcoded values for 48 MHz.
+
 ## [0.4.1] - 2026-02-16
 
 ### Fixed
