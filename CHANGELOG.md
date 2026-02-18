@@ -23,6 +23,8 @@ All notable changes to CANdor will be documented in this file.
 
 - **Logo Menu Text Colour**: Fixed logo menu dropdown text visibility in both light and dark modes. The dropdown container now sets the text colour explicitly so that buttons inherit the correct theme-aware colour after Dockview's CSS reset.
 
+- **Update Notification Contrast**: Fixed update notification button in the nav bar using static Tailwind colours that didn't adapt to the theme. Now uses CSS variable-based warning tokens for proper contrast in both light and dark modes on Windows.
+
 - **gs_usb Bit Timing for Non-Standard Clocks**: Fixed bit timing calculation for gs_usb devices with non-48 MHz clocks (e.g., CANable 2.5 with Elmue firmware uses 160 MHz). The driver now reads the device's actual clock frequency from BT_CONST and calculates appropriate timing parameters dynamically, instead of using hardcoded values for 48 MHz.
 
 ## [0.4.1] - 2026-02-16
