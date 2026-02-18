@@ -66,12 +66,14 @@ export async function getCanSetupCommand(
 /**
  * Probe a gs_usb device to get its capabilities.
  * Only available on Windows (Linux uses SocketCAN).
+ * Pass serial number for stable device matching across USB re-enumeration.
  */
 export async function probeGsUsbDevice(
   bus: number,
-  address: number
+  address: number,
+  serial?: string | null
 ): Promise<GsUsbProbeResult> {
-  return invoke("probe_gs_usb_device", { bus, address });
+  return invoke("probe_gs_usb_device", { bus, address, serial: serial ?? null });
 }
 
 /**
