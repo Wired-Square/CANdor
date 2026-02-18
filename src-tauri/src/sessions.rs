@@ -1097,6 +1097,8 @@ pub struct DeviceProbeResult {
     pub primary_info: Option<String>,
     /// Secondary info line (hardware version, channel count, etc.)
     pub secondary_info: Option<String>,
+    /// Whether device supports CAN FD (gs_usb devices only, None for others)
+    pub supports_fd: Option<bool>,
     /// Error message if probe failed
     pub error: Option<String>,
 }
@@ -1170,6 +1172,7 @@ pub async fn probe_device(
                     bus_count: info.bus_count,
                     primary_info: Some(format!("{} buses available", info.bus_count)),
                     secondary_info: Some(format!("{}:{}", host, port)),
+                    supports_fd: None,
                     error: None,
                 }),
                 Err(e) => Ok(DeviceProbeResult {
@@ -1179,6 +1182,7 @@ pub async fn probe_device(
                     bus_count: 0,
                     primary_info: None,
                     secondary_info: None,
+                    supports_fd: None,
                     error: Some(e.to_string()),
                 }),
             }
@@ -1202,6 +1206,7 @@ pub async fn probe_device(
                     bus_count: info.bus_count,
                     primary_info: Some(format!("{} buses available", info.bus_count)),
                     secondary_info: Some(port.to_string()),
+                    supports_fd: None,
                     error: None,
                 }),
                 Ok(Err(e)) => Ok(DeviceProbeResult {
@@ -1211,6 +1216,7 @@ pub async fn probe_device(
                     bus_count: 0,
                     primary_info: None,
                     secondary_info: None,
+                    supports_fd: None,
                     error: Some(e.to_string()),
                 }),
                 Err(e) => Ok(DeviceProbeResult {
@@ -1220,6 +1226,7 @@ pub async fn probe_device(
                     bus_count: 0,
                     primary_info: None,
                     secondary_info: None,
+                    supports_fd: None,
                     error: Some(format!("Probe task failed: {}", e)),
                 }),
             }
@@ -1268,6 +1275,7 @@ pub async fn probe_device(
                 bus_count: if result.success { 1 } else { 0 },
                 primary_info: result.version,
                 secondary_info: result.hardware_version,
+                supports_fd: None,
                 error: result.error,
             })
         }
@@ -1280,6 +1288,7 @@ pub async fn probe_device(
                 bus_count: 0,
                 primary_info: None,
                 secondary_info: None,
+                supports_fd: None,
                 error: Some("slcan is not available on iOS".to_string()),
             })
         }
@@ -1312,6 +1321,7 @@ pub async fn probe_device(
                     } else {
                         None
                     },
+                    supports_fd: info.supports_fd,
                     error: None,
                 }),
                 Err(e) => Ok(DeviceProbeResult {
@@ -1321,6 +1331,7 @@ pub async fn probe_device(
                     bus_count: 0,
                     primary_info: None,
                     secondary_info: None,
+                    supports_fd: None,
                     error: Some(e),
                 }),
             }
@@ -1377,6 +1388,7 @@ pub async fn probe_device(
                     bus_count: 1,
                     primary_info: Some(port.to_string()),
                     secondary_info: None,
+                    supports_fd: None,
                     error: None,
                 })
             } else {
@@ -1387,6 +1399,7 @@ pub async fn probe_device(
                     bus_count: 0,
                     primary_info: None,
                     secondary_info: None,
+                    supports_fd: None,
                     error: Some(format!("Port '{}' not found", port)),
                 })
             }

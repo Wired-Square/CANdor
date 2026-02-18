@@ -17,6 +17,8 @@ export interface DeviceProbeResult {
   primaryInfo?: string | null;
   /** Secondary info to display (e.g., hardware version) */
   secondaryInfo?: string | null;
+  /** Whether device supports CAN FD (gs_usb only) */
+  supports_fd?: boolean | null;
   /** Error message (if probe failed) */
   error?: string | null;
 }

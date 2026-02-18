@@ -550,6 +550,7 @@ export default function IoReaderPickerDialog({
           busCount: isMultiBus ? 5 : 1,
           primaryInfo: "Session active",
           secondaryInfo: null,
+          supports_fd: null,
           error: null,
         }));
         if (isMultiBus) {
@@ -582,6 +583,7 @@ export default function IoReaderPickerDialog({
             busCount: 0,
             primaryInfo: null,
             secondaryInfo: null,
+            supports_fd: null,
             error: String(err),
           }));
           // For multi-bus devices, fall back to default 5 buses

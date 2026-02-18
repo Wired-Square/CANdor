@@ -83,6 +83,31 @@ pub mod can_mode {
     pub const FD: u32 = 1 << 8;
 }
 
+/// CAN device feature flags (from BT_CONST.feature field)
+pub mod can_feature {
+    pub const LISTEN_ONLY: u32 = 1 << 0;
+    pub const LOOP_BACK: u32 = 1 << 1;
+    pub const TRIPLE_SAMPLE: u32 = 1 << 2;
+    pub const ONE_SHOT: u32 = 1 << 3;
+    pub const HW_TIMESTAMP: u32 = 1 << 4;
+    pub const IDENTIFY: u32 = 1 << 5;
+    pub const USER_ID: u32 = 1 << 6;
+    pub const PAD_PKTS_TO_MAX_PKT_SIZE: u32 = 1 << 7;
+    pub const FD: u32 = 1 << 8;
+    pub const REQ_USB_QUIRK_LPC546XX: u32 = 1 << 9;
+    pub const BT_CONST_EXT: u32 = 1 << 10;
+    pub const TERMINATION: u32 = 1 << 11;
+    pub const BERR_REPORTING: u32 = 1 << 12;
+    pub const GET_STATE: u32 = 1 << 13;
+}
+
+/// CAN FD frame flags (in GsHostFrame.flags field)
+pub mod can_fd_flags {
+    pub const FD: u8 = 0x01;
+    pub const BRS: u8 = 0x02;
+    pub const ESI: u8 = 0x04;
+}
+
 /// CAN ID flags (in can_id field)
 pub mod can_id_flags {
     pub const EXTENDED: u32 = 0x80000000;
@@ -160,6 +185,79 @@ impl GsHostFrame {
                 data[12], data[13], data[14], data[15],
                 data[16], data[17], data[18], data[19],
             ],
+        })
+    }
+}
+
+/// gs_usb host frame structure for CAN FD (76 bytes: 12 header + 64 data)
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct GsHostFrameFd {
+    pub echo_id: u32,
+    pub can_id: u32,
+    pub can_dlc: u8,
+    pub channel: u8,
+    pub flags: u8,
+    pub reserved: u8,
+    pub data: [u8; 64],
+}
+
+impl GsHostFrameFd {
+    pub const SIZE: usize = 76;
+
+    /// Check if this is a received frame (not a TX echo)
+    pub fn is_rx(&self) -> bool {
+        self.echo_id == GS_USB_ECHO_ID_RX
+    }
+
+    /// Check if this is an extended ID frame
+    pub fn is_extended(&self) -> bool {
+        self.can_id & can_id_flags::EXTENDED != 0
+    }
+
+    /// Check if this is a CAN FD frame
+    pub fn is_fd(&self) -> bool {
+        self.flags & can_fd_flags::FD != 0
+    }
+
+    /// Check if BRS (Bit Rate Switch) is set
+    pub fn is_brs(&self) -> bool {
+        self.flags & can_fd_flags::BRS != 0
+    }
+
+    /// Check if ESI (Error State Indicator) is set
+    pub fn is_esi(&self) -> bool {
+        self.flags & can_fd_flags::ESI != 0
+    }
+
+    /// Get the CAN ID (without flags)
+    pub fn get_can_id(&self) -> u32 {
+        self.can_id & can_id_flags::ID_MASK
+    }
+
+    /// Get data bytes based on length.
+    /// For CAN FD, can_dlc contains the actual byte count (up to 64).
+    pub fn get_data(&self) -> &[u8] {
+        let len = (self.can_dlc as usize).min(64);
+        &self.data[..len]
+    }
+
+    /// Safely construct from a byte slice (must be at least 76 bytes).
+    /// Returns None if the slice is too short.
+    pub fn from_bytes(data: &[u8]) -> Option<Self> {
+        if data.len() < Self::SIZE {
+            return None;
+        }
+        let mut frame_data = [0u8; 64];
+        frame_data.copy_from_slice(&data[12..76]);
+        Some(GsHostFrameFd {
+            echo_id: u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
+            can_id: u32::from_le_bytes([data[4], data[5], data[6], data[7]]),
+            can_dlc: data[8],
+            channel: data[9],
+            flags: data[10],
+            reserved: data[11],
+            data: frame_data,
         })
     }
 }
@@ -279,10 +377,31 @@ pub struct GsUsbConfig {
     /// If None, defaults to the channel number.
     #[serde(default)]
     pub bus_override: Option<u8>,
+    /// Enable CAN FD mode.
+    /// Requires an FD-capable device and bus.
+    #[serde(default)]
+    pub enable_fd: bool,
+    /// CAN FD data phase bitrate in bits/second (e.g., 2000000 for 2 Mbit/s).
+    /// Only used when enable_fd is true.
+    #[serde(default = "default_data_bitrate")]
+    pub data_bitrate: u32,
+    /// Data phase sample point as percentage (e.g., 75.0 for 75%).
+    /// Common values: 60.0, 70.0, 75.0, 80.0. Default is 75.0%.
+    /// Lower sample points are recommended for higher data rates.
+    #[serde(default = "default_data_sample_point")]
+    pub data_sample_point: f32,
 }
 
 fn default_sample_point() -> f32 {
     87.5
+}
+
+fn default_data_bitrate() -> u32 {
+    2_000_000
+}
+
+fn default_data_sample_point() -> f32 {
+    75.0
 }
 
 impl Default for GsUsbConfig {
@@ -298,6 +417,9 @@ impl Default for GsUsbConfig {
             limit: None,
             display_name: None,
             bus_override: None,
+            enable_fd: false,
+            data_bitrate: 2_000_000,
+            data_sample_point: 75.0,
         }
     }
 }

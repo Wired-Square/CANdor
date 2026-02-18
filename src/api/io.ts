@@ -926,6 +926,8 @@ export interface DeviceProbeResult {
   primaryInfo: string | null;
   /** Secondary info line (hardware version, channel count, etc.) */
   secondaryInfo: string | null;
+  /** Whether device supports CAN FD (gs_usb devices only, null for others) */
+  supports_fd: boolean | null;
   /** Error message if probe failed */
   error: string | null;
 }
@@ -954,6 +956,7 @@ export async function probeDevice(profileId: string): Promise<DeviceProbeResult>
     bus_count: number;
     primary_info: string | null;
     secondary_info: string | null;
+    supports_fd: boolean | null;
     error: string | null;
   }>("probe_device", { profile_id: profileId });
 
@@ -964,6 +967,7 @@ export async function probeDevice(profileId: string): Promise<DeviceProbeResult>
     busCount: raw.bus_count,
     primaryInfo: raw.primary_info,
     secondaryInfo: raw.secondary_info,
+    supports_fd: raw.supports_fd,
     error: raw.error,
   };
 }

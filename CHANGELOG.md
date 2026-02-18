@@ -6,6 +6,15 @@ All notable changes to CANdor will be documented in this file.
 
 ### Added
 
+- **CAN FD Support**: Full CAN FD support for gs_usb (candleLight/CANable) and SocketCAN adapters. Features include:
+  - Device capability detection during probe (shows "FD Capable" or "Classic CAN Only")
+  - Enable CAN FD checkbox in profile configuration
+  - Data phase bitrate selection (1, 2, 4, 5, 8 Mbit/s)
+  - Data phase sample point configuration for gs_usb (60%, 70%, 75%, 80%)
+  - Receive and transmit FD frames with payloads up to 64 bytes
+  - gs_usb: Queries BT_CONST feature flags to detect FD support, sends DataBittiming for data phase timing, uses GsHostFrameFd (76-byte) struct for FD frames
+  - SocketCAN: Configures interface with `fd on` and `dbitrate` parameters via ip link
+
 - **gs_usb Sample Point Configuration**: Added configurable sample point setting to gs_usb (candleLight) profiles. Users can now select 75.0%, 80.0%, or 87.5% (default) sample point to match their CAN bus requirements. Particularly useful for CAN FD-capable devices on classic CAN buses where sample point mismatches can cause communication failures.
 
 ### Fixed

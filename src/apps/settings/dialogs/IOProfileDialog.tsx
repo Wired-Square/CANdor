@@ -1118,6 +1118,45 @@ export default function IOProfileDialog({
                 </Select>
               </FormField>
 
+              {/* CAN FD Options - only show if bitrate is set (interface will be configured) */}
+              {profileForm.connection.bitrate && (
+                <div className={`border-t ${borderDefault} pt-4 mt-2`}>
+                  <div className={flexRowGap2}>
+                    <input
+                      type="checkbox"
+                      id="socketcan_enable_fd"
+                      checked={profileForm.connection.enable_fd === true}
+                      onChange={(e) => onUpdateConnectionField("enable_fd", e.target.checked)}
+                      className="w-4 h-4 text-blue-600 bg-[var(--bg-primary)] border-[color:var(--border-default)] rounded focus:ring-blue-500"
+                    />
+                    <label htmlFor="socketcan_enable_fd" className="text-sm text-[color:var(--text-secondary)]">
+                      Enable CAN FD
+                    </label>
+                  </div>
+                  <p className="text-xs text-[color:var(--text-muted)] mt-1 ml-6">
+                    Enables CAN Flexible Data-rate. Requires FD-capable hardware.
+                  </p>
+
+                  {profileForm.connection.enable_fd && (
+                    <div className="mt-3 pl-6">
+                      <FormField label="Data Phase Bitrate" variant="default">
+                        <Select
+                          variant="default"
+                          value={profileForm.connection.data_bitrate || "2000000"}
+                          onChange={(e) => onUpdateConnectionField("data_bitrate", e.target.value)}
+                        >
+                          <option value="1000000">1 Mbit/s</option>
+                          <option value="2000000">2 Mbit/s</option>
+                          <option value="4000000">4 Mbit/s</option>
+                          <option value="5000000">5 Mbit/s</option>
+                          <option value="8000000">8 Mbit/s</option>
+                        </Select>
+                      </FormField>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className={alertInfo}>
                 <p className="text-sm text-[color:var(--text-info)]">
                   <strong>Linux only.</strong> Works with CANable Pro (Candlelight firmware),
@@ -1202,6 +1241,62 @@ export default function IOProfileDialog({
                 <label htmlFor="gs_usb_listen_only" className="text-sm text-[color:var(--text-secondary)]">
                   Listen-only mode (no ACK, no transmit)
                 </label>
+              </div>
+
+              {/* CAN FD Options */}
+              <div className={`border-t ${borderDefault} pt-4 mt-2`}>
+                <div className={flexRowGap2}>
+                  <input
+                    type="checkbox"
+                    id="gs_usb_enable_fd"
+                    checked={profileForm.connection.enable_fd === true}
+                    onChange={(e) => onUpdateConnectionField("enable_fd", e.target.checked)}
+                    className="w-4 h-4 text-blue-600 bg-[var(--bg-primary)] border-[color:var(--border-default)] rounded focus:ring-blue-500"
+                  />
+                  <label htmlFor="gs_usb_enable_fd" className="text-sm text-[color:var(--text-secondary)]">
+                    Enable CAN FD
+                  </label>
+                  {gsUsbProbeResult?.supports_fd === false && (
+                    <span className="text-xs text-[color:var(--text-warning)]">(device does not support FD)</span>
+                  )}
+                  {gsUsbProbeResult?.supports_fd === true && (
+                    <span className="text-xs text-[color:var(--text-success)]">(FD capable)</span>
+                  )}
+                </div>
+                <p className="text-xs text-[color:var(--text-muted)] mt-1 ml-6">
+                  Enables CAN Flexible Data-rate for higher throughput and larger payloads (up to 64 bytes).
+                </p>
+
+                {profileForm.connection.enable_fd && (
+                  <div className="mt-3 space-y-3 pl-6">
+                    <FormField label="Data Phase Bitrate" variant="default">
+                      <Select
+                        variant="default"
+                        value={profileForm.connection.data_bitrate || "2000000"}
+                        onChange={(e) => onUpdateConnectionField("data_bitrate", e.target.value)}
+                      >
+                        <option value="1000000">1 Mbit/s</option>
+                        <option value="2000000">2 Mbit/s</option>
+                        <option value="4000000">4 Mbit/s</option>
+                        <option value="5000000">5 Mbit/s</option>
+                        <option value="8000000">8 Mbit/s</option>
+                      </Select>
+                    </FormField>
+
+                    <FormField label="Data Phase Sample Point" variant="default">
+                      <Select
+                        variant="default"
+                        value={profileForm.connection.data_sample_point || "75.0"}
+                        onChange={(e) => onUpdateConnectionField("data_sample_point", e.target.value)}
+                      >
+                        <option value="60.0">60.0%</option>
+                        <option value="70.0">70.0%</option>
+                        <option value="75.0">75.0% (recommended)</option>
+                        <option value="80.0">80.0%</option>
+                      </Select>
+                    </FormField>
+                  </div>
+                )}
               </div>
 
               {/* Linux: Setup command helper */}
