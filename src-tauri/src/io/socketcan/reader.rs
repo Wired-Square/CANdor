@@ -51,6 +51,14 @@ mod linux_impl {
         /// If None, defaults to bus 0.
         #[serde(default)]
         pub bus_override: Option<u8>,
+        /// Enable CAN FD mode.
+        /// Requires an FD-capable interface and hardware.
+        #[serde(default)]
+        pub enable_fd: bool,
+        /// CAN FD data phase bitrate in bits/second (e.g., 2000000 for 2 Mbit/s).
+        /// Only used when enable_fd is true.
+        #[serde(default)]
+        pub data_bitrate: Option<u32>,
     }
 
     // ============================================================================
@@ -59,23 +67,45 @@ mod linux_impl {
 
     /// Configure a SocketCAN interface using pkexec for privilege escalation.
     /// This brings down the interface, sets the bitrate, and brings it back up.
+    /// If enable_fd is true, the interface is configured for CAN FD mode.
     ///
     /// Returns Ok(()) on success, or an error message on failure.
-    pub fn configure_interface(interface: &str, bitrate: u32) -> Result<(), String> {
+    pub fn configure_interface(
+        interface: &str,
+        bitrate: u32,
+        enable_fd: bool,
+        data_bitrate: Option<u32>,
+    ) -> Result<(), String> {
         use std::process::Command;
 
         eprintln!(
-            "[socketcan] Configuring interface {} with bitrate {} using pkexec",
-            interface, bitrate
+            "[socketcan] Configuring interface {} with bitrate {}{} using pkexec",
+            interface,
+            bitrate,
+            if enable_fd {
+                format!(" (FD mode, dbitrate: {:?})", data_bitrate)
+            } else {
+                String::new()
+            }
         );
 
         // Build the shell command to configure the interface
         // We use a single pkexec call with sh -c to run all commands in sequence
-        let script = format!(
-            "ip link set {iface} down && ip link set {iface} type can bitrate {bitrate} && ip link set {iface} up",
+        let mut script = format!(
+            "ip link set {iface} down && ip link set {iface} type can bitrate {bitrate}",
             iface = interface,
             bitrate = bitrate
         );
+
+        // Add FD configuration if enabled
+        if enable_fd {
+            script.push_str(" fd on");
+            if let Some(dbitrate) = data_bitrate {
+                script.push_str(&format!(" dbitrate {}", dbitrate));
+            }
+        }
+
+        script.push_str(&format!(" && ip link set {} up", interface));
 
         let output = Command::new("pkexec")
             .args(["sh", "-c", &script])
@@ -344,6 +374,8 @@ mod linux_impl {
         source_idx: usize,
         interface: String,
         bitrate: Option<u32>,
+        enable_fd: bool,
+        data_bitrate: Option<u32>,
         bus_mappings: Vec<BusMapping>,
         stop_flag: Arc<AtomicBool>,
         tx: mpsc::Sender<SourceMessage>,
@@ -352,7 +384,7 @@ mod linux_impl {
 
         // Configure interface if bitrate is specified
         if let Some(br) = bitrate {
-            if let Err(e) = configure_interface(&interface, br) {
+            if let Err(e) = configure_interface(&interface, br, enable_fd, data_bitrate) {
                 let _ = tx
                     .send(SourceMessage::Error(source_idx, e))
                     .await;
@@ -529,6 +561,10 @@ mod stub {
         pub display_name: Option<String>,
         #[serde(default)]
         pub bus_override: Option<u8>,
+        #[serde(default)]
+        pub enable_fd: bool,
+        #[serde(default)]
+        pub data_bitrate: Option<u32>,
     }
 
     /// Encoded frame result - either classic CAN (16 bytes) or CAN FD (72 bytes)
@@ -538,7 +574,12 @@ mod stub {
     }
 
     /// Stub configure_interface for non-Linux
-    pub fn configure_interface(_interface: &str, _bitrate: u32) -> Result<(), String> {
+    pub fn configure_interface(
+        _interface: &str,
+        _bitrate: u32,
+        _enable_fd: bool,
+        _data_bitrate: Option<u32>,
+    ) -> Result<(), String> {
         Err("SocketCAN is only available on Linux".to_string())
     }
 
@@ -556,6 +597,8 @@ mod stub {
         source_idx: usize,
         _interface: String,
         _bitrate: Option<u32>,
+        _enable_fd: bool,
+        _data_bitrate: Option<u32>,
         _bus_mappings: Vec<BusMapping>,
         _stop_flag: Arc<AtomicBool>,
         tx: mpsc::Sender<SourceMessage>,

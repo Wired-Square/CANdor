@@ -16,9 +16,9 @@ use std::time::Duration;
 use tauri::AppHandle;
 
 use super::{
-    can_id_flags, can_mode, get_bittiming_for_bitrate, GsDeviceBittiming, GsDeviceConfig,
-    GsDeviceMode, GsHostFrame, GsUsbBreq, GsUsbConfig, GsUsbDeviceInfo, GsUsbProbeResult,
-    GS_USB_HOST_FORMAT, GS_USB_PIDS, GS_USB_VID,
+    can_fd_flags, can_feature, can_id_flags, can_mode, get_bittiming_for_bitrate,
+    GsDeviceBittiming, GsDeviceConfig, GsDeviceMode, GsHostFrame, GsHostFrameFd, GsUsbBreq,
+    GsUsbConfig, GsUsbDeviceInfo, GsUsbProbeResult, GS_USB_HOST_FORMAT, GS_USB_PIDS, GS_USB_VID,
 };
 use tokio::sync::mpsc;
 
@@ -31,8 +31,19 @@ use crate::io::{
     IOCapabilities, IODevice, IOState, TransmitPayload, TransmitResult,
 };
 
-/// Encode a CAN frame into gs_usb GsHostFrame format (20 bytes)
+/// Encode a CAN frame into gs_usb format.
+/// Classic CAN: 20 bytes (GsHostFrame)
+/// CAN FD: 76 bytes (GsHostFrameFd)
 pub fn encode_frame(frame: &CanTransmitFrame, channel: u8) -> Vec<u8> {
+    if frame.is_fd {
+        encode_fd_frame(frame, channel)
+    } else {
+        encode_classic_frame(frame, channel)
+    }
+}
+
+/// Encode a classic CAN frame (20 bytes)
+fn encode_classic_frame(frame: &CanTransmitFrame, channel: u8) -> Vec<u8> {
     let mut buf = vec![0u8; GsHostFrame::SIZE];
 
     // echo_id: non-0xFFFFFFFF for TX (using 0 for simplicity)
@@ -49,7 +60,7 @@ pub fn encode_frame(frame: &CanTransmitFrame, channel: u8) -> Vec<u8> {
     buf[4..8].copy_from_slice(&can_id.to_le_bytes());
 
     // can_dlc
-    buf[8] = frame.data.len() as u8;
+    buf[8] = frame.data.len().min(8) as u8;
 
     // channel
     buf[9] = channel;
@@ -62,6 +73,43 @@ pub fn encode_frame(frame: &CanTransmitFrame, channel: u8) -> Vec<u8> {
 
     // data (up to 8 bytes)
     let len = frame.data.len().min(8);
+    buf[12..12 + len].copy_from_slice(&frame.data[..len]);
+
+    buf
+}
+
+/// Encode a CAN FD frame (76 bytes)
+fn encode_fd_frame(frame: &CanTransmitFrame, channel: u8) -> Vec<u8> {
+    let mut buf = vec![0u8; GsHostFrameFd::SIZE];
+
+    // echo_id: non-0xFFFFFFFF for TX (using 0 for simplicity)
+    buf[0..4].copy_from_slice(&0u32.to_le_bytes());
+
+    // can_id with flags
+    let mut can_id = frame.frame_id;
+    if frame.is_extended {
+        can_id |= can_id_flags::EXTENDED;
+    }
+    buf[4..8].copy_from_slice(&can_id.to_le_bytes());
+
+    // can_dlc (actual byte count for FD, up to 64)
+    buf[8] = frame.data.len().min(64) as u8;
+
+    // channel
+    buf[9] = channel;
+
+    // flags: FD flag always set, BRS if requested
+    let mut flags = can_fd_flags::FD;
+    if frame.is_brs {
+        flags |= can_fd_flags::BRS;
+    }
+    buf[10] = flags;
+
+    // reserved
+    buf[11] = 0;
+
+    // data (up to 64 bytes)
+    let len = frame.data.len().min(64);
     buf[12..12 + len].copy_from_slice(&frame.data[..len]);
 
     buf
@@ -155,16 +203,50 @@ pub fn probe_device(bus: u8, address: u8, serial: Option<&str>) -> Result<GsUsbP
     let config = get_device_config_sync(&interface)
         .map_err(|e| IoError::protocol(&device, e))?;
 
+    // Query BT_CONST to get feature flags and clock frequency
+    let (can_clock, supports_fd) = get_bt_const_sync(&interface)
+        .map(|(feature, fclk)| {
+            let fd_supported = feature & can_feature::FD != 0;
+            (Some(fclk), Some(fd_supported))
+        })
+        .unwrap_or((None, None));
+
     // icount is 0-indexed (number of interfaces - 1), so add 1 to get count
     Ok(GsUsbProbeResult {
         success: true,
         channel_count: Some(config.icount + 1),
         sw_version: Some(config.sw_version),
         hw_version: Some(config.hw_version),
-        can_clock: None, // Would need to query BT_CONST
-        supports_fd: None,
+        can_clock,
+        supports_fd,
         error: None,
     })
+}
+
+/// Get bit timing constants (feature flags and clock) via USB control transfer (sync version)
+fn get_bt_const_sync(interface: &Interface) -> Result<(u32, u32), String> {
+    let data = interface
+        .control_in(ControlIn {
+            control_type: ControlType::Vendor,
+            recipient: Recipient::Interface,
+            request: GsUsbBreq::BtConst as u8,
+            value: 0, // channel 0
+            index: 0,
+            length: 40,
+        }, CONTROL_TIMEOUT)
+        .wait()
+        .map_err(|e| format!("BT_CONST query failed: {:?}", e))?;
+
+    if data.len() >= 8 {
+        let feature = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        let fclk = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        Ok((feature, fclk))
+    } else {
+        Err(format!(
+            "Incomplete BT_CONST response: got {} bytes, expected at least 8",
+            data.len()
+        ))
+    }
 }
 
 /// Get device configuration via USB control transfer (sync version)
@@ -323,9 +405,22 @@ impl IODevice for GsUsbReader {
             );
         }
 
-        // Validate frame
-        if frame.data.len() > 8 {
-            return Ok(TransmitResult::error("Data length exceeds 8 bytes".to_string()));
+        // Validate frame size
+        let max_len = if frame.is_fd { 64 } else { 8 };
+        if frame.data.len() > max_len {
+            return Ok(TransmitResult::error(format!(
+                "Data length {} exceeds maximum {} bytes for {} frame",
+                frame.data.len(),
+                max_len,
+                if frame.is_fd { "FD" } else { "classic CAN" }
+            )));
+        }
+
+        // FD frames require FD mode to be enabled
+        if frame.is_fd && !self.config.enable_fd {
+            return Ok(TransmitResult::error(
+                "Cannot transmit FD frame: FD mode not enabled in profile settings".to_string(),
+            ));
         }
 
         // Encode frame as GsHostFrame
@@ -501,9 +596,12 @@ async fn run_gs_usb_stream(
     let mut last_emit_time = std::time::Instant::now();
     let emit_interval = Duration::from_millis(25);
 
+    // Buffer size: 76 bytes for FD mode (can hold both classic and FD frames), 64 for classic
+    let buf_size = if config.enable_fd { GsHostFrameFd::SIZE } else { 64 };
+
     // Pre-submit multiple read requests for better throughput
     for _ in 0..4 {
-        bulk_in.submit(bulk_in.allocate(64));
+        bulk_in.submit(bulk_in.allocate(buf_size));
     }
 
     // Read loop - only handles reading, transmit is handled by the dedicated task
@@ -538,29 +636,66 @@ async fn run_gs_usb_stream(
                     Ok(()) => {
                         let len = completion.actual_len;
                         let data = &completion.buffer[..len];
-                        if let Some(gs_frame) = GsHostFrame::from_bytes(data) {
-                            // Only process RX frames (not TX echoes)
-                            if gs_frame.is_rx() {
-                                let frame_msg = FrameMessage {
-                                    protocol: "can".to_string(),
-                                    timestamp_us: now_us(),
-                                    frame_id: gs_frame.get_can_id(),
-                                    // Use bus_override if configured, otherwise use device channel
-                                    bus: config.bus_override.unwrap_or(gs_frame.channel),
-                                    dlc: gs_frame.can_dlc,
-                                    bytes: gs_frame.get_data().to_vec(),
-                                    is_extended: gs_frame.is_extended(),
-                                    is_fd: false,
-                                    source_address: None,
-                                    incomplete: None,
-                                    direction: None,
-                                };
-                                pending_frames.push(frame_msg);
-                                total_frames += 1;
+
+                        // Parse frame - check flags byte to determine if FD
+                        // Flags byte is at offset 10 in both classic and FD frames
+                        let frame_msg = if len >= GsHostFrame::SIZE {
+                            let is_fd_frame = len >= 12 && (data[10] & can_fd_flags::FD) != 0;
+
+                            if is_fd_frame && len >= GsHostFrameFd::SIZE {
+                                // Parse as FD frame
+                                GsHostFrameFd::from_bytes(data).and_then(|gs_frame| {
+                                    if gs_frame.is_rx() {
+                                        Some(FrameMessage {
+                                            protocol: "can".to_string(),
+                                            timestamp_us: now_us(),
+                                            frame_id: gs_frame.get_can_id(),
+                                            bus: config.bus_override.unwrap_or(gs_frame.channel),
+                                            dlc: gs_frame.can_dlc,
+                                            bytes: gs_frame.get_data().to_vec(),
+                                            is_extended: gs_frame.is_extended(),
+                                            is_fd: true,
+                                            source_address: None,
+                                            incomplete: None,
+                                            direction: None,
+                                        })
+                                    } else {
+                                        None
+                                    }
+                                })
+                            } else {
+                                // Parse as classic CAN frame
+                                GsHostFrame::from_bytes(data).and_then(|gs_frame| {
+                                    if gs_frame.is_rx() {
+                                        Some(FrameMessage {
+                                            protocol: "can".to_string(),
+                                            timestamp_us: now_us(),
+                                            frame_id: gs_frame.get_can_id(),
+                                            bus: config.bus_override.unwrap_or(gs_frame.channel),
+                                            dlc: gs_frame.can_dlc,
+                                            bytes: gs_frame.get_data().to_vec(),
+                                            is_extended: gs_frame.is_extended(),
+                                            is_fd: false,
+                                            source_address: None,
+                                            incomplete: None,
+                                            direction: None,
+                                        })
+                                    } else {
+                                        None
+                                    }
+                                })
                             }
+                        } else {
+                            None
+                        };
+
+                        if let Some(frame) = frame_msg {
+                            pending_frames.push(frame);
+                            total_frames += 1;
                         }
+
                         // Resubmit for continuous reading
-                        bulk_in.submit(bulk_in.allocate(64));
+                        bulk_in.submit(bulk_in.allocate(buf_size));
                     }
                     Err(e) => {
                         eprintln!("[gs_usb:{}] Bulk transfer error: {:?}", session_id, e);
@@ -669,12 +804,74 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
         .await
         .map_err(|e| format!("BITTIMING failed: {:?}", e))?;
 
-    // 3. Set mode and start
-    let mode_flags = if config.listen_only {
+    // 3. If FD is enabled, set data phase bit timing
+    if config.enable_fd {
+        // Query BT_CONST_EXT for data phase timing constraints (optional, use same clock if unavailable)
+        let fclk_data = interface
+            .control_in(ControlIn {
+                control_type: ControlType::Vendor,
+                recipient: Recipient::Interface,
+                request: GsUsbBreq::BtConstExt as u8,
+                value: config.channel as u16,
+                index: 0,
+                length: 40,
+            }, CONTROL_TIMEOUT)
+            .await
+            .ok()
+            .and_then(|data| {
+                if data.len() >= 8 {
+                    Some(u32::from_le_bytes([data[4], data[5], data[6], data[7]]))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(fclk_can); // Use nominal clock if extended not available
+
+        // Calculate data phase timing
+        let data_timing = super::calculate_bittiming(fclk_data, config.data_bitrate, config.data_sample_point)
+            .ok_or_else(|| {
+                format!(
+                    "Cannot calculate FD data timing for {} bps at {}% sample point (clock: {} Hz)",
+                    config.data_bitrate, config.data_sample_point, fclk_data
+                )
+            })?;
+
+        let data_timing_bytes = unsafe {
+            std::slice::from_raw_parts(
+                &data_timing as *const GsDeviceBittiming as *const u8,
+                GsDeviceBittiming::SIZE,
+            )
+        };
+
+        interface
+            .control_out(ControlOut {
+                control_type: ControlType::Vendor,
+                recipient: Recipient::Interface,
+                request: GsUsbBreq::DataBittiming as u8,
+                value: config.channel as u16,
+                index: 0,
+                data: data_timing_bytes,
+            }, CONTROL_TIMEOUT)
+            .await
+            .map_err(|e| format!("DATA_BITTIMING failed: {:?} (device may not support CAN FD)", e))?;
+
+        eprintln!(
+            "[gs_usb] FD mode: data bitrate {} bps, sample point {}%",
+            config.data_bitrate, config.data_sample_point
+        );
+    }
+
+    // 4. Set mode and start
+    let mut mode_flags = if config.listen_only {
         can_mode::LISTEN_ONLY
     } else {
         can_mode::NORMAL
     };
+
+    // Add FD mode flag if enabled
+    if config.enable_fd {
+        mode_flags |= can_mode::FD;
+    }
 
     let mode = GsDeviceMode {
         mode: 1, // Start
@@ -733,28 +930,54 @@ pub async fn stop_device(interface: &Interface, config: &GsUsbConfig) -> Result<
     Ok(())
 }
 
-/// Parse a gs_usb host frame from raw bytes
+/// Parse a gs_usb host frame from raw bytes (classic CAN or FD)
 pub fn parse_host_frame(data: &[u8]) -> Option<FrameMessage> {
-    let gs_frame = GsHostFrame::from_bytes(data)?;
-
-    // Only process RX frames (not TX echoes)
-    if !gs_frame.is_rx() {
+    if data.len() < GsHostFrame::SIZE {
         return None;
     }
 
-    Some(FrameMessage {
-        protocol: "can".to_string(),
-        timestamp_us: now_us(),
-        frame_id: gs_frame.get_can_id(),
-        bus: gs_frame.channel,
-        dlc: gs_frame.can_dlc,
-        bytes: gs_frame.get_data().to_vec(),
-        is_extended: gs_frame.is_extended(),
-        is_fd: false,
-        source_address: None,
-        incomplete: None,
-        direction: None,
-    })
+    // Check flags byte to determine if this is an FD frame
+    let is_fd_frame = data.len() >= 12 && (data[10] & can_fd_flags::FD) != 0;
+
+    if is_fd_frame && data.len() >= GsHostFrameFd::SIZE {
+        // Parse as FD frame
+        let gs_frame = GsHostFrameFd::from_bytes(data)?;
+        if !gs_frame.is_rx() {
+            return None;
+        }
+        Some(FrameMessage {
+            protocol: "can".to_string(),
+            timestamp_us: now_us(),
+            frame_id: gs_frame.get_can_id(),
+            bus: gs_frame.channel,
+            dlc: gs_frame.can_dlc,
+            bytes: gs_frame.get_data().to_vec(),
+            is_extended: gs_frame.is_extended(),
+            is_fd: true,
+            source_address: None,
+            incomplete: None,
+            direction: None,
+        })
+    } else {
+        // Parse as classic CAN frame
+        let gs_frame = GsHostFrame::from_bytes(data)?;
+        if !gs_frame.is_rx() {
+            return None;
+        }
+        Some(FrameMessage {
+            protocol: "can".to_string(),
+            timestamp_us: now_us(),
+            frame_id: gs_frame.get_can_id(),
+            bus: gs_frame.channel,
+            dlc: gs_frame.can_dlc,
+            bytes: gs_frame.get_data().to_vec(),
+            is_extended: gs_frame.is_extended(),
+            is_fd: false,
+            source_address: None,
+            incomplete: None,
+            direction: None,
+        })
+    }
 }
 
 // ============================================================================
@@ -771,6 +994,9 @@ pub async fn run_source(
     sample_point: f32,
     listen_only: bool,
     channel: u8,
+    enable_fd: bool,
+    data_bitrate: u32,
+    data_sample_point: f32,
     bus_mappings: Vec<BusMapping>,
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
@@ -829,6 +1055,9 @@ pub async fn run_source(
         limit: None,
         display_name: None,
         bus_override: None,
+        enable_fd,
+        data_bitrate,
+        data_sample_point,
     };
 
     // Initialize device
@@ -912,9 +1141,12 @@ pub async fn run_source(
         None
     };
 
+    // Buffer size: 76 bytes for FD mode, 64 for classic
+    let buf_size = if enable_fd { GsHostFrameFd::SIZE } else { 64 };
+
     // Pre-submit read requests
     for _ in 0..4 {
-        bulk_in.submit(bulk_in.allocate(64));
+        bulk_in.submit(bulk_in.allocate(buf_size));
     }
 
     // Read loop
@@ -928,32 +1160,17 @@ pub async fn run_source(
                     let len = completion.actual_len;
                     let data = &completion.buffer[..len];
 
-                    if let Some(gs_frame) = GsHostFrame::from_bytes(data) {
-                        if gs_frame.is_rx() {
-                            let mut frame_msg = FrameMessage {
-                                protocol: "can".to_string(),
-                                timestamp_us: now_us(),
-                                frame_id: gs_frame.get_can_id(),
-                                bus: gs_frame.channel,
-                                dlc: gs_frame.can_dlc,
-                                bytes: gs_frame.get_data().to_vec(),
-                                is_extended: gs_frame.is_extended(),
-                                is_fd: false,
-                                source_address: None,
-                                incomplete: None,
-                                direction: None,
-                            };
-
-                            // Apply bus mapping
-                            if apply_bus_mapping(&mut frame_msg, &bus_mappings) {
-                                let _ = tx
-                                    .send(SourceMessage::Frames(source_idx, vec![frame_msg]))
-                                    .await;
-                            }
+                    // Parse frame using shared function (handles both classic and FD)
+                    if let Some(mut frame_msg) = parse_host_frame(data) {
+                        // Apply bus mapping
+                        if apply_bus_mapping(&mut frame_msg, &bus_mappings) {
+                            let _ = tx
+                                .send(SourceMessage::Frames(source_idx, vec![frame_msg]))
+                                .await;
                         }
                     }
 
-                    bulk_in.submit(bulk_in.allocate(64));
+                    bulk_in.submit(bulk_in.allocate(buf_size));
                 }
                 Err(e) => {
                     let _ = tx

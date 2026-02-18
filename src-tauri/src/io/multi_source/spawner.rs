@@ -254,6 +254,21 @@ async fn run_gs_usb_reader(
         .get("channel")
         .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
         .unwrap_or(0) as u8;
+    let enable_fd = profile
+        .connection
+        .get("enable_fd")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let data_bitrate = profile
+        .connection
+        .get("data_bitrate")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(2_000_000) as u32;
+    let data_sample_point = profile
+        .connection
+        .get("data_sample_point")
+        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(75.0) as f32;
 
     run_gs_usb_source(
         source_idx,
@@ -264,6 +279,9 @@ async fn run_gs_usb_reader(
         sample_point,
         listen_only,
         channel,
+        enable_fd,
+        data_bitrate,
+        data_sample_point,
         bus_mappings,
         stop_flag,
         tx,
@@ -298,8 +316,28 @@ async fn run_socketcan_reader(
         .get("bitrate")
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse::<u32>().ok());
+    let enable_fd = profile
+        .connection
+        .get("enable_fd")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let data_bitrate = profile
+        .connection
+        .get("data_bitrate")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .map(|v| v as u32);
 
-    run_socketcan_source(source_idx, interface, bitrate, bus_mappings, stop_flag, tx).await;
+    run_socketcan_source(
+        source_idx,
+        interface,
+        bitrate,
+        enable_fd,
+        data_bitrate,
+        bus_mappings,
+        stop_flag,
+        tx,
+    )
+    .await;
 }
 
 #[cfg(not(target_os = "ios"))]
