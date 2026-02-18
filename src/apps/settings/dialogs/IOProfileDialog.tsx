@@ -281,6 +281,7 @@ export default function IOProfileDialog({
 
     const bus = parseInt(profileForm.connection.bus || "0", 10);
     const address = parseInt(profileForm.connection.address || "0", 10);
+    const serial = profileForm.connection.serial || null;
 
     if (!bus && !address) {
       setGsUsbProbeState("idle");
@@ -290,7 +291,8 @@ export default function IOProfileDialog({
 
     setGsUsbProbeState("probing");
     try {
-      const result = await probeGsUsbDevice(bus, address);
+      // Pass serial for stable device matching across USB re-enumeration
+      const result = await probeGsUsbDevice(bus, address, serial);
       setGsUsbProbeResult({
         success: result.success,
         primaryInfo: result.channel_count ? `${result.channel_count} channel(s)` : undefined,
@@ -305,7 +307,7 @@ export default function IOProfileDialog({
       });
       setGsUsbProbeState("error");
     }
-  }, [platformIsWindows, platformIsMacos, profileForm.connection.bus, profileForm.connection.address]);
+  }, [platformIsWindows, platformIsMacos, profileForm.connection.bus, profileForm.connection.address, profileForm.connection.serial]);
 
   // Auto-probe gs_usb device when bus/address changes (Windows/macOS)
   useEffect(() => {
