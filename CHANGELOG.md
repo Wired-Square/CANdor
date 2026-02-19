@@ -14,6 +14,10 @@ All notable changes to CANdor will be documented in this file.
 
 - **Bus Labels on Edges**: Source-to-session edges in the Session Manager Visual tab now display bus labels near both handles (e.g., "bus0" on the source side, "bus1" on the session side). Each source connects to its own input handle on the session node, with sources sorted by output bus to avoid edge crossings.
 
+### Fixed
+
+- **Update notification contrast on Windows**: The update button in the nav bar was nearly invisible on Windows because Dockview's `all: unset` CSS rule overrode Tailwind classes. Switched to inline styles to guarantee visibility on all platforms.
+
 ### Removed
 
 - **Session Owner Concept**: Removed the `is_owner` flag from sessions. Ownership granted no special privileges — all listeners have equal capabilities. The backend already auto-destroys sessions when the last listener unregisters, making the owner concept redundant.

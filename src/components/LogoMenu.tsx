@@ -150,11 +150,12 @@ export default function LogoMenu({ onPanelClick }: LogoMenuProps) {
       {availableUpdate && (
         <button
           onClick={handleUpdateClick}
-          className="flex items-center gap-1 px-2 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 transition-colors"
+          className="flex items-center gap-1 transition-colors"
+          style={{ backgroundColor: '#2563eb', color: 'white', padding: '4px 8px', borderRadius: '6px', fontSize: '12px', fontWeight: 500 }}
           title={`Update available: ${availableUpdate.version}`}
         >
           <ArrowUpCircle className={iconMd} />
-          <span className="text-xs font-medium">Update</span>
+          <span>Update</span>
         </button>
       )}
 
