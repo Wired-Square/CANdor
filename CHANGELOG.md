@@ -4,6 +4,10 @@ All notable changes to CANdor will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`release:rebuild` script**: New `npm run release:rebuild` command to re-release the current version without bumping. Commits any uncommitted fixes, deletes and recreates the existing tag, and pushes — useful when a release fails CI due to build errors.
+
 ### Fixed
 
 - **SocketCAN probe missing `supports_fd` field**: SocketCAN device probing failed to compile after the CAN FD support changes due to missing `supports_fd` field in `DeviceProbeResult` initialisers.

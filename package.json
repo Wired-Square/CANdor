@@ -16,10 +16,11 @@
     "version:patch": "node scripts/bump-version.js patch",
     "version:minor": "node scripts/bump-version.js minor",
     "version:major": "node scripts/bump-version.js major",
-    "release": "node scripts/release.js patch",
+    "release": "node scripts/release.js",
     "release:patch": "node scripts/release.js patch",
     "release:minor": "node scripts/release.js minor",
-    "release:major": "node scripts/release.js major"
+    "release:major": "node scripts/release.js major",
+    "release:rebuild": "node scripts/release.js rebuild"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
