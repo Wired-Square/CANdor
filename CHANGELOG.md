@@ -21,6 +21,8 @@ All notable changes to CANdor will be documented in this file.
 
 - **gs_usb Device Probe Using Wrong Device ID**: Fixed gs_usb device probing in Settings using stale bus:address instead of serial number. When a device was unplugged and replugged at a different USB address, the probe would fail with "device not found" at the old address. Now passes the serial number to the backend for stable device matching across USB re-enumeration.
 
+- **Logo Menu Text Colour**: Fixed logo menu dropdown text visibility in both light and dark modes. The dropdown container now sets the text colour explicitly so that buttons inherit the correct theme-aware colour after Dockview's CSS reset.
+
 - **gs_usb Bit Timing for Non-Standard Clocks**: Fixed bit timing calculation for gs_usb devices with non-48 MHz clocks (e.g., CANable 2.5 with Elmue firmware uses 160 MHz). The driver now reads the device's actual clock frequency from BT_CONST and calculates appropriate timing parameters dynamically, instead of using hardcoded values for 48 MHz.
 
 ## [0.4.1] - 2026-02-16
