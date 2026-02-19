@@ -6,6 +6,7 @@ import type { IOProfile } from "../../../hooks/useSettings";
 import type { SourceNodeData } from "../nodes/SourceNode";
 import type { SessionNodeData } from "../nodes/SessionNode";
 import type { ListenerNodeData } from "../nodes/ListenerNode";
+import type { InterfaceEdgeData } from "../edges/InterfaceEdge";
 
 // Layout constants
 const COLUMN_SPACING = 300;
@@ -42,9 +43,23 @@ export function buildSessionGraph(
     session.sourceProfileIds.forEach((id) => activeProfileIds.add(id));
   });
 
+  // Build a map of profileId → lowest outputBus for sorting source nodes
+  // to match the vertical order of session input handles (avoids edge crossings)
+  const profileOutputBus = new Map<string, number>();
+  sessions.forEach((session) => {
+    session.multiSourceConfigs?.forEach((config) => {
+      const firstEnabled = config.busMappings.find((m) => m.enabled);
+      if (firstEnabled && !profileOutputBus.has(config.profileId)) {
+        profileOutputBus.set(config.profileId, firstEnabled.outputBus);
+      }
+    });
+  });
+
   // Column 1: Source nodes (profiles feeding sessions)
-  // Only show profiles that are actively used
-  const activeProfiles = profiles.filter((p) => activeProfileIds.has(p.id));
+  // Sorted by output bus so edges don't cross
+  const activeProfiles = profiles
+    .filter((p) => activeProfileIds.has(p.id))
+    .sort((a, b) => (profileOutputBus.get(a.id) ?? 0) - (profileOutputBus.get(b.id) ?? 0));
   activeProfiles.forEach((profile, index) => {
     const isRealtime = ["gvret_tcp", "gvret_usb", "slcan", "socketcan", "gs_usb", "mqtt"].includes(
       profile.kind
@@ -68,9 +83,20 @@ export function buildSessionGraph(
 
   // Column 2: Session nodes
   sessions.forEach((session, index) => {
+    // Collect all mapped input interfaces for this session (one per source mapping)
+    const inputInterfaces: string[] = [];
+    session.sourceProfileIds.forEach((profileId) => {
+      const sourceConfig = session.multiSourceConfigs?.find((c) => c.profileId === profileId);
+      const enabledMappings = sourceConfig?.busMappings.filter((m) => m.enabled) ?? [];
+      for (const m of enabledMappings) {
+        inputInterfaces.push(`bus${m.outputBus}`);
+      }
+    });
+
     const nodeData: SessionNodeData = {
       session,
       label: session.sessionId,
+      inputInterfaces: inputInterfaces.length > 0 ? inputInterfaces : undefined,
     };
 
     nodes.push({
@@ -80,17 +106,39 @@ export function buildSessionGraph(
       data: nodeData,
     });
 
-    // Create edges from sources to session
+    // Create edges from sources to session, with interface labels
     session.sourceProfileIds.forEach((profileId) => {
+      // Look up interface IDs from multi-source configs
+      const sourceConfig = session.multiSourceConfigs?.find((c) => c.profileId === profileId);
+      const enabledMappings = sourceConfig?.busMappings.filter((m) => m.enabled) ?? [];
+      // Source label: device bus (e.g., "bus0")
+      const sourceLabel = enabledMappings.length > 0
+        ? enabledMappings.map((m) => `bus${m.deviceBus}`).join(", ")
+        : undefined;
+      // Target label: mapped output bus (e.g., "bus0", "bus1")
+      const targetLabel = enabledMappings.length > 0
+        ? enabledMappings.map((m) => `bus${m.outputBus}`).join(", ")
+        : undefined;
+      // Target handle ID — connects to the matching input handle on the session node
+      const targetHandleId = enabledMappings.length > 0
+        ? `in-bus${enabledMappings[0].outputBus}`
+        : undefined;
+
       edges.push({
         id: `edge-${profileId}-${session.sessionId}`,
         source: `source-${profileId}`,
         target: `session-${session.sessionId}`,
+        targetHandle: targetHandleId,
+        type: sourceLabel ? "interface" : "smoothstep",
         animated: session.state === "running",
         style: {
           stroke: session.state === "running" ? "#a855f7" : "#6b7280",
           strokeWidth: 2,
         },
+        data: {
+          sourceInterface: sourceLabel ?? "",
+          targetInterface: targetLabel ?? "",
+        } satisfies InterfaceEdgeData as InterfaceEdgeData & Record<string, unknown>,
       });
     });
   });
@@ -104,7 +152,6 @@ export function buildSessionGraph(
         listenerId: listener.listener_id,
         appName: listener.listener_id,
         sessionId: session.sessionId,
-        isOwner: listener.is_owner,
         isActive: listener.is_active,
         registeredSecondsAgo: listener.registered_seconds_ago,
       };

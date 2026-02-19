@@ -739,8 +739,6 @@ export async function sessionTransmitFrame(
 export interface ListenerInfo {
   /** Unique ID for this listener (e.g., "discovery", "decoder") */
   listener_id: string;
-  /** Whether this listener is the session owner (created the session) */
-  is_owner: boolean;
   /** Seconds since registration */
   registered_seconds_ago: number;
   /** Whether this listener is actively receiving frames */
@@ -759,8 +757,6 @@ export interface RegisterListenerResult {
   buffer_id: string | null;
   /** Buffer type ("frames" or "bytes") */
   buffer_type: "frames" | "bytes" | null;
-  /** Whether this listener is the session owner */
-  is_owner: boolean;
   /** Total number of listeners */
   listener_count: number;
   /** Error that occurred before this listener registered (one-shot, cleared after return) */
@@ -801,6 +797,82 @@ export async function unregisterSessionListener(
   return invoke("unregister_session_listener", {
     session_id: sessionId,
     listener_id: listenerId,
+  });
+}
+
+/**
+ * Evict a listener from a session, giving it a copy of the current buffer.
+ * Used by the Session Manager to remove a listener without destroying the session.
+ * @param sessionId The session ID
+ * @param listenerId The listener ID to evict
+ * @returns List of copied buffer IDs given to the evicted listener
+ */
+export async function evictSessionListener(
+  sessionId: string,
+  listenerId: string
+): Promise<string[]> {
+  return invoke("evict_session_listener_cmd", {
+    session_id: sessionId,
+    listener_id: listenerId,
+  });
+}
+
+/**
+ * Add a new IO source to an existing multi-source session.
+ * Stops the current device, creates a new MultiSourceReader with all sources (old + new),
+ * and restarts. Keeps the same session ID and listeners.
+ * @param sessionId The session ID to add the source to
+ * @param source The source configuration to add
+ * @returns Updated IOCapabilities for the session
+ */
+export async function addSourceToSession(
+  sessionId: string,
+  source: MultiSourceInput
+): Promise<IOCapabilities> {
+  // Convert TypeScript camelCase to Rust snake_case
+  const rustSource = {
+    profile_id: source.profileId,
+    display_name: source.displayName,
+    bus_mappings: source.busMappings.map((m) => ({
+      device_bus: m.deviceBus,
+      enabled: m.enabled,
+      output_bus: m.outputBus,
+      interface_id: m.interfaceId,
+      traits: m.traits,
+    })),
+    framing_encoding: source.framingEncoding,
+    delimiter: source.delimiter,
+    max_frame_length: source.maxFrameLength,
+    min_frame_length: source.minFrameLength,
+    emit_raw_bytes: source.emitRawBytes,
+    frame_id_start_byte: source.frameIdStartByte,
+    frame_id_bytes: source.frameIdBytes,
+    frame_id_big_endian: source.frameIdBigEndian,
+    source_address_start_byte: source.sourceAddressStartByte,
+    source_address_bytes: source.sourceAddressBytes,
+    source_address_big_endian: source.sourceAddressBigEndian,
+  };
+  return invoke("add_source_to_session_cmd", {
+    session_id: sessionId,
+    source: rustSource,
+  });
+}
+
+/**
+ * Remove an IO source from an existing multi-source session.
+ * Rebuilds with remaining sources (bus mappings preserved) and restarts.
+ * Cannot remove the last source — destroy the session instead.
+ * @param sessionId The session ID to remove the source from
+ * @param profileId The profile ID of the source to remove
+ * @returns Updated IOCapabilities for the session
+ */
+export async function removeSourceFromSession(
+  sessionId: string,
+  profileId: string
+): Promise<IOCapabilities> {
+  return invoke("remove_source_from_session_cmd", {
+    session_id: sessionId,
+    profile_id: profileId,
   });
 }
 
@@ -1141,7 +1213,6 @@ export async function listActiveSessions(): Promise<ActiveSessionInfo[]> {
     listener_count: number;
     listeners: Array<{
       listener_id: string;
-      is_owner: boolean;
       registered_seconds_ago: number;
       is_active: boolean;
     }>;

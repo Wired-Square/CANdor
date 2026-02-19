@@ -6,7 +6,17 @@ All notable changes to CANdor will be documented in this file.
 
 ### Added
 
-- **Session Manager Individual Listeners**: The Visual tab now shows individual listener nodes instead of an aggregated count. Each listener displays its app icon, owner/listener role, and an active/inactive status dot. Clicking a listener node shows full details in the side panel (listener ID, session, role, status, registration time). Inactive listeners are dimmed with greyed edges; active listeners show animated green edges when streaming.
+- **Session Manager Individual Listeners**: The Visual tab now shows individual listener nodes instead of an aggregated count. Each listener displays its app icon and an active/inactive status dot. Clicking a listener node shows full details in the side panel (listener ID, session, status, registration time). Inactive listeners are dimmed with greyed edges; active listeners show animated green edges when streaming.
+
+- **Listener Eviction**: Remove a listener from a session via the Session Manager Visual tab. The evicted listener receives a copy of the current buffer and transitions to standalone buffer mode. Other listeners on the session are unaffected.
+
+- **Add/Remove Source on Active Session**: Add or remove IO sources on a running multi-source session from the Session Manager Visual tab. The session stops briefly, rebuilds the MultiSourceReader with the updated source list (preserving bus mappings of untouched sources), and restarts. Same session ID and listeners are preserved.
+
+- **Bus Labels on Edges**: Source-to-session edges in the Session Manager Visual tab now display bus labels near both handles (e.g., "bus0" on the source side, "bus1" on the session side). Each source connects to its own input handle on the session node, with sources sorted by output bus to avoid edge crossings.
+
+### Removed
+
+- **Session Owner Concept**: Removed the `is_owner` flag from sessions. Ownership granted no special privileges — all listeners have equal capabilities. The backend already auto-destroys sessions when the last listener unregisters, making the owner concept redundant.
 
 - **CAN FD Support**: Full CAN FD support for gs_usb (candleLight/CANable) and SocketCAN adapters. Features include:
   - Device capability detection during probe (shows "FD Capable" or "Classic CAN Only")

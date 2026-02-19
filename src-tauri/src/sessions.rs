@@ -12,6 +12,7 @@ use crate::{
         reconfigure_session, register_listener, reinitialize_session_if_safe, resume_session,
         resume_session_fresh, seek_session, seek_session_by_frame, set_listener_active, start_session, stop_session,
         suspend_session, switch_to_buffer_replay, resume_to_live_session, transmit_frame, unregister_listener,
+        evict_session_listener, add_source_to_session, remove_source_from_session, get_session_source_count,
         update_session_direction, update_session_speed, update_session_time_range, ActiveSessionInfo, IOCapabilities, IODevice, IOState,
         JoinSessionResult, ListenerInfo, RegisterListenerResult, ReinitializeResult, BufferReader, step_frame, StepResult,
         BusMapping, InterfaceTraits, Protocol, TemporalMode,
@@ -977,6 +978,88 @@ pub async fn get_session_listener_list(session_id: String) -> Result<Vec<Listene
     get_session_listeners(&session_id).await
 }
 
+/// Evict a listener from a session, giving it a copy of the current buffer.
+/// Used by the Session Manager to remove a listener without destroying the session.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn evict_session_listener_cmd(
+    app: tauri::AppHandle,
+    session_id: String,
+    listener_id: String,
+) -> Result<Vec<String>, String> {
+    evict_session_listener(&app, &session_id, &listener_id).await
+}
+
+/// Add a new IO source to an existing multi-source session.
+/// Stops the current device, creates a new MultiSourceReader with all sources (old + new),
+/// and restarts. Keeps the same session ID and listeners.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn add_source_to_session_cmd(
+    app: tauri::AppHandle,
+    session_id: String,
+    source: MultiSourceInput,
+) -> Result<IOCapabilities, String> {
+    let settings = settings::load_settings(app.clone())
+        .await
+        .map_err(|e| format!("Failed to load settings: {}", e))?;
+
+    // Determine next source index from existing configs (for auto-assigning output bus)
+    let existing_count = get_session_source_count(&session_id).await;
+
+    let source_config = resolve_source_config(source, existing_count, &settings)?;
+
+    // Validate it's a real-time device
+    if !is_realtime_device(&source_config.profile_kind) {
+        return Err(format!(
+            "Profile '{}' has unsupported type '{}' for multi-source mode",
+            source_config.profile_id, source_config.profile_kind
+        ));
+    }
+
+    // Check if profile is already in use by another session
+    profile_tracker::can_use_profile(&source_config.profile_id, &source_config.profile_kind)?;
+
+    // Register profile usage
+    let profile_id = source_config.profile_id.clone();
+    profile_tracker::register_usage(&profile_id, &session_id);
+    register_session_profile(&session_id, &profile_id);
+
+    let capabilities = add_source_to_session(&app, &session_id, source_config).await?;
+
+    Ok(capabilities)
+}
+
+/// Remove an IO source from an existing multi-source session.
+/// Stops the current device, rebuilds with remaining sources (bus mappings preserved),
+/// and restarts. Cannot remove the last source — destroy the session instead.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn remove_source_from_session_cmd(
+    app: tauri::AppHandle,
+    session_id: String,
+    profile_id: String,
+) -> Result<IOCapabilities, String> {
+    let capabilities = remove_source_from_session(&app, &session_id, &profile_id).await?;
+
+    // Unregister profile tracking for the removed source
+    profile_tracker::unregister_usage_by_session(&profile_id, &session_id);
+
+    // Remove from session→profile mapping
+    if let Ok(mut map) = SESSION_PROFILES.lock() {
+        if let Some(profiles) = map.get_mut(&session_id) {
+            profiles.retain(|id| id != &profile_id);
+        }
+    }
+    if let Ok(mut map) = PROFILE_SESSIONS.lock() {
+        if let Some(sessions) = map.get_mut(&profile_id) {
+            sessions.remove(&session_id);
+            if sessions.is_empty() {
+                map.remove(&profile_id);
+            }
+        }
+    }
+
+    Ok(capabilities)
+}
+
 /// Check if it's safe to reinitialize a session and do so if safe.
 /// Reinitialize is only safe if the requesting listener is the only listener.
 /// This is an atomic check-and-act operation to prevent race conditions.
@@ -1490,6 +1573,74 @@ pub struct MultiSourceInput {
     pub source_address_big_endian: Option<bool>,
 }
 
+/// Convert a MultiSourceInput to a SourceConfig, resolving profile name and kind from settings.
+/// `source_idx` is used for auto-assigning output bus numbers when no mappings are provided.
+fn resolve_source_config(
+    input: MultiSourceInput,
+    source_idx: usize,
+    settings: &AppSettings,
+) -> Result<SourceConfig, String> {
+    let profile = settings
+        .io_profiles
+        .iter()
+        .find(|p| p.id == input.profile_id)
+        .ok_or_else(|| format!("Profile '{}' not found", input.profile_id))?;
+
+    let display_name = input.display_name.unwrap_or_else(|| profile.name.clone());
+    let profile_kind = profile.kind.clone();
+
+    // Determine interface traits based on profile kind
+    let (default_interface_id, default_protocols, default_can_transmit) = match profile_kind.as_str() {
+        "gvret_tcp" | "gvret-tcp" | "gvret_usb" | "gvret-usb" => {
+            ("can0".to_string(), vec![Protocol::Can, Protocol::CanFd], true)
+        }
+        "slcan" => ("can0".to_string(), vec![Protocol::Can], true),
+        "gs_usb" => ("can0".to_string(), vec![Protocol::Can, Protocol::CanFd], true),
+        "socketcan" => ("can0".to_string(), vec![Protocol::Can, Protocol::CanFd], true),
+        _ => ("can0".to_string(), vec![Protocol::Can], true),
+    };
+
+    // Use provided bus mappings, or auto-assign if none provided
+    let bus_mappings = if input.bus_mappings.is_empty() {
+        let output_bus = source_idx as u8;
+        eprintln!(
+            "[resolve_source_config] Source {} '{}' has no bus mappings, auto-assigning output bus {}",
+            source_idx, display_name, output_bus
+        );
+        vec![BusMapping {
+            device_bus: 0,
+            enabled: true,
+            output_bus,
+            interface_id: default_interface_id,
+            traits: Some(InterfaceTraits {
+                temporal_mode: TemporalMode::Realtime,
+                protocols: default_protocols,
+                can_transmit: default_can_transmit,
+            }),
+        }]
+    } else {
+        input.bus_mappings
+    };
+
+    Ok(SourceConfig {
+        profile_id: input.profile_id,
+        profile_kind,
+        display_name,
+        bus_mappings,
+        framing_encoding: input.framing_encoding,
+        delimiter: input.delimiter,
+        max_frame_length: input.max_frame_length,
+        min_frame_length: input.min_frame_length,
+        emit_raw_bytes: input.emit_raw_bytes,
+        frame_id_start_byte: input.frame_id_start_byte,
+        frame_id_bytes: input.frame_id_bytes,
+        frame_id_big_endian: input.frame_id_big_endian,
+        source_address_start_byte: input.source_address_start_byte,
+        source_address_bytes: input.source_address_bytes,
+        source_address_big_endian: input.source_address_big_endian,
+    })
+}
+
 /// Create a multi-source reader session that combines frames from multiple devices.
 ///
 /// This is used for multi-bus capture where frames from diverse sources are merged
@@ -1513,73 +1664,10 @@ pub async fn create_multi_source_session(
         .await
         .map_err(|e| format!("Failed to load settings: {}", e))?;
 
-    // Convert MultiSourceInput to SourceConfig, resolving profile names and kinds
-    // Auto-assign unique output bus numbers based on source index to distinguish frames from different devices
+    // Convert MultiSourceInput to SourceConfig
     let mut source_configs: Vec<SourceConfig> = Vec::with_capacity(sources.len());
     for (source_idx, input) in sources.into_iter().enumerate() {
-        // Look up the profile to get its kind
-        let profile = settings
-            .io_profiles
-            .iter()
-            .find(|p| p.id == input.profile_id)
-            .ok_or_else(|| format!("Profile '{}' not found", input.profile_id))?;
-
-        let display_name = input.display_name.unwrap_or_else(|| profile.name.clone());
-        let profile_kind = profile.kind.clone();
-
-        // Determine interface traits based on profile kind
-        let (default_interface_id, default_protocols, default_can_transmit) = match profile_kind.as_str() {
-            "gvret_tcp" | "gvret-tcp" | "gvret_usb" | "gvret-usb" => {
-                ("can0".to_string(), vec![Protocol::Can, Protocol::CanFd], true)
-            }
-            "slcan" => ("can0".to_string(), vec![Protocol::Can], true),
-            "gs_usb" => ("can0".to_string(), vec![Protocol::Can, Protocol::CanFd], true),
-            "socketcan" => ("can0".to_string(), vec![Protocol::Can, Protocol::CanFd], true),
-            _ => ("can0".to_string(), vec![Protocol::Can], true),
-        };
-
-        // Use provided bus mappings, or auto-assign if none provided
-        // The frontend now handles sequential assignment, so we trust mappings as-is
-        let bus_mappings = if input.bus_mappings.is_empty() {
-            // No mappings provided - create default for device bus 0 with source index as output
-            let output_bus = source_idx as u8;
-            eprintln!(
-                "[create_multi_source_session] Source {} '{}' has no bus mappings, auto-assigning output bus {}",
-                source_idx, display_name, output_bus
-            );
-            vec![BusMapping {
-                device_bus: 0,
-                enabled: true,
-                output_bus,
-                interface_id: default_interface_id,
-                traits: Some(InterfaceTraits {
-                    temporal_mode: TemporalMode::Realtime,
-                    protocols: default_protocols,
-                    can_transmit: default_can_transmit,
-                }),
-            }]
-        } else {
-            // Mappings provided by frontend - use as-is (frontend handles sequential assignment)
-            input.bus_mappings
-        };
-
-        source_configs.push(SourceConfig {
-            profile_id: input.profile_id,
-            profile_kind,
-            display_name,
-            bus_mappings,
-            framing_encoding: input.framing_encoding,
-            delimiter: input.delimiter,
-            max_frame_length: input.max_frame_length,
-            min_frame_length: input.min_frame_length,
-            emit_raw_bytes: input.emit_raw_bytes,
-            frame_id_start_byte: input.frame_id_start_byte,
-            frame_id_bytes: input.frame_id_bytes,
-            frame_id_big_endian: input.frame_id_big_endian,
-            source_address_start_byte: input.source_address_start_byte,
-            source_address_bytes: input.source_address_bytes,
-            source_address_big_endian: input.source_address_big_endian,
-        });
+        source_configs.push(resolve_source_config(input, source_idx, &settings)?);
     }
 
     // Validate all profiles are real-time devices supported by MultiSourceReader

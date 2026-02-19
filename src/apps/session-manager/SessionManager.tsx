@@ -12,8 +12,12 @@ import {
   pauseReaderSession,
   resumeReaderSession,
   destroyReaderSession,
+  evictSessionListener,
+  addSourceToSession,
+  removeSourceFromSession,
   type ActiveSessionInfo,
 } from "../../api/io";
+import Dialog from "../../components/Dialog";
 import { useSettings } from "../../hooks/useSettings";
 import { useSessionManagerStore } from "./stores/sessionManagerStore";
 import { useSessionLogStore } from "./stores/sessionLogStore";
@@ -122,6 +126,58 @@ export default function SessionManager() {
     }
   }, [fetchSessions]);
 
+  const handleEvictListener = useCallback(async (sessionId: string, listenerId: string) => {
+    try {
+      await evictSessionListener(sessionId, listenerId);
+      await fetchSessions();
+    } catch (error) {
+      console.error("[SessionManager] Failed to evict listener:", error);
+    }
+  }, [fetchSessions]);
+
+  // Add Source dialog state
+  const [addSourceSessionId, setAddSourceSessionId] = useState<string | null>(null);
+
+  const handleAddSource = useCallback((sessionId: string) => {
+    setAddSourceSessionId(sessionId);
+  }, []);
+
+  const handleAddSourceConfirm = useCallback(async (profileId: string) => {
+    if (!addSourceSessionId) return;
+    try {
+      await addSourceToSession(addSourceSessionId, {
+        profileId,
+        busMappings: [],
+      });
+      setAddSourceSessionId(null);
+      await fetchSessions();
+    } catch (error) {
+      console.error("[SessionManager] Failed to add source:", error);
+    }
+  }, [addSourceSessionId, fetchSessions]);
+
+  const handleRemoveSource = useCallback(async (sessionId: string, profileId: string) => {
+    try {
+      await removeSourceFromSession(sessionId, profileId);
+      await fetchSessions();
+    } catch (error) {
+      console.error("[SessionManager] Failed to remove source:", error);
+    }
+  }, [fetchSessions]);
+
+  // Available profiles for add source dialog (realtime profiles not already in the session)
+  const addSourceSession = addSourceSessionId
+    ? sessions.find((s) => s.sessionId === addSourceSessionId)
+    : null;
+  const realtimeKinds = new Set(["gvret_tcp", "gvret_usb", "slcan", "gs_usb", "socketcan", "serial"]);
+  const availableProfiles = addSourceSession
+    ? profiles.filter(
+        (p) =>
+          realtimeKinds.has(p.kind) &&
+          !addSourceSession.sourceProfileIds.includes(p.id)
+      )
+    : [];
+
   return (
     <AppLayout
       topBar={
@@ -156,11 +212,55 @@ export default function SessionManager() {
               onPauseSession={handlePauseSession}
               onResumeSession={handleResumeSession}
               onDestroySession={handleDestroySession}
+              onEvictListener={handleEvictListener}
+              onAddSource={handleAddSource}
+              onRemoveSource={handleRemoveSource}
             />
           </div>
         )}
         {activeTab === "log" && <SessionLogView />}
       </AppTabView>
+
+      {/* Add Source dialog */}
+      <Dialog
+        isOpen={addSourceSessionId !== null}
+        onBackdropClick={() => setAddSourceSessionId(null)}
+        maxWidth="max-w-sm"
+      >
+        <div className="p-4">
+          <h3 className="text-sm font-medium text-[color:var(--text-primary)] mb-3">
+            Add Source to Session
+          </h3>
+          {availableProfiles.length === 0 ? (
+            <p className="text-sm text-[color:var(--text-muted)]">
+              No available realtime profiles to add.
+            </p>
+          ) : (
+            <div className="space-y-1">
+              {availableProfiles.map((profile) => (
+                <button
+                  key={profile.id}
+                  onClick={() => handleAddSourceConfirm(profile.id)}
+                  className="w-full text-left px-3 py-2 rounded text-sm text-[color:var(--text-primary)] hover:bg-[var(--hover-bg)] transition-colors"
+                >
+                  <span className="font-medium">{profile.name}</span>
+                  <span className="text-[color:var(--text-muted)] ml-2 text-xs">
+                    {profile.kind}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="mt-3 flex justify-end">
+            <button
+              onClick={() => setAddSourceSessionId(null)}
+              className="px-3 py-1 rounded text-xs text-[color:var(--text-muted)] hover:bg-[var(--hover-bg)]"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </Dialog>
     </AppLayout>
   );
 }

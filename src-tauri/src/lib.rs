@@ -776,6 +776,9 @@ pub fn run() {
             // Listener registration API
             sessions::register_session_listener,
             sessions::unregister_session_listener,
+            sessions::evict_session_listener_cmd,
+            sessions::add_source_to_session_cmd,
+            sessions::remove_source_from_session_cmd,
             sessions::get_session_listener_list,
             sessions::reinitialize_session_if_safe_cmd,
             sessions::set_session_listener_active,

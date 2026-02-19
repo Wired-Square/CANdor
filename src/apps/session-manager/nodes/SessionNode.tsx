@@ -9,6 +9,8 @@ import { iconSm, iconXs } from "../../../styles/spacing";
 export interface SessionNodeData {
   session: ActiveSessionInfo;
   label: string;
+  /** Input interface handles (one per source mapping, e.g., ["can0", "can1"]) */
+  inputInterfaces?: string[];
 }
 
 interface SessionNodeProps {
@@ -17,7 +19,7 @@ interface SessionNodeProps {
 }
 
 function SessionNode({ data, selected }: SessionNodeProps) {
-  const { session, label } = data;
+  const { session, label, inputInterfaces } = data;
   const isRunning = session.state === "running";
   const isStopped = session.state === "stopped";
   const isPaused = session.state === "paused";
@@ -70,12 +72,29 @@ function SessionNode({ data, selected }: SessionNodeProps) {
     <div
       className={`px-4 py-3 rounded-lg border-2 ${borderColour} ${bgColour} min-w-[180px] shadow-lg`}
     >
-      {/* Input handle - connects from sources */}
-      <Handle
-        type="target"
-        position={Position.Left}
-        className="!w-3 !h-3 !bg-cyan-500 !border-2 !border-cyan-300"
-      />
+      {/* Input handles — one per source interface, or a single default */}
+      {inputInterfaces && inputInterfaces.length > 1 ? (
+        inputInterfaces.map((ifaceId, i) => {
+          const pct = ((i + 1) / (inputInterfaces.length + 1)) * 100;
+          return (
+            <Handle
+              key={ifaceId}
+              id={`in-${ifaceId}`}
+              type="target"
+              position={Position.Left}
+              style={{ top: `${pct}%` }}
+              className="!w-3 !h-3 !bg-cyan-500 !border-2 !border-cyan-300"
+            />
+          );
+        })
+      ) : (
+        <Handle
+          type="target"
+          position={Position.Left}
+          id={inputInterfaces?.[0] ? `in-${inputInterfaces[0]}` : undefined}
+          className="!w-3 !h-3 !bg-cyan-500 !border-2 !border-cyan-300"
+        />
+      )}
 
       {/* Header */}
       <div className="flex items-center gap-2 mb-2">
