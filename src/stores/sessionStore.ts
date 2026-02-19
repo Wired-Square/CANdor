@@ -250,8 +250,6 @@ export interface Session {
   capabilities: IOCapabilities | null;
   /** Error message if lifecycleState is "error" */
   errorMessage: string | null;
-  /** Whether this listener was the session owner (created the session) */
-  isOwner: boolean;
   /** Number of listeners connected to this session (from Rust backend) */
   listenerCount: number;
   /** Buffer info after stream ends */
@@ -388,6 +386,8 @@ export interface SessionStore {
   removeSession: (sessionId: string) => Promise<void>;
   /** Clean up a session that was destroyed externally (local-only, no backend calls) */
   cleanupDestroyedSession: (sessionId: string) => void;
+  /** Clean up after a listener is evicted from a session (local-only, no backend calls) */
+  cleanupEvictedListener: (sessionId: string, listenerId: string) => void;
   /** Reinitialize a session with new options (atomic check via Rust) */
   reinitializeSession: (
     sessionId: string,
@@ -798,7 +798,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     // Step 4: Create or join the backend session
     let capabilities: IOCapabilities;
     let ioState: IOStateType = "stopped";
-    let isOwner = true;
     let listenerCount = 1;
     let bufferId: string | null = null;
     let bufferType: "frames" | "bytes" | null = null;
@@ -811,7 +810,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       const regResult = await registerSessionListener(sessionId, listenerId);
       capabilities = regResult.capabilities;
       ioState = getStateType(regResult.state);
-      isOwner = regResult.is_owner;
       listenerCount = regResult.listener_count;
       bufferId = regResult.buffer_id;
       bufferType = regResult.buffer_type;
@@ -870,7 +868,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         // Register as owner listener
         try {
           const regResult = await registerSessionListener(sessionId, listenerId);
-          isOwner = regResult.is_owner;
           listenerCount = regResult.listener_count;
           // Handle startup error (error that occurred before listener registered)
           if (regResult.startup_error) {
@@ -887,7 +884,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           const regResult = await registerSessionListener(sessionId, listenerId);
           capabilities = regResult.capabilities;
           ioState = getStateType(regResult.state);
-          isOwner = regResult.is_owner;
           listenerCount = regResult.listener_count;
           bufferId = regResult.buffer_id;
           bufferType = regResult.buffer_type;
@@ -906,7 +902,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             ioState: "error",
             capabilities: null,
             errorMessage: msg,
-            isOwner: false,
             listenerCount: 0,
             buffer: { available: false, id: null, type: null, count: 0, owningSessionId: null, startTimeUs: null, endTimeUs: null },
             createdAt: Date.now(),
@@ -1037,7 +1032,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         ioState,
         capabilities,
         errorMessage: null,
-        isOwner,
         listenerCount: finalListenerCount,
         buffer: {
           available: false,
@@ -1178,15 +1172,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       cleanupEventListeners(eventListeners);
     }
 
-    // Destroy session in backend if owner (session should already be stopped by unregister)
-    if (session.isOwner) {
-      try {
-        await destroyReaderSession(sessionId);
-      } catch {
-        // Ignore
-      }
-    }
-    // Note: Don't call leaveReaderSession - unregisterSessionListener already handles it
+    // Note: Don't call leaveReaderSession - unregisterSessionListener already handles it.
+    // The backend auto-destroys sessions when the last listener unregisters.
 
     // Clear any pending frames for this session
     pendingFramesMap.delete(sessionId);
@@ -1223,6 +1210,44 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         activeSessionId: s.activeSessionId === sessionId ? null : s.activeSessionId,
       };
     });
+  },
+
+  cleanupEvictedListener: (sessionId, listenerId) => {
+    console.log(`[sessionStore:cleanupEvictedListener] Cleaning up evicted listener '${listenerId}' from session '${sessionId}'`);
+    const eventListeners = get()._eventListeners[sessionId];
+
+    if (eventListeners) {
+      // Remove this listener's callback and registration
+      eventListeners.callbacks.delete(listenerId);
+      eventListeners.registeredListeners.delete(listenerId);
+
+      // If no more local callbacks, full cleanup (like cleanupDestroyedSession)
+      if (eventListeners.callbacks.size === 0) {
+        cleanupEventListeners(eventListeners);
+        pendingFramesMap.delete(sessionId);
+
+        set((s) => {
+          const { [sessionId]: _, ...remainingSessions } = s.sessions;
+          const { [sessionId]: __, ...remainingListeners } = s._eventListeners;
+          return {
+            sessions: remainingSessions,
+            _eventListeners: remainingListeners,
+            activeSessionId: s.activeSessionId === sessionId ? null : s.activeSessionId,
+          };
+        });
+      } else {
+        // Other local listeners remain — just update the listener count
+        set((s) => ({
+          sessions: {
+            ...s.sessions,
+            [sessionId]: {
+              ...s.sessions[sessionId],
+              listenerCount: Math.max(0, (s.sessions[sessionId]?.listenerCount ?? 1) - 1),
+            },
+          },
+        }));
+      }
+    }
   },
 
   reinitializeSession: async (sessionId, listenerId, profileId, profileName, options) => {

@@ -1,6 +1,6 @@
 // src/apps/session-manager/views/SessionDetailPanel.tsx
 
-import { Play, Pause, Square, Trash2, X } from "lucide-react";
+import { Play, Pause, Square, Trash2, UserMinus, Plus, X } from "lucide-react";
 import { useSessionManagerStore } from "../stores/sessionManagerStore";
 import type { ActiveSessionInfo } from "../../../api/io";
 import type { IOProfile } from "../../../hooks/useSettings";
@@ -15,6 +15,9 @@ interface SessionDetailPanelProps {
   onPauseSession: (sessionId: string) => void;
   onResumeSession: (sessionId: string) => void;
   onDestroySession: (sessionId: string) => void;
+  onEvictListener: (sessionId: string, listenerId: string) => void;
+  onAddSource: (sessionId: string) => void;
+  onRemoveSource: (sessionId: string, profileId: string) => void;
 }
 
 export default function SessionDetailPanel({
@@ -25,6 +28,9 @@ export default function SessionDetailPanel({
   onPauseSession,
   onResumeSession,
   onDestroySession,
+  onEvictListener,
+  onAddSource,
+  onRemoveSource,
 }: SessionDetailPanelProps) {
   const selectedNode = useSessionManagerStore((s) => s.selectedNode);
   const setSelectedNode = useSessionManagerStore((s) => s.setSelectedNode);
@@ -46,7 +52,7 @@ export default function SessionDetailPanel({
       const session = sessions.find((s) => s.sessionId === sessionId);
       if (!session) return <p className="text-sm text-[color:var(--text-muted)]">Session not found</p>;
 
-      return <SessionDetails session={session} onStart={onStartSession} onStop={onStopSession} onPause={onPauseSession} onResume={onResumeSession} onDestroy={onDestroySession} />;
+      return <SessionDetails session={session} onStart={onStartSession} onStop={onStopSession} onPause={onPauseSession} onResume={onResumeSession} onDestroy={onDestroySession} onAddSource={onAddSource} />;
     }
 
     if (selectedNode.type === "source") {
@@ -54,11 +60,11 @@ export default function SessionDetailPanel({
       const profile = profiles.find((p) => p.id === profileId);
       if (!profile) return <p className="text-sm text-[color:var(--text-muted)]">Profile not found</p>;
 
-      return <SourceDetails profile={profile} />;
+      return <SourceDetails profile={profile} sessions={sessions} onRemoveSource={onRemoveSource} />;
     }
 
     if (selectedNode.type === "listener") {
-      return <ListenerDetails nodeId={selectedNode.id} sessions={sessions} />;
+      return <ListenerDetails nodeId={selectedNode.id} sessions={sessions} onEvict={onEvictListener} />;
     }
 
     return null;
@@ -95,6 +101,7 @@ function SessionDetails({
   onPause,
   onResume,
   onDestroy,
+  onAddSource,
 }: {
   session: ActiveSessionInfo;
   onStart: (id: string) => void;
@@ -102,6 +109,7 @@ function SessionDetails({
   onPause: (id: string) => void;
   onResume: (id: string) => void;
   onDestroy: (id: string) => void;
+  onAddSource: (id: string) => void;
 }) {
   const isRunning = session.state === "running";
   const isStopped = session.state === "stopped";
@@ -248,6 +256,15 @@ function SessionDetails({
               Resume
             </button>
           )}
+          {session.deviceType === "multi_source" && (
+            <button
+              onClick={() => onAddSource(session.sessionId)}
+              className={`flex items-center gap-1 px-2 py-1 rounded text-xs ${iconButtonHover} text-purple-400`}
+            >
+              <Plus className={iconSm} />
+              Add Source
+            </button>
+          )}
           <button
             onClick={() => onDestroy(session.sessionId)}
             className={`flex items-center gap-1 px-2 py-1 rounded text-xs ${iconButtonHoverDanger}`}
@@ -262,7 +279,14 @@ function SessionDetails({
 }
 
 // Source (profile) details sub-component
-function SourceDetails({ profile }: { profile: IOProfile }) {
+function SourceDetails({ profile, sessions, onRemoveSource }: {
+  profile: IOProfile;
+  sessions: ActiveSessionInfo[];
+  onRemoveSource: (sessionId: string, profileId: string) => void;
+}) {
+  // Find sessions that use this profile as a source
+  const usingSessions = sessions.filter((s) => s.sourceProfileIds.includes(profile.id));
+
   return (
     <div className="space-y-4">
       <div>
@@ -291,12 +315,33 @@ function SourceDetails({ profile }: { profile: IOProfile }) {
           {profile.kind}
         </p>
       </div>
+
+      {/* Actions — remove from session (only if session has more than 1 source) */}
+      {usingSessions.some((s) => s.sourceProfileIds.length > 1) && (
+        <div className="pt-2 border-t border-[color:var(--border-default)]">
+          <label className="text-xs text-[color:var(--text-muted)] uppercase tracking-wide mb-2 block">
+            Actions
+          </label>
+          {usingSessions.map((s) =>
+            s.sourceProfileIds.length > 1 ? (
+              <button
+                key={s.sessionId}
+                onClick={() => onRemoveSource(s.sessionId, profile.id)}
+                className={`flex items-center gap-1 px-2 py-1 rounded text-xs ${iconButtonHoverDanger}`}
+              >
+                <Trash2 className={iconSm} />
+                Remove from {s.sessionId}
+              </button>
+            ) : null
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 // Listener details sub-component
-function ListenerDetails({ nodeId, sessions }: { nodeId: string; sessions: ActiveSessionInfo[] }) {
+function ListenerDetails({ nodeId, sessions, onEvict }: { nodeId: string; sessions: ActiveSessionInfo[]; onEvict: (sessionId: string, listenerId: string) => void }) {
   // Parse "listener::${sessionId}::${listenerId}"
   const parts = nodeId.split("::");
   const sessionId = parts[1];
@@ -337,16 +382,6 @@ function ListenerDetails({ nodeId, sessions }: { nodeId: string; sessions: Activ
         </p>
       </div>
 
-      {/* Role */}
-      <div>
-        <label className="text-xs text-[color:var(--text-muted)] uppercase tracking-wide">
-          Role
-        </label>
-        <p className={`text-sm font-medium ${listener.is_owner ? "text-green-400" : "text-[color:var(--text-primary)]"}`}>
-          {listener.is_owner ? "Owner" : "Listener"}
-        </p>
-      </div>
-
       {/* Active status */}
       <div>
         <label className="text-xs text-[color:var(--text-muted)] uppercase tracking-wide">
@@ -368,6 +403,20 @@ function ListenerDetails({ nodeId, sessions }: { nodeId: string; sessions: Activ
         <p className="text-sm text-[color:var(--text-primary)]">
           {formatUptime(listener.registered_seconds_ago)}
         </p>
+      </div>
+
+      {/* Actions */}
+      <div className="pt-2 border-t border-[color:var(--border-default)]">
+        <label className="text-xs text-[color:var(--text-muted)] uppercase tracking-wide mb-2 block">
+          Actions
+        </label>
+        <button
+          onClick={() => onEvict(sessionId, listenerId)}
+          className={`flex items-center gap-1 px-2 py-1 rounded text-xs ${iconButtonHoverDanger}`}
+        >
+          <UserMinus className={iconSm} />
+          Remove
+        </button>
       </div>
     </div>
   );

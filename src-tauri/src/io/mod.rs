@@ -629,8 +629,6 @@ pub struct SessionListener {
     pub registered_at: std::time::Instant,
     /// Last heartbeat from this listener
     pub last_heartbeat: std::time::Instant,
-    /// Whether this listener was the session owner (created the session)
-    pub is_owner: bool,
     /// Whether this listener is active (receiving frames). Set to false when detaching.
     pub is_active: bool,
 }
@@ -1119,8 +1117,6 @@ pub struct CreateSessionResult {
     pub capabilities: IOCapabilities,
     /// Whether this was a new session (true) or joined existing (false)
     pub is_new: bool,
-    /// Whether the listener is the session owner
-    pub is_owner: bool,
     /// Total listener count
     pub listener_count: usize,
 }
@@ -1144,7 +1140,6 @@ pub async fn create_session(
     // Check if session already exists - join it instead of overwriting
     if let Some(existing) = sessions.get_mut(&session_id) {
         let capabilities = existing.device.capabilities();
-        let is_owner: bool;
         let listener_count: usize;
 
         if let Some(lid) = listener_id {
@@ -1152,25 +1147,22 @@ pub async fn create_session(
             if let Some(listener) = existing.listeners.get_mut(&lid) {
                 // Already registered - update heartbeat
                 listener.last_heartbeat = now;
-                is_owner = listener.is_owner;
             } else {
                 // New listener joining existing session
-                is_owner = false; // Joining listener is never owner
                 existing.listeners.insert(
                     lid.clone(),
                     SessionListener {
                         listener_id: lid.clone(),
                         registered_at: now,
                         last_heartbeat: now,
-                        is_owner,
                         is_active: true, // New listeners are active by default
                     },
                 );
                 existing.joiner_count = existing.listeners.len();
 
                 eprintln!(
-                    "[reader] Session '{}' - listener '{}' joined existing session (owner: {}), total: {}",
-                    session_id, lid, is_owner, existing.listeners.len()
+                    "[reader] Session '{}' - listener '{}' joined existing session, total: {}",
+                    session_id, lid, existing.listeners.len()
                 );
 
                 // Emit joiner count change
@@ -1178,14 +1170,12 @@ pub async fn create_session(
             }
             listener_count = existing.listeners.len();
         } else {
-            is_owner = false;
             listener_count = existing.listeners.len();
         }
 
         return CreateSessionResult {
             capabilities,
             is_new: false,
-            is_owner,
             listener_count,
         };
     }
@@ -1195,7 +1185,6 @@ pub async fn create_session(
 
     // Create initial listeners map
     let mut listeners = HashMap::new();
-    let is_owner = listener_id.is_some();
     if let Some(lid) = listener_id.clone() {
         listeners.insert(
             lid.clone(),
@@ -1203,12 +1192,11 @@ pub async fn create_session(
                 listener_id: lid.clone(),
                 registered_at: now,
                 last_heartbeat: now,
-                is_owner: true, // First listener is the owner
                 is_active: true, // New listeners are active by default
             },
         );
         eprintln!(
-            "[reader] Session '{}' created with listener '{}' (owner: true), total: 1",
+            "[reader] Session '{}' created with listener '{}', total: 1",
             session_id, lid
         );
     } else {
@@ -1246,7 +1234,6 @@ pub async fn create_session(
     CreateSessionResult {
         capabilities,
         is_new: true,
-        is_owner,
         listener_count,
     }
 }
@@ -1267,6 +1254,17 @@ pub async fn get_session_capabilities(session_id: &str) -> Option<IOCapabilities
 pub async fn get_session_joiner_count(session_id: &str) -> usize {
     let sessions = IO_SESSIONS.lock().await;
     sessions.get(session_id).map(|s| s.joiner_count).unwrap_or(0)
+}
+
+/// Get the number of source configs in a multi-source session.
+/// Returns 0 if the session doesn't exist or isn't a multi-source session.
+pub async fn get_session_source_count(session_id: &str) -> usize {
+    let sessions = IO_SESSIONS.lock().await;
+    sessions
+        .get(session_id)
+        .and_then(|s| s.device.multi_source_configs())
+        .map(|c| c.len())
+        .unwrap_or(0)
 }
 
 /// Result of joining an existing session
@@ -2081,7 +2079,7 @@ pub async fn list_sessions() -> Vec<ActiveSessionInfo> {
                 .values()
                 .map(|l| ListenerInfo {
                     listener_id: l.listener_id.clone(),
-                    is_owner: l.is_owner,
+
                     registered_seconds_ago: now.duration_since(l.registered_at).as_secs(),
                     is_active: l.is_active,
                 })
@@ -2149,7 +2147,6 @@ pub async fn transmit_serial(session_id: &str, bytes: &[u8]) -> Result<TransmitR
 #[derive(Clone, Debug, Serialize)]
 pub struct ListenerInfo {
     pub listener_id: String,
-    pub is_owner: bool,
     /// Seconds since registration
     pub registered_seconds_ago: u64,
     /// Whether this listener is actively receiving frames
@@ -2167,8 +2164,6 @@ pub struct RegisterListenerResult {
     pub buffer_id: Option<String>,
     /// Buffer type ("frames" or "bytes")
     pub buffer_type: Option<String>,
-    /// Whether this listener is the session owner
-    pub is_owner: bool,
     /// Total number of listeners
     pub listener_count: usize,
     /// Error that occurred before this listener registered (one-shot, cleared after return)
@@ -2178,7 +2173,7 @@ pub struct RegisterListenerResult {
 /// Register a listener for a session.
 /// This is the primary way for frontend components to join a session.
 /// If the listener is already registered, this updates their heartbeat.
-/// Returns session info including whether this listener is the owner.
+/// Returns session info for the registered listener.
 pub async fn register_listener(session_id: &str, listener_id: &str) -> Result<RegisterListenerResult, String> {
     let mut sessions = IO_SESSIONS.lock().await;
     let session = sessions
@@ -2186,22 +2181,18 @@ pub async fn register_listener(session_id: &str, listener_id: &str) -> Result<Re
         .ok_or_else(|| format!("Session '{}' not found", session_id))?;
 
     let now = std::time::Instant::now();
-    let is_owner: bool;
 
     if let Some(listener) = session.listeners.get_mut(listener_id) {
         // Already registered - update heartbeat
         listener.last_heartbeat = now;
-        is_owner = listener.is_owner;
     } else {
         // New listener - register them
-        is_owner = session.listeners.is_empty(); // First listener is owner
         session.listeners.insert(
             listener_id.to_string(),
             SessionListener {
                 listener_id: listener_id.to_string(),
                 registered_at: now,
                 last_heartbeat: now,
-                is_owner,
                 is_active: true, // New listeners are active by default
             },
         );
@@ -2210,10 +2201,9 @@ pub async fn register_listener(session_id: &str, listener_id: &str) -> Result<Re
         session.joiner_count = session.listeners.len();
 
         eprintln!(
-            "[reader] Session '{}' registered listener '{}' (owner: {}), total: {}",
+            "[reader] Session '{}' registered listener '{}', total: {}",
             session_id,
             listener_id,
-            is_owner,
             session.listeners.len()
         );
 
@@ -2244,7 +2234,6 @@ pub async fn register_listener(session_id: &str, listener_id: &str) -> Result<Re
         state: session.device.state(),
         buffer_id,
         buffer_type,
-        is_owner,
         listener_count: session.listeners.len(),
         startup_error,
     })
@@ -2310,6 +2299,217 @@ pub async fn unregister_listener(session_id: &str, listener_id: &str) -> Result<
     }
 }
 
+/// Evict a listener from a session, giving it a copy of the current buffer.
+/// This is used by the Session Manager to remove a listener without destroying the session.
+/// The evicted listener receives a buffer copy so it can continue viewing data standalone.
+/// Returns the list of copied buffer IDs.
+pub async fn evict_session_listener(app: &AppHandle, session_id: &str, listener_id: &str) -> Result<Vec<String>, String> {
+    // Copy the buffer before unregistering (so the evicted listener gets a snapshot)
+    let mut copied_buffer_ids = Vec::new();
+    if let Some(buffer_id) = crate::buffer_store::get_buffer_for_session(session_id) {
+        let copy_name = format!("{} (evicted)", listener_id);
+        match crate::buffer_store::copy_buffer(&buffer_id, copy_name) {
+            Ok(copied_id) => {
+                eprintln!(
+                    "[reader] Copied buffer '{}' -> '{}' for evicted listener '{}'",
+                    buffer_id, copied_id, listener_id
+                );
+                copied_buffer_ids.push(copied_id);
+            }
+            Err(e) => {
+                eprintln!(
+                    "[reader] Failed to copy buffer for evicted listener '{}': {}",
+                    listener_id, e
+                );
+            }
+        }
+    }
+
+    // Unregister the listener (this may destroy the session if it was the last one)
+    let remaining = unregister_listener(session_id, listener_id).await?;
+
+    // Emit listener-evicted event so the frontend can clean up the evicted app
+    #[derive(Clone, Debug, Serialize)]
+    struct ListenerEvictedPayload {
+        session_id: String,
+        listener_id: String,
+        buffer_ids: Vec<String>,
+    }
+
+    let payload = ListenerEvictedPayload {
+        session_id: session_id.to_string(),
+        listener_id: listener_id.to_string(),
+        buffer_ids: copied_buffer_ids.clone(),
+    };
+    let _ = app.emit("listener-evicted", payload);
+
+    eprintln!(
+        "[reader] Evicted listener '{}' from session '{}' (remaining: {}, buffer copies: {:?})",
+        listener_id, session_id, remaining, copied_buffer_ids
+    );
+
+    Ok(copied_buffer_ids)
+}
+
+/// Add a new source to an existing multi-source session.
+/// Stops the current device, creates a new MultiSourceReader with all sources (old + new),
+/// swaps it into the session, and restarts. Keeps the same session ID and listeners.
+pub async fn add_source_to_session(
+    app: &AppHandle,
+    session_id: &str,
+    new_source: SourceConfig,
+) -> Result<IOCapabilities, String> {
+    let mut sessions = IO_SESSIONS.lock().await;
+    let session = sessions
+        .get_mut(session_id)
+        .ok_or_else(|| format!("Session '{}' not found", session_id))?;
+
+    // Get current source configs — only multi-source sessions support this
+    let mut existing_configs = session.device.multi_source_configs()
+        .ok_or_else(|| "Session does not support multi-source — cannot add a source".to_string())?;
+
+    // Check for duplicate profile
+    if existing_configs.iter().any(|c| c.profile_id == new_source.profile_id) {
+        return Err(format!(
+            "Profile '{}' is already a source in session '{}'",
+            new_source.profile_id, session_id
+        ));
+    }
+
+    let was_running = matches!(session.device.state(), IOState::Running);
+
+    // Stop the current device
+    if was_running {
+        let previous = session.device.state();
+        session.device.stop().await?;
+        let current = session.device.state();
+        if previous != current {
+            emit_state_change(&session.app, session_id, &previous, &current);
+        }
+    }
+
+    // Orphan the current buffer so listeners keep their data
+    let orphaned = buffer_store::orphan_buffers_for_session(session_id);
+    if !orphaned.is_empty() {
+        emit_buffer_orphaned(&session.app, session_id, orphaned);
+    }
+
+    // Append the new source and update display names
+    let new_display_name = new_source.display_name.clone();
+    existing_configs.push(new_source);
+
+    let source_display_names: Vec<String> = existing_configs.iter()
+        .map(|c| c.display_name.clone())
+        .collect();
+
+    // Create a new MultiSourceReader with all sources
+    let reader = MultiSourceReader::new(app.clone(), session_id.to_string(), existing_configs)?;
+    let capabilities = reader.capabilities();
+
+    // Swap the device
+    session.device = Box::new(reader);
+    session.source_names = source_display_names;
+
+    // Start the new device (if the session was running before)
+    if was_running {
+        let previous = session.device.state();
+        session.device.start().await?;
+        let current = session.device.state();
+        if previous != current {
+            emit_state_change(&session.app, session_id, &previous, &current);
+        }
+    }
+
+    eprintln!(
+        "[reader] Added source '{}' to session '{}' (sources: {:?})",
+        new_display_name, session_id, session.source_names
+    );
+
+    Ok(capabilities)
+}
+
+/// Remove a source from an existing multi-source session.
+/// Stops the current device, creates a new MultiSourceReader with the remaining sources
+/// (preserving their bus mappings), swaps it into the session, and restarts.
+pub async fn remove_source_from_session(
+    app: &AppHandle,
+    session_id: &str,
+    profile_id: &str,
+) -> Result<IOCapabilities, String> {
+    let mut sessions = IO_SESSIONS.lock().await;
+    let session = sessions
+        .get_mut(session_id)
+        .ok_or_else(|| format!("Session '{}' not found", session_id))?;
+
+    // Get current source configs — only multi-source sessions support this
+    let existing_configs = session.device.multi_source_configs()
+        .ok_or_else(|| "Session does not support multi-source — cannot remove a source".to_string())?;
+
+    // Check the profile is actually a source
+    if !existing_configs.iter().any(|c| c.profile_id == profile_id) {
+        return Err(format!(
+            "Profile '{}' is not a source in session '{}'",
+            profile_id, session_id
+        ));
+    }
+
+    // Must keep at least one source
+    let remaining_configs: Vec<_> = existing_configs
+        .into_iter()
+        .filter(|c| c.profile_id != profile_id)
+        .collect();
+    if remaining_configs.is_empty() {
+        return Err("Cannot remove the last source — destroy the session instead".to_string());
+    }
+
+    let was_running = matches!(session.device.state(), IOState::Running);
+
+    // Stop the current device
+    if was_running {
+        let previous = session.device.state();
+        session.device.stop().await?;
+        let current = session.device.state();
+        if previous != current {
+            emit_state_change(&session.app, session_id, &previous, &current);
+        }
+    }
+
+    // Orphan the current buffer so listeners keep their data
+    let orphaned = buffer_store::orphan_buffers_for_session(session_id);
+    if !orphaned.is_empty() {
+        emit_buffer_orphaned(&session.app, session_id, orphaned);
+    }
+
+    let source_display_names: Vec<String> = remaining_configs.iter()
+        .map(|c| c.display_name.clone())
+        .collect();
+
+    // Create a new MultiSourceReader with remaining sources (bus mappings preserved)
+    let reader = MultiSourceReader::new(app.clone(), session_id.to_string(), remaining_configs)?;
+    let capabilities = reader.capabilities();
+
+    // Swap the device
+    session.device = Box::new(reader);
+    session.source_names = source_display_names;
+
+    // Start the new device (if the session was running before)
+    if was_running {
+        let previous = session.device.state();
+        session.device.start().await?;
+        let current = session.device.state();
+        if previous != current {
+            emit_state_change(&session.app, session_id, &previous, &current);
+        }
+    }
+
+    eprintln!(
+        "[reader] Removed source '{}' from session '{}' (remaining sources: {:?})",
+        profile_id, session_id, session.source_names
+    );
+
+    Ok(capabilities)
+}
+
 /// Get all listeners for a session.
 /// Useful for debugging and for the frontend to understand session state.
 pub async fn get_session_listeners(session_id: &str) -> Result<Vec<ListenerInfo>, String> {
@@ -2324,7 +2524,6 @@ pub async fn get_session_listeners(session_id: &str) -> Result<Vec<ListenerInfo>
         .values()
         .map(|l| ListenerInfo {
             listener_id: l.listener_id.clone(),
-            is_owner: l.is_owner,
             registered_seconds_ago: now.duration_since(l.registered_at).as_secs(),
             is_active: l.is_active,
         })

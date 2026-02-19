@@ -9,7 +9,6 @@ export interface ListenerNodeData {
   listenerId: string;
   appName: string;
   sessionId: string;
-  isOwner: boolean;
   isActive: boolean;
   registeredSecondsAgo: number;
 }
@@ -31,7 +30,7 @@ interface ListenerNodeProps {
 }
 
 function ListenerNode({ data, selected }: ListenerNodeProps) {
-  const { listenerId, appName, isOwner, isActive } = data;
+  const { listenerId, appName, isActive } = data;
 
   const config = appConfig[appName.toLowerCase()] || {
     icon: Search,
@@ -41,13 +40,9 @@ function ListenerNode({ data, selected }: ListenerNodeProps) {
 
   const borderColour = selected
     ? "border-cyan-400"
-    : isOwner
-    ? "border-green-500"
     : "border-[color:var(--border-default)]";
 
-  const bgColour = isOwner
-    ? "bg-green-500/10"
-    : "bg-[var(--bg-surface)]";
+  const bgColour = "bg-[var(--bg-surface)]";
 
   // Format display name from listener ID
   const displayName = listenerId.includes("-")
@@ -74,14 +69,6 @@ function ListenerNode({ data, selected }: ListenerNodeProps) {
         <span className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${isActive ? "bg-green-400" : "bg-gray-500"}`} />
       </div>
 
-      {/* Role */}
-      <div className="text-xs text-[color:var(--text-muted)]">
-        {isOwner ? (
-          <span className="text-green-400">Owner</span>
-        ) : (
-          <span>Listener</span>
-        )}
-      </div>
     </div>
   );
 }

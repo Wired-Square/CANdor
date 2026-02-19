@@ -11,6 +11,7 @@ import {
   useReactFlow,
   type Node,
   type NodeTypes,
+  type EdgeTypes,
   BackgroundVariant,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -18,17 +19,23 @@ import "@xyflow/react/dist/style.css";
 import SourceNode from "../nodes/SourceNode";
 import SessionNode from "../nodes/SessionNode";
 import ListenerNode from "../nodes/ListenerNode";
+import InterfaceEdge from "../edges/InterfaceEdge";
 import { buildSessionGraph, calculateFitViewPadding } from "../utils/layoutUtils";
 import { useSessionManagerStore } from "../stores/sessionManagerStore";
 import type { ActiveSessionInfo } from "../../../api/io";
 import type { IOProfile } from "../../../hooks/useSettings";
 
-// Register custom node types
+// Register custom node and edge types
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const nodeTypes: NodeTypes = {
   source: SourceNode as any,
   session: SessionNode as any,
   listener: ListenerNode as any,
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const edgeTypes: EdgeTypes = {
+  interface: InterfaceEdge as any,
 };
 
 interface SessionCanvasProps {
@@ -102,6 +109,7 @@ export default function SessionCanvas({ sessions, profiles }: SessionCanvasProps
         onNodeClick={onNodeClick}
         onPaneClick={onPaneClick}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         minZoom={0.1}
         maxZoom={2}
         defaultEdgeOptions={{ type: "smoothstep" }}
