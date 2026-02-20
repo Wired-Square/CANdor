@@ -6,6 +6,7 @@
 // This is the single source of truth for all profile capabilities.
 
 import type { IOProfile } from "../hooks/useSettings";
+import type { BusMapping } from "../api/io";
 
 // ============================================================================
 // Types
@@ -285,4 +286,29 @@ export function validateProfileSelection(
   }
 
   return { valid: true };
+}
+
+// ============================================================================
+// Bus Mapping Helpers
+// ============================================================================
+
+/**
+ * Build a default BusMapping array for a single profile.
+ * Used when routing a single realtime source through the multi-source session path
+ * so that `generateMultiSessionId` can determine the correct session ID prefix.
+ */
+export function buildDefaultBusMappings(profile: IOProfile): BusMapping[] {
+  const traits = getProfileTraits(profile);
+  const protocol = traits?.protocols[0] ?? "can";
+  return [{
+    deviceBus: 0,
+    enabled: true,
+    outputBus: 0,
+    interfaceId: `${protocol}0`,
+    traits: {
+      temporal_mode: "realtime",
+      protocols: (protocol === "can" ? ["can", "canfd"] : [protocol]) as Protocol[],
+      can_transmit: traits?.canTransmit ?? false,
+    },
+  }];
 }

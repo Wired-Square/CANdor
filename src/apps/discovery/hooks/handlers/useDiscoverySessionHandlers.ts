@@ -18,7 +18,7 @@ export interface UseDiscoverySessionHandlersParams {
   setShowBusColumn: (show: boolean) => void;
 
   // Manager session switching methods
-  watchSingleSource: (profileId: string, options: ManagerIngestOptions, reinitializeOptions?: Record<string, unknown>) => Promise<void>;
+  watchSingleSource: (profileId: string, options: ManagerIngestOptions) => Promise<void>;
   watchMultiSource: (profileIds: string[], options: ManagerIngestOptions) => Promise<void>;
   ingestSingleSource: (profileId: string, options: ManagerIngestOptions) => Promise<void>;
   ingestMultiSource: (profileIds: string[], options: ManagerIngestOptions) => Promise<void>;
@@ -215,10 +215,8 @@ export function useDiscoverySessionHandlers({
           setFramingConfig(null);
         }
 
-        // Manager handles: onBeforeWatch cleanup, reinitialize, multi-bus clear, profile set, speed, watch state
-        await watchSingleSource(profileId, options, {
-          sourceAddressBigEndian: sourceAddressEndianness === "big",
-        });
+        // Manager handles: onBeforeWatch cleanup, session creation, profile set, speed, watch state
+        await watchSingleSource(profileId, options);
 
         closeIoReaderPicker();
         console.log(`[DiscoverySessionHandlers] Watch mode - complete`);

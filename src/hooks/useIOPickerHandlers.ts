@@ -36,8 +36,6 @@ export interface UseIOPickerHandlersOptions {
   closeDialog: () => void;
   /** Optional callback to merge app-specific options (e.g., catalog serial config) */
   mergeOptions?: (options: DialogIngestOptions) => ManagerIngestOptions;
-  /** Optional callback to get extra reinitialize options for watch mode (e.g., frameIdBigEndian) */
-  getReinitializeOptions?: () => Record<string, unknown>;
   /** Optional callback when multi-bus mode is set */
   onMultiBusSet?: (profileIds: string[]) => void;
   /** Optional callback when joining a session */
@@ -66,7 +64,6 @@ export function useIOPickerHandlers({
   manager,
   closeDialog,
   mergeOptions,
-  getReinitializeOptions,
   onMultiBusSet,
   onJoinSession: onJoinSessionCallback,
 }: UseIOPickerHandlersOptions): IOPickerDialogProps {
@@ -97,15 +94,14 @@ export function useIOPickerHandlers({
 
       if (closeDialogFlag) {
         // Watch mode - close dialog and show real-time display
-        const reinitializeOptions = getReinitializeOptions?.();
-        await watchSingleSource(profileId, mergedOptions, reinitializeOptions);
+        await watchSingleSource(profileId, mergedOptions);
         closeDialog();
       } else {
         // Ingest mode - keep dialog open to show progress
         await ingestSingleSource(profileId, mergedOptions);
       }
     },
-    [watchSingleSource, ingestSingleSource, closeDialog, mergeOptions, getReinitializeOptions]
+    [watchSingleSource, ingestSingleSource, closeDialog, mergeOptions]
   );
 
   // Handle multi-bus Watch/Ingest

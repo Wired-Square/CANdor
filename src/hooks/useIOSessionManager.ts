@@ -32,6 +32,7 @@ import { setSessionListenerActive, reconfigureReaderSession, switchSessionToBuff
 import { markFavoriteUsed, type TimeRangeFavorite } from "../utils/favorites";
 import { localToUtc } from "../utils/timeFormat";
 import { isRealtimeProfile, generateIngestSessionId } from "../dialogs/io-reader-picker/utils";
+import { isMultiSourceCapable, buildDefaultBusMappings } from "../utils/profileTraits";
 
 /**
  * Generate a unique session ID for recorded/timeline sources.
@@ -261,8 +262,8 @@ export interface UseIOSessionManagerResult {
   ) => Promise<void>;
 
   // ---- Session Switching Methods ----
-  /** Watch a single source (reinitialize, set profile, clear multi-bus, set speed, start watching) */
-  watchSingleSource: (profileId: string, options: IngestOptions, reinitializeOptions?: Record<string, unknown>) => Promise<void>;
+  /** Watch a single source (routes realtime through multi-source backend, recorded through reinitialize) */
+  watchSingleSource: (profileId: string, options: IngestOptions) => Promise<void>;
   /** Watch multiple sources (start multi-bus session, set speed, start watching) */
   watchMultiSource: (profileIds: string[], options: IngestOptions) => Promise<void>;
   /** Stop watching (stop session, clear watch state) */
@@ -426,18 +427,21 @@ export function useIOSessionManager(
   const streamCompletedRef = streamCompletedRefProp ?? localStreamCompletedRef;
 
   // ---- Derived Values ----
-  // Effective session ID: multi-bus ID or single profile ID
-  const effectiveSessionId = multiBusProfiles.length > 0 ? (multiSessionId ?? undefined) : (ioProfile ?? undefined);
+  // Effective session ID: multiSessionId takes priority (all realtime sources now use it),
+  // ioProfile is fallback (recorded sources, buffer profiles)
+  const effectiveSessionId = multiSessionId ?? ioProfile ?? undefined;
 
   // Profile name for display
   const ioProfileName = useMemo(() => {
-    if (multiBusProfiles.length > 0) {
+    if (multiBusProfiles.length > 1) {
       return `Multi-Bus (${multiBusProfiles.length} sources)`;
     }
-    if (!ioProfile) return undefined;
-    const profile = ioProfiles.find((p) => p.id === ioProfile);
-    return profile?.name;
-  }, [ioProfile, multiBusProfiles.length, ioProfiles]);
+    // For single profile (whether directly selected or routed through multi-source),
+    // look up the actual profile name
+    const lookupId = multiBusProfiles.length === 1 ? multiBusProfiles[0] : ioProfile;
+    if (!lookupId) return undefined;
+    return ioProfiles.find((p) => p.id === lookupId)?.name;
+  }, [ioProfile, multiBusProfiles, ioProfiles]);
 
   // Profile names map for multi-bus
   const profileNamesMap = useMemo(() => {
@@ -798,22 +802,36 @@ export function useIOSessionManager(
 
   // ---- Session Switching Methods ----
 
-  // Watch a single source: reinitialize, clear multi-bus, set profile, set speed, start watching
+  // Watch a single source: route multi-source-capable (realtime) profiles through
+  // startMultiBusSession for consistent f_/b_/s_ session IDs. Recorded sources
+  // continue to use session.reinitialize() with generated t_ session IDs.
   const watchSingleSource = useCallback(async (
     profileId: string,
     opts: IngestOptions,
-    reinitializeOptions?: Record<string, unknown>
   ) => {
     onBeforeWatch?.();
 
-    // For recorded sources (postgres, csv), generate a unique session ID so multiple
-    // apps can watch the same profile independently with separate buffers.
-    // Real-time sources continue to use profile ID as session ID (shared session).
     const profile = ioProfiles.find((p) => p.id === profileId);
-    const isRecorded = profile ? !isRealtimeProfile(profile) : false;
-    const sessionId = isRecorded ? generateRecordedSessionId() : profileId;
 
-    // Reinitialize with the provided options merged with any extra reinitialize options
+    // Multi-source-capable profiles (all realtime sources) go through the multi-source
+    // backend even for a single profile. This gives consistent generated session IDs
+    // and avoids using the profile ID as the session ID.
+    if (profile && isMultiSourceCapable(profile)) {
+      const busMappings = new Map([[profileId, buildDefaultBusMappings(profile)]]);
+      await startMultiBusSession([profileId], { ...opts, busMappings });
+      setSourceProfileId(profileId);
+      if (opts.speed !== undefined) {
+        setPlaybackSpeedProp?.(opts.speed);
+      }
+      setIsWatching(true);
+      resetWatchFrameCount();
+      streamCompletedRef.current = false;
+      return;
+    }
+
+    // Recorded/non-multi-source-capable sources: generate unique t_ session ID
+    const sessionId = generateRecordedSessionId();
+
     await session.reinitialize(profileId, {
       startTime: opts.startTime,
       endTime: opts.endTime,
@@ -831,35 +849,22 @@ export function useIOSessionManager(
       minFrameLength: opts.minFrameLength,
       emitRawBytes: opts.emitRawBytes,
       busOverride: opts.busOverride,
-      // For recorded sources, use unique session ID so multiple apps can have independent streams
-      sessionIdOverride: isRecorded ? sessionId : undefined,
-      ...reinitializeOptions,
+      sessionIdOverride: sessionId,
     });
 
-    // Ensure listener is ACTIVE so we receive frames
-    // (connectOnly sets listener inactive, so we need to reactivate it)
-    try {
-      await setSessionListenerActive(sessionId, appName, true);
-    } catch {
-      // Ignore - may fail if session doesn't exist yet
-    }
-
-    // Clear multi-bus state when switching to a single source
+    // Clear multi-bus state when switching to a recorded source
     setMultiBusProfiles([]);
 
-    // Set profile (use session ID so callbacks are registered correctly)
-    // Also track the source profile ID for bookmark lookups
     setIoProfile(sessionId);
     setSourceProfileId(profileId);
     if (opts.speed !== undefined) {
       setPlaybackSpeedProp?.(opts.speed);
     }
 
-    // Start watching
     setIsWatching(true);
     resetWatchFrameCount();
     streamCompletedRef.current = false;
-  }, [session, appName, ioProfiles, onBeforeWatch, setMultiBusProfiles, setIoProfile, setPlaybackSpeedProp, resetWatchFrameCount]);
+  }, [session, ioProfiles, onBeforeWatch, startMultiBusSession, setMultiBusProfiles, setIoProfile, setPlaybackSpeedProp, resetWatchFrameCount]);
 
   // Watch multiple sources: start multi-bus session, set speed, start watching
   const watchMultiSource = useCallback(async (

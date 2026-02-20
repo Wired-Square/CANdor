@@ -200,9 +200,6 @@ export default function Graph() {
     manager,
     closeDialog: () => dialogs.ioReaderPicker.close(),
     mergeOptions: (options) => mergeSerialConfig(useGraphStore.getState().serialConfig, options),
-    getReinitializeOptions: () => ({
-      frameIdBigEndian: useGraphStore.getState().serialConfig?.frame_id_byte_order === "big",
-    }),
   });
 
   // ── Initialise from settings ──

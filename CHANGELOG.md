@@ -51,6 +51,10 @@ All notable changes to CANdor will be documented in this file.
 
 ### Changed
 
+- **Realtime sources always use multi-source sessions**: All multi-source-capable (realtime) profiles now route through the multi-source session backend even for single-profile watch, giving consistent `f_`/`b_`/`s_` session IDs instead of raw profile IDs (`io_xxxx`). Recorded sources (postgres, csv) continue using `t_` prefixed IDs.
+
+- **Removed `reinitializeOptions` parameter**: The `getReinitializeOptions` callback in `useIOPickerHandlers` and the `reinitializeOptions` parameter on `watchSingleSource` have been removed — the multi-source session path handles these options natively.
+
 - **Graph top bar now shows full session controls**: ReaderButton with status dot, session ID, multi-bus count, and stop/resume/leave buttons — matching Decoder and Discovery.
 
 - **Decoder session handlers simplified**: Removed 6 dialog handler methods (~100 lines) from `useDecoderSessionHandlers` that are now handled by the shared `useIOPickerHandlers` hook.

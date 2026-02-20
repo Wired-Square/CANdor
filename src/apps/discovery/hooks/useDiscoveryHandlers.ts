@@ -84,7 +84,7 @@ export interface UseDiscoveryHandlersParams {
   setBufferMetadata: (meta: BufferMetadata | null) => void;
 
   // Manager session switching methods
-  watchSingleSource: (profileId: string, options: ManagerIngestOptions, reinitializeOptions?: Record<string, unknown>) => Promise<void>;
+  watchSingleSource: (profileId: string, options: ManagerIngestOptions) => Promise<void>;
   watchMultiSource: (profileIds: string[], options: ManagerIngestOptions) => Promise<void>;
   ingestSingleSource: (profileId: string, options: ManagerIngestOptions) => Promise<void>;
   ingestMultiSource: (profileIds: string[], options: ManagerIngestOptions) => Promise<void>;

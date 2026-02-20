@@ -658,9 +658,6 @@ export default function Decoder() {
     manager,
     closeDialog: () => dialogs.ioReaderPicker.close(),
     mergeOptions: (options) => mergeSerialConfigForWatch(useDecoderStore.getState().serialConfig, options),
-    getReinitializeOptions: () => ({
-      frameIdBigEndian: useDecoderStore.getState().serialConfig?.frame_id_byte_order === "big",
-    }),
   });
 
   // Report session state to menu when this panel is focused
