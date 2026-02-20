@@ -14,7 +14,6 @@ import type { StreamEndedPayload as IngestStreamEndedPayload } from "../api/io";
 import {
   createAndStartMultiSourceSession,
   joinMultiSourceSession,
-  useMultiBusState,
   useSessionStore,
   isBufferProfileId,
   BUFFER_PROFILE_ID,
@@ -395,15 +394,12 @@ export function useIOSessionManager(
   const ioProfile = store?.ioProfile ?? localProfile;
   const setIoProfile = store?.setIoProfile ?? setLocalProfile;
 
-  // ---- Multi-Bus State ----
-  const {
-    multiBusProfiles,
-    sourceProfileId,
-    outputBusToSource,
-    setMultiBusProfiles,
-    setSourceProfileId,
-    setOutputBusToSource,
-  } = useMultiBusState();
+  // ---- Multi-Bus State (per-instance, not global) ----
+  const [multiBusProfiles, setMultiBusProfiles] = useState<string[]>([]);
+  const [sourceProfileId, setSourceProfileId] = useState<string | null>(null);
+  const [outputBusToSource, setOutputBusToSource] = useState<Map<number, BusSourceInfo>>(
+    () => new Map()
+  );
 
   // ---- Detach/Watch State ----
   const [isDetached, setIsDetached] = useState(false);

@@ -6,7 +6,7 @@
 import { useCallback, useMemo } from "react";
 import { Play, Square, Trash2, StopCircle, Users, AlertCircle, Link } from "lucide-react";
 import { useTransmitStore, GVRET_BUSES } from "../../../stores/transmitStore";
-import { useActiveSession, useSessionStore } from "../../../stores/sessionStore";
+import { useActiveSession, useSessionStore, type BusSourceInfo } from "../../../stores/sessionStore";
 import {
   bgDataToolbar,
   borderDataView,
@@ -28,13 +28,16 @@ import { flexRowGap2 } from "../../../styles/spacing";
 import { byteToHex } from "../../../utils/byteUtils";
 import { formatBusLabel } from "../../../utils/busFormat";
 
-export default function TransmitQueueView() {
+interface TransmitQueueViewProps {
+  outputBusToSource: Map<number, BusSourceInfo>;
+}
+
+export default function TransmitQueueView({ outputBusToSource }: TransmitQueueViewProps) {
   // Store selectors
   const queue = useTransmitStore((s) => s.queue);
   const activeSession = useActiveSession();
   const activeGroups = useTransmitStore((s) => s.activeGroups);
   const sessions = useSessionStore((s) => s.sessions);
-  const outputBusToSource = useSessionStore((s) => s.outputBusToSource);
 
   // Store actions
   const removeFromQueue = useTransmitStore((s) => s.removeFromQueue);

@@ -135,6 +135,7 @@ export default function Transmit() {
     ioProfile,
     ioProfileName,
     multiBusProfiles,
+    outputBusToSource,
     effectiveSessionId,
     session,
     isStreaming,
@@ -245,9 +246,9 @@ export default function Transmit() {
           <CanTransmitView />
         );
       case "queue":
-        return <TransmitQueueView />;
+        return <TransmitQueueView outputBusToSource={outputBusToSource} />;
       case "history":
-        return <TransmitHistoryView />;
+        return <TransmitHistoryView outputBusToSource={outputBusToSource} />;
       default:
         return null;
     }

@@ -364,14 +364,6 @@ export interface SessionStore {
   /** Event listeners per session (frontend-only, for routing events to callbacks) */
   _eventListeners: Record<string, SessionEventListeners>;
 
-  // ---- Multi-Bus State ----
-  /** Profile IDs involved in the current multi-bus session */
-  multiBusProfiles: string[];
-  /** Source profile ID - preserved when switching to buffer mode */
-  sourceProfileId: string | null;
-  /** Maps output bus number to source info { profileName, deviceBus } */
-  outputBusToSource: Map<number, { profileName: string; deviceBus: number }>;
-
   // ---- Actions: Session Lifecycle ----
   /** Open a session - creates if not exists, joins if exists */
   openSession: (
@@ -443,16 +435,6 @@ export interface SessionStore {
   registerCallbacks: (sessionId: string, listenerId: string, callbacks: SessionCallbacks) => void;
   /** Clear callbacks for a specific listener */
   clearCallbacks: (sessionId: string, listenerId: string) => void;
-
-  // ---- Actions: Multi-Bus State ----
-  /** Set profiles involved in multi-bus session */
-  setMultiBusProfiles: (profiles: string[]) => void;
-  /** Set source profile ID (preserved when switching to buffer) */
-  setSourceProfileId: (profileId: string | null) => void;
-  /** Set output bus to source mapping (output bus → { profileName, deviceBus }) */
-  setOutputBusToSource: (mapping: Map<number, { profileName: string; deviceBus: number }>) => void;
-  /** Reset multi-bus state (disable mode, clear profiles) */
-  resetMultiBusState: () => void;
 
   // ---- Selectors ----
   /** Get session by ID */
@@ -727,9 +709,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   sessions: {},
   activeSessionId: null,
   _eventListeners: {},
-  multiBusProfiles: [],
-  sourceProfileId: null,
-  outputBusToSource: new Map(),
   appErrorDialog: {
     isOpen: false,
     title: "",
@@ -1653,19 +1632,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
   },
 
-  // ---- Multi-Bus State ----
-  setMultiBusProfiles: (profiles) => set({ multiBusProfiles: profiles }),
-
-  setSourceProfileId: (profileId) => set({ sourceProfileId: profileId }),
-
-  setOutputBusToSource: (mapping) => set({ outputBusToSource: mapping }),
-
-  resetMultiBusState: () => set({
-    multiBusProfiles: [],
-    sourceProfileId: null,
-    outputBusToSource: new Map(),
-  }),
-
   // ---- Selectors ----
   getSession: (sessionId) => get().sessions[sessionId],
 
@@ -1791,38 +1757,6 @@ export interface BusSourceInfo {
   deviceBus: number;
 }
 
-/** Multi-bus state returned by useMultiBusState hook */
-export interface MultiBusState {
-  /** Profile IDs in the multi-bus session */
-  multiBusProfiles: string[];
-  /** Source profile ID (preserved when switching to buffer) */
-  sourceProfileId: string | null;
-  /** Maps output bus number to source info */
-  outputBusToSource: Map<number, BusSourceInfo>;
-  /** Set profiles in multi-bus session */
-  setMultiBusProfiles: (profiles: string[]) => void;
-  /** Set source profile ID */
-  setSourceProfileId: (profileId: string | null) => void;
-  /** Set output bus to source mapping */
-  setOutputBusToSource: (mapping: Map<number, BusSourceInfo>) => void;
-  /** Reset all multi-bus state */
-  resetMultiBusState: () => void;
-}
-
-/** Get multi-bus state and setters */
-export function useMultiBusState(): MultiBusState {
-  return useSessionStore(
-    useShallow((s) => ({
-      multiBusProfiles: s.multiBusProfiles,
-      sourceProfileId: s.sourceProfileId,
-      outputBusToSource: s.outputBusToSource,
-      setMultiBusProfiles: s.setMultiBusProfiles,
-      setSourceProfileId: s.setSourceProfileId,
-      setOutputBusToSource: s.setOutputBusToSource,
-      resetMultiBusState: s.resetMultiBusState,
-    }))
-  );
-}
 
 // ============================================================================
 // Multi-Source Session Helpers

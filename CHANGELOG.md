@@ -18,6 +18,8 @@ All notable changes to CANdor will be documented in this file.
 
 ### Fixed
 
+- **Multi-bus state isolation**: Multi-bus state (`multiBusProfiles`, `sourceProfileId`, `outputBusToSource`) is now per-instance in `useIOSessionManager` instead of global in `sessionStore`, preventing multiple windows or app instances from clobbering each other's bus mappings.
+
 - **Multi-window listener counting**: Two windows with the same app (e.g., Discovery) connected to the same session now correctly show 2 listeners instead of 1. Each app instance gets a unique listener ID while preserving the human-readable app name for display and logging.
 
 - **Decoder mirror icon**: Mirror frame badge now uses the Layers icon to match the Catalog Editor tree.

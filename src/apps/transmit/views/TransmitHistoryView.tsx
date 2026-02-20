@@ -5,7 +5,7 @@
 import React, { useCallback, useMemo } from "react";
 import { Trash2, Check, X, Download } from "lucide-react";
 import { useTransmitStore } from "../../../stores/transmitStore";
-import { useSessionStore } from "../../../stores/sessionStore";
+import type { BusSourceInfo } from "../../../stores/sessionStore";
 import { useSettings } from "../../../hooks/useSettings";
 import {
   bgDataToolbar,
@@ -19,12 +19,15 @@ import { byteToHex } from "../../../utils/byteUtils";
 import { formatIsoUs, formatHumanUs, renderDeltaNode } from "../../../utils/timeFormat";
 import { formatBusLabel } from "../../../utils/busFormat";
 
-export default function TransmitHistoryView() {
+interface TransmitHistoryViewProps {
+  outputBusToSource: Map<number, BusSourceInfo>;
+}
+
+export default function TransmitHistoryView({ outputBusToSource }: TransmitHistoryViewProps) {
   const { settings } = useSettings();
 
   // Store selectors
   const history = useTransmitStore((s) => s.history);
-  const outputBusToSource = useSessionStore((s) => s.outputBusToSource);
 
   // Store actions
   const clearHistory = useTransmitStore((s) => s.clearHistory);
