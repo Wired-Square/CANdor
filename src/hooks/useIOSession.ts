@@ -17,6 +17,13 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useSessionStore } from "../stores/sessionStore";
 
+// Generate unique listener instance IDs using random suffix.
+// Random is needed because each Tauri window has its own JS context,
+// so a module-level counter would reset to 0 in each window.
+function generateListenerId(appName: string): string {
+  return `${appName}_${Math.random().toString(36).slice(2, 6)}`;
+}
+
 // Module-level map to track sessions being reinitialized.
 // This persists across re-renders and prevents the effect from
 // trying to openSession while reinitialize() is in progress.
@@ -182,6 +189,8 @@ export interface UseIOSessionResult {
   currentTimeUs: number | null;
   /** Convenience: playbackPosition?.frame_index */
   currentFrameIndex: number | null;
+  /** Unique listener instance ID for this hook (e.g., "discovery_1") */
+  listenerId: string;
 
   // Actions
   /** Start the reader */
@@ -316,8 +325,8 @@ export function useIOSession(
   const isMountedRef = useRef(true);
   // Track the currently active session ID (for cleanup to check if session changed)
   const currentSessionIdRef = useRef<string | null>(null);
-  // Listener ID is the app name for clarity in debugging
-  const listenerIdRef = useRef<string>(appName);
+  // Generate a unique listener instance ID per hook mount (e.g., "discovery_1")
+  const listenerIdRef = useRef<string>(generateListenerId(appName));
   // Track if we're currently leaving to prevent double-leave
   const isLeavingRef = useRef(false);
   // Track when session was created/joined to prevent immediate leave (click-through protection)
@@ -641,7 +650,7 @@ export function useIOSession(
           if (cancelled) return;
           if (
             event.payload.session_id === effectiveSessionId &&
-            event.payload.listener_id === appName
+            event.payload.listener_id === listenerIdRef.current
           ) {
             console.log(
               `[useIOSession:${appName}] Evicted from session '${effectiveSessionId}', buffer copies: ${event.payload.buffer_ids}`
@@ -650,7 +659,7 @@ export function useIOSession(
             setupCompleteRef.current = false;
             currentSessionIdRef.current = null;
             // Clean up local state in store (no backend calls - already unregistered)
-            useSessionStore.getState().cleanupEvictedListener(effectiveSessionId, appName);
+            useSessionStore.getState().cleanupEvictedListener(effectiveSessionId, listenerIdRef.current);
             // Clear local state
             setLocalState(null);
             // Notify higher-level hooks with copied buffer IDs (same path as destroy)
@@ -720,7 +729,7 @@ export function useIOSession(
         // Open session (creates if not exists, joins if exists)
         // This also registers this listener with the Rust backend
         console.log(`[useIOSession:${appName}] calling openSession...`);
-        await openSession(effectiveSessionId, effectiveProfileName, listenerIdRef.current, {
+        await openSession(effectiveSessionId, effectiveProfileName, listenerIdRef.current, appName, {
           requireFrames,
         });
         console.log(`[useIOSession:${appName}] openSession completed`);
@@ -1108,6 +1117,7 @@ export function useIOSession(
         await reinitializeSession(
           targetSessionId,
           listenerIdRef.current,
+          appName,
           targetProfileId,
           targetProfileName,
           {
@@ -1232,7 +1242,7 @@ export function useIOSession(
     const targetProfileName = profileName || effectiveProfileName;
     if (!targetSessionId) return;
     try {
-      await openSession(targetSessionId, targetProfileName, listenerIdRef.current, {});
+      await openSession(targetSessionId, targetProfileName, listenerIdRef.current, appName, {});
 
       // Mark listener as active in Rust so it receives frames again
       try {
@@ -1313,6 +1323,7 @@ export function useIOSession(
     playbackPosition: effectiveState?.playbackPosition ?? null,
     currentTimeUs: effectiveState?.playbackPosition?.timestamp_us ?? null,
     currentFrameIndex: effectiveState?.playbackPosition?.frame_index ?? null,
+    listenerId: listenerIdRef.current,
     start,
     stop,
     leave,

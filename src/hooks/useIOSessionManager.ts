@@ -722,7 +722,8 @@ export function useIOSessionManager(
 
     const createOptions: CreateMultiSourceOptions = {
       sessionId,
-      listenerId: appName,
+      listenerId: session.listenerId,
+      appName,
       profileIds,
       busMappings,
       profileNames: profileNamesMap,
@@ -785,7 +786,8 @@ export function useIOSessionManager(
     // Join the session and set up heartbeats
     await joinMultiSourceSession({
       sessionId,
-      listenerId: appName,
+      listenerId: session.listenerId,
+      appName,
       sourceProfileIds,
     });
 

@@ -223,8 +223,10 @@ export interface CreateIOSessionOptions {
   emitRawBytes?: boolean;
   /** Bus number override for single-bus devices (0-7) */
   busOverride?: number;
-  /** Listener ID for session logging (e.g., "discovery", "decoder") */
+  /** Listener instance ID for session logging (e.g., "discovery_1", "decoder_2") */
   listenerId?: string;
+  /** Human-readable app name (e.g., "discovery", "decoder") */
+  appName?: string;
 }
 
 /**
@@ -269,6 +271,8 @@ export async function createIOSession(
     bus_override: options.busOverride,
     // Listener ID for session logging
     listener_id: options.listenerId,
+    // Human-readable app name
+    app_name: options.appName,
   });
 }
 
@@ -737,8 +741,10 @@ export async function sessionTransmitFrame(
  * Info about a registered listener.
  */
 export interface ListenerInfo {
-  /** Unique ID for this listener (e.g., "discovery", "decoder") */
+  /** Unique instance ID for this listener (e.g., "discovery_1", "decoder_2") */
   listener_id: string;
+  /** Human-readable app name (e.g., "discovery", "decoder") */
+  app_name: string;
   /** Seconds since registration */
   registered_seconds_ago: number;
   /** Whether this listener is actively receiving frames */
@@ -773,11 +779,13 @@ export interface RegisterListenerResult {
  */
 export async function registerSessionListener(
   sessionId: string,
-  listenerId: string
+  listenerId: string,
+  appName?: string
 ): Promise<RegisterListenerResult> {
   return invoke("register_session_listener", {
     session_id: sessionId,
     listener_id: listenerId,
+    app_name: appName,
   });
 }
 
@@ -1119,8 +1127,10 @@ export interface CreateMultiSourceSessionOptions {
   sessionId: string;
   /** Array of source configurations */
   sources: MultiSourceInput[];
-  /** Listener ID for session logging (e.g., "discovery", "decoder") */
+  /** Listener instance ID for session logging (e.g., "discovery_1", "decoder_2") */
   listenerId?: string;
+  /** Human-readable app name (e.g., "discovery", "decoder") */
+  appName?: string;
 }
 
 /**
@@ -1169,6 +1179,7 @@ export async function createMultiSourceSession(
     session_id: options.sessionId,
     sources: rustSources,
     listener_id: options.listenerId,
+    app_name: options.appName,
   });
 }
 
@@ -1213,6 +1224,7 @@ export async function listActiveSessions(): Promise<ActiveSessionInfo[]> {
     listener_count: number;
     listeners: Array<{
       listener_id: string;
+      app_name: string;
       registered_seconds_ago: number;
       is_active: boolean;
     }>;

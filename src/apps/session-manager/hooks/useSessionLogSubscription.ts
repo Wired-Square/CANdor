@@ -38,8 +38,10 @@ interface SessionReconfiguredPayload {
 interface JoinerCountChangedPayload {
   /** New total listener count */
   count: number;
-  /** The listener that triggered the change (if known) */
+  /** The listener instance ID that triggered the change (if known) */
   listener_id: string | null;
+  /** Human-readable app name (e.g., "discovery", "decoder") */
+  app_name: string | null;
   /** Whether the listener joined or left ("joined" | "left" | null for sync) */
   change: "joined" | "left" | null;
 }
@@ -457,17 +459,17 @@ async function setupPerSessionListeners(
 
     unlistenFns.push(
       await listen<JoinerCountChangedPayload>(`joiner-count-changed:${sessionId}`, async (e) => {
-        const { count, listener_id, change } = e.payload;
-        console.log(`[SessionLog:joiner] ${sessionId}: prev=${prevListenerCount} new=${count} listener=${listener_id} change=${change}`);
+        const { count, listener_id, app_name, change } = e.payload;
+        console.log(`[SessionLog:joiner] ${sessionId}: prev=${prevListenerCount} new=${count} listener=${listener_id} app=${app_name} change=${change}`);
         if (count === prevListenerCount) {
           return; // No change
         }
         const { profileId, profileName } = await getProfileInfo();
-        const listenerName = listener_id ?? "unknown";
+        const listenerName = app_name ?? listener_id ?? "unknown";
         if (count > prevListenerCount) {
-          addEntry({ eventType: "session-joined", sessionId, profileId, profileName, appName: listener_id, details: `${listenerName} joined (${count} listeners)` });
+          addEntry({ eventType: "session-joined", sessionId, profileId, profileName, appName: app_name ?? listener_id, details: `${listenerName} joined (${count} listeners)` });
         } else if (count < prevListenerCount) {
-          addEntry({ eventType: "session-left", sessionId, profileId, profileName, appName: listener_id, details: `${listenerName} left (${count} listeners)` });
+          addEntry({ eventType: "session-left", sessionId, profileId, profileName, appName: app_name ?? listener_id, details: `${listenerName} left (${count} listeners)` });
         }
         prevListenerCount = count;
       })

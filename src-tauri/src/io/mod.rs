@@ -524,6 +524,8 @@ pub struct JoinerCountChangedPayload {
     pub count: usize,
     /// The listener that triggered the change (if known)
     pub listener_id: Option<String>,
+    /// Human-readable app name (e.g., "discovery", "decoder")
+    pub app_name: Option<String>,
     /// Whether the listener joined or left ("joined" | "left" | null for sync)
     pub change: Option<String>,
 }
@@ -623,8 +625,10 @@ const HEARTBEAT_CHECK_INTERVAL_SECS: u64 = 5;
 /// A registered listener for an IO session
 #[derive(Clone, Debug)]
 pub struct SessionListener {
-    /// Unique ID for this listener (e.g., "discovery", "decoder")
+    /// Unique ID for this listener instance (e.g., "discovery_1", "decoder_2")
     pub listener_id: String,
+    /// Human-readable app name (e.g., "discovery", "decoder")
+    pub app_name: String,
     /// When this listener was registered
     pub registered_at: std::time::Instant,
     /// Last heartbeat from this listener
@@ -675,11 +679,13 @@ fn emit_joiner_count_change(
     session_id: &str,
     joiner_count: usize,
     listener_id: Option<&str>,
+    app_name: Option<&str>,
     change: Option<&str>,
 ) {
     let payload = JoinerCountChangedPayload {
         count: joiner_count,
         listener_id: listener_id.map(|s| s.to_string()),
+        app_name: app_name.map(|s| s.to_string()),
         change: change.map(|s| s.to_string()),
     };
     emit_to_session(app, "joiner-count-changed", session_id, payload);
@@ -1129,6 +1135,7 @@ pub async fn create_session(
     session_id: String,
     device: Box<dyn IODevice>,
     listener_id: Option<String>,
+    app_name: Option<String>,
     source_names: Option<Vec<String>>,
 ) -> CreateSessionResult {
     // Clear the closing flag in case this is a new session for a previously closed window
@@ -1149,10 +1156,12 @@ pub async fn create_session(
                 listener.last_heartbeat = now;
             } else {
                 // New listener joining existing session
+                let resolved_name = app_name.clone().unwrap_or_else(|| lid.clone());
                 existing.listeners.insert(
                     lid.clone(),
                     SessionListener {
                         listener_id: lid.clone(),
+                        app_name: resolved_name.clone(),
                         registered_at: now,
                         last_heartbeat: now,
                         is_active: true, // New listeners are active by default
@@ -1166,7 +1175,7 @@ pub async fn create_session(
                 );
 
                 // Emit joiner count change
-                emit_joiner_count_change(&existing.app, &session_id, existing.listeners.len(), Some(&lid), Some("joined"));
+                emit_joiner_count_change(&existing.app, &session_id, existing.listeners.len(), Some(&lid), Some(&resolved_name), Some("joined"));
             }
             listener_count = existing.listeners.len();
         } else {
@@ -1186,10 +1195,12 @@ pub async fn create_session(
     // Create initial listeners map
     let mut listeners = HashMap::new();
     if let Some(lid) = listener_id.clone() {
+        let resolved_name = app_name.unwrap_or_else(|| lid.clone());
         listeners.insert(
             lid.clone(),
             SessionListener {
                 listener_id: lid.clone(),
+                app_name: resolved_name,
                 registered_at: now,
                 last_heartbeat: now,
                 is_active: true, // New listeners are active by default
@@ -1294,7 +1305,7 @@ pub async fn join_session(session_id: &str) -> Result<JoinSessionResult, String>
     let app = session.app.clone();
 
     // Emit joiner count change event to all listeners (legacy join - no listener ID)
-    emit_joiner_count_change(&app, session_id, joiner_count, None, Some("joined"));
+    emit_joiner_count_change(&app, session_id, joiner_count, None, None, Some("joined"));
 
     // Get active buffer info
     let (buffer_id, buffer_type) = match crate::buffer_store::get_active_buffer_id() {
@@ -1328,7 +1339,7 @@ pub async fn leave_session(session_id: &str) -> Result<usize, String> {
         let app = session.app.clone();
 
         // Emit joiner count change event to remaining listeners (legacy leave - no listener ID)
-        emit_joiner_count_change(&app, session_id, joiner_count, None, Some("left"));
+        emit_joiner_count_change(&app, session_id, joiner_count, None, None, Some("left"));
 
         // If no joiners left, stop the session to prevent emitting to destroyed WebViews
         if joiner_count == 0 {
@@ -1399,7 +1410,7 @@ pub async fn cleanup_stale_listeners() -> Vec<(String, usize, usize)> {
                     );
 
                     // Emit joiner count change (sync - no specific listener)
-                    emit_joiner_count_change(&session.app, session_id, after_count, None, None);
+                    emit_joiner_count_change(&session.app, session_id, after_count, None, None, None);
 
                     // If no listeners left, mark for destruction
                     if after_count == 0 {
@@ -2079,7 +2090,7 @@ pub async fn list_sessions() -> Vec<ActiveSessionInfo> {
                 .values()
                 .map(|l| ListenerInfo {
                     listener_id: l.listener_id.clone(),
-
+                    app_name: l.app_name.clone(),
                     registered_seconds_ago: now.duration_since(l.registered_at).as_secs(),
                     is_active: l.is_active,
                 })
@@ -2147,6 +2158,8 @@ pub async fn transmit_serial(session_id: &str, bytes: &[u8]) -> Result<TransmitR
 #[derive(Clone, Debug, Serialize)]
 pub struct ListenerInfo {
     pub listener_id: String,
+    /// Human-readable app name (e.g., "discovery", "decoder")
+    pub app_name: String,
     /// Seconds since registration
     pub registered_seconds_ago: u64,
     /// Whether this listener is actively receiving frames
@@ -2174,7 +2187,7 @@ pub struct RegisterListenerResult {
 /// This is the primary way for frontend components to join a session.
 /// If the listener is already registered, this updates their heartbeat.
 /// Returns session info for the registered listener.
-pub async fn register_listener(session_id: &str, listener_id: &str) -> Result<RegisterListenerResult, String> {
+pub async fn register_listener(session_id: &str, listener_id: &str, app_name: Option<&str>) -> Result<RegisterListenerResult, String> {
     let mut sessions = IO_SESSIONS.lock().await;
     let session = sessions
         .get_mut(session_id)
@@ -2187,10 +2200,12 @@ pub async fn register_listener(session_id: &str, listener_id: &str) -> Result<Re
         listener.last_heartbeat = now;
     } else {
         // New listener - register them
+        let resolved_app_name = app_name.unwrap_or(listener_id).to_string();
         session.listeners.insert(
             listener_id.to_string(),
             SessionListener {
                 listener_id: listener_id.to_string(),
+                app_name: resolved_app_name.clone(),
                 registered_at: now,
                 last_heartbeat: now,
                 is_active: true, // New listeners are active by default
@@ -2208,7 +2223,7 @@ pub async fn register_listener(session_id: &str, listener_id: &str) -> Result<Re
         );
 
         // Emit joiner count change
-        emit_joiner_count_change(&session.app, session_id, session.listeners.len(), Some(listener_id), Some("joined"));
+        emit_joiner_count_change(&session.app, session_id, session.listeners.len(), Some(listener_id), Some(&resolved_app_name), Some("joined"));
     }
 
     // Get buffer info
@@ -2246,7 +2261,8 @@ pub async fn unregister_listener(session_id: &str, listener_id: &str) -> Result<
     let mut sessions = IO_SESSIONS.lock().await;
 
     if let Some(session) = sessions.get_mut(session_id) {
-        if session.listeners.remove(listener_id).is_some() {
+        if let Some(removed) = session.listeners.remove(listener_id) {
+            let removed_app_name = removed.app_name;
             session.joiner_count = session.listeners.len();
             let remaining = session.listeners.len();
             let app = session.app.clone();
@@ -2257,7 +2273,7 @@ pub async fn unregister_listener(session_id: &str, listener_id: &str) -> Result<
             );
 
             // Emit joiner count change
-            emit_joiner_count_change(&app, session_id, remaining, Some(listener_id), Some("left"));
+            emit_joiner_count_change(&app, session_id, remaining, Some(listener_id), Some(&removed_app_name), Some("left"));
 
             // If no listeners left, stop and destroy the session
             if remaining == 0 {
@@ -2524,6 +2540,7 @@ pub async fn get_session_listeners(session_id: &str) -> Result<Vec<ListenerInfo>
         .values()
         .map(|l| ListenerInfo {
             listener_id: l.listener_id.clone(),
+            app_name: l.app_name.clone(),
             registered_seconds_ago: now.duration_since(l.registered_at).as_secs(),
             is_active: l.is_active,
         })

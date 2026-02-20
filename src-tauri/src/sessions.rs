@@ -395,6 +395,8 @@ pub async fn create_reader_session(
     bus_override: Option<u8>,
     // Listener ID (for session logging)
     listener_id: Option<String>,
+    // Human-readable app name (e.g., "discovery", "decoder")
+    app_name: Option<String>,
 ) -> Result<IOCapabilities, String> {
     let settings = settings::load_settings(app.clone())
         .await
@@ -615,7 +617,7 @@ pub async fn create_reader_session(
     profile_tracker::register_usage(&profile_id_for_tracking, &session_id);
     register_session_profile(&session_id, &profile_id_for_tracking);
 
-    let result = create_session(app, session_id.clone(), reader, listener_id, None).await;
+    let result = create_session(app, session_id.clone(), reader, listener_id, app_name, None).await;
 
     // Auto-start the session after creation (only for real-time devices)
     // Playback sources (postgres, csv) should NOT auto-start because frames would be emitted
@@ -811,7 +813,7 @@ pub async fn create_buffer_reader_session(
         speed.unwrap_or(0.0), // 0 = no limit by default
     );
 
-    let result = create_session(app, session_id, Box::new(reader), None, None).await;
+    let result = create_session(app, session_id, Box::new(reader), None, None, None).await;
     Ok(result.capabilities)
 }
 
@@ -839,7 +841,7 @@ pub async fn transition_to_buffer_reader(
         speed.unwrap_or(1.0), // Default to 1x speed for replay
     );
 
-    let result = create_session(app, session_id, Box::new(reader), None, None).await;
+    let result = create_session(app, session_id, Box::new(reader), None, None, None).await;
     Ok(result.capabilities)
 }
 
@@ -956,8 +958,9 @@ pub async fn session_transmit_frame(
 pub async fn register_session_listener(
     session_id: String,
     listener_id: String,
+    app_name: Option<String>,
 ) -> Result<RegisterListenerResult, String> {
-    register_listener(&session_id, &listener_id).await
+    register_listener(&session_id, &listener_id, app_name.as_deref()).await
 }
 
 /// Unregister a listener from a session.
@@ -1657,6 +1660,7 @@ pub async fn create_multi_source_session(
     session_id: String,
     sources: Vec<MultiSourceInput>,
     listener_id: Option<String>,
+    app_name: Option<String>,
 ) -> Result<IOCapabilities, String> {
     if sources.is_empty() {
         return Err("At least one source is required".to_string());
@@ -1728,7 +1732,7 @@ pub async fn create_multi_source_session(
     // Store all profiles for this session (needed for cleanup on destroy)
     register_session_profiles(&session_id, &profile_ids);
 
-    let result = create_session(app, session_id.clone(), Box::new(reader), listener_id, Some(source_display_names)).await;
+    let result = create_session(app, session_id.clone(), Box::new(reader), listener_id, app_name, Some(source_display_names)).await;
 
     // Auto-start the session if it's new OR if it exists but is stopped
     let should_start = if result.is_new {

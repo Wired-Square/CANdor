@@ -378,6 +378,7 @@ export interface SessionStore {
     profileId: string,
     profileName: string,
     listenerId: string,
+    appName: string,
     options?: CreateSessionOptions
   ) => Promise<Session>;
   /** Leave a session (unregister listener) */
@@ -392,6 +393,7 @@ export interface SessionStore {
   reinitializeSession: (
     sessionId: string,
     listenerId: string,
+    appName: string,
     profileId: string,
     profileName: string,
     options?: CreateSessionOptions
@@ -736,7 +738,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   // ---- Session Lifecycle ----
-  openSession: async (profileId, profileName, listenerId, options = {}) => {
+  openSession: async (profileId, profileName, listenerId, appName, options = {}) => {
     console.log(`[sessionStore:openSession] Called with profileId=${profileId}, profileName=${profileName}, listenerId=${listenerId}`);
     console.log(`[sessionStore:openSession] Options: ${JSON.stringify(options)}`);
 
@@ -750,7 +752,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     if (existingSession?.lifecycleState === "connected") {
       // Register this listener with Rust backend
       try {
-        const result = await registerSessionListener(sessionId, listenerId);
+        const result = await registerSessionListener(sessionId, listenerId, appName);
 
         // Handle startup error (error that occurred before listener registered)
         if (result.startup_error) {
@@ -807,7 +809,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       // Don't call joinReaderSession - it increments joiner_count separately from the listener map,
       // which causes count to overshoot when React StrictMode double-mounts components
       console.log(`[sessionStore:openSession] Backend exists, joining session ${sessionId}`);
-      const regResult = await registerSessionListener(sessionId, listenerId);
+      const regResult = await registerSessionListener(sessionId, listenerId, appName);
       capabilities = regResult.capabilities;
       ioState = getStateType(regResult.state);
       listenerCount = regResult.listener_count;
@@ -825,7 +827,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         sessionId,
         profileId,
         profileName,
-        appName: listenerId,
+        appName,
         details: `Joined existing session (${listenerCount} listeners, state: ${ioState})`,
       });
     } else {
@@ -852,6 +854,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         minFrameLength: options.minFrameLength,
         busOverride: options.busOverride,
         listenerId, // For session logging
+        appName, // Human-readable app name
       };
 
       try {
@@ -867,7 +870,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
         // Register as owner listener
         try {
-          const regResult = await registerSessionListener(sessionId, listenerId);
+          const regResult = await registerSessionListener(sessionId, listenerId, appName);
           listenerCount = regResult.listener_count;
           // Handle startup error (error that occurred before listener registered)
           if (regResult.startup_error) {
@@ -881,7 +884,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
         // If profile is in use, try to join instead using registerSessionListener only
         if (msg.includes("Profile is in use by session")) {
-          const regResult = await registerSessionListener(sessionId, listenerId);
+          const regResult = await registerSessionListener(sessionId, listenerId, appName);
           capabilities = regResult.capabilities;
           ioState = getStateType(regResult.state);
           listenerCount = regResult.listener_count;
@@ -1250,7 +1253,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
   },
 
-  reinitializeSession: async (sessionId, listenerId, profileId, profileName, options) => {
+  reinitializeSession: async (sessionId, listenerId, appName, profileId, profileName, options) => {
     console.log(`[sessionStore:reinitializeSession] Called with sessionId=${sessionId}, listenerId=${listenerId}, profileId=${profileId}, profileName=${profileName}`);
     console.log(`[sessionStore:reinitializeSession] Options: ${JSON.stringify(options)}`);
 
@@ -1273,7 +1276,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       // If no session exists, create one
       // Pass sessionId via options so openSession uses it instead of defaulting to profileId
       console.log(`[sessionStore:reinitializeSession] No existing session, calling openSession`);
-      return get().openSession(profileId, profileName, listenerId, { ...options, sessionId });
+      return get().openSession(profileId, profileName, listenerId, appName, { ...options, sessionId });
     }
 
     // Clean up local event listeners but keep session in store
@@ -1306,7 +1309,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     // Create new session - this will update the existing entry in the store
     // Pass sessionId via options so openSession uses it instead of defaulting to profileId
     console.log(`[sessionStore:reinitializeSession] Success, calling openSession for profileId=${profileId}, sessionId=${sessionId}`);
-    const result2 = await get().openSession(profileId, profileName, listenerId, { ...options, sessionId });
+    const result2 = await get().openSession(profileId, profileName, listenerId, appName, { ...options, sessionId });
     console.log(`[sessionStore:reinitializeSession] openSession complete, result.id=${result2?.id}`);
     return result2;
   },
@@ -1842,8 +1845,10 @@ export interface PerInterfaceFramingConfig {
 export interface CreateMultiSourceOptions {
   /** Unique session ID for the merged session (e.g., "discovery-multi") */
   sessionId: string;
-  /** Listener ID for this app (e.g., "discovery", "decoder") */
+  /** Listener instance ID for this app (e.g., "discovery_1", "decoder_2") */
   listenerId: string;
+  /** Human-readable app name (e.g., "discovery", "decoder") */
+  appName: string;
   /** Profile IDs to combine */
   profileIds: string[];
   /** Bus mappings per profile (keyed by profile ID) */
@@ -1912,6 +1917,7 @@ export async function createAndStartMultiSourceSession(
   const {
     sessionId,
     listenerId,
+    appName,
     profileIds,
     busMappings,
     profileNames,
@@ -1969,10 +1975,11 @@ export async function createAndStartMultiSourceSession(
     sessionId,
     sources,
     listenerId,
+    appName,
   });
 
   // Register this listener with the session
-  const regResult = await registerSessionListener(sessionId, listenerId);
+  const regResult = await registerSessionListener(sessionId, listenerId, appName);
   // Handle startup error (error that occurred before listener registered)
   if (regResult.startup_error) {
     useSessionStore.getState().showAppError("Stream Error", "An error occurred while starting the session.", regResult.startup_error);
@@ -2055,8 +2062,10 @@ export async function createAndStartMultiSourceSession(
 export interface JoinMultiSourceOptions {
   /** Session ID to join */
   sessionId: string;
-  /** Listener ID for this app */
+  /** Listener instance ID for this app */
   listenerId: string;
+  /** Human-readable app name (e.g., "discovery", "decoder") */
+  appName: string;
   /** Source profile IDs (for display purposes) */
   sourceProfileIds?: string[];
 }
@@ -2071,11 +2080,11 @@ export interface JoinMultiSourceOptions {
 export async function joinMultiSourceSession(
   options: JoinMultiSourceOptions
 ): Promise<MultiSourceSessionResult> {
-  const { sessionId, listenerId, sourceProfileIds = [] } = options;
+  const { sessionId, listenerId, appName, sourceProfileIds = [] } = options;
 
   // Join the existing session using registerSessionListener only
   // Don't call joinReaderSession - it increments joiner_count separately from the listener map
-  const regResult = await registerSessionListener(sessionId, listenerId);
+  const regResult = await registerSessionListener(sessionId, listenerId, appName);
   // Handle startup error (error that occurred before listener registered)
   if (regResult.startup_error) {
     useSessionStore.getState().showAppError("Stream Error", "An error occurred while starting the session.", regResult.startup_error);

@@ -150,7 +150,7 @@ export function buildSessionGraph(
     session.listeners.forEach((listener, listenerIndex) => {
       const nodeData: ListenerNodeData = {
         listenerId: listener.listener_id,
-        appName: listener.listener_id,
+        appName: listener.app_name || listener.listener_id,
         sessionId: session.sessionId,
         isActive: listener.is_active,
         registeredSecondsAgo: listener.registered_seconds_ago,
