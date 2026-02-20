@@ -32,6 +32,9 @@ export interface UseBufferFrameViewOptions {
   pollIntervalMs?: number;
   /** Buffer playback mode - uses pagination even when isStreaming is true */
   isBufferPlayback?: boolean;
+  /** When set, the hook auto-navigates to the page containing this timestamp during pagination mode.
+   *  Used for play/play backward and stepping — the hook owns the page state so it handles navigation internally. */
+  followTimeUs?: number | null;
 }
 
 export interface UseBufferFrameViewResult {
@@ -87,6 +90,7 @@ export function useBufferFrameView(
     tailSize = 50,
     pollIntervalMs = 200,
     isBufferPlayback = false,
+    followTimeUs,
   } = options;
 
   const [frames, setFrames] = useState<FrameWithHex[]>([]);
@@ -214,15 +218,6 @@ export function useBufferFrameView(
         if (!isMounted) return;
 
         const withHex = addHexBytes(response.frames);
-        console.log('[useBufferFrameView] fetchPage result', {
-          currentPage,
-          pageSize,
-          offset,
-          responseFrameCount: response.frames.length,
-          responseTotalCount: response.total_count,
-          firstFrame: response.frames[0] ? { frameId: response.frames[0].frame_id, ts: response.frames[0].timestamp_us } : null,
-          lastFrame: response.frames[response.frames.length - 1] ? { frameId: response.frames[response.frames.length - 1].frame_id, ts: response.frames[response.frames.length - 1].timestamp_us } : null,
-        });
         setFrames(withHex);
         setTotalCount(response.total_count);
       } catch (e) {
@@ -256,7 +251,6 @@ export function useBufferFrameView(
           selectedIdsRef.current
         );
         const targetPage = Math.floor(offset / pageSizeRef.current);
-        console.log('[useBufferFrameView] navigateToTimestamp', { timeUs: timeUsInt, offset, targetPage, pageSize: pageSizeRef.current });
         setCurrentPage(targetPage);
       } catch (e) {
         console.error("[useBufferFrameView] timestamp navigation error:", e);
@@ -264,6 +258,33 @@ export function useBufferFrameView(
     },
     [bufferId]
   );
+
+  // FOLLOW MODE: Auto-navigate to page containing followTimeUs during buffer playback
+  // The hook owns the page state, so follow logic lives here (not in external effects)
+  const followPendingRef = useRef(false);
+
+  useEffect(() => {
+    if (followTimeUs == null || !bufferId || !isBufferPlayback) return;
+    if (followPendingRef.current) return;
+
+    // If we have frames, check whether the timestamp is already on the current page
+    if (frames.length > 0) {
+      const firstTs = frames[0].timestamp_us;
+      const lastTs = frames[frames.length - 1].timestamp_us;
+      if (followTimeUs >= firstTs && followTimeUs <= lastTs) return;
+    }
+
+    // Timestamp is outside the current page (or no frames loaded yet) — navigate
+    followPendingRef.current = true;
+    const timeUsInt = Math.round(followTimeUs);
+    findBufferOffsetForTimestamp(timeUsInt, selectedIdsRef.current)
+      .then((offset) => {
+        const targetPage = Math.floor(offset / pageSizeRef.current);
+        setCurrentPage(targetPage);
+      })
+      .catch((e) => console.error("[useBufferFrameView] follow navigation error:", e))
+      .finally(() => { followPendingRef.current = false; });
+  }, [followTimeUs, bufferId, isBufferPlayback, frames]);
 
   // Track previous selection to detect actual changes
   const prevSelectedFramesRef = useRef<Set<number>>(selectedFrames);

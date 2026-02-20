@@ -143,6 +143,9 @@ function DiscoveryFramesView({
   const effectiveBufferId = bufferId ?? bufferMetadata?.id ?? null;
   const useBufferFirstMode = effectiveBufferId !== null;
 
+  // Buffer playback = pagination mode (not tail-follow). True for: buf_N profile, paused stream, or store-level buffer mode (after ingest)
+  const isBufferPlayback = isBufferMode || isStreamPaused || bufferMode.enabled;
+
   const bufferFrameView = useBufferFrameView({
     bufferId: effectiveBufferId,
     isStreaming,
@@ -150,8 +153,9 @@ function DiscoveryFramesView({
     pageSize: renderBuffer === -1 ? 1000 : renderBuffer,
     tailSize: renderBuffer === -1 ? 100 : renderBuffer,
     pollIntervalMs: 200,
-    // Use pagination mode when: in buffer mode, OR when stream is paused
-    isBufferPlayback: isBufferMode || isStreamPaused,
+    isBufferPlayback,
+    // During buffer playback, the hook follows the playback position and auto-navigates pages
+    followTimeUs: isBufferPlayback ? currentTimeUs : null,
   });
 
   // Tab state for CAN frames view - stored in UI store so analysis can switch to it
@@ -552,21 +556,8 @@ function DiscoveryFramesView({
   const effectivePageSize = renderBuffer === -1 ? 1000 : renderBuffer;
   const effectivePageStartIndex = effectiveCurrentPage * effectivePageSize;
 
-  // Use refs to avoid infinite loops in useEffect when using effectiveCurrentPage
-  const effectiveCurrentPageRef = useRef(effectiveCurrentPage);
-  useEffect(() => {
-    effectiveCurrentPageRef.current = effectiveCurrentPage;
-  }, [effectiveCurrentPage]);
 
-  // Auto-navigate to page containing currentFrameIndex when stepping
-  useEffect(() => {
-    if (currentFrameIndex == null || !isStreamPaused) return;
-    const pageSize = renderBuffer === -1 ? 1000 : renderBuffer;
-    const targetPage = Math.floor(currentFrameIndex / pageSize);
-    if (targetPage !== effectiveCurrentPageRef.current && targetPage >= 0 && targetPage < effectiveTotalPages) {
-      setCurrentPageStable(targetPage);
-    }
-  }, [currentFrameIndex, isStreamPaused, renderBuffer, effectiveTotalPages, setCurrentPageStable]);
+
 
   // Ensure frames are always sorted by timestamp ascending (oldest at top)
   // regardless of playback direction. Track if we reversed for index mapping.
@@ -699,25 +690,6 @@ function DiscoveryFramesView({
     return { show: false, minTimeUs: 0, maxTimeUs: 0, currentTimeUs: 0, onScrub: () => {}, disabled: true };
   }, [useBufferFirstMode, bufferFrameView.timeRange, bufferMode.enabled, isBufferMode, isStreaming, bufferMetadata, frames, currentTimeUs, visibleFrames, handleBufferFirstScrub, handleBufferScrub, handleNormalScrub]);
 
-  // Auto-navigate to the page containing the current frame during playback
-  // Uses timestamp-based navigation since frames may be filtered
-  // During live streaming, currentTimeUs changes frequently so we skip navigation
-  useEffect(() => {
-    if (currentTimeUs == null || isStreaming) return;
-
-    // Check if the current timestamp is within the visible frames' time range
-    if (visibleFrames.length === 0) return;
-
-    const firstTs = visibleFrames[0].timestamp_us;
-    const lastTs = visibleFrames[visibleFrames.length - 1].timestamp_us;
-
-    // If current time is outside the visible range, navigate to the correct page
-    if (currentTimeUs < firstTs || currentTimeUs > lastTs) {
-      // Use the hook's navigateToTimestamp to find the correct page
-      hookNavigateToTimestampRef.current(currentTimeUs);
-    }
-  }, [currentTimeUs, isStreaming, visibleFrames]);
-
   // Calculate which row to highlight based on current timestamp
   // Since frames can be filtered, we find the matching frame by timestamp rather than index
   // Returns the index within visibleFrames, or null if current frame is not visible
@@ -744,24 +716,8 @@ function DiscoveryFramesView({
       }
     }
 
-    console.log('[DiscoveryFramesView] highlightedRowIndex calculation (timestamp-based)', {
-      currentTimeUs,
-      currentFrameIndex,
-      visibleFramesLength: visibleFrames.length,
-      matchIndex,
-      matchedFrame: matchIndex >= 0 ? { frameId: visibleFrames[matchIndex]?.frame_id, ts: visibleFrames[matchIndex]?.timestamp_us } : null,
-      firstFrame: visibleFrames[0] ? { frameId: visibleFrames[0].frame_id, ts: visibleFrames[0].timestamp_us } : null,
-      lastFrame: visibleFrames[visibleFrames.length - 1] ? { frameId: visibleFrames[visibleFrames.length - 1].frame_id, ts: visibleFrames[visibleFrames.length - 1].timestamp_us } : null,
-    });
-
-    if (matchIndex >= 0) {
-      console.log('[DiscoveryFramesView] highlight result', { rowIndex: matchIndex, highlightedFrame: visibleFrames[matchIndex]?.frame_id });
-      return matchIndex;
-    }
-
-    console.log('[DiscoveryFramesView] currentTimeUs not found in visibleFrames');
-    return null;
-  }, [currentTimeUs, visibleFrames, currentFrameIndex]);
+    return matchIndex >= 0 ? matchIndex : null;
+  }, [currentTimeUs, visibleFrames]);
 
   // Handle row click - convert row index to global frame index and get timestamp
   const handleRowClick = useCallback((rowIndex: number) => {
