@@ -39,12 +39,12 @@ interface DiscoveryFrameState {
   };
 
   // Actions - Data management
-  addFrames: (newFrames: FrameMessage[], maxBuffer: number, skipFramePicker?: boolean) => void;
+  addFrames: (newFrames: FrameMessage[], maxBuffer: number, skipFramePicker?: boolean, activeSelectionSetSelectedIds?: Set<number> | null) => void;
   clearBuffer: () => void;
   clearFramePicker: () => void;
   clearAll: () => void;
   setFrames: (frames: FrameMessage[]) => void;
-  rebuildFramePickerFromBuffer: () => void;
+  rebuildFramePickerFromBuffer: (activeSelectionSetSelectedIds?: Set<number> | null) => void;
 
   // Actions - Frame selection
   toggleFrameSelection: (id: number, activeSelectionSetId: string | null, setDirty: (dirty: boolean) => void) => void;
@@ -63,7 +63,7 @@ interface DiscoveryFrameState {
     bus: number;
     is_extended: boolean;
     has_dlc_mismatch: boolean;
-  }>, protocol?: string) => void;
+  }>, protocol?: string, activeSelectionSetSelectedIds?: Set<number> | null) => void;
 }
 
 export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => ({
@@ -76,7 +76,7 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
   bufferMode: { enabled: false, totalFrames: 0, viewMode: "pagination" },
 
   // Data management actions
-  addFrames: (newFrames, maxBuffer, skipFramePicker = false) => {
+  addFrames: (newFrames, maxBuffer, skipFramePicker = false, activeSelectionSetSelectedIds = null) => {
     pendingFrames.push(...newFrames);
 
     if (flushTimeout === null) {
@@ -124,7 +124,14 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
             const nextSelectedFrames = new Set(selectedFrames);
             newlyDiscovered.forEach((id) => {
               nextSeenIds.add(id);
-              nextSelectedFrames.add(id);
+              // When a selection set is active, only auto-select frames that are in the set
+              if (activeSelectionSetSelectedIds) {
+                if (activeSelectionSetSelectedIds.has(id)) {
+                  nextSelectedFrames.add(id);
+                }
+              } else {
+                nextSelectedFrames.add(id);
+              }
             });
             stateUpdate.seenIds = nextSeenIds;
             stateUpdate.selectedFrames = nextSelectedFrames;
@@ -216,7 +223,7 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
     get().rebuildFramePickerFromBuffer();
   },
 
-  rebuildFramePickerFromBuffer: () => {
+  rebuildFramePickerFromBuffer: (activeSelectionSetSelectedIds = null) => {
     const { frames } = get();
     if (frames.length === 0) return;
 
@@ -229,7 +236,13 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
     for (const f of frames) {
       if (!nextSeenIds.has(f.frame_id)) {
         nextSeenIds.add(f.frame_id);
-        nextSelectedFrames.add(f.frame_id);
+        if (activeSelectionSetSelectedIds) {
+          if (activeSelectionSetSelectedIds.has(f.frame_id)) {
+            nextSelectedFrames.add(f.frame_id);
+          }
+        } else {
+          nextSelectedFrames.add(f.frame_id);
+        }
       }
 
       const current = nextFrameInfoMap.get(f.frame_id);
@@ -368,7 +381,7 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
     }));
   },
 
-  setFrameInfoFromBuffer: (frameInfoList, protocol) => {
+  setFrameInfoFromBuffer: (frameInfoList, protocol, activeSelectionSetSelectedIds = null) => {
     console.log(`[discoveryFrameStore] Setting frame info from buffer: ${frameInfoList.length} unique frames, protocol: ${protocol || 'can'}`);
 
     const nextSeenIds = new Set<number>();
@@ -377,7 +390,13 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
 
     for (const info of frameInfoList) {
       nextSeenIds.add(info.frame_id);
-      nextSelectedFrames.add(info.frame_id);
+      if (activeSelectionSetSelectedIds) {
+        if (activeSelectionSetSelectedIds.has(info.frame_id)) {
+          nextSelectedFrames.add(info.frame_id);
+        }
+      } else {
+        nextSelectedFrames.add(info.frame_id);
+      }
       nextFrameInfoMap.set(info.frame_id, {
         len: info.max_dlc,
         isExtended: info.is_extended,

@@ -47,6 +47,8 @@ interface DiscoveryUIState {
   // Selection set state
   activeSelectionSetId: string | null;
   selectionSetDirty: boolean;
+  /** Cached selectedIds from the active selection set — used to gate auto-selection during ingestion */
+  activeSelectionSetSelectedIds: Set<number> | null;
 
   // Frame view tab state
   framesViewActiveTab: 'frames' | 'filtered' | 'analysis';
@@ -84,6 +86,7 @@ interface DiscoveryUIState {
   // Actions - Selection sets
   setActiveSelectionSet: (id: string | null) => void;
   setSelectionSetDirty: (dirty: boolean) => void;
+  setActiveSelectionSetSelectedIds: (ids: Set<number> | null) => void;
 
   // Actions - Frame view tabs
   setFramesViewActiveTab: (tab: 'frames' | 'filtered' | 'analysis') => void;
@@ -115,6 +118,7 @@ export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
   serialConfig: null,
   activeSelectionSetId: null,
   selectionSetDirty: false,
+  activeSelectionSetSelectedIds: null,
   framesViewActiveTab: 'frames',
   showAsciiColumn: false,
   showBusColumn: false,
@@ -234,6 +238,7 @@ export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
   // Selection sets
   setActiveSelectionSet: (id) => set({ activeSelectionSetId: id }),
   setSelectionSetDirty: (dirty) => set({ selectionSetDirty: dirty }),
+  setActiveSelectionSetSelectedIds: (ids) => set({ activeSelectionSetSelectedIds: ids }),
 
   // Frame view tabs
   setFramesViewActiveTab: (tab) => set({ framesViewActiveTab: tab }),

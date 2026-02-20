@@ -6,6 +6,7 @@ import { borderDivider, hoverLight, bgSurface } from "../styles";
 import Dialog from "../components/Dialog";
 import FramePicker from "../components/FramePicker";
 import type { FrameInfo } from "../types/common";
+import type { SelectionSet } from "../utils/selectionSets";
 
 type Props = {
   isOpen: boolean;
@@ -20,7 +21,10 @@ type Props = {
   activeSelectionSetId?: string | null;
   selectionSetDirty?: boolean;
   onSaveSelectionSet?: () => void;
-  onOpenSelectionSetPicker?: () => void;
+  selectionSets?: SelectionSet[];
+  onLoadSelectionSet?: (selectionSet: SelectionSet) => void;
+  onClearSelectionSet?: () => void;
+  onSaveAsNewSelectionSet?: () => void;
 };
 
 export default function FramePickerDialog({
@@ -36,7 +40,10 @@ export default function FramePickerDialog({
   activeSelectionSetId,
   selectionSetDirty,
   onSaveSelectionSet,
-  onOpenSelectionSetPicker,
+  selectionSets,
+  onLoadSelectionSet,
+  onClearSelectionSet,
+  onSaveAsNewSelectionSet,
 }: Props) {
   return (
     <Dialog isOpen={isOpen} onBackdropClick={onClose} maxWidth="max-w-sm">
@@ -64,7 +71,10 @@ export default function FramePickerDialog({
             activeSelectionSetId={activeSelectionSetId}
             selectionSetDirty={selectionSetDirty}
             onSaveSelectionSet={onSaveSelectionSet}
-            onOpenSelectionSetPicker={onOpenSelectionSetPicker}
+            selectionSets={selectionSets}
+            onLoadSelectionSet={onLoadSelectionSet}
+            onClearSelectionSet={onClearSelectionSet}
+            onSaveAsNewSelectionSet={onSaveAsNewSelectionSet}
             defaultExpanded={true}
             noInnerScroll={true}
           />

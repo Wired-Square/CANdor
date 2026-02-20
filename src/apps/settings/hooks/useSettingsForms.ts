@@ -29,6 +29,9 @@ export function useSettingsForms() {
   const [newBookmarkName, setNewBookmarkName] = useState('');
   const [newBookmarkTimeBounds, setNewBookmarkTimeBounds] = useState<TimeBounds>(defaultTimeBounds);
 
+  // Selection set dialog form (for editing)
+  const [selectionSetName, setSelectionSetName] = useState('');
+
   // Reset helpers
   const resetCatalogForm = () => {
     setCatalogName('');
@@ -81,6 +84,15 @@ export function useSettingsForms() {
     setNewBookmarkTimeBounds(defaultTimeBounds);
   }, []);
 
+  // Reset / initialize selection set form
+  const resetSelectionSetForm = useCallback(() => {
+    setSelectionSetName('');
+  }, []);
+
+  const initEditSelectionSetForm = useCallback((name: string) => {
+    setSelectionSetName(name);
+  }, []);
+
   // Handle time bounds changes
   const handleBookmarkTimeBoundsChange = useCallback((bounds: TimeBounds) => {
     setBookmarkTimeBounds(bounds);
@@ -117,6 +129,12 @@ export function useSettingsForms() {
     setNewBookmarkTimeBounds: handleNewBookmarkTimeBoundsChange,
     resetNewBookmarkForm,
     initNewBookmarkForm,
+
+    // Selection set form (editing)
+    selectionSetName,
+    setSelectionSetName,
+    resetSelectionSetForm,
+    initEditSelectionSetForm,
   };
 }
 

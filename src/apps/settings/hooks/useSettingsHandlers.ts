@@ -10,6 +10,10 @@ import {
   useBookmarkHandlers,
   type BookmarkHandlers,
 } from './handlers/useBookmarkHandlers';
+import {
+  useSelectionSetSettingsHandlers,
+  type SelectionSetSettingsHandlers,
+} from './handlers/useSelectionSetSettingsHandlers';
 import type { IOProfile } from '../stores/settingsStore';
 import type { TimeBounds } from '../../../components/TimeBoundsInput';
 
@@ -41,9 +45,14 @@ export interface UseSettingsHandlersParams {
   resetNewBookmarkForm: () => void;
   initNewBookmarkForm: (defaultProfileId: string) => void;
   timeRangeCapableProfiles: IOProfile[];
+
+  // Selection set form (editing)
+  selectionSetName: string;
+  resetSelectionSetForm: () => void;
+  initEditSelectionSetForm: (name: string) => void;
 }
 
-export type SettingsHandlers = IOProfileHandlers & SettingsCatalogHandlers & BookmarkHandlers;
+export type SettingsHandlers = IOProfileHandlers & SettingsCatalogHandlers & BookmarkHandlers & SelectionSetSettingsHandlers;
 
 export function useSettingsHandlers(params: UseSettingsHandlersParams): SettingsHandlers {
   // IO Profile handlers (no params needed - uses store directly)
@@ -74,10 +83,18 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): Settings
     timeRangeCapableProfiles: params.timeRangeCapableProfiles,
   });
 
+  // Selection set handlers
+  const selectionSetHandlers = useSelectionSetSettingsHandlers({
+    selectionSetName: params.selectionSetName,
+    resetSelectionSetForm: params.resetSelectionSetForm,
+    initEditSelectionSetForm: params.initEditSelectionSetForm,
+  });
+
   // Spread all handlers into a flat object
   return {
     ...ioProfileHandlers,
     ...catalogHandlers,
     ...bookmarkHandlers,
+    ...selectionSetHandlers,
   };
 }

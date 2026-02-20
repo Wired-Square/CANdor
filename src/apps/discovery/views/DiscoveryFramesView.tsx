@@ -13,6 +13,7 @@ import type { PlaybackSpeed } from "../../../components/TimeController";
 import ChangesResultView from "./tools/ChangesResultView";
 import MessageOrderResultView from "./tools/MessageOrderResultView";
 import ChecksumDiscoveryResultView from "./tools/ChecksumDiscoveryResultView";
+import FilteredTabContent from "./FilteredTabContent";
 import { bgDataView, textDataSecondary, bgSurface, textMuted, textPrimary, textSecondary, borderDefault } from "../../../styles";
 import type { FrameMessage } from "../../../types/frame";
 import type { IOCapabilities } from "../../../api/io";
@@ -128,6 +129,7 @@ function DiscoveryFramesView({
   const renderBuffer = useDiscoveryStore((s) => s.renderBuffer);
   const setRenderBuffer = useDiscoveryStore((s) => s.setRenderBuffer);
   const selectedFrames = useDiscoveryStore((s) => s.selectedFrames);
+  const seenIds = useDiscoveryStore((s) => s.seenIds);
   const bufferMode = useDiscoveryStore((s) => s.bufferMode);
   const setBufferViewMode = useDiscoveryStore((s) => s.setBufferViewMode);
   const toolboxResults = useDiscoveryStore((s) => s.toolbox);
@@ -613,17 +615,25 @@ function DiscoveryFramesView({
   // Check if we have any analysis results
   const hasAnalysisResults = toolboxResults.changesResults !== null || toolboxResults.messageOrderResults !== null || toolboxResults.checksumDiscoveryResults !== null;
 
+  // Compute count of filtered-out frame IDs (seen but not selected)
+  const filteredOutCount = useMemo(() => {
+    let count = 0;
+    for (const id of seenIds) {
+      if (!selectedFrames.has(id)) count++;
+    }
+    return count;
+  }, [seenIds, selectedFrames]);
+
   // Build tab definitions for shared tab bar
   const frameCount = filteredCount > 0 ? filteredCount : frames.length;
   const tabs: TabDefinition[] = useMemo(() => {
     const result: TabDefinition[] = [
       { id: 'frames', label: 'Frames', count: frameCount, countColor: 'green' as const },
     ];
-    // Filtered tab is a placeholder for now - will be implemented in a future update
-    // result.push({ id: 'filtered', label: 'Filtered', count: 0, countColor: 'amber' as const });
+    result.push({ id: 'filtered', label: 'Filtered', count: filteredOutCount, countColor: 'orange' as const });
     result.push({ id: 'analysis', label: 'Analysis', hasIndicator: hasAnalysisResults });
     return result;
-  }, [frameCount, hasAnalysisResults]);
+  }, [frameCount, filteredOutCount, hasAnalysisResults]);
 
   // Handle page size change - reset to page 0
   const handlePageSizeChange = useCallback((size: number) => {
@@ -946,6 +956,16 @@ function DiscoveryFramesView({
           pageStartIndex={effectivePageStartIndex}
           framesReversed={framesWereReversed}
           pageFrameCount={visibleFrames.length}
+        />
+      )}
+
+      {activeTab === 'filtered' && (
+        <FilteredTabContent
+          displayFrameIdFormat={displayFrameIdFormat}
+          displayTimeFormat={displayTimeFormat}
+          isStreaming={isStreaming}
+          streamStartTimeUs={effectiveStartTimeUs}
+          bufferMetadata={bufferMetadata}
         />
       )}
 

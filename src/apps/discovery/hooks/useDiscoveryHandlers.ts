@@ -146,6 +146,8 @@ export interface UseDiscoveryHandlersParams {
   openBookmarkDialog: () => void;
   closeSpeedChangeDialog: () => void;
   openSaveSelectionSetDialog: () => void;
+  /** Called after a selection set is saved or updated */
+  onAfterSelectionSetMutate?: () => void;
   closeExportDialog: () => void;
   closeIoReaderPicker: () => void;
 }
@@ -274,6 +276,7 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     setSelectionSetDirty: params.setSelectionSetDirty,
     applySelectionSet: params.applySelectionSet,
     openSaveSelectionSetDialog: params.openSaveSelectionSetDialog,
+    onAfterMutate: params.onAfterSelectionSetMutate,
   });
 
   // Handle clear discovered frames

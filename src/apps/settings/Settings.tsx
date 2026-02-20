@@ -5,7 +5,7 @@ import { pickDirectory } from '../../api/dialogs';
 import AppLayout from "../../components/AppLayout";
 import AppTopBar from "../../components/AppTopBar";
 import AppSideBar, { type SideBarItem } from "../../components/AppSideBar";
-import { Cog, MapPin, Cable, BookOpen, Monitor, Bookmark } from "lucide-react";
+import { Cog, MapPin, Cable, BookOpen, Monitor, Bookmark, Star } from "lucide-react";
 import { bgDataView, borderDataView } from "../../styles/colourTokens";
 import LocationsView from './views/LocationsView';
 import DisplayView from './views/DisplayView';
@@ -13,11 +13,13 @@ import CatalogsView from './views/CatalogsView';
 import DataIOView from './views/DataIOView';
 import GeneralView from './views/GeneralView';
 import BookmarksView from './views/BookmarksView';
+import SelectionSetsView from './views/SelectionSetsView';
 import IOProfileDialog from './dialogs/IOProfileDialog';
 import EditCatalogDialog from './dialogs/EditCatalogDialog';
 import ConfirmDeleteDialog from '../../dialogs/ConfirmDeleteDialog';
 import DuplicateCatalogDialog from './dialogs/DuplicateCatalogDialog';
 import EditBookmarkDialog from './dialogs/EditBookmarkDialog';
+import EditSelectionSetDialog from './dialogs/EditSelectionSetDialog';
 import CreateBookmarkDialog from './dialogs/CreateBookmarkDialog';
 import { useSettingsStore, type SettingsSection } from './stores/settingsStore';
 import { useSettingsForms } from './hooks/useSettingsForms';
@@ -34,6 +36,7 @@ export default function Settings() {
   const setSection = useSettingsStore((s) => s.setSection);
   const loadSettings = useSettingsStore((s) => s.loadSettings);
   const loadBookmarks = useSettingsStore((s) => s.loadBookmarks);
+  const loadSelectionSets = useSettingsStore((s) => s.loadSelectionSets);
 
   // Locations
   const decoderDir = useSettingsStore((s) => s.locations.decoderDir);
@@ -99,6 +102,9 @@ export default function Settings() {
   // Bookmarks
   const bookmarks = useSettingsStore((s) => s.bookmarks);
 
+  // Selection sets
+  const selectionSets = useSettingsStore((s) => s.selectionSets);
+
   // Dialog state
   const dialogs = useSettingsStore((s) => s.ui.dialogs);
   const dialogPayload = useSettingsStore((s) => s.ui.dialogPayload);
@@ -122,6 +128,9 @@ export default function Settings() {
     resetNewBookmarkForm: forms.resetNewBookmarkForm,
     initNewBookmarkForm: forms.initNewBookmarkForm,
     timeRangeCapableProfiles,
+    selectionSetName: forms.selectionSetName,
+    resetSelectionSetForm: forms.resetSelectionSetForm,
+    initEditSelectionSetForm: forms.initEditSelectionSetForm,
   });
 
   // Sidebar collapsed state
@@ -134,8 +143,9 @@ export default function Settings() {
   useEffect(() => {
     loadSettings();
     loadBookmarks();
+    loadSelectionSets();
     isIOS().then(setIsIOSPlatform);
-  }, [loadSettings, loadBookmarks]);
+  }, [loadSettings, loadBookmarks, loadSelectionSets]);
 
   // Sidebar items (Storage hidden on iOS due to sandboxing restrictions)
   const sidebarItems: SideBarItem[] = [
@@ -145,6 +155,7 @@ export default function Settings() {
     { id: 'data-io', label: 'Data IO', icon: Cable },
     { id: 'catalogs', label: 'Catalogs', icon: BookOpen },
     { id: 'bookmarks', label: 'Bookmarks', icon: Bookmark },
+    { id: 'selection-sets', label: 'Selection Sets', icon: Star },
     { id: 'display', label: 'Display', icon: Monitor },
   ];
 
@@ -255,6 +266,15 @@ export default function Settings() {
               onEditBookmark={handlers.handleEditBookmark}
               onDeleteBookmark={handlers.handleDeleteBookmark}
               onNewBookmark={handlers.handleNewBookmark}
+            />
+          )}
+
+          {/* Selection Sets Section */}
+          {currentSection === 'selection-sets' && (
+            <SelectionSetsView
+              selectionSets={selectionSets}
+              onEditSelectionSet={handlers.handleEditSelectionSet}
+              onDeleteSelectionSet={handlers.handleDeleteSelectionSet}
             />
           )}
 
@@ -382,6 +402,25 @@ export default function Settings() {
         highlightText={dialogPayload.bookmarkToDelete?.name}
         onCancel={handlers.handleCancelDeleteBookmark}
         onConfirm={handlers.handleConfirmDeleteBookmark}
+      />
+
+      {/* Edit Selection Set Dialog */}
+      <EditSelectionSetDialog
+        isOpen={dialogs.editSelectionSet}
+        name={forms.selectionSetName}
+        onChangeName={forms.setSelectionSetName}
+        onCancel={handlers.handleCancelEditSelectionSet}
+        onSave={handlers.handleConfirmEditSelectionSet}
+      />
+
+      {/* Delete Selection Set Confirmation Dialog */}
+      <ConfirmDeleteDialog
+        open={dialogs.deleteSelectionSet}
+        title="Delete Selection Set"
+        message="Are you sure you want to delete"
+        highlightText={dialogPayload.selectionSetToDelete?.name}
+        onCancel={handlers.handleCancelDeleteSelectionSet}
+        onConfirm={handlers.handleConfirmDeleteSelectionSet}
       />
     </AppLayout>
   );

@@ -25,6 +25,9 @@ export interface UseSelectionSetHandlersParams {
 
   // Dialog controls
   openSaveDialog: () => void;
+
+  /** Called after a selection set is saved or updated (for refreshing lists) */
+  onAfterMutate?: () => void;
 }
 
 export function useSelectionSetHandlers({
@@ -36,6 +39,7 @@ export function useSelectionSetHandlers({
   setSelectionSetDirty,
   applySelectionSet,
   openSaveDialog,
+  onAfterMutate,
 }: UseSelectionSetHandlersParams) {
   // Save selection set: update existing if dirty, otherwise open dialog
   const handleSaveSelectionSet = useCallback(async () => {
@@ -47,6 +51,7 @@ export function useSelectionSetHandlers({
         selectedIds: selectedIds,
       });
       setSelectionSetDirty(false);
+      onAfterMutate?.();
     } else {
       openSaveDialog();
     }
@@ -57,6 +62,7 @@ export function useSelectionSetHandlers({
     selectedFrames,
     setSelectionSetDirty,
     openSaveDialog,
+    onAfterMutate,
   ]);
 
   // Save new selection set with a name
@@ -67,8 +73,9 @@ export function useSelectionSetHandlers({
       const newSet = await addSelectionSet(name, allFrameIds, selectedIds);
       setActiveSelectionSet(newSet.id);
       setSelectionSetDirty(false);
+      onAfterMutate?.();
     },
-    [frameMap, selectedFrames, setActiveSelectionSet, setSelectionSetDirty]
+    [frameMap, selectedFrames, setActiveSelectionSet, setSelectionSetDirty, onAfterMutate]
   );
 
   // Load a selection set
@@ -76,8 +83,18 @@ export function useSelectionSetHandlers({
     async (selectionSet: SelectionSet) => {
       applySelectionSet(selectionSet);
       await markSelectionSetUsed(selectionSet.id);
+
+      // If the current frame map has IDs not tracked by the selection set,
+      // mark dirty so the user can save those new frames into the set
+      const setFrameIds = new Set(selectionSet.frameIds);
+      for (const frameId of frameMap.keys()) {
+        if (!setFrameIds.has(frameId)) {
+          setSelectionSetDirty(true);
+          break;
+        }
+      }
     },
-    [applySelectionSet]
+    [applySelectionSet, frameMap, setSelectionSetDirty]
   );
 
   // Clear current selection set

@@ -19,6 +19,9 @@ export interface UseDiscoverySelectionHandlersParams {
 
   // Dialog controls
   openSaveSelectionSetDialog: () => void;
+
+  /** Called after a selection set is saved or updated */
+  onAfterMutate?: () => void;
 }
 
 export function useDiscoverySelectionHandlers({
@@ -30,6 +33,7 @@ export function useDiscoverySelectionHandlers({
   setSelectionSetDirty,
   applySelectionSet,
   openSaveSelectionSetDialog,
+  onAfterMutate,
 }: UseDiscoverySelectionHandlersParams) {
   return useSelectionSetHandlers({
     frameMap: frameInfoMap,
@@ -40,6 +44,7 @@ export function useDiscoverySelectionHandlers({
     setSelectionSetDirty,
     applySelectionSet,
     openSaveDialog: openSaveSelectionSetDialog,
+    onAfterMutate,
   });
 }
 

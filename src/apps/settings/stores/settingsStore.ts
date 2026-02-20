@@ -15,9 +15,13 @@ import {
   getAllFavorites,
   type TimeRangeFavorite,
 } from '../../../utils/favorites';
+import {
+  getAllSelectionSets,
+  type SelectionSet,
+} from '../../../utils/selectionSets';
 import { setIOSScreenWake } from '../../../utils/platform';
 // Types
-export type SettingsSection = "general" | "locations" | "data-io" | "catalogs" | "bookmarks" | "display";
+export type SettingsSection = "general" | "locations" | "data-io" | "catalogs" | "bookmarks" | "selection-sets" | "display";
 export type DefaultFrameType = 'can' | 'modbus' | 'serial';
 
 export interface DirectoryValidation {
@@ -130,7 +134,9 @@ type DialogName =
   | 'editCatalog'
   | 'editBookmark'
   | 'deleteBookmark'
-  | 'createBookmark';
+  | 'createBookmark'
+  | 'editSelectionSet'
+  | 'deleteSelectionSet';
 
 interface DialogPayload {
   editingProfileId: string | null;
@@ -141,6 +147,8 @@ interface DialogPayload {
   catalogToEdit: CatalogFile | null;
   bookmarkToEdit: TimeRangeFavorite | null;
   bookmarkToDelete: TimeRangeFavorite | null;
+  selectionSetToEdit: SelectionSet | null;
+  selectionSetToDelete: SelectionSet | null;
 }
 
 const initialDialogs: Record<DialogName, boolean> = {
@@ -152,6 +160,8 @@ const initialDialogs: Record<DialogName, boolean> = {
   editBookmark: false,
   deleteBookmark: false,
   createBookmark: false,
+  editSelectionSet: false,
+  deleteSelectionSet: false,
 };
 
 const initialDialogPayload: DialogPayload = {
@@ -163,6 +173,8 @@ const initialDialogPayload: DialogPayload = {
   catalogToEdit: null,
   bookmarkToEdit: null,
   bookmarkToDelete: null,
+  selectionSetToEdit: null,
+  selectionSetToDelete: null,
 };
 
 const defaultSignalColours: SignalColours = {
@@ -234,6 +246,9 @@ interface SettingsState {
   // Bookmarks
   bookmarks: TimeRangeFavorite[];
 
+  // Selection sets
+  selectionSets: SelectionSet[];
+
   // Display settings
   display: {
     frameIdFormat: 'hex' | 'decimal';
@@ -272,6 +287,7 @@ interface SettingsState {
   loadSettings: () => Promise<void>;
   loadCatalogs: () => Promise<void>;
   loadBookmarks: () => Promise<void>;
+  loadSelectionSets: () => Promise<void>;
 
   // Actions - Saving
   saveSettings: () => Promise<void>;
@@ -367,6 +383,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   bookmarks: [],
+
+  selectionSets: [],
 
   display: {
     frameIdFormat: 'hex',
@@ -586,6 +604,16 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       set({ bookmarks: allBookmarks });
     } catch (error) {
       console.error('Failed to load bookmarks:', error);
+    }
+  },
+
+  loadSelectionSets: async () => {
+    try {
+      const allSets = await getAllSelectionSets();
+      allSets.sort((a, b) => a.name.localeCompare(b.name));
+      set({ selectionSets: allSets });
+    } catch (error) {
+      console.error('Failed to load selection sets:', error);
     }
   },
 

@@ -26,8 +26,9 @@ import CatalogPickerDialog from "../../dialogs/CatalogPickerDialog";
 import FlashNotification from "../../components/FlashNotification";
 import BookmarkEditorDialog from "../../dialogs/BookmarkEditorDialog";
 import SaveSelectionSetDialog from "../../dialogs/SaveSelectionSetDialog";
-import SelectionSetPickerDialog from "../../dialogs/SelectionSetPickerDialog";
 import FilterDialog from "./dialogs/FilterDialog";
+import { getAllSelectionSets, type SelectionSet } from "../../utils/selectionSets";
+import { useSettingsStore } from "../settings/stores/settingsStore";
 import { WINDOW_EVENTS, type CatalogSavedPayload, type BufferChangedPayload } from "../../events/registry";
 import { useDialogManager } from "../../hooks/useDialogManager";
 import { useDecoderHandlers } from "./hooks/useDecoderHandlers";
@@ -48,7 +49,6 @@ export default function Decoder() {
   const dialogs = useDialogManager([
     'bookmarkPicker',
     'saveSelectionSet',
-    'selectionSetPicker',
     'framePicker',
     'ioReaderPicker',
     'speedPicker',
@@ -56,6 +56,21 @@ export default function Decoder() {
     'filter',
   ] as const);
   const [bufferMetadata, setBufferMetadata] = useState<BufferMetadata | null>(null);
+
+  // Selection sets for the dropdown in FramePicker
+  const [selectionSets, setSelectionSets] = useState<SelectionSet[]>([]);
+  const loadSelectionSets = useCallback(async () => {
+    const all = await getAllSelectionSets();
+    all.sort((a, b) => a.name.localeCompare(b.name));
+    setSelectionSets(all);
+  }, []);
+  useEffect(() => { loadSelectionSets(); }, [loadSelectionSets]);
+
+  // Refresh both local dropdown and settings store after selection set mutations
+  const handleSelectionSetMutate = useCallback(async () => {
+    await loadSelectionSets();
+    useSettingsStore.getState().loadSelectionSets();
+  }, [loadSelectionSets]);
 
   // Active tab for per-tab clear functionality
   const [activeTab, setActiveTab] = useState<string>('signals');
@@ -621,6 +636,7 @@ export default function Decoder() {
 
     // Dialog controls
     openSaveSelectionSet: dialogs.saveSelectionSet.open,
+    onAfterSelectionSetMutate: handleSelectionSetMutate,
 
     // Active tab
     activeTab,
@@ -1114,7 +1130,10 @@ export default function Decoder() {
         activeSelectionSetId={activeSelectionSetId}
         selectionSetDirty={selectionSetDirty}
         onSaveSelectionSet={handlers.handleSaveSelectionSet}
-        onOpenSelectionSetPicker={() => dialogs.selectionSetPicker.open()}
+        selectionSets={selectionSets}
+        onLoadSelectionSet={handlers.handleLoadSelectionSet}
+        onClearSelectionSet={handlers.handleClearSelectionSet}
+        onSaveAsNewSelectionSet={() => dialogs.saveSelectionSet.open()}
       />
 
       <IoReaderPickerDialog
@@ -1163,13 +1182,6 @@ export default function Decoder() {
         frameCount={selectedFrames.size}
         onClose={() => dialogs.saveSelectionSet.close()}
         onSave={handlers.handleSaveNewSelectionSet}
-      />
-
-      <SelectionSetPickerDialog
-        isOpen={dialogs.selectionSetPicker.isOpen}
-        onClose={() => dialogs.selectionSetPicker.close()}
-        onLoad={handlers.handleLoadSelectionSet}
-        onClear={handlers.handleClearSelectionSet}
       />
 
       <FilterDialog

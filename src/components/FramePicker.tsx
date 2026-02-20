@@ -7,6 +7,7 @@ import { labelSmall, caption, captionMuted } from "../styles/typography";
 import { hoverLight } from "../styles";
 import { formatFrameId } from "../utils/frameIds";
 import type { FrameInfo } from "../types/common";
+import type { SelectionSet } from "../utils/selectionSets";
 
 type FrameWarning = {
   type: "length-mismatch";
@@ -27,7 +28,14 @@ type Props = {
   activeSelectionSetId?: string | null;
   selectionSetDirty?: boolean;
   onSaveSelectionSet?: () => void;
-  onOpenSelectionSetPicker?: () => void;
+  /** Available selection sets for the dropdown */
+  selectionSets?: SelectionSet[];
+  /** Called when a selection set is chosen from the dropdown */
+  onLoadSelectionSet?: (selectionSet: SelectionSet) => void;
+  /** Called when the dropdown is set to "None" */
+  onClearSelectionSet?: () => void;
+  /** Called when the star icon is clicked to save as a new set */
+  onSaveAsNewSelectionSet?: () => void;
   // Default expanded state
   defaultExpanded?: boolean;
   // Disable inner scroll (for use in dialogs that already scroll)
@@ -46,7 +54,10 @@ function FramePicker({
   activeSelectionSetId,
   selectionSetDirty,
   onSaveSelectionSet,
-  onOpenSelectionSetPicker,
+  selectionSets,
+  onLoadSelectionSet,
+  onClearSelectionSet,
+  onSaveAsNewSelectionSet,
   defaultExpanded = false,
   noInnerScroll = false,
 }: Props) {
@@ -93,19 +104,21 @@ function FramePicker({
 
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 
-  // Determine save icon color based on active set and dirty state
+  // Save icon: only active when there's an active set with unsaved changes
+  const saveDisabled = !activeSelectionSetId || !selectionSetDirty;
+
   const getSaveIconColor = () => {
     if (activeSelectionSetId && selectionSetDirty) {
       return "#b91c1c"; // solid red-700 for dirty
     }
-    return undefined; // Default color otherwise
+    return undefined;
   };
 
   const getSaveIconTitle = () => {
     if (!activeSelectionSetId) {
-      return "Save as selection set";
+      return "No selection set active";
     }
-    return selectionSetDirty ? "Save changes to selection set" : "Selection set saved";
+    return selectionSetDirty ? "Save changes to selection set" : "No unsaved changes";
   };
 
   return (
@@ -139,9 +152,9 @@ function FramePicker({
 
       {isExpanded && (
         <div className="space-y-2">
-          {/* Global All/None icons + Selection Set icons */}
-          {(onSelectAll || onDeselectAll || onSaveSelectionSet || onOpenSelectionSetPicker) && (
-            <div className="flex flex-wrap gap-1">
+          {/* Global All/None icons + Selection Set controls */}
+          {(onSelectAll || onDeselectAll || onSaveSelectionSet || selectionSets) && (
+            <div className="flex flex-wrap items-center gap-1">
               <div className="flex items-center gap-0.5">
                 {onSelectAll && (
                   <button
@@ -173,14 +186,14 @@ function FramePicker({
                     <SquareSlash className={iconSm} />
                   </button>
                 )}
-                {/* Save Selection Set Icon */}
+                {/* Save to active selection set */}
                 {onSaveSelectionSet && (
                   <button
                     type="button"
                     onClick={onSaveSelectionSet}
-                    disabled={!anyFrames && !activeSelectionSetId}
+                    disabled={saveDisabled}
                     className={`p-1 rounded ${
-                      !anyFrames && !activeSelectionSetId
+                      saveDisabled
                         ? "text-[color:var(--text-muted)] cursor-not-allowed"
                         : hoverLight
                     }`}
@@ -190,22 +203,47 @@ function FramePicker({
                     <Save className={iconSm} />
                   </button>
                 )}
-                {/* Selection Set Picker Icon */}
-                {onOpenSelectionSetPicker && (
+                {/* Save as new selection set */}
+                {onSaveAsNewSelectionSet && (
                   <button
                     type="button"
-                    onClick={onOpenSelectionSetPicker}
-                    className={`p-1 rounded ${hoverLight}`}
-                    style={{ color: activeSelectionSetId ? "#eab308" : undefined }}
-                    title={activeSelectionSetId ? "Selection set loaded" : "Load selection set"}
+                    onClick={onSaveAsNewSelectionSet}
+                    disabled={!anyFrames}
+                    className={`p-1 rounded ${
+                      !anyFrames
+                        ? "text-[color:var(--text-muted)] cursor-not-allowed"
+                        : hoverLight
+                    }`}
+                    title="Save as new selection set"
                   >
-                    <Star
-                      className={iconSm}
-                      fill={activeSelectionSetId ? "currentColor" : "none"}
-                    />
+                    <Star className={iconSm} />
                   </button>
                 )}
               </div>
+              {/* Selection set dropdown */}
+              {selectionSets && (
+                <select
+                  value={activeSelectionSetId ?? ""}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    if (id === "") {
+                      onClearSelectionSet?.();
+                    } else {
+                      const set = selectionSets.find((s) => s.id === id);
+                      if (set) onLoadSelectionSet?.(set);
+                    }
+                  }}
+                  className="text-[10px] px-1 py-0.5 rounded border border-[color:var(--border-default)] bg-[var(--bg-surface)] text-[color:var(--text-primary)] max-w-[140px]"
+                  title="Selection set"
+                >
+                  <option value="">-- None --</option>
+                  {selectionSets.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           )}
           {/* Per-bus bulk select buttons */}

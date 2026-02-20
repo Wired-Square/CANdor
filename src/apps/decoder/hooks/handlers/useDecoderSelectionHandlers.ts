@@ -20,6 +20,9 @@ export interface UseDecoderSelectionHandlersParams {
 
   // Dialog controls
   openSaveSelectionSet: () => void;
+
+  /** Called after a selection set is saved or updated */
+  onAfterMutate?: () => void;
 }
 
 export function useDecoderSelectionHandlers({
@@ -31,6 +34,7 @@ export function useDecoderSelectionHandlers({
   setSelectionSetDirty,
   applySelectionSet,
   openSaveSelectionSet,
+  onAfterMutate,
 }: UseDecoderSelectionHandlersParams) {
   return useSelectionSetHandlers({
     frameMap: frames,
@@ -41,6 +45,7 @@ export function useDecoderSelectionHandlers({
     setSelectionSetDirty,
     applySelectionSet,
     openSaveDialog: openSaveSelectionSet,
+    onAfterMutate,
   });
 }
 

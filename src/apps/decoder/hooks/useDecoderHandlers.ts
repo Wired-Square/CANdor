@@ -104,6 +104,9 @@ export interface UseDecoderHandlersParams {
   // Dialog controls
   openSaveSelectionSet: () => void;
 
+  /** Called after a selection set is saved or updated */
+  onAfterSelectionSetMutate?: () => void;
+
   // Active tab
   activeTab: string;
 
@@ -186,6 +189,7 @@ export function useDecoderHandlers(params: UseDecoderHandlersParams): DecoderHan
     setSelectionSetDirty: params.setSelectionSetDirty,
     applySelectionSet: params.applySelectionSet,
     openSaveSelectionSet: params.openSaveSelectionSet,
+    onAfterMutate: params.onAfterSelectionSetMutate,
   });
 
   // Catalog handlers (catalog change, clear data)

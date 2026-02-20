@@ -6,6 +6,18 @@ All notable changes to CANdor will be documented in this file.
 
 ### Added
 
+- **FramePicker selection set dropdown**: Replaced the Star icon with a `<select>` dropdown for quick switching between selection sets. Star icon now saves as a new set, save icon saves to the active set.
+
+- **Selection Sets in Settings**: New "Selection Sets" section in Settings (under Bookmarks) for managing selection sets — rename and delete sets without opening the frame picker.
+
+- **Filtered tab in Discovery**: New "Filtered" tab next to "Frames" showing deselected frame IDs with an orange count badge. Supports streaming tail, stopped pagination, and buffer mode.
+
+- **Discovery auto-selection respects active selection set**: When a selection set is active during streaming, newly discovered frame IDs are only auto-selected if they belong to the active set. Previously all new frames were auto-selected regardless.
+
+- **Selection set dirty detection on load**: Loading a selection set in Decoder or Discovery now marks it as dirty if the app's frame map contains IDs not tracked by the set, enabling immediate save with the additional frames included as deselected.
+
+- **Cross-app selection set refresh**: Saving or creating a selection set in Decoder or Discovery now refreshes the Settings panel's selection set list in real time via an `onAfterMutate` callback.
+
 - **Graph App**: New app for visualising decoded CAN signal values in real time. Features include:
   - **Line chart panels** powered by uPlot for fast time-series plotting with auto-scrolling
   - **Radial gauge panels** with custom SVG arc display showing live signal values

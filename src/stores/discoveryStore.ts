@@ -249,7 +249,7 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
 
     // Frame store actions (with coordination)
     addFrames: (newFrames, skipFramePicker) => {
-      frameStore.addFrames(newFrames, uiStore.maxBuffer, skipFramePicker);
+      frameStore.addFrames(newFrames, uiStore.maxBuffer, skipFramePicker, uiStore.activeSelectionSetSelectedIds);
     },
     clearBuffer: frameStore.clearBuffer,
     clearFramePicker: frameStore.clearFramePicker,
@@ -270,6 +270,9 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     },
     applySelectionSet: (selectionSet) => {
       frameStore.applySelectionSet(selectionSet, uiStore.setActiveSelectionSet, uiStore.setSelectionSetDirty);
+      uiStore.setActiveSelectionSetSelectedIds(
+        new Set(selectionSet.selectedIds ?? selectionSet.frameIds)
+      );
     },
     enableBufferMode: frameStore.enableBufferMode,
     disableBufferMode: frameStore.disableBufferMode,
@@ -318,7 +321,12 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     saveFrames: (decoderDir, saveFrameIdFormat) => {
       return uiStore.saveFrames(decoderDir, saveFrameIdFormat, frameStore.selectedFrames, frameStore.frameInfoMap);
     },
-    setActiveSelectionSet: uiStore.setActiveSelectionSet,
+    setActiveSelectionSet: (id: string | null) => {
+      uiStore.setActiveSelectionSet(id);
+      if (id === null) {
+        uiStore.setActiveSelectionSetSelectedIds(null);
+      }
+    },
     setSelectionSetDirty: uiStore.setSelectionSetDirty,
 
     // Serial store actions
