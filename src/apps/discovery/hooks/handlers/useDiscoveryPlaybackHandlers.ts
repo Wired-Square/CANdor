@@ -1,12 +1,12 @@
 // ui/src/apps/discovery/hooks/handlers/useDiscoveryPlaybackHandlers.ts
 //
-// Playback-related handlers for Discovery: play, pause, stop, speed change, scrub, time range.
+// Playback-related handlers for Discovery: play, pause, stop, speed change, scrub.
+// Time range and frame change handlers are now in shared useTimeHandlers.
 // Uses shared usePlaybackHandlers for play/pause/stop/step consistency with Decoder.
 
 import { useCallback } from "react";
 import { usePlaybackHandlers } from "../../../../hooks/usePlaybackHandlers";
 import type { PlaybackSpeed } from "../../../../stores/discoveryStore";
-import { localToUtc } from "../../../../utils/timeFormat";
 
 export interface UseDiscoveryPlaybackHandlersParams {
   // Session ID for direction control
@@ -18,9 +18,7 @@ export interface UseDiscoveryPlaybackHandlersParams {
   pause: () => Promise<void>;
   resume: () => Promise<void>;
   setSpeed: (speed: number) => Promise<void>;
-  setTimeRange: (start: string, end: string) => Promise<void>;
   seek: (timestampUs: number) => Promise<void>;
-  seekByFrame: (frameIndex: number) => Promise<void>;
 
   // Reader state
   isPaused: boolean;
@@ -35,21 +33,16 @@ export interface UseDiscoveryPlaybackHandlersParams {
   // Selected frame IDs for filtering step operations
   selectedFrameIds?: Set<number>;
 
-  // Time range state
-  startTime: string;
-  endTime: string;
+  // Speed change state
   pendingSpeed: PlaybackSpeed | null;
 
   // State setters
   setPendingSpeed: (speed: PlaybackSpeed | null) => void;
-  setActiveBookmarkId: (id: string | null) => void;
 
   // Store actions
   setPlaybackSpeed: (speed: PlaybackSpeed) => void;
   updateCurrentTime: (time: number) => void;
   setCurrentFrameIndex?: (index: number) => void;
-  setStartTime: (time: string) => void;
-  setEndTime: (time: string) => void;
   clearBuffer: () => void;
   clearFramePicker: () => void;
 
@@ -67,9 +60,7 @@ export function useDiscoveryPlaybackHandlers({
   pause,
   resume,
   setSpeed,
-  setTimeRange,
   seek,
-  seekByFrame,
   isPaused,
   isStreaming,
   sessionReady,
@@ -77,16 +68,11 @@ export function useDiscoveryPlaybackHandlers({
   currentFrameIndex,
   currentTimestampUs,
   selectedFrameIds,
-  startTime,
-  endTime,
   pendingSpeed,
   setPendingSpeed,
-  setActiveBookmarkId,
   setPlaybackSpeed,
   updateCurrentTime,
   setCurrentFrameIndex,
-  setStartTime,
-  setEndTime,
   clearBuffer,
   clearFramePicker,
   resetWatchFrameCount,
@@ -139,29 +125,7 @@ export function useDiscoveryPlaybackHandlers({
     closeSpeedChangeDialog();
   }, [setPendingSpeed, closeSpeedChangeDialog]);
 
-  // Handle time range changes
-  const handleStartTimeChange = useCallback(async (time: string) => {
-    setStartTime(time);
-    setActiveBookmarkId(null);
-    const startUtc = localToUtc(time);
-    const endUtc = localToUtc(endTime);
-    if (startUtc && endUtc) {
-      await setTimeRange(startUtc, endUtc);
-    }
-  }, [setStartTime, setActiveBookmarkId, setTimeRange, endTime]);
-
-  const handleEndTimeChange = useCallback(async (time: string) => {
-    setEndTime(time);
-    setActiveBookmarkId(null);
-    const startUtc = localToUtc(startTime);
-    const endUtc = localToUtc(time);
-    if (startUtc && endUtc) {
-      await setTimeRange(startUtc, endUtc);
-    }
-  }, [setEndTime, setActiveBookmarkId, setTimeRange, startTime]);
-
-  // Handle timeline scrubber position change (timestamp-based)
-  // Seeks the backend and updates local state
+  // Discovery-specific: timeline scrubber with try/catch
   const handleScrub = useCallback(async (timeUs: number) => {
     // Update local state immediately for responsiveness
     updateCurrentTime(timeUs / 1_000_000);
@@ -172,14 +136,6 @@ export function useDiscoveryPlaybackHandlers({
       console.error('[Discovery] Failed to seek to timestamp:', e);
     }
   }, [updateCurrentTime, seek]);
-
-  // Handle frame-based position change (preferred for buffer playback)
-  const handleFrameChange = useCallback(async (frameIndex: number) => {
-    // Update local state immediately for responsiveness
-    setCurrentFrameIndex?.(frameIndex);
-    // Tell the session to seek to this frame
-    await seekByFrame(frameIndex);
-  }, [setCurrentFrameIndex, seekByFrame]);
 
   return {
     // From shared handlers
@@ -193,10 +149,7 @@ export function useDiscoveryPlaybackHandlers({
     handleSpeedChange,
     confirmSpeedChange,
     cancelSpeedChange,
-    handleStartTimeChange,
-    handleEndTimeChange,
     handleScrub,
-    handleFrameChange,
   };
 }
 

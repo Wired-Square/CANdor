@@ -28,6 +28,16 @@ All notable changes to CANdor will be documented in this file.
 
 - **Error handling centralised**: Extracted `withAppError` utility (`src/utils/appError.ts`) to replace repeated try/catch/showAppError boilerplate across session, export, catalog, and credential handlers. Removed `showError` callback plumbing from Discovery's handler chain.
 
+- **Time handlers centralised**: Extracted `useTimeHandlers` shared hook (`src/hooks/useTimeHandlers.ts`) for time range changes, frame-based seeking, and bookmark loading. Decoder and Discovery now delegate to the shared hook, keeping only app-specific scrub logic locally.
+
+- **Discovery IO picker fully centralised**: Discovery now uses the shared `useIOPickerHandlers` hook for all dialog handlers (start/stop ingest, multi-ingest, join, skip, multi-select), matching the pattern used by Decoder, Graph, Query, and Transmit. Added `onBeforeStart` and `onBeforeMultiStart` lifecycle callbacks to `useIOPickerHandlers` for app-specific setup (serial config, framing config). All IO picker handlers now wrap with `withAppError` for consistent error display.
+
+### Removed
+
+- **Deprecated `INGEST_SESSION_ID` constant**: Removed the unused legacy `"__ingest__"` constant and its re-exports. Use `generateIngestSessionId()` instead.
+
+- **Legacy `startIngest` wrapper**: Removed the backwards-compatibility `startIngest` method from `useIOSessionManager`. Use `ingestSingleSource` / `ingestMultiSource` instead.
+
 ### Fixed
 
 - **Query DB status light**: The DB indicator now shows green when connected to a PostgreSQL source, instead of always showing red.

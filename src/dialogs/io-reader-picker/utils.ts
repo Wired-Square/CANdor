@@ -50,10 +50,6 @@ export const BUFFER_PROFILE_ID = "__imported_buffer__";
 // Special ID for CSV external source
 export const CSV_EXTERNAL_ID = "__csv_external__";
 
-// Legacy session ID for ingest operations - DEPRECATED
-// Use generateIngestSessionId() instead for unique session IDs
-export const INGEST_SESSION_ID = "__ingest__";
-
 /**
  * Generate a unique session ID for ingest operations.
  * Pattern: ingest_{shortId}

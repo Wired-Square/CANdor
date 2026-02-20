@@ -1,31 +1,19 @@
 // ui/src/apps/discovery/hooks/handlers/useDiscoverySessionHandlers.ts
 //
-// Session-related handlers for Discovery: IO profile change, ingest, multi-bus, join session.
+// Session-related handlers for Discovery: IO profile change and buffer switching.
 // Delegates session orchestration to useIOSessionManager methods; only adds Discovery-specific logic
-// (serial config, framing config, buffer cleanup).
+// (buffer cleanup).
+// Note: Dialog handlers (start/stop ingest, join, skip) are centralised in useIOPickerHandlers.
 // Note: Playback handlers (play/pause/stop/step) are in useDiscoveryPlaybackHandlers.
 
 import { useCallback } from "react";
-import type { IngestOptions } from "../../../../dialogs/IoReaderPickerDialog";
-import type { IngestOptions as ManagerIngestOptions } from "../../../../hooks/useIOSessionManager";
 import { getBufferFrameInfo, setActiveBuffer, type BufferMetadata } from "../../../../api/buffer";
 import { isBufferProfileId } from "../../../../hooks/useIOSessionManager";
 import { useBufferSession } from "../../../../hooks/useBufferSession";
-import { withAppError } from "../../../../utils/appError";
 
 export interface UseDiscoverySessionHandlersParams {
   // Session actions
-  setSourceProfileId: (profileId: string | null) => void;
-  setShowBusColumn: (show: boolean) => void;
-
-  // Manager session switching methods
-  watchSingleSource: (profileId: string, options: ManagerIngestOptions) => Promise<void>;
-  watchMultiSource: (profileIds: string[], options: ManagerIngestOptions) => Promise<void>;
-  ingestSingleSource: (profileId: string, options: ManagerIngestOptions) => Promise<void>;
-  ingestMultiSource: (profileIds: string[], options: ManagerIngestOptions) => Promise<void>;
   selectProfile: (profileId: string | null) => void;
-  selectMultipleProfiles: (profileIds: string[]) => void;
-  joinSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
 
   // Store actions
   updateCurrentTime?: (timeSeconds: number) => void;
@@ -41,26 +29,13 @@ export interface UseDiscoverySessionHandlersParams {
   resetFraming: () => void;
   setBackendByteCount: (count: number) => void;
   addSerialBytes: (entries: { byte: number; timestampUs: number }[]) => void;
-  setSerialConfig: (config: any) => void;
-  setFramingConfig: (config: any) => void;
 
   // Buffer state
   setBufferMetadata: (meta: BufferMetadata | null) => void;
-
-  // Dialog controls
-  closeIoReaderPicker: () => void;
 }
 
 export function useDiscoverySessionHandlers({
-  setSourceProfileId,
-  setShowBusColumn,
-  watchSingleSource,
-  watchMultiSource,
-  ingestSingleSource,
-  ingestMultiSource,
   selectProfile,
-  selectMultipleProfiles,
-  joinSession,
   updateCurrentTime,
   setCurrentFrameIndex,
   setMaxBuffer,
@@ -74,10 +49,7 @@ export function useDiscoverySessionHandlers({
   resetFraming,
   setBackendByteCount,
   addSerialBytes: _addSerialBytes,
-  setSerialConfig,
-  setFramingConfig,
   setBufferMetadata,
-  closeIoReaderPicker,
 }: UseDiscoverySessionHandlersParams) {
   void _addSerialBytes; // Reserved for future bytes mode support
 
@@ -155,155 +127,12 @@ export function useDiscoverySessionHandlers({
     setBackendByteCount,
   ]);
 
-  // Handle Watch/Ingest from IoReaderPickerDialog
-  const handleDialogStartIngest = useCallback(async (
-    profileId: string,
-    closeDialog: boolean,
-    options: IngestOptions
-  ) => {
-    console.log(`[DiscoverySessionHandlers] handleDialogStartIngest called - profileId=${profileId}, closeDialog=${closeDialog}`);
-    const {
-      frameIdStartByte,
-      frameIdBytes,
-      sourceAddressStartByte,
-      sourceAddressBytes,
-      sourceAddressEndianness,
-      minFrameLength,
-      framingEncoding,
-      delimiter,
-      maxFrameLength,
-    } = options;
-
-    // Store serial config for TOML export
-    const hasSerialConfig = frameIdStartByte !== undefined || sourceAddressStartByte !== undefined || minFrameLength !== undefined;
-    if (hasSerialConfig) {
-      setSerialConfig({
-        frame_id_start_byte: frameIdStartByte,
-        frame_id_bytes: frameIdBytes,
-        source_address_start_byte: sourceAddressStartByte,
-        source_address_bytes: sourceAddressBytes,
-        source_address_byte_order: sourceAddressEndianness,
-        min_frame_length: minFrameLength,
-      });
-    } else {
-      setSerialConfig(null);
-    }
-
-    if (closeDialog) {
-      // Watch mode
-      console.log(`[DiscoverySessionHandlers] Watch mode - calling watchSingleSource(${profileId})`);
-
-      // Discovery-specific: set source profile ID and sync framing config
-      setSourceProfileId(profileId);
-
-      // Sync framing config with discovery store
-      if (framingEncoding && framingEncoding !== "raw") {
-        const storeFramingConfig =
-          framingEncoding === "slip"
-            ? { mode: "slip" as const }
-            : framingEncoding === "modbus_rtu"
-            ? { mode: "modbus_rtu" as const, validateCrc: true }
-            : {
-                mode: "raw" as const,
-                delimiter: delimiter ? delimiter.map((b: number) => b.toString(16).toUpperCase().padStart(2, "0")).join("") : "0A",
-                maxLength: maxFrameLength ?? 256,
-              };
-        setFramingConfig(storeFramingConfig);
-      } else {
-        setFramingConfig(null);
-      }
-
-      // Manager handles: onBeforeWatch cleanup, session creation, profile set, speed, watch state
-      await withAppError("Watch Error", "Failed to start watch session", async () => {
-        await watchSingleSource(profileId, options);
-        closeIoReaderPicker();
-      });
-      console.log(`[DiscoverySessionHandlers] Watch mode - complete`);
-    } else {
-      // Ingest mode - fast ingest without rendering, auto-transitions to buffer reader
-      console.log(`[DiscoverySessionHandlers] Ingest mode - calling ingestSingleSource(${profileId})`);
-
-      // Discovery-specific: set source profile ID
-      setSourceProfileId(profileId);
-
-      // Manager handles: pre-ingest cleanup, session creation with speed=0, frame counting, auto-transition
-      await withAppError("Ingest Error", "Failed to start ingest", () =>
-        ingestSingleSource(profileId, options)
-      );
-
-      console.log(`[DiscoverySessionHandlers] Ingest mode - started`);
-    }
-  }, [
-    setSerialConfig,
-    setSourceProfileId,
-    setFramingConfig,
-    watchSingleSource,
-    ingestSingleSource,
-    closeIoReaderPicker,
-  ]);
-
-  // Handle Watch/Ingest for multiple profiles (multi-bus mode)
-  const handleDialogStartMultiIngest = useCallback(async (
-    profileIds: string[],
-    closeDialog: boolean,
-    options: IngestOptions
-  ) => {
-    if (closeDialog) {
-      // Watch mode
-      // Note: cleanup is handled by manager's onBeforeMultiWatch callback
-      // Manager handles: onBeforeMultiWatch cleanup, startMultiBusSession, speed, watch state
-      await withAppError("Multi-Bus Error", "Failed to start multi-bus session", async () => {
-        await watchMultiSource(profileIds, options);
-        setShowBusColumn(true);
-        closeIoReaderPicker();
-      });
-    } else {
-      // Ingest mode - fast ingest without rendering
-      console.log(`[DiscoverySessionHandlers] Multi-source ingest mode - calling ingestMultiSource`);
-
-      // Manager handles: pre-ingest cleanup, session creation with speed=0, frame counting, auto-transition
-      await withAppError("Multi-Bus Ingest Error", "Failed to start multi-bus ingest", async () => {
-        await ingestMultiSource(profileIds, options);
-        setShowBusColumn(true);
-      });
-
-      console.log(`[DiscoverySessionHandlers] Multi-source ingest mode - started`);
-    }
-  }, [
-    watchMultiSource,
-    ingestMultiSource,
-    setShowBusColumn,
-    closeIoReaderPicker,
-  ]);
-
-  // Handle selecting multiple profiles in multi-bus mode
-  const handleSelectMultiple = useCallback((profileIds: string[]) => {
-    selectMultipleProfiles(profileIds);
-  }, [selectMultipleProfiles]);
-
-  // Handle joining an existing session from the IO picker dialog
-  const handleJoinSession = useCallback(async (
-    profileId: string,
-    sourceProfileIds?: string[]
-  ) => {
-    await joinSession(profileId, sourceProfileIds);
-
-    if (sourceProfileIds && sourceProfileIds.length > 1) {
-      setShowBusColumn(true);
-    }
-
-    closeIoReaderPicker();
-  }, [joinSession, setShowBusColumn, closeIoReaderPicker]);
-
-  // Note: handlePlay, handlePlayBackward, handleStop, handlePause, handleStepBackward, handleStepForward
-  // are now provided by useDiscoveryPlaybackHandlers (via shared usePlaybackHandlers)
+  // Note: Dialog handlers (start/stop ingest, join, skip, multi-select) are now provided
+  // by the centralised useIOPickerHandlers hook in Discovery.tsx.
+  // Note: Playback handlers (play/pause/stop/step) are in useDiscoveryPlaybackHandlers.
 
   return {
     handleIoProfileChange,
-    handleDialogStartIngest,
-    handleDialogStartMultiIngest,
-    handleSelectMultiple,
-    handleJoinSession,
   };
 }
 

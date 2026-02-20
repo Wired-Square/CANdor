@@ -1,11 +1,11 @@
 // ui/src/apps/decoder/hooks/handlers/useDecoderTimeHandlers.ts
 //
-// Time-related handlers for Decoder: scrub, start/end time change, load bookmark.
+// Time-related handlers for Decoder: wraps shared useTimeHandlers + keeps handleScrub.
 
 import { useCallback } from "react";
-import { localToUtc } from "../../../../utils/timeFormat";
-import type { TimeRangeFavorite } from "../../../../utils/favorites";
+import { useTimeHandlers } from "../../../../hooks/useTimeHandlers";
 import type { IOCapabilities } from "../../../../api/io";
+import type { TimeRangeFavorite } from "../../../../utils/favorites";
 import type { IngestOptions } from "../../../../hooks/useIOSessionManager";
 
 export interface UseDecoderTimeHandlersParams {
@@ -52,24 +52,19 @@ export function useDecoderTimeHandlers({
   setActiveBookmarkId,
   jumpToBookmark,
 }: UseDecoderTimeHandlersParams) {
-  // Handle time range changes
-  const handleStartTimeChange = useCallback(
-    async (time: string) => {
-      setActiveBookmarkId(null); // Clear bookmark when time changes
-      await setTimeRange(localToUtc(time), localToUtc(endTime));
-    },
-    [setActiveBookmarkId, setTimeRange, endTime]
-  );
+  // Shared handlers: time range, frame change, bookmark load
+  const shared = useTimeHandlers({
+    setTimeRange,
+    seekByFrame,
+    capabilities,
+    setCurrentFrameIndex,
+    startTime,
+    endTime,
+    setActiveBookmarkId,
+    jumpToBookmark,
+  });
 
-  const handleEndTimeChange = useCallback(
-    async (time: string) => {
-      setActiveBookmarkId(null); // Clear bookmark when time changes
-      await setTimeRange(localToUtc(startTime), localToUtc(time));
-    },
-    [setActiveBookmarkId, setTimeRange, startTime]
-  );
-
-  // Handle timeline scrubber position change (timestamp-based - legacy)
+  // Decoder-specific: timeline scrubber with boundary frame index calculation
   const handleScrub = useCallback(
     async (timeUs: number) => {
       // Update UI immediately for responsiveness
@@ -95,36 +90,9 @@ export function useDecoderTimeHandlers({
     [updateCurrentTime, setCurrentFrameIndex, minTimeUs, maxTimeUs, totalFrames, capabilities, seek]
   );
 
-  // Handle frame-based position change (preferred for buffer playback)
-  const handleFrameChange = useCallback(
-    async (frameIndex: number) => {
-      // Update UI immediately for responsiveness
-      setCurrentFrameIndex?.(frameIndex);
-
-      // If the reader supports seeking, tell it to jump to this frame
-      if (capabilities?.supports_seek) {
-        await seekByFrame(frameIndex);
-      }
-    },
-    [setCurrentFrameIndex, capabilities, seekByFrame]
-  );
-
-  // Handle loading a bookmark - delegates to manager's jumpToBookmark
-  // The manager handles: stopping if streaming, cleanup, reinitialize, notify apps
-  const handleLoadBookmark = useCallback(
-    async (bookmark: TimeRangeFavorite) => {
-      console.log("[Decoder:handleLoadBookmark] Delegating to manager.jumpToBookmark:", bookmark.name);
-      await jumpToBookmark(bookmark);
-    },
-    [jumpToBookmark]
-  );
-
   return {
-    handleStartTimeChange,
-    handleEndTimeChange,
+    ...shared,
     handleScrub,
-    handleFrameChange,
-    handleLoadBookmark,
   };
 }
 

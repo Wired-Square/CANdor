@@ -225,20 +225,6 @@ export interface UseIOSessionManagerResult {
   ingestFrameCount: number;
   /** Ingest error */
   ingestError: string | null;
-  /** Start ingest (legacy signature for backwards compatibility) */
-  startIngest: (params: {
-    profileId: string;
-    speed?: number;
-    startTime?: string;
-    endTime?: string;
-    maxFrames?: number;
-    frameIdStartByte?: number;
-    frameIdBytes?: number;
-    sourceAddressStartByte?: number;
-    sourceAddressBytes?: number;
-    sourceAddressBigEndian?: boolean;
-    minFrameLength?: number;
-  }) => Promise<void>;
   /** Stop ingest */
   stopIngest: () => Promise<void>;
   /** Clear ingest error */
@@ -1372,24 +1358,8 @@ export function useIOSessionManager(
     ingestProfileId: ingestSessionId,
     ingestFrameCount,
     ingestError,
-    // Legacy startIngest wrapper for backwards compatibility
-    startIngest: async (params) => {
-      const { profileId, ...opts } = params;
-      await ingestSingleSource(profileId, {
-        maxFrames: opts.maxFrames,
-        startTime: opts.startTime,
-        endTime: opts.endTime,
-        frameIdStartByte: opts.frameIdStartByte,
-        frameIdBytes: opts.frameIdBytes,
-        sourceAddressStartByte: opts.sourceAddressStartByte,
-        sourceAddressBytes: opts.sourceAddressBytes,
-        sourceAddressEndianness: opts.sourceAddressBigEndian ? "big" : "little",
-        minFrameLength: opts.minFrameLength,
-      });
-    },
     stopIngest,
     clearIngestError,
-    // New ingest methods
     ingestSingleSource,
     ingestMultiSource,
 

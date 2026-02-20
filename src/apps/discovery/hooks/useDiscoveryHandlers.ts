@@ -23,6 +23,7 @@ import {
   useDiscoverySelectionHandlers,
   type DiscoverySelectionHandlers,
 } from "./handlers/useDiscoverySelectionHandlers";
+import { useTimeHandlers, type TimeHandlers } from "../../../hooks/useTimeHandlers";
 import type { PlaybackSpeed, FrameMessage } from "../../../stores/discoveryStore";
 import type { BufferMetadata, TimestampedByte } from "../../../api/buffer";
 import type { ExportDataMode } from "../../../dialogs/ExportFramesDialog";
@@ -84,20 +85,12 @@ export interface UseDiscoveryHandlersParams {
   setBufferMetadata: (meta: BufferMetadata | null) => void;
 
   // Manager session switching methods
-  watchSingleSource: (profileId: string, options: ManagerIngestOptions) => Promise<void>;
-  watchMultiSource: (profileIds: string[], options: ManagerIngestOptions) => Promise<void>;
-  ingestSingleSource: (profileId: string, options: ManagerIngestOptions) => Promise<void>;
-  ingestMultiSource: (profileIds: string[], options: ManagerIngestOptions) => Promise<void>;
   stopWatch: () => Promise<void>;
   selectProfile: (profileId: string | null) => void;
-  selectMultipleProfiles: (profileIds: string[]) => void;
-  joinSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
   jumpToBookmark: (bookmark: TimeRangeFavorite, options?: Omit<ManagerIngestOptions, "startTime" | "endTime" | "maxFrames">) => Promise<void>;
 
   // Session actions
   setIoProfile: (profileId: string | null) => void;
-  setSourceProfileId: (profileId: string | null) => void;
-  setShowBusColumn: (show: boolean) => void;
   start: () => Promise<void>;
   pause: () => Promise<void>;
   resume: () => Promise<void>;
@@ -125,8 +118,6 @@ export interface UseDiscoveryHandlersParams {
   setBackendByteCount: (count: number) => void;
   setBackendFrameCount: (count: number) => void;
   addSerialBytes: (entries: { byte: number; timestampUs: number }[]) => void;
-  setSerialConfig: (config: any) => void;
-  setFramingConfig: (config: any) => void;
   openSaveDialog: () => void;
   saveFrames: (decoderDir: string, format: 'hex' | 'decimal') => Promise<void>;
   setActiveSelectionSet: (id: string | null) => void;
@@ -148,11 +139,11 @@ export interface UseDiscoveryHandlersParams {
   /** Called after a selection set is saved or updated */
   onAfterSelectionSetMutate?: () => void;
   closeExportDialog: () => void;
-  closeIoReaderPicker: () => void;
 }
 
 export type DiscoveryHandlers = DiscoverySessionHandlers &
   DiscoveryPlaybackHandlers &
+  TimeHandlers &
   DiscoveryExportHandlers &
   DiscoveryBookmarkHandlers &
   DiscoverySelectionHandlers & {
@@ -161,17 +152,11 @@ export type DiscoveryHandlers = DiscoverySessionHandlers &
   };
 
 export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): DiscoveryHandlers {
-  // Session handlers (IO profile change, ingest, multi-bus, join)
+  // Session handlers (IO profile change, buffer switching)
+  // Note: Dialog handlers (start/stop ingest, join, skip, multi-select) are centralised
+  // in useIOPickerHandlers, called directly from Discovery.tsx.
   const sessionHandlers = useDiscoverySessionHandlers({
-    setSourceProfileId: params.setSourceProfileId,
-    setShowBusColumn: params.setShowBusColumn,
-    watchSingleSource: params.watchSingleSource,
-    watchMultiSource: params.watchMultiSource,
-    ingestSingleSource: params.ingestSingleSource,
-    ingestMultiSource: params.ingestMultiSource,
     selectProfile: params.selectProfile,
-    selectMultipleProfiles: params.selectMultipleProfiles,
-    joinSession: params.joinSession,
     updateCurrentTime: params.updateCurrentTime,
     setCurrentFrameIndex: params.setCurrentFrameIndex,
     setMaxBuffer: params.setMaxBuffer,
@@ -185,24 +170,18 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     resetFraming: params.resetFraming,
     setBackendByteCount: params.setBackendByteCount,
     addSerialBytes: params.addSerialBytes,
-    setSerialConfig: params.setSerialConfig,
-    setFramingConfig: params.setFramingConfig,
     setBufferMetadata: params.setBufferMetadata,
-    closeIoReaderPicker: params.closeIoReaderPicker,
   });
 
   // Playback handlers (uses shared usePlaybackHandlers for play/pause/stop consistency)
   const playbackHandlers = useDiscoveryPlaybackHandlers({
-    // Session state for shared handlers
     sessionId: params.sessionId,
     start: params.start,
     stop: params.stopWatch,
     pause: params.pause,
     resume: params.resume,
     setSpeed: params.setSpeed,
-    setTimeRange: params.setTimeRange,
     seek: params.seek,
-    seekByFrame: params.seekByFrame,
     isPaused: params.isPaused,
     isStreaming: params.isStreaming,
     sessionReady: params.sessionReady,
@@ -210,22 +189,28 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     currentFrameIndex: params.currentFrameIndex,
     currentTimestampUs: params.currentTimestampUs,
     selectedFrameIds: params.selectedFrames,
-    // Time range state
-    startTime: params.startTime,
-    endTime: params.endTime,
     pendingSpeed: params.pendingSpeed,
     setPendingSpeed: params.setPendingSpeed,
-    setActiveBookmarkId: params.setActiveBookmarkId,
-    // Store actions
     setPlaybackSpeed: params.setPlaybackSpeed,
     updateCurrentTime: params.updateCurrentTime,
     setCurrentFrameIndex: params.setCurrentFrameIndex,
-    setStartTime: params.setStartTime,
-    setEndTime: params.setEndTime,
     clearBuffer: params.clearBuffer,
     clearFramePicker: params.clearFramePicker,
     resetWatchFrameCount: params.resetWatchFrameCount,
     closeSpeedChangeDialog: params.closeSpeedChangeDialog,
+  });
+
+  // Time handlers (shared: time range, frame change, bookmark load)
+  const timeHandlers = useTimeHandlers({
+    setTimeRange: params.setTimeRange,
+    seekByFrame: params.seekByFrame,
+    setCurrentFrameIndex: params.setCurrentFrameIndex,
+    startTime: params.startTime,
+    endTime: params.endTime,
+    setActiveBookmarkId: params.setActiveBookmarkId,
+    jumpToBookmark: params.jumpToBookmark,
+    onStartTimeChange: params.setStartTime,
+    onEndTimeChange: params.setEndTime,
   });
 
   // Export handlers
@@ -253,13 +238,12 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     closeExportDialog: params.closeExportDialog,
   });
 
-  // Bookmark handlers
+  // Bookmark handlers (bookmark UI + save; load is in shared timeHandlers)
   const bookmarkHandlers = useDiscoveryBookmarkHandlers({
     setBookmarkFrameId: params.setBookmarkFrameId,
     setBookmarkFrameTime: params.setBookmarkFrameTime,
     ioProfile: params.ioProfile,
     sourceProfileId: params.sourceProfileId,
-    jumpToBookmark: params.jumpToBookmark,
     openBookmarkDialog: params.openBookmarkDialog,
   });
 
@@ -319,6 +303,7 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
   return {
     ...sessionHandlers,
     ...playbackHandlers,
+    ...timeHandlers,
     ...exportHandlers,
     ...bookmarkHandlers,
     ...selectionHandlers,

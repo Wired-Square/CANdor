@@ -378,15 +378,9 @@ export default function Discovery() {
     // Watch state (used by ioPickerProps hook)
     resetWatchFrameCount,
     // Session switching methods
-    watchSingleSource,
-    watchMultiSource,
-    ingestSingleSource,
-    ingestMultiSource,
     stopWatch,
     resumeWithNewBuffer,
     selectProfile,
-    selectMultipleProfiles,
-    joinSession,
     // Bookmark methods
     jumpToBookmark,
   } = manager;
@@ -456,6 +450,53 @@ export default function Discovery() {
       if (sourceProfileIds && sourceProfileIds.length > 1) {
         setShowBusColumn(true);
       }
+    },
+    onBeforeStart: (profileId, options, mode) => {
+      // Store serial config for TOML export
+      const hasSerialConfig = options.frameIdStartByte !== undefined
+        || options.sourceAddressStartByte !== undefined
+        || options.minFrameLength !== undefined;
+      if (hasSerialConfig) {
+        setSerialConfig({
+          frame_id_start_byte: options.frameIdStartByte,
+          frame_id_bytes: options.frameIdBytes,
+          source_address_start_byte: options.sourceAddressStartByte,
+          source_address_bytes: options.sourceAddressBytes,
+          source_address_byte_order: options.sourceAddressEndianness,
+          min_frame_length: options.minFrameLength,
+        });
+      } else {
+        setSerialConfig(null);
+      }
+
+      setSourceProfileId(profileId);
+
+      // Sync framing config (watch mode only)
+      if (mode === "watch") {
+        if (options.framingEncoding && options.framingEncoding !== "raw") {
+          const storeFramingConfig =
+            options.framingEncoding === "slip"
+              ? { mode: "slip" as const }
+              : options.framingEncoding === "modbus_rtu"
+              ? { mode: "modbus_rtu" as const, validateCrc: true }
+              : {
+                  mode: "raw" as const,
+                  delimiter: options.delimiter
+                    ? options.delimiter.map((b: number) => b.toString(16).toUpperCase().padStart(2, "0")).join("")
+                    : "0A",
+                  maxLength: options.maxFrameLength ?? 256,
+                };
+          setFramingConfig(storeFramingConfig);
+        } else {
+          setFramingConfig(null);
+        }
+      }
+    },
+    onBeforeMultiStart: (_profileIds, _options, _mode) => {
+      setShowBusColumn(true);
+    },
+    onMultiBusSet: () => {
+      setShowBusColumn(true);
     },
   });
 
@@ -619,20 +660,12 @@ export default function Discovery() {
     setBufferMetadata,
 
     // Manager session switching methods
-    watchSingleSource,
-    watchMultiSource,
-    ingestSingleSource,
-    ingestMultiSource,
     stopWatch,
     selectProfile,
-    selectMultipleProfiles,
-    joinSession,
     jumpToBookmark,
 
     // Session actions
     setIoProfile,
-    setSourceProfileId,
-    setShowBusColumn,
     start,
     pause,
     resume,
@@ -660,8 +693,6 @@ export default function Discovery() {
     setBackendByteCount,
     setBackendFrameCount,
     addSerialBytes,
-    setSerialConfig,
-    setFramingConfig,
     openSaveDialog,
     saveFrames,
     setActiveSelectionSet,
@@ -681,7 +712,6 @@ export default function Discovery() {
     closeSpeedChangeDialog: dialogs.speedChange.close,
     openSaveSelectionSetDialog: dialogs.saveSelectionSet.open,
     closeExportDialog: dialogs.export.close,
-    closeIoReaderPicker: dialogs.ioReaderPicker.close,
   });
 
   // ── Menu session control ──
@@ -893,24 +923,13 @@ export default function Discovery() {
         selectedIds={ioProfiles.length > 0 ? ioProfiles : undefined}
         defaultId={settings?.default_read_profile}
         onSelect={handlers.handleIoProfileChange}
-        onSelectMultiple={handlers.handleSelectMultiple}
+        {...ioPickerProps}
         onImport={setBufferMetadata}
         bufferMetadata={bufferMetadata}
         defaultDir={settings?.dump_dir}
-        // Use centralized state props for consistent behavior across apps
-        isIngesting={ioPickerProps.isIngesting}
-        ingestProfileId={ioPickerProps.ingestProfileId}
-        ingestFrameCount={ioPickerProps.ingestFrameCount}
-        ingestError={ioPickerProps.ingestError}
         ingestSpeed={playbackSpeed}
         onIngestSpeedChange={(speed) => handlers.handleSpeedChange(speed)}
-        // Keep app-specific handlers for serial config, framing, etc.
-        onStartIngest={handlers.handleDialogStartIngest}
-        onStartMultiIngest={handlers.handleDialogStartMultiIngest}
-        onStopIngest={ioPickerProps.onStopIngest}
-        onJoinSession={ioPickerProps.onJoinSession}
         allowMultiSelect={true}
-        onSkip={ioPickerProps.onSkip}
       />
 
       <FramePickerDialog

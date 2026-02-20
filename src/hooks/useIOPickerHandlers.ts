@@ -6,6 +6,7 @@
 
 import { useCallback } from "react";
 import type { UseIOSessionManagerResult, IngestOptions as ManagerIngestOptions } from "./useIOSessionManager";
+import { withAppError } from "../utils/appError";
 
 /** Options passed from IoReaderPickerDialog */
 export interface DialogIngestOptions {
@@ -40,6 +41,10 @@ export interface UseIOPickerHandlersOptions {
   onMultiBusSet?: (profileIds: string[]) => void;
   /** Optional callback when joining a session */
   onJoinSession?: (sessionId: string, sourceProfileIds?: string[]) => void;
+  /** Callback before starting single-source watch or ingest (for app-specific setup like serial/framing config) */
+  onBeforeStart?: (profileId: string, options: DialogIngestOptions, mode: "watch" | "ingest") => void;
+  /** Callback before starting multi-source watch or ingest */
+  onBeforeMultiStart?: (profileIds: string[], options: DialogIngestOptions, mode: "watch" | "ingest") => void;
 }
 
 /** Props to pass to IoReaderPickerDialog */
@@ -67,6 +72,8 @@ export function useIOPickerHandlers({
   mergeOptions,
   onMultiBusSet,
   onJoinSession: onJoinSessionCallback,
+  onBeforeStart,
+  onBeforeMultiStart,
 }: UseIOPickerHandlersOptions): IOPickerDialogProps {
   const {
     ioProfile,
@@ -84,44 +91,56 @@ export function useIOPickerHandlers({
     ingestMultiSource,
     joinSession,
     skipReader,
-    setMultiBusProfiles,
+    selectMultipleProfiles,
     connectOnly,
   } = manager;
 
   // Handle Watch/Ingest from IoReaderPickerDialog
   const handleDialogStartIngest = useCallback(
     async (profileId: string, closeDialogFlag: boolean, options: DialogIngestOptions) => {
-      // Merge with app-specific options if provided
+      const mode = closeDialogFlag ? "watch" : "ingest";
       const mergedOptions = mergeOptions ? mergeOptions(options) : options;
 
-      if (closeDialogFlag) {
-        // Watch mode - close dialog and show real-time display
-        await watchSingleSource(profileId, mergedOptions);
-        closeDialog();
-      } else {
-        // Ingest mode - keep dialog open to show progress
-        await ingestSingleSource(profileId, mergedOptions);
-      }
+      await withAppError(
+        closeDialogFlag ? "Watch Error" : "Ingest Error",
+        closeDialogFlag ? "Failed to start watch session" : "Failed to start ingest",
+        async () => {
+          onBeforeStart?.(profileId, options, mode);
+
+          if (closeDialogFlag) {
+            await watchSingleSource(profileId, mergedOptions);
+            closeDialog();
+          } else {
+            await ingestSingleSource(profileId, mergedOptions);
+          }
+        }
+      );
     },
-    [watchSingleSource, ingestSingleSource, closeDialog, mergeOptions]
+    [watchSingleSource, ingestSingleSource, closeDialog, mergeOptions, onBeforeStart]
   );
 
   // Handle multi-bus Watch/Ingest
   const handleDialogStartMultiIngest = useCallback(
     async (profileIds: string[], closeDialogFlag: boolean, options: DialogIngestOptions) => {
-      // Merge with app-specific options if provided
+      const mode = closeDialogFlag ? "watch" : "ingest";
       const mergedOptions = mergeOptions ? mergeOptions(options) : options;
 
-      if (closeDialogFlag) {
-        // Watch mode - close dialog and show real-time display
-        await watchMultiSource(profileIds, mergedOptions);
-        closeDialog();
-      } else {
-        // Ingest mode - keep dialog open to show progress
-        await ingestMultiSource(profileIds, mergedOptions);
-      }
+      await withAppError(
+        closeDialogFlag ? "Multi-Bus Error" : "Multi-Bus Ingest Error",
+        closeDialogFlag ? "Failed to start multi-bus session" : "Failed to start multi-bus ingest",
+        async () => {
+          onBeforeMultiStart?.(profileIds, options, mode);
+
+          if (closeDialogFlag) {
+            await watchMultiSource(profileIds, mergedOptions);
+            closeDialog();
+          } else {
+            await ingestMultiSource(profileIds, mergedOptions);
+          }
+        }
+      );
     },
-    [watchMultiSource, ingestMultiSource, closeDialog, mergeOptions]
+    [watchMultiSource, ingestMultiSource, closeDialog, mergeOptions, onBeforeMultiStart]
   );
 
   // Handle stopping from the dialog - routes to streaming or ingest stop
@@ -164,10 +183,10 @@ export function useIOPickerHandlers({
   // Handle multi-select from dialog
   const handleSelectMultiple = useCallback(
     (profileIds: string[]) => {
-      setMultiBusProfiles(profileIds);
+      selectMultipleProfiles(profileIds);
       onMultiBusSet?.(profileIds);
     },
-    [setMultiBusProfiles, onMultiBusSet]
+    [selectMultipleProfiles, onMultiBusSet]
   );
 
   return {

@@ -67,7 +67,7 @@ import { isBufferProfileId } from "../hooks/useIOSessionManager";
 import type { FramingConfig, InterfaceFramingConfig } from "./io-reader-picker";
 
 // Re-export constants for backward compatibility
-export { BUFFER_PROFILE_ID, INGEST_SESSION_ID } from "./io-reader-picker";
+export { BUFFER_PROFILE_ID } from "./io-reader-picker";
 
 /** Options passed when starting ingest */
 export interface IngestOptions {

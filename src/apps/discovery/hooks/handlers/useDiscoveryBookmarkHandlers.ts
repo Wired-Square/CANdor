@@ -1,11 +1,11 @@
 // ui/src/apps/discovery/hooks/handlers/useDiscoveryBookmarkHandlers.ts
 //
-// Bookmark handlers for Discovery: load, save, bookmark dialog.
+// Bookmark handlers for Discovery: save bookmark, bookmark dialog.
+// Bookmark loading is now in shared useTimeHandlers.
 
 import { useCallback } from "react";
-import { addFavorite, type TimeRangeFavorite } from "../../../../utils/favorites";
+import { addFavorite } from "../../../../utils/favorites";
 import { microsToDatetimeLocal } from "../../../../utils/timeFormat";
-import type { IngestOptions } from "../../../../hooks/useIOSessionManager";
 
 export interface UseDiscoveryBookmarkHandlersParams {
   // State
@@ -16,9 +16,6 @@ export interface UseDiscoveryBookmarkHandlersParams {
   setBookmarkFrameId: (id: number) => void;
   setBookmarkFrameTime: (time: string) => void;
 
-  // Manager method for jumping to bookmarks
-  jumpToBookmark: (bookmark: TimeRangeFavorite, options?: Omit<IngestOptions, "startTime" | "endTime" | "maxFrames">) => Promise<void>;
-
   // Dialog controls
   openBookmarkDialog: () => void;
 }
@@ -28,7 +25,6 @@ export function useDiscoveryBookmarkHandlers({
   sourceProfileId,
   setBookmarkFrameId,
   setBookmarkFrameTime,
-  jumpToBookmark,
   openBookmarkDialog,
 }: UseDiscoveryBookmarkHandlersParams) {
   // Handle bookmark button click from DiscoveryFramesView
@@ -46,17 +42,9 @@ export function useDiscoveryBookmarkHandlers({
     await addFavorite(name, profileId, fromTime, toTime);
   }, [sourceProfileId, ioProfile]);
 
-  // Handle loading a bookmark - delegates to manager's jumpToBookmark
-  // The manager handles: stopping if streaming, cleanup, reinitialize, notify apps
-  const handleLoadBookmark = useCallback(async (bookmark: TimeRangeFavorite) => {
-    console.log("[Discovery:handleLoadBookmark] Delegating to manager.jumpToBookmark:", bookmark.name);
-    await jumpToBookmark(bookmark);
-  }, [jumpToBookmark]);
-
   return {
     handleBookmark,
     handleSaveBookmark,
-    handleLoadBookmark,
   };
 }
 
