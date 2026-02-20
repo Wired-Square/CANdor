@@ -599,16 +599,22 @@ pub trait IODevice: Send + Sync {
         None
     }
 
-    /// Reconfigure a running session with new time range.
-    /// This stops the current stream, orphans the old buffer, creates a new buffer,
-    /// and starts streaming with the new time range - all while keeping the session alive.
-    /// Other apps joined to this session remain connected.
+    /// Stop the current stream and update options in preparation for reconfigure.
+    /// Called by `reconfigure_session` so it can emit events between stop and restart.
+    /// Returns Ok(()) if the device supports reconfiguration.
     /// Default implementation returns an error.
-    async fn reconfigure(
+    async fn prepare_reconfigure(
         &mut self,
         _start: Option<String>,
         _end: Option<String>,
     ) -> Result<(), String> {
+        Err("This device does not support reconfiguration".to_string())
+    }
+
+    /// Complete a reconfigure by starting the new stream.
+    /// Called after `prepare_reconfigure` and after events have been emitted.
+    /// Default implementation returns an error.
+    async fn complete_reconfigure(&mut self) -> Result<(), String> {
         Err("This device does not support reconfiguration".to_string())
     }
 }
@@ -1802,13 +1808,28 @@ pub async fn reconfigure_session(
         err
     })?;
 
-    let result = session.device.reconfigure(start.clone(), end.clone()).await;
+    // Phase 1: Stop the old stream and update options (no new frames after this)
+    session.device.prepare_reconfigure(start.clone(), end.clone()).await?;
+
+    // Emit session-reconfigured BETWEEN stop and start.
+    // This ensures the event ordering in the frontend is:
+    //   [stale frames from old stream] → [session-reconfigured] → [new frames]
+    // The frontend clears stale frames when it receives this event.
+    emit_to_session(
+        &session.app,
+        "session-reconfigured",
+        session_id,
+        serde_json::json!({
+            "start": start,
+            "end": end,
+        }),
+    );
+
+    // Phase 2: Start the new stream (orphans old buffer, creates new one)
+    let result = session.device.complete_reconfigure().await;
     if let Err(ref e) = result {
-        eprintln!("[io] reconfigure_session failed: {}", e);
+        eprintln!("[io] reconfigure_session failed on restart: {}", e);
     } else {
-        // Emit state change event so frontend updates
-        // During reconfigure, session goes: Running -> Stopped -> Running internally
-        // Emit Stopped -> Running to ensure frontend shows correct streaming state
         let state_after = session.device.state();
         eprintln!(
             "[io] reconfigure_session completed successfully - final state: {:?}",
@@ -1816,17 +1837,6 @@ pub async fn reconfigure_session(
         );
         // Force emit Stopped -> current to ensure UI updates to streaming state
         emit_state_change(&session.app, session_id, &IOState::Stopped, &state_after);
-
-        // Emit session-reconfigured event so apps know to clear their frame lists and reset state
-        emit_to_session(
-            &session.app,
-            "session-reconfigured",
-            session_id,
-            serde_json::json!({
-                "start": start,
-                "end": end,
-            }),
-        );
     }
     result
 }

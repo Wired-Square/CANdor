@@ -196,7 +196,7 @@ impl IODevice for PostgresReader {
         "postgres"
     }
 
-    async fn reconfigure(
+    async fn prepare_reconfigure(
         &mut self,
         start: Option<String>,
         end: Option<String>,
@@ -208,8 +208,11 @@ impl IODevice for PostgresReader {
         self.options.start = start;
         self.options.end = end;
 
+        Ok(())
+    }
+
+    async fn complete_reconfigure(&mut self) -> Result<(), String> {
         // Start a new stream (this will orphan old buffer and create new one)
-        // The start() method creates the buffer synchronously before spawning the task
         self.start().await
     }
 }

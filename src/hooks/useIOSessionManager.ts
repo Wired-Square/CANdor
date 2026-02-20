@@ -408,6 +408,11 @@ export function useIOSessionManager(
   const localStreamCompletedRef = useRef(false);
   const streamCompletedRef = streamCompletedRefProp ?? localStreamCompletedRef;
 
+  // Flag to suppress handleReconfigure when the reconfigure was self-initiated
+  // (e.g., our own jumpToBookmark). The backend fires session-reconfigured for ALL
+  // listeners, including the one that initiated the reconfigure.
+  const selfReconfigureRef = useRef(false);
+
   // ---- Derived Values ----
   // Effective session ID: multiSessionId takes priority (all realtime sources now use it),
   // ioProfile is fallback (recorded sources, buffer profiles)
@@ -458,6 +463,12 @@ export function useIOSessionManager(
       setIngestFrameCount((prev) => prev + frames.length);
       return; // Don't call onFramesProp
     }
+    if (selfReconfigureRef.current) {
+      // During self-initiated reconfigure: suppress stale in-flight frames from the old stream.
+      // The flag is cleared by handleReconfigure when the session-reconfigured event arrives,
+      // so new-stream frames flow normally after that.
+      return;
+    }
     if (isWatchingRef.current) {
       setWatchFrameCount((prev) => prev + frames.length);
     }
@@ -474,8 +485,18 @@ export function useIOSessionManager(
 
   // ---- IO Session ----
   // Handler for when session is reconfigured externally (e.g., another app jumped to a bookmark)
-  // This resets frame counts and calls cleanup so the UI clears its state
+  // This resets frame counts and calls cleanup so the UI clears its state.
+  // Skipped for self-initiated reconfigures (jumpToBookmark already handled cleanup).
   const handleReconfigure = useCallback(() => {
+    if (selfReconfigureRef.current) {
+      selfReconfigureRef.current = false;
+      // Self-initiated reconfigure: the backend emits this event AFTER the old stream has
+      // stopped and BEFORE the new one starts. Any stale in-flight frames from the old stream
+      // were suppressed by the flag check in handleFrames. Clear the flag so new-stream
+      // frames flow normally.
+      console.log(`[IOSessionManager:${appName}] Self-initiated reconfigure - skipping external cleanup`);
+      return;
+    }
     console.log(`[IOSessionManager:${appName}] Session reconfigured externally - clearing state`);
     // Call the same cleanup as before watch
     onBeforeWatch?.();
@@ -1174,14 +1195,26 @@ export function useIOSessionManager(
       // Step 1: Run cleanup callback (same as onBeforeWatch)
       onBeforeWatch?.();
 
-      // Step 2: Clear multi-bus state
+      // Step 2: Notify app of reconfiguration BEFORE the async backend call.
+      // This lets the app set streamStartTimeUs (for correct time deltas) before
+      // frames start arriving during the await below.
+      onSessionReconfigured?.({
+        reason: "bookmark",
+        bookmark,
+        startTime: startUtc,
+        endTime: endUtc ?? undefined,
+      });
+
+      // Step 3: Clear multi-bus state
       setMultiBusProfiles([]);
 
-      // Step 3: Either reconfigure existing session or reinitialize
+      // Step 4: Reconfigure or reinitialize (backend auto-starts and may send frames)
       if (isSameProfile && ioProfile && isRecorded) {
         // Same profile, recorded source - use reconfigure to keep session alive
         // This stops the stream, orphans old buffer, creates new buffer, and restarts
         // Other apps joined to this session stay connected
+        // Suppress the session-reconfigured event handler since we already ran cleanup
+        selfReconfigureRef.current = true;
         console.log("[IOSessionManager:jumpToBookmark] Using reconfigure (same profile, session stays alive)");
         await reconfigureReaderSession(sessionId, startUtc, endUtc || undefined);
       } else {
@@ -1219,27 +1252,19 @@ export function useIOSessionManager(
         });
       }
 
-      // Step 4: Update manager state (use session ID so callbacks are registered correctly)
+      // Step 5: Update manager state (use session ID so callbacks are registered correctly)
       setIoProfile(sessionId);
       setSourceProfileId(targetProfileId);
       if (opts?.speed !== undefined) {
         setPlaybackSpeedProp?.(opts.speed);
       }
 
-      // Step 5: Mark as watching and reset state
+      // Step 6: Mark as watching and reset state
       setIsWatching(true);
       resetWatchFrameCount();
       streamCompletedRef.current = false;
 
-      // Step 7: Notify app of reconfiguration
-      onSessionReconfigured?.({
-        reason: "bookmark",
-        bookmark,
-        startTime: startUtc,
-        endTime: endUtc ?? undefined,
-      });
-
-      // Step 8: Mark bookmark as used
+      // Step 7: Mark bookmark as used
       await markFavoriteUsed(bookmark.id);
     },
     [

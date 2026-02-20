@@ -64,8 +64,8 @@ interface DiscoveryUIState {
 
   // Actions - Playback control
   setPlaybackSpeed: (speed: PlaybackSpeed) => void;
-  updateCurrentTime: (time: number) => void;
-  setCurrentFrameIndex: (index: number) => void;
+  updateCurrentTime: (time: number | null) => void;
+  setCurrentFrameIndex: (index: number | null) => void;
 
   // Actions - Time range
   setStartTime: (time: string) => void;

@@ -42,6 +42,8 @@ All notable changes to CANdor will be documented in this file.
 
 - **Discovery buffer playback page scrolling**: Play/play backward now auto-advances pages and highlights the current frame during buffer replay. Moved position-following into the `useBufferFrameView` hook so the hook owns its own page state, replacing external auto-navigate effects that raced against it. Also fixed `isBufferPlayback` to use the store's `bufferMode.enabled` (correct after CSV/PostgreSQL ingest) instead of only the manager's `isBufferMode` (only true for explicit `buf_N` profiles).
 
+- **Discovery bookmark time delta and scrub position**: Jumping to a bookmark now zeros the time delta from the bookmark's start time and resets the playback position, so delta-start displays show "0.000000s" at the beginning of the bookmark rather than a stale offset from the previous session. Fixed multiple race conditions: the reconfiguration callback now fires before the backend call to set `streamStartTimeUs` early; stale `bufferMetadata` is cleared on bookmark change; in-flight frames from the old stream are suppressed during the transition; and the backend now emits `session-reconfigured` between stopping the old stream and starting the new one (two-phase reconfigure) to guarantee correct event ordering.
+
 - **Query DB status light**: The DB indicator now shows green when connected to a PostgreSQL source, instead of always showing red.
 
 - **Query session ID format**: `connectOnly` now generates `t_` prefixed session IDs consistent with other recorded sources, and correctly tracks `sourceProfileId` so database queries use the real profile ID.

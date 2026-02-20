@@ -107,6 +107,7 @@ type CombinedDiscoveryState = {
   showInfoView: boolean;
 
   // Combined actions
+  setStreamStartTimeUs: (timeUs: number | null) => void;
   addFrames: (newFrames: FrameMessage[], skipFramePicker?: boolean) => void;
   clearBuffer: () => void;
   clearFramePicker: () => void;
@@ -117,8 +118,8 @@ type CombinedDiscoveryState = {
   setRenderBuffer: (value: number) => void;
   setIoProfile: (profile: string | null) => void;
   setPlaybackSpeed: (speed: PlaybackSpeed) => void;
-  updateCurrentTime: (time: number) => void;
-  setCurrentFrameIndex: (index: number) => void;
+  updateCurrentTime: (time: number | null) => void;
+  setCurrentFrameIndex: (index: number | null) => void;
   rebuildFramePickerFromBuffer: () => void;
   setStartTime: (time: string) => void;
   setEndTime: (time: string) => void;
@@ -248,6 +249,7 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     showInfoView: toolboxStore.showInfoView,
 
     // Frame store actions (with coordination)
+    setStreamStartTimeUs: frameStore.setStreamStartTimeUs,
     addFrames: (newFrames, skipFramePicker) => {
       frameStore.addFrames(newFrames, uiStore.maxBuffer, skipFramePicker, uiStore.activeSelectionSetSelectedIds);
     },

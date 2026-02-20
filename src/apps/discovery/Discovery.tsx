@@ -70,6 +70,7 @@ export default function Discovery() {
   const showAppError = useSessionStore((state) => state.showAppError);
 
   // Zustand store actions
+  const setStreamStartTimeUs = useDiscoveryStore((state) => state.setStreamStartTimeUs);
   const addFrames = useDiscoveryStore((state) => state.addFrames);
   const clearBuffer = useDiscoveryStore((state) => state.clearBuffer);
   const clearFramePicker = useDiscoveryStore((state) => state.clearFramePicker);
@@ -315,8 +316,18 @@ export default function Discovery() {
       setStartTime(info.bookmark.startTime);
       setEndTime(info.bookmark.endTime);
       setActiveBookmarkId(info.bookmark.id);
+
+      // Zero the time delta from the bookmark's start time
+      if (info.startTime) {
+        const startTimeUs = new Date(info.startTime).getTime() * 1000;
+        setStreamStartTimeUs(startTimeUs);
+      }
+
+      // Reset playback position so the scrubber doesn't show a stale position
+      updateCurrentTime(null);
+      setCurrentFrameIndex(null);
     }
-  }, [setStartTime, setEndTime, setActiveBookmarkId]);
+  }, [setStartTime, setEndTime, setActiveBookmarkId, setStreamStartTimeUs, updateCurrentTime, setCurrentFrameIndex]);
 
   // Cleanup callback for before starting a new watch session
   const clearBeforeWatch = useCallback(() => {
@@ -324,6 +335,7 @@ export default function Discovery() {
     clearFramePicker();
     clearAnalysisResults();
     disableBufferMode();
+    setBufferMetadata(null); // Clear stale metadata so effectiveStartTimeUs doesn't use old values
     clearSerialBytes();
     resetFraming();
     setBackendByteCount(0);
@@ -810,7 +822,7 @@ export default function Discovery() {
         ) : (
           <DiscoveryFramesView
             frames={frames}
-            bufferId={bufferMetadata?.id ?? sessionBufferId ?? null}
+            bufferId={bufferMetadata?.id ?? (bufferMode.enabled ? sessionBufferId : null)}
             protocol={protocolLabel}
             displayFrameIdFormat={displayFrameIdFormat}
             displayTimeFormat={displayTimeFormat}

@@ -38,6 +38,9 @@ interface DiscoveryFrameState {
     viewMode: "pagination" | "playback";
   };
 
+  // Actions - Stream timing
+  setStreamStartTimeUs: (timeUs: number | null) => void;
+
   // Actions - Data management
   addFrames: (newFrames: FrameMessage[], maxBuffer: number, skipFramePicker?: boolean, activeSelectionSetSelectedIds?: Set<number> | null) => void;
   clearBuffer: () => void;
@@ -74,6 +77,9 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
   seenIds: new Set(),
   streamStartTimeUs: null,
   bufferMode: { enabled: false, totalFrames: 0, viewMode: "pagination" },
+
+  // Stream timing actions
+  setStreamStartTimeUs: (timeUs) => set({ streamStartTimeUs: timeUs }),
 
   // Data management actions
   addFrames: (newFrames, maxBuffer, skipFramePicker = false, activeSelectionSetSelectedIds = null) => {
