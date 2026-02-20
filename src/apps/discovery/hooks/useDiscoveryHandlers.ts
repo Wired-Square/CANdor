@@ -127,7 +127,6 @@ export interface UseDiscoveryHandlersParams {
   addSerialBytes: (entries: { byte: number; timestampUs: number }[]) => void;
   setSerialConfig: (config: any) => void;
   setFramingConfig: (config: any) => void;
-  showError: (title: string, message: string, details?: string) => void;
   openSaveDialog: () => void;
   saveFrames: (decoderDir: string, format: 'hex' | 'decimal') => Promise<void>;
   setActiveSelectionSet: (id: string | null) => void;
@@ -188,7 +187,6 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     addSerialBytes: params.addSerialBytes,
     setSerialConfig: params.setSerialConfig,
     setFramingConfig: params.setFramingConfig,
-    showError: params.showError,
     setBufferMetadata: params.setBufferMetadata,
     closeIoReaderPicker: params.closeIoReaderPicker,
   });
@@ -245,7 +243,6 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     decoderDir: params.decoderDir,
     saveFrameIdFormat: params.saveFrameIdFormat,
     dumpDir: params.dumpDir,
-    showError: params.showError,
     openSaveDialog: params.openSaveDialog,
     saveFrames: params.saveFrames,
     getBufferBytesPaginated: params.getBufferBytesPaginated,

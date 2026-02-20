@@ -26,6 +26,8 @@ All notable changes to CANdor will be documented in this file.
 
 - **Transmit IO picker centralised**: Transmit now uses the shared `useIOPickerHandlers` hook and `useDialogManager` for IO picker dialog handling, matching the pattern used by Decoder, Discovery, Graph, and Query. Removes duplicated session handlers for start, multi-start, join, and skip from `useTransmitSessionHandlers`.
 
+- **Error handling centralised**: Extracted `withAppError` utility (`src/utils/appError.ts`) to replace repeated try/catch/showAppError boilerplate across session, export, catalog, and credential handlers. Removed `showError` callback plumbing from Discovery's handler chain.
+
 ### Fixed
 
 - **Query DB status light**: The DB indicator now shows green when connected to a PostgreSQL source, instead of always showing red.

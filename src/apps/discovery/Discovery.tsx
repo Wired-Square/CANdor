@@ -662,7 +662,6 @@ export default function Discovery() {
     addSerialBytes,
     setSerialConfig,
     setFramingConfig,
-    showError: showAppError,
     openSaveDialog,
     saveFrames,
     setActiveSelectionSet,

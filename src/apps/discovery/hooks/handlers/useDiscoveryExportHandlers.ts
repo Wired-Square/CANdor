@@ -6,6 +6,8 @@ import { useCallback } from "react";
 import type { FrameMessage } from "../../../../stores/discoveryStore";
 import type { ExportFormat, ExportDataMode } from "../../../../dialogs/ExportFramesDialog";
 import type { TimestampedByte } from "../../../../api/buffer";
+import { useSessionStore } from "../../../../stores/sessionStore";
+import { withAppError } from "../../../../utils/appError";
 
 export interface UseDiscoveryExportHandlersParams {
   // State
@@ -24,7 +26,6 @@ export interface UseDiscoveryExportHandlersParams {
   dumpDir: string;
 
   // Store actions
-  showError: (title: string, message: string, details?: string) => void;
   openSaveDialog: () => void;
   saveFrames: (decoderDir: string, format: 'hex' | 'decimal') => Promise<void>;
 
@@ -53,7 +54,6 @@ export function useDiscoveryExportHandlers({
   decoderDir,
   saveFrameIdFormat,
   dumpDir,
-  showError,
   openSaveDialog,
   saveFrames,
   getBufferBytesPaginated,
@@ -71,11 +71,11 @@ export function useDiscoveryExportHandlers({
   // Handle export dialog confirm
   const handleExport = useCallback(async (format: ExportFormat, filename: string) => {
     if (!dumpDir) {
-      showError("Export Error", "Dump directory not configured", "Please set a dump directory in Settings.");
+      useSessionStore.getState().showAppError("Export Error", "Dump directory not configured", "Please set a dump directory in Settings.");
       return;
     }
 
-    try {
+    await withAppError("Export Error", "Failed to export", async () => {
       let content: string | Uint8Array;
       let extension: string;
 
@@ -137,10 +137,7 @@ export function useDiscoveryExportHandlers({
         }
         closeExportDialog();
       }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      showError("Export Error", "Failed to export", errorMessage);
-    }
+    });
   }, [
     dumpDir,
     exportDataMode,
@@ -157,7 +154,6 @@ export function useDiscoveryExportHandlers({
     getBufferFramesPaginatedById,
     pickFileToSave,
     saveCatalog,
-    showError,
     closeExportDialog,
   ]);
 

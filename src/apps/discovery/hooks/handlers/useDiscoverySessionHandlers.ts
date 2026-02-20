@@ -11,6 +11,7 @@ import type { IngestOptions as ManagerIngestOptions } from "../../../../hooks/us
 import { getBufferFrameInfo, setActiveBuffer, type BufferMetadata } from "../../../../api/buffer";
 import { isBufferProfileId } from "../../../../hooks/useIOSessionManager";
 import { useBufferSession } from "../../../../hooks/useBufferSession";
+import { withAppError } from "../../../../utils/appError";
 
 export interface UseDiscoverySessionHandlersParams {
   // Session actions
@@ -42,7 +43,6 @@ export interface UseDiscoverySessionHandlersParams {
   addSerialBytes: (entries: { byte: number; timestampUs: number }[]) => void;
   setSerialConfig: (config: any) => void;
   setFramingConfig: (config: any) => void;
-  showError: (title: string, message: string, details?: string) => void;
 
   // Buffer state
   setBufferMetadata: (meta: BufferMetadata | null) => void;
@@ -76,7 +76,6 @@ export function useDiscoverySessionHandlers({
   addSerialBytes: _addSerialBytes,
   setSerialConfig,
   setFramingConfig,
-  showError,
   setBufferMetadata,
   closeIoReaderPicker,
 }: UseDiscoverySessionHandlersParams) {
@@ -192,54 +191,47 @@ export function useDiscoverySessionHandlers({
 
     if (closeDialog) {
       // Watch mode
-      try {
-        console.log(`[DiscoverySessionHandlers] Watch mode - calling watchSingleSource(${profileId})`);
+      console.log(`[DiscoverySessionHandlers] Watch mode - calling watchSingleSource(${profileId})`);
 
-        // Discovery-specific: set source profile ID and sync framing config
-        setSourceProfileId(profileId);
+      // Discovery-specific: set source profile ID and sync framing config
+      setSourceProfileId(profileId);
 
-        // Sync framing config with discovery store
-        if (framingEncoding && framingEncoding !== "raw") {
-          const storeFramingConfig =
-            framingEncoding === "slip"
-              ? { mode: "slip" as const }
-              : framingEncoding === "modbus_rtu"
-              ? { mode: "modbus_rtu" as const, validateCrc: true }
-              : {
-                  mode: "raw" as const,
-                  delimiter: delimiter ? delimiter.map((b: number) => b.toString(16).toUpperCase().padStart(2, "0")).join("") : "0A",
-                  maxLength: maxFrameLength ?? 256,
-                };
-          setFramingConfig(storeFramingConfig);
-        } else {
-          setFramingConfig(null);
-        }
-
-        // Manager handles: onBeforeWatch cleanup, session creation, profile set, speed, watch state
-        await watchSingleSource(profileId, options);
-
-        closeIoReaderPicker();
-        console.log(`[DiscoverySessionHandlers] Watch mode - complete`);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        showError("Watch Error", "Failed to start watch session", msg);
+      // Sync framing config with discovery store
+      if (framingEncoding && framingEncoding !== "raw") {
+        const storeFramingConfig =
+          framingEncoding === "slip"
+            ? { mode: "slip" as const }
+            : framingEncoding === "modbus_rtu"
+            ? { mode: "modbus_rtu" as const, validateCrc: true }
+            : {
+                mode: "raw" as const,
+                delimiter: delimiter ? delimiter.map((b: number) => b.toString(16).toUpperCase().padStart(2, "0")).join("") : "0A",
+                maxLength: maxFrameLength ?? 256,
+              };
+        setFramingConfig(storeFramingConfig);
+      } else {
+        setFramingConfig(null);
       }
+
+      // Manager handles: onBeforeWatch cleanup, session creation, profile set, speed, watch state
+      await withAppError("Watch Error", "Failed to start watch session", async () => {
+        await watchSingleSource(profileId, options);
+        closeIoReaderPicker();
+      });
+      console.log(`[DiscoverySessionHandlers] Watch mode - complete`);
     } else {
       // Ingest mode - fast ingest without rendering, auto-transitions to buffer reader
-      try {
-        console.log(`[DiscoverySessionHandlers] Ingest mode - calling ingestSingleSource(${profileId})`);
+      console.log(`[DiscoverySessionHandlers] Ingest mode - calling ingestSingleSource(${profileId})`);
 
-        // Discovery-specific: set source profile ID
-        setSourceProfileId(profileId);
+      // Discovery-specific: set source profile ID
+      setSourceProfileId(profileId);
 
-        // Manager handles: pre-ingest cleanup, session creation with speed=0, frame counting, auto-transition
-        await ingestSingleSource(profileId, options);
+      // Manager handles: pre-ingest cleanup, session creation with speed=0, frame counting, auto-transition
+      await withAppError("Ingest Error", "Failed to start ingest", () =>
+        ingestSingleSource(profileId, options)
+      );
 
-        console.log(`[DiscoverySessionHandlers] Ingest mode - started`);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        showError("Ingest Error", "Failed to start ingest", msg);
-      }
+      console.log(`[DiscoverySessionHandlers] Ingest mode - started`);
     }
   }, [
     setSerialConfig,
@@ -248,7 +240,6 @@ export function useDiscoverySessionHandlers({
     watchSingleSource,
     ingestSingleSource,
     closeIoReaderPicker,
-    showError,
   ]);
 
   // Handle Watch/Ingest for multiple profiles (multi-bus mode)
@@ -260,37 +251,29 @@ export function useDiscoverySessionHandlers({
     if (closeDialog) {
       // Watch mode
       // Note: cleanup is handled by manager's onBeforeMultiWatch callback
-      try {
-        // Manager handles: onBeforeMultiWatch cleanup, startMultiBusSession, speed, watch state
+      // Manager handles: onBeforeMultiWatch cleanup, startMultiBusSession, speed, watch state
+      await withAppError("Multi-Bus Error", "Failed to start multi-bus session", async () => {
         await watchMultiSource(profileIds, options);
-
         setShowBusColumn(true);
         closeIoReaderPicker();
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        showError("Multi-Bus Error", "Failed to start multi-bus session", msg);
-      }
+      });
     } else {
       // Ingest mode - fast ingest without rendering
-      try {
-        console.log(`[DiscoverySessionHandlers] Multi-source ingest mode - calling ingestMultiSource`);
+      console.log(`[DiscoverySessionHandlers] Multi-source ingest mode - calling ingestMultiSource`);
 
-        // Manager handles: pre-ingest cleanup, session creation with speed=0, frame counting, auto-transition
+      // Manager handles: pre-ingest cleanup, session creation with speed=0, frame counting, auto-transition
+      await withAppError("Multi-Bus Ingest Error", "Failed to start multi-bus ingest", async () => {
         await ingestMultiSource(profileIds, options);
-
         setShowBusColumn(true);
-        console.log(`[DiscoverySessionHandlers] Multi-source ingest mode - started`);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        showError("Multi-Bus Ingest Error", "Failed to start multi-bus ingest", msg);
-      }
+      });
+
+      console.log(`[DiscoverySessionHandlers] Multi-source ingest mode - started`);
     }
   }, [
     watchMultiSource,
     ingestMultiSource,
     setShowBusColumn,
     closeIoReaderPicker,
-    showError,
   ]);
 
   // Handle selecting multiple profiles in multi-bus mode

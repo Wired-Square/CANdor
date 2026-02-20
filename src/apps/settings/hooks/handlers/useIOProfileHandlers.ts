@@ -8,6 +8,7 @@ import {
 } from '../../../../api/credentials';
 import { useSettingsStore, type IOProfile } from '../../stores/settingsStore';
 import { useSessionStore } from '../../../../stores/sessionStore';
+import { withAppError } from '../../../../utils/appError';
 
 export function useIOProfileHandlers() {
   // Store selectors
@@ -150,15 +151,11 @@ export function useIOProfileHandlers() {
     for (const field of SECURE_FIELDS) {
       const value = connectionWithoutSecrets[field];
       if (value && typeof value === 'string' && value.trim()) {
-        try {
-          await storeCredential(profileId, field, value);
-          connectionWithoutSecrets[`_${field}_stored`] = true;
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
-          console.error(`Failed to store ${field} in keyring:`, error);
-          showAppError('Credential Error', `Failed to securely store ${field}.`, msg);
-          return;
-        }
+        const ok = await withAppError('Credential Error', `Failed to securely store ${field}.`, () =>
+          storeCredential(profileId, field, value)
+        );
+        if (!ok) return;
+        connectionWithoutSecrets[`_${field}_stored`] = true;
       }
       delete connectionWithoutSecrets[field];
     }
