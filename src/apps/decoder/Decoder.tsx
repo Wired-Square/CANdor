@@ -7,8 +7,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { useSettings, getDisplayFrameIdFormat } from "../../hooks/useSettings";
 import { useDecoderStore } from "../../stores/decoderStore";
 import { useIOSessionManager, type SessionReconfigurationInfo, isBufferProfileId } from '../../hooks/useIOSessionManager';
+import { useIOPickerHandlers } from '../../hooks/useIOPickerHandlers';
 import { useEffectiveBufferMetadata } from "../../hooks/useEffectiveBufferMetadata";
 import { getFavoritesForProfile } from "../../utils/favorites";
+import { mergeSerialConfigForWatch } from "../../utils/sessionConfigMerge";
 import { useFocusStore } from '../../stores/focusStore';
 import { listCatalogs, type CatalogMetadata } from "../../api/catalog";
 import { clearBuffer } from "../../api/buffer";
@@ -20,7 +22,7 @@ import FramePickerDialog from "../../dialogs/FramePickerDialog";
 import IoReaderPickerDialog from "../../dialogs/IoReaderPickerDialog";
 import { getBufferMetadata, type BufferMetadata } from "../../api/buffer";
 import SpeedPickerDialog from "../../dialogs/SpeedPickerDialog";
-import CatalogPickerDialog from "./dialogs/CatalogPickerDialog";
+import CatalogPickerDialog from "../../dialogs/CatalogPickerDialog";
 import FlashNotification from "../../components/FlashNotification";
 import BookmarkEditorDialog from "../../dialogs/BookmarkEditorDialog";
 import SaveSelectionSetDialog from "../../dialogs/SaveSelectionSetDialog";
@@ -506,26 +508,13 @@ export default function Decoder() {
     currentFrameIndex: sessionCurrentFrameIndex,
     handleLeave,
     isDetached,
-    // Watch state
-    watchFrameCount,
-    isWatching,
     // Ingest state
     isIngesting,
-    ingestProfileId,
-    ingestFrameCount,
-    ingestError,
-    startIngest,
     stopIngest,
     // Session switching methods
-    watchSingleSource,
-    watchMultiSource,
     stopWatch,
     resumeWithNewBuffer,
     selectProfile,
-    selectMultipleProfiles,
-    joinSession,
-    skipReader,
-    // Note: streamCompletedRef is created locally and passed to manager via options
     // Bookmark methods
     jumpToBookmark,
   } = manager;
@@ -621,36 +610,16 @@ export default function Decoder() {
     startTime,
     endTime,
     playbackSpeed,
-    ioProfile,
-    // Note: serialConfig is read directly from store in session handlers to avoid stale closures
-
-    // Ingest session
-    startIngest,
-    stopIngest,
-    isIngesting,
-
-    // Watch state (read-only, from manager)
-    isWatching,
 
     // Stream completed ref (from manager, for playback handlers)
     streamCompletedRef,
 
     // Manager session switching methods
-    watchSingleSource,
-    watchMultiSource,
     stopWatch,
     selectProfile,
-    selectMultipleProfiles,
-    joinSession,
-    skipReader,
     jumpToBookmark,
 
-    // Ingest speed
-    ingestSpeed,
-    setIngestSpeed,
-
     // Dialog controls
-    closeIoReaderPicker: dialogs.ioReaderPicker.close,
     openSaveSelectionSet: dialogs.saveSelectionSet.open,
 
     // Active tab
@@ -666,6 +635,16 @@ export default function Decoder() {
     minTimeUs: effectiveBufferMetadata?.start_time_us,
     maxTimeUs: effectiveBufferMetadata?.end_time_us,
     totalFrames: effectiveBufferMetadata?.count,
+  });
+
+  // Centralised IO picker handlers - replaces manual dialog handler wiring
+  const ioPickerProps = useIOPickerHandlers({
+    manager,
+    closeDialog: () => dialogs.ioReaderPicker.close(),
+    mergeOptions: (options) => mergeSerialConfigForWatch(useDecoderStore.getState().serialConfig, options),
+    getReinitializeOptions: () => ({
+      frameIdBigEndian: useDecoderStore.getState().serialConfig?.frame_id_byte_order === "big",
+    }),
   });
 
   // Report session state to menu when this panel is focused
@@ -1016,8 +995,8 @@ export default function Decoder() {
           <DecoderTopBar
             catalogs={catalogs}
             catalogPath={catalogPath}
-            onCatalogChange={handlers.handleCatalogChange}
             defaultCatalogFilename={settings?.default_catalog}
+            onOpenCatalogPicker={() => dialogs.catalogPicker.open()}
             ioProfiles={settings?.io_profiles || []}
             ioProfile={ioProfile}
             onIoProfileChange={handlers.handleIoProfileChange}
@@ -1041,7 +1020,6 @@ export default function Decoder() {
             onOpenFramePicker={() => dialogs.framePicker.open()}
             onOpenIoReaderPicker={() => dialogs.ioReaderPicker.open()}
             onOpenSpeedPicker={() => dialogs.speedPicker.open()}
-            onOpenCatalogPicker={() => dialogs.catalogPicker.open()}
             showRawBytes={showRawBytes}
             onToggleRawBytes={toggleShowRawBytes}
             onClear={handlers.handleClear}
@@ -1140,6 +1118,7 @@ export default function Decoder() {
       />
 
       <IoReaderPickerDialog
+        {...ioPickerProps}
         isOpen={dialogs.ioReaderPicker.isOpen}
         onClose={() => dialogs.ioReaderPicker.close()}
         ioProfiles={settings?.io_profiles || []}
@@ -1147,21 +1126,11 @@ export default function Decoder() {
         selectedIds={ioProfiles.length > 0 ? ioProfiles : []}
         defaultId={settings?.default_read_profile}
         onSelect={handlers.handleIoProfileChange}
-        onSelectMultiple={handlers.handleSelectMultiple}
         onImport={(meta) => setBufferMetadata(meta)}
         bufferMetadata={bufferMetadata}
         defaultDir={settings?.dump_dir}
-        isIngesting={isIngesting || isWatching}
-        ingestProfileId={isIngesting ? ingestProfileId : (isWatching ? ioProfile : null)}
-        ingestFrameCount={isIngesting ? ingestFrameCount : watchFrameCount}
         ingestSpeed={ingestSpeed}
         onIngestSpeedChange={(speed) => setIngestSpeed(speed)}
-        onStartIngest={handlers.handleDialogStartIngest}
-        onStartMultiIngest={handlers.handleDialogStartMultiIngest}
-        onStopIngest={handlers.handleDialogStopIngest}
-        ingestError={ingestError}
-        onJoinSession={handlers.handleJoinSession}
-        onSkip={handlers.handleSkip}
         allowMultiSelect={true}
       />
 
@@ -1179,6 +1148,7 @@ export default function Decoder() {
         selectedPath={catalogPath}
         defaultFilename={settings?.default_catalog}
         onSelect={handlers.handleCatalogChange}
+        title="Select Decoder Catalog"
       />
 
       <BookmarkEditorDialog

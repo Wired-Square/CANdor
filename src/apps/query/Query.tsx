@@ -28,7 +28,7 @@ import ResultsPanel from "./views/ResultsPanel";
 import StatsPanel from "./views/StatsPanel";
 import IoReaderPickerDialog from "../../dialogs/IoReaderPickerDialog";
 import ErrorDialog from "../../dialogs/ErrorDialog";
-import CatalogPickerDialog from "../decoder/dialogs/CatalogPickerDialog";
+import CatalogPickerDialog from "../../dialogs/CatalogPickerDialog";
 import AddBookmarkDialog from "../../dialogs/AddBookmarkDialog";
 
 export default function Query() {

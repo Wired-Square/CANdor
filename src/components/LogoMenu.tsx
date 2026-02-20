@@ -1,7 +1,7 @@
 // ui/src/components/LogoMenu.tsx
 
 import { useState, useRef, useEffect } from "react";
-import { Search, Activity, FileText, Calculator, Settings, Send, ArrowUpCircle, DatabaseZap, Network } from "lucide-react";
+import { Search, Activity, FileText, Calculator, Settings, Send, ArrowUpCircle, DatabaseZap, Network, BarChart3 } from "lucide-react";
 import { iconMd } from "../styles/spacing";
 import { bgSurface, borderDefault, textPrimary } from "../styles";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -9,7 +9,7 @@ import logo from "../assets/logo.png";
 import { useUpdateStore } from "../stores/updateStore";
 import { openSettingsPanel } from "../api";
 
-export type PanelId = "discovery" | "decoder" | "catalog-editor" | "frame-calculator" | "payload-analysis" | "frame-order-analysis" | "transmit" | "query" | "session-manager" | "settings";
+export type PanelId = "discovery" | "decoder" | "catalog-editor" | "frame-calculator" | "payload-analysis" | "frame-order-analysis" | "transmit" | "query" | "session-manager" | "graph" | "settings";
 
 interface LogoMenuProps {
   onPanelClick: (panelId: PanelId) => void;
@@ -72,6 +72,13 @@ const menuItems: MenuItem[] = [
     label: "Sessions",
     color: "text-cyan-400",
     bgColor: "hover:bg-cyan-500/10",
+  },
+  {
+    id: "graph",
+    icon: BarChart3,
+    label: "Graph",
+    color: "text-pink-400",
+    bgColor: "hover:bg-pink-500/10",
   },
   {
     id: "settings",

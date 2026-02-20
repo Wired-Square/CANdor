@@ -28,7 +28,6 @@ import type { BufferMetadata } from "../../../api/buffer";
 import type { FrameDetail } from "../../../types/decoder";
 import type { IngestOptions as ManagerIngestOptions } from "../../../hooks/useIOSessionManager";
 import type { TimeRangeFavorite } from "../../../utils/favorites";
-// Note: SerialFrameConfig is read directly from store in session handlers to avoid stale closures
 import type { SelectionSet } from "../../../utils/selectionSets";
 
 export interface UseDecoderHandlersParams {
@@ -93,48 +92,16 @@ export interface UseDecoderHandlersParams {
   startTime: string;
   endTime: string;
   playbackSpeed: PlaybackSpeed;
-  ioProfile: string | null;
-  // Note: serialConfig is read directly from store via getState() to avoid stale closure issues
-
-  // Ingest session
-  startIngest: (params: {
-    profileId: string;
-    speed?: number;
-    startTime?: string;
-    endTime?: string;
-    maxFrames?: number;
-    frameIdStartByte?: number;
-    frameIdBytes?: number;
-    sourceAddressStartByte?: number;
-    sourceAddressBytes?: number;
-    sourceAddressBigEndian?: boolean;
-    minFrameLength?: number;
-  }) => Promise<void>;
-  stopIngest: () => Promise<void>;
-  isIngesting: boolean;
-
-  // Watch state (read-only, from manager)
-  isWatching: boolean;
 
   // Stream completed ref (from manager, for playback handlers)
   streamCompletedRef: React.MutableRefObject<boolean>;
 
   // Manager session switching methods
-  watchSingleSource: (profileId: string, options: ManagerIngestOptions, reinitializeOptions?: Record<string, unknown>) => Promise<void>;
-  watchMultiSource: (profileIds: string[], options: ManagerIngestOptions) => Promise<void>;
   stopWatch: () => Promise<void>;
   selectProfile: (profileId: string | null) => void;
-  selectMultipleProfiles: (profileIds: string[]) => void;
-  joinSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
-  skipReader: () => Promise<void>;
   jumpToBookmark: (bookmark: TimeRangeFavorite, options?: Omit<ManagerIngestOptions, "startTime" | "endTime" | "maxFrames">) => Promise<void>;
 
-  // Ingest speed
-  ingestSpeed: number;
-  setIngestSpeed: (speed: number) => void;
-
   // Dialog controls
-  closeIoReaderPicker: () => void;
   openSaveSelectionSet: () => void;
 
   // Active tab
@@ -159,25 +126,12 @@ export type DecoderHandlers = DecoderSessionHandlers &
   DecoderCatalogHandlers;
 
 export function useDecoderHandlers(params: UseDecoderHandlersParams): DecoderHandlers {
-  // Session handlers (start ingest, stop watch, detach, rejoin, multi-bus, IO profile change)
-  // Delegates session orchestration to manager methods; only adds Decoder-specific logic
+  // Session handlers (stop watch, IO profile change)
+  // Dialog handlers (start/stop ingest, join, skip) are now in useIOPickerHandlers
   const sessionHandlers = useDecoderSessionHandlers({
     reinitialize: params.reinitialize,
-    startIngest: params.startIngest,
-    stopIngest: params.stopIngest,
-    isIngesting: params.isIngesting,
-    isWatching: params.isWatching,
-    // Manager session switching methods
-    watchSingleSource: params.watchSingleSource,
-    watchMultiSource: params.watchMultiSource,
     stopWatch: params.stopWatch,
     selectProfile: params.selectProfile,
-    selectMultipleProfiles: params.selectMultipleProfiles,
-    joinSession: params.joinSession,
-    skipReader: params.skipReader,
-    ingestSpeed: params.ingestSpeed,
-    setIngestSpeed: params.setIngestSpeed,
-    closeIoReaderPicker: params.closeIoReaderPicker,
     playbackSpeed: params.playbackSpeed,
     setBufferMetadata: params.setBufferMetadata,
     updateCurrentTime: params.updateCurrentTime,

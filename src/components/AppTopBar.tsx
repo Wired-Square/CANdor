@@ -6,10 +6,12 @@
 import { type ReactNode } from "react";
 import { ChevronRight, ListFilter, type LucideIcon } from "lucide-react";
 import { IOSessionControls, type IOSessionControlsProps } from "./SessionControls";
+import CatalogButton from "./CatalogButton";
 import FlexSeparator from "./FlexSeparator";
 import { buttonBase } from "../styles/buttonStyles";
 import { iconLg, iconSm } from "../styles/spacing";
 import { bgSurface, borderDivider } from "../styles/colourTokens";
+import type { CatalogMetadata } from "../api/catalog";
 
 /**
  * IO Session section props - passed to IOSessionControls.
@@ -36,6 +38,16 @@ export interface FramePickerSectionProps {
   disabledTitle?: string;
 }
 
+/**
+ * Catalog section props - renders a shared CatalogButton.
+ */
+export interface CatalogSectionProps {
+  catalogs: CatalogMetadata[];
+  catalogPath: string | null;
+  defaultCatalogFilename?: string | null;
+  onOpen: () => void;
+}
+
 export interface AppTopBarProps {
   // === Identity (required) ===
   /** Lucide icon component */
@@ -52,6 +64,10 @@ export interface AppTopBarProps {
   // === Frame Picker Section (optional) ===
   /** If provided, renders a frame picker button */
   framePicker?: FramePickerSectionProps;
+
+  // === Catalog Section (optional) ===
+  /** If provided, renders a CatalogButton after frame picker */
+  catalog?: CatalogSectionProps;
 
   // === Custom Content ===
   /** Content rendered after standard sections, before actions */
@@ -70,9 +86,10 @@ export interface AppTopBarProps {
  * 2. FlexSeparator
  * 3. IOSessionControls (if `ioSession` provided)
  * 4. ChevronRight + FramePickerButton (if `framePicker` provided)
- * 5. Children (custom content)
- * 6. FlexSeparator
- * 7. Actions
+ * 5. ChevronRight + CatalogButton (if `catalog` provided)
+ * 6. Children (custom content)
+ * 7. FlexSeparator
+ * 8. Actions
  *
  * @example
  * ```tsx
@@ -102,6 +119,7 @@ export default function AppTopBar({
   title,
   ioSession,
   framePicker,
+  catalog,
   children,
   actions,
 }: AppTopBarProps) {
@@ -167,6 +185,19 @@ export default function AppTopBar({
                 {framePicker.selectedCount}/{framePicker.frameCount}
               </span>
             </button>
+          </>
+        )}
+
+        {/* Catalog (if provided) */}
+        {catalog && (
+          <>
+            <ChevronRight className={`${iconSm} text-[color:var(--text-muted)] shrink-0`} />
+            <CatalogButton
+              catalogs={catalog.catalogs}
+              catalogPath={catalog.catalogPath}
+              defaultCatalogFilename={catalog.defaultCatalogFilename}
+              onClick={catalog.onOpen}
+            />
           </>
         )}
 

@@ -1,10 +1,10 @@
-// ui/src/apps/decoder/dialogs/CatalogPickerDialog.tsx
+// ui/src/dialogs/CatalogPickerDialog.tsx
 
 import { Check, Star, X } from "lucide-react";
-import { iconMd, iconSm, iconLg, flexRowGap2 } from "../../../styles/spacing";
-import { caption, textMedium, borderDivider, hoverLight, bgSurface } from "../../../styles";
-import Dialog from "../../../components/Dialog";
-import type { CatalogMetadata } from "../../../api/catalog";
+import { iconMd, iconSm, iconLg, flexRowGap2 } from "../styles/spacing";
+import { caption, textMedium, borderDivider, hoverLight, bgSurface } from "../styles";
+import Dialog from "../components/Dialog";
+import type { CatalogMetadata } from "../api/catalog";
 
 type Props = {
   isOpen: boolean;
@@ -13,6 +13,7 @@ type Props = {
   selectedPath: string | null;
   defaultFilename?: string | null;
   onSelect: (path: string) => void;
+  title?: string;
 };
 
 export default function CatalogPickerDialog({
@@ -22,6 +23,7 @@ export default function CatalogPickerDialog({
   selectedPath,
   defaultFilename,
   onSelect,
+  title = "Select Catalog",
 }: Props) {
   const handleSelect = (path: string) => {
     onSelect(path);
@@ -33,7 +35,7 @@ export default function CatalogPickerDialog({
       <div className={`${bgSurface} rounded-xl shadow-xl overflow-hidden`}>
         <div className={`p-4 ${borderDivider} flex items-center justify-between`}>
           <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">
-            Select Decoder Catalog
+            {title}
           </h2>
           <button
             onClick={onClose}

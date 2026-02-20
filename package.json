@@ -37,8 +37,10 @@
     "react": "^19.1.0",
     "react-datepicker": "^9.1.0",
     "react-dom": "^19.1.0",
+    "react-grid-layout": "^2.2.2",
     "smol-toml": "^1.5.2",
     "tauri-plugin-keep-screen-on-api": "^0.1.4",
+    "uplot": "^1.6.32",
     "zustand": "^5.0.9"
   },
   "devDependencies": {

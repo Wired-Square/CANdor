@@ -14,7 +14,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { storeGet, storeSet } from "../api/store";
-import { Settings as SettingsIcon, Search, Activity, FileText, Calculator, Send, DatabaseZap, Network } from "lucide-react";
+import { Settings as SettingsIcon, Search, Activity, FileText, Calculator, Send, DatabaseZap, Network, BarChart3 } from "lucide-react";
 import { icon2xl } from "../styles/spacing";
 import { bgPrimary, textPrimary, textSecondary, textTertiary } from "../styles/colourTokens";
 import { launcherButton, launcherButtonLabel, launcherGrid } from "../styles/buttonStyles";
@@ -47,6 +47,7 @@ const PayloadAnalysis = lazy(() => import("../apps/analysis/PayloadAnalysis"));
 const FrameOrderAnalysis = lazy(() => import("../apps/analysis/FrameOrderAnalysis"));
 const Query = lazy(() => import("../apps/query/Query"));
 const SessionManager = lazy(() => import("../apps/session-manager/SessionManager"));
+const Graph = lazy(() => import("../apps/graph/Graph"));
 const Settings = lazy(() => import("../apps/settings/Settings"));
 
 // Get layout key for a specific window (per-window persistence)
@@ -117,6 +118,10 @@ function SessionManagerPanel(_props: IDockviewPanelProps) {
   return <PanelWrapper><SessionManager /></PanelWrapper>;
 }
 
+function GraphPanel(_props: IDockviewPanelProps) {
+  return <PanelWrapper><Graph /></PanelWrapper>;
+}
+
 function SettingsPanel(_props: IDockviewPanelProps) {
   return <PanelWrapper><Settings /></PanelWrapper>;
 }
@@ -132,6 +137,7 @@ const components = {
   "frame-order-analysis": FrameOrderAnalysisPanel,
   query: QueryPanel,
   "session-manager": SessionManagerPanel,
+  graph: GraphPanel,
   settings: SettingsPanel,
 };
 
@@ -222,6 +228,13 @@ function Watermark(_props: IWatermarkPanelProps) {
             onClick={() => openPanel("session-manager")}
           />
           <WatermarkAppButton
+            icon={BarChart3}
+            label="Graph"
+            color="text-pink-400"
+            bgColor="bg-pink-500/10 hover:bg-pink-500/20"
+            onClick={() => openPanel("graph")}
+          />
+          <WatermarkAppButton
             icon={SettingsIcon}
             label="Settings"
             color="text-orange-400"
@@ -266,6 +279,7 @@ const panelTitles: Record<PanelId, string> = {
   "frame-order-analysis": "Frame Order",
   query: "Query",
   "session-manager": "Sessions",
+  graph: "Graph",
   settings: "Settings",
 };
 

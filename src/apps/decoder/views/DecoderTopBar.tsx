@@ -1,6 +1,6 @@
 // ui/src/apps/decoder/views/DecoderTopBar.tsx
 
-import { Activity, ChevronRight, Star, Glasses, Trash2, Users, User, Filter, Eye, EyeOff, Type } from "lucide-react";
+import { Activity, Glasses, Trash2, Users, User, Filter, Eye, EyeOff, Type } from "lucide-react";
 import { iconSm, iconMd } from "../../../styles/spacing";
 import type { CatalogMetadata } from "../../../api/catalog";
 import type { IOProfile } from "../../../types/common";
@@ -14,8 +14,8 @@ type Props = {
   // Catalog selection
   catalogs: CatalogMetadata[];
   catalogPath: string | null;
-  onCatalogChange: (path: string) => void;
   defaultCatalogFilename?: string | null;
+  onOpenCatalogPicker: () => void;
 
   // IO profile selection
   ioProfiles: IOProfile[];
@@ -58,7 +58,6 @@ type Props = {
   // Dialogs
   onOpenIoReaderPicker: () => void;
   onOpenSpeedPicker: () => void;
-  onOpenCatalogPicker: () => void;
 
   // Raw bytes toggle
   showRawBytes?: boolean;
@@ -91,6 +90,7 @@ export default function DecoderTopBar({
   catalogs,
   catalogPath,
   defaultCatalogFilename,
+  onOpenCatalogPicker,
   ioProfiles,
   ioProfile,
   defaultReadProfileId,
@@ -113,7 +113,6 @@ export default function DecoderTopBar({
   onOpenFramePicker,
   onOpenIoReaderPicker,
   onOpenSpeedPicker,
-  onOpenCatalogPicker,
   showRawBytes = false,
   onToggleRawBytes,
   onClear,
@@ -127,14 +126,6 @@ export default function DecoderTopBar({
   onToggleAsciiGutter,
   frameIdFilter = '',
 }: Props) {
-  // Normalise path separators for cross-platform comparison (Windows uses backslashes)
-  const normalisePath = (p: string) => p.replace(/\\/g, '/');
-  const normalisedCatalogPath = catalogPath ? normalisePath(catalogPath) : null;
-  const selectedCatalog = catalogs.find((c) => normalisePath(c.path) === normalisedCatalogPath);
-  const hasCatalog = !!selectedCatalog;
-  const catalogName = selectedCatalog?.name || "No catalog";
-  const isDefaultCatalog = selectedCatalog?.filename === defaultCatalogFilename;
-
   // Filter button state
   const hasFilters = minFrameLength > 0 || frameIdFilter.trim() !== '';
   const filterParts: string[] = [];
@@ -170,32 +161,13 @@ export default function DecoderTopBar({
         selectedCount: selectedFrameCount,
         onOpen: onOpenFramePicker,
       }}
+      catalog={{
+        catalogs,
+        catalogPath,
+        defaultCatalogFilename,
+        onOpen: onOpenCatalogPicker,
+      }}
     >
-      {/* Right arrow icon */}
-      <ChevronRight className={`${iconSm} text-slate-400 shrink-0`} />
-
-      {/* Catalog Selection */}
-      {hasCatalog ? (
-        <button
-          onClick={onOpenCatalogPicker}
-          className={buttonBase}
-          title="Select Decoder Catalog"
-        >
-          {isDefaultCatalog && (
-            <Star className={`${iconSm} text-amber-500 flex-shrink-0`} fill="currentColor" />
-          )}
-          <span className="max-w-32 truncate">{catalogName}</span>
-        </button>
-      ) : (
-        <button
-          onClick={onOpenCatalogPicker}
-          className={buttonBase}
-          title="Select Decoder Catalog"
-        >
-          <span className="text-[color:var(--text-muted)] italic">No catalog</span>
-        </button>
-      )}
-
       {/* Raw bytes toggle */}
       {onToggleRawBytes && (
         <button

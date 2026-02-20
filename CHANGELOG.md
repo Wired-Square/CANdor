@@ -6,7 +6,31 @@ All notable changes to CANdor will be documented in this file.
 
 ### Added
 
+- **Graph App**: New app for visualising decoded CAN signal values in real time. Features include:
+  - **Line chart panels** powered by uPlot for fast time-series plotting with auto-scrolling
+  - **Radial gauge panels** with custom SVG arc display showing live signal values
+  - **Draggable/resizable grid layout** via react-grid-layout v2 — panels can be rearranged and resized freely
+  - **Signal picker dialog** for selecting which catalog signals to plot on each panel
+  - **Panel configuration** for editing titles and gauge min/max ranges
+  - Independent session and catalog selection (not coupled to the Decoder)
+
+- **Shared CatalogPickerDialog**: Moved `CatalogPickerDialog` from the Decoder to `src/dialogs/` as a shared component with a configurable `title` prop, reused by Decoder, Query, and Graph apps.
+
+- **Shared serial config merging utility**: Extracted `mergeSerialConfig()` and `mergeSerialConfigForWatch()` to `src/utils/sessionConfigMerge.ts`, reused by Decoder and Graph session handlers.
+
+- **Shared CatalogButton component**: Extracted catalog display button to `src/components/CatalogButton.tsx` with cross-platform path normalisation, default catalog star icon, and "No catalog" placeholder. Used by Decoder, Query, and Graph via AppTopBar's new `catalog` section.
+
+- **AppTopBar catalog section**: `AppTopBar` now accepts a `catalog` prop to render a consistent catalog selector button, eliminating duplicated catalog display logic across app top bars.
+
+- **Centralised IO picker handlers for all session apps**: `useIOPickerHandlers` (previously only used by Discovery) is now used by Graph and Decoder. Added `getReinitializeOptions` callback for apps that pass extra options during watch (e.g., `frameIdBigEndian` for serial catalogs). Graph's `IoReaderPickerDialog` reduced from 14 manual handler props to a single `{...ioPickerProps}` spread; Decoder's reduced from 12 to a spread plus app-specific extras.
+
 - **`release:rebuild` script**: New `npm run release:rebuild` command to re-release the current version without bumping. Commits any uncommitted fixes, deletes and recreates the existing tag, and pushes — useful when a release fails CI due to build errors.
+
+### Changed
+
+- **Graph top bar now shows full session controls**: ReaderButton with status dot, session ID, multi-bus count, and stop/resume/leave buttons — matching Decoder and Discovery.
+
+- **Decoder session handlers simplified**: Removed 6 dialog handler methods (~100 lines) from `useDecoderSessionHandlers` that are now handled by the shared `useIOPickerHandlers` hook.
 
 ### Fixed
 
