@@ -16,7 +16,8 @@ import AppTabView, { type TabDefinition, type ProtocolBadge } from "../../../com
 import HeaderFieldFilter from "../../../components/HeaderFieldFilter";
 import type { DecodedFrame, DecodedSignal, DecoderViewMode, UnmatchedFrame, FilteredFrame, MirrorValidationEntry } from "../../../stores/decoderStore";
 import { MAX_UNMATCHED_FRAMES, MAX_FILTERED_FRAMES } from "../../../stores/decoderStore";
-import type { FrameDetail, SignalDef, MuxDef } from "../../../types/decoder";
+import type { FrameDetail, SignalDef } from "../../../types/decoder";
+import { getAllFrameSignals } from "../../../utils/frameSignals";
 import type { SerialFrameConfig } from "../../../utils/frameExport";
 import type { TimeFormat } from "../../../hooks/useSettings";
 
@@ -41,30 +42,6 @@ function getSignalByteIndices(signal: SignalDef): Set<number> {
   return indices;
 }
 
-/**
- * Recursively collect all signals from a mux structure (all cases).
- */
-function collectMuxSignals(mux: MuxDef): SignalDef[] {
-  const signals: SignalDef[] = [];
-  for (const caseData of Object.values(mux.cases)) {
-    signals.push(...caseData.signals);
-    if (caseData.mux) {
-      signals.push(...collectMuxSignals(caseData.mux));
-    }
-  }
-  return signals;
-}
-
-/**
- * Get all signals for a frame (plain + all mux signals).
- */
-function getAllSignals(frame: FrameDetail): SignalDef[] {
-  const signals = [...frame.signals];
-  if (frame.mux) {
-    signals.push(...collectMuxSignals(frame.mux));
-  }
-  return signals;
-}
 
 /**
  * Convert byte to ASCII character (printable) or dot.
@@ -459,7 +436,7 @@ function FrameCard({
     return baseColour;
   };
 
-  const allSignals = getAllSignals(frame);
+  const allSignals = getAllFrameSignals(frame);
 
   // Build a mapping from byte index to the confidence colour of the signal that covers it
   // If multiple signals cover a byte, use the first one found (priority based on definition order)

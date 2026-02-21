@@ -7,6 +7,7 @@ import { bgSurface, borderDivider, textSecondary, hoverLight } from "../../../st
 import Dialog from "../../../components/Dialog";
 import { useGraphStore } from "../../../stores/graphStore";
 import { formatFrameId } from "../../../utils/frameIds";
+import { getAllFrameSignals } from "../../../utils/frameSignals";
 
 interface Props {
   isOpen: boolean;
@@ -85,7 +86,7 @@ export default function SignalPickerDialog({ isOpen, onClose, panelId }: Props) 
             <div className="py-1">
               {sortedFrames.map(([frameId, frame]) => {
                 const isExpanded = expandedFrames.has(frameId);
-                const numericSignals = frame.signals.filter(
+                const numericSignals = getAllFrameSignals(frame).filter(
                   (s) => s.name && s.format !== "ascii" && s.format !== "utf8" && s.format !== "hex",
                 );
                 if (numericSignals.length === 0) return null;

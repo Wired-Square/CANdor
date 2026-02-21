@@ -12,6 +12,10 @@ All notable changes to CANdor will be documented in this file.
 
 - **Privacy settings tab**: New Privacy tab in Settings with a toggle for anonymous crash reporting.
 
+### Fixed
+
+- **Graph signal picker missing muxed signals**: Signals inside mux structures (e.g. 0x70F module SoC values) were not appearing in the Select Signals dialog. The picker now includes all mux signals alongside plain signals.
+
 ## [0.4.3] - 2026-02-20
 
 ### Added
