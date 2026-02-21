@@ -6,15 +6,8 @@
 import { useState, useRef, useCallback, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { getSignalLabel, getConfidenceColour, type SignalRef } from "../../../../stores/graphStore";
+import { formatValue } from "../../utils/graphFormat";
 import type { AppSettings } from "../../../../hooks/useSettings";
-
-/** Format a numeric value for tooltip display */
-function formatValue(v: number): string {
-  if (Math.abs(v) >= 10000) return v.toFixed(0);
-  if (Math.abs(v) >= 1000) return v.toFixed(1);
-  if (Math.abs(v) >= 100) return v.toFixed(2);
-  return v.toFixed(3);
-}
 
 interface PanelTooltipProps {
   signals: SignalRef[];

@@ -6,6 +6,20 @@ All notable changes to CANdor will be documented in this file.
 
 ### Added
 
+- **Graph zoom and pan**: Line charts now support drag-select zoom, mouse wheel zoom (centred on cursor), and Shift+drag / middle-click pan. A reset zoom button in the panel header restores the full view.
+
+- **Graph follow mode**: During live capture, line charts auto-scroll to keep the latest data visible. Automatically disables when the user manually zooms or pans. A toggle button (chevrons icon) in the panel header re-enables it.
+
+- **Graph dual measurement cursors**: Click on a line chart to place two measurement cursors. Shows values at both cursors and deltas (ΔValue, Δt) per signal. Double-click or third click clears cursors. Cursors survive zoom and pan.
+
+- **Graph statistics overlay**: A toggleable min/avg/max overlay per signal in the top-right corner of line charts. Running stats computed inline with zero overhead. Toggle via the bar chart icon in the panel header.
+
+- **Graph configurable buffer size**: Graph ring buffer size is now configurable in Settings → General (default 10,000 samples per signal, range 1,000–100,000). Higher values show more history at the cost of more memory.
+
+- **Graph CSV export**: Export panel signal data as CSV via the download button in the panel header. Columns are timestamp (ISO-8601) and one column per signal with units in headers.
+
+- **Graph dual Y-axes**: Line chart signals can be assigned to left or right Y-axis for independent auto-scaling. An L/R toggle appears per signal in Panel Settings when a panel has 2+ signals.
+
 - **Graph raw JSON view**: A glasses toggle (purple, matching the Catalog Editor) shows the current panel layout as editable JSON. Copy/paste to export or import layouts between sessions.
 
 - **Graph signal reordering**: Signals in the Panel Settings dialog can be reordered by dragging the grip handle.
@@ -21,6 +35,14 @@ All notable changes to CANdor will be documented in this file.
 - **Shared CodeView component**: The Catalog Editor's text mode editor extracted to `src/components/CodeView.tsx` for reuse across apps.
 
 ### Changed
+
+- **Graph panel header hover scope**: Icon bar now expands only when hovering the header itself, not the entire panel, reducing accidental reveals during chart interaction.
+
+- **Graph panel drag-click suppression**: Button clicks in the panel header are suppressed after a drag-relocate, preventing accidental actions when dropping a panel.
+
+- **Graph shared formatting**: Centralised `formatValue`, `formatTimeDelta`, and `formatTimestamp` into `graphFormat.ts`. ListPanel, GaugePanel, PanelTooltip, and line chart tooltip/stats all use the same unified formatter.
+
+- **Graph centralised plugins**: Tooltip, wheel zoom, pan, and measurement cursor plugins extracted into `chartPlugins.ts` with shared styling and helpers.
 
 - **Graph top bar buttons**: "Add Panel" shortened to a `+` icon; "Layouts" shortened to an icon. Both use `iconMd` sizing with hover tooltips.
 

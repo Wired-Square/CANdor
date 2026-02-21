@@ -3,6 +3,7 @@
 import { useGraphStore, getConfidenceColour, type GraphPanel } from "../../../../../stores/graphStore";
 import { useSettings } from "../../../../../hooks/useSettings";
 import { textSecondary } from "../../../../../styles/colourTokens";
+import { formatValue } from "../../../utils/graphFormat";
 import PanelTooltip from "../PanelTooltip";
 
 interface Props {
@@ -31,13 +32,6 @@ function describeArc(cx: number, cy: number, r: number, startAngle: number, endA
   const sweep = endAngle - startAngle;
   const largeArc = sweep > 180 ? 1 : 0;
   return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 0 ${end.x} ${end.y}`;
-}
-
-/** Format a numeric value for display */
-function formatValue(v: number): string {
-  if (Math.abs(v) >= 1000) return v.toFixed(0);
-  if (Math.abs(v) >= 100) return v.toFixed(1);
-  return v.toFixed(2);
 }
 
 export default function GaugePanel({ panel }: Props) {

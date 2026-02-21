@@ -60,6 +60,7 @@ export default function Graph() {
   const pushSignalValues = useGraphStore((s) => s.pushSignalValues);
   const clearData = useGraphStore((s) => s.clearData);
   const setPlaybackSpeed = useGraphStore((s) => s.setPlaybackSpeed);
+  const setBufferCapacity = useGraphStore((s) => s.setBufferCapacity);
 
   // Layout persistence
   const savedLayouts = useGraphStore((s) => s.savedLayouts);
@@ -304,8 +305,9 @@ export default function Graph() {
         settings.decoder_dir,
         settings.default_read_profile,
       );
+      setBufferCapacity(settings.graph_buffer_size ?? 10_000);
     }
-  }, [settings, initFromSettings]);
+  }, [settings, initFromSettings, setBufferCapacity]);
 
   // Load catalog list and saved layouts on mount
   useEffect(() => {

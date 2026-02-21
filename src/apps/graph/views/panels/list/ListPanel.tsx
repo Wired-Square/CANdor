@@ -3,18 +3,11 @@
 import { useGraphStore, getSignalLabel, getConfidenceColour, type GraphPanel } from "../../../../../stores/graphStore";
 import { useSettings } from "../../../../../hooks/useSettings";
 import { textSecondary } from "../../../../../styles/colourTokens";
+import { formatValue } from "../../../utils/graphFormat";
 import PanelTooltip from "../PanelTooltip";
 
 interface Props {
   panel: GraphPanel;
-}
-
-/** Format a numeric value for display */
-function formatValue(v: number): string {
-  if (Math.abs(v) >= 10000) return v.toFixed(0);
-  if (Math.abs(v) >= 1000) return v.toFixed(1);
-  if (Math.abs(v) >= 100) return v.toFixed(2);
-  return v.toFixed(3);
 }
 
 export default function ListPanel({ panel }: Props) {

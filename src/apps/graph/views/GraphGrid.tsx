@@ -9,6 +9,9 @@ import GaugePanel from "./panels/gauge/GaugePanel";
 import ListPanel from "./panels/list/ListPanel";
 import { useCallback, useMemo } from "react";
 import { textSecondary } from "../../../styles/colourTokens";
+import { buildPanelCsv } from "../utils/graphExport";
+import { pickFileToSave } from "../../../api/dialogs";
+import { saveCatalog } from "../../../api/catalog";
 
 interface Props {
   onOpenSignalPicker: (panelId: string) => void;
@@ -45,6 +48,22 @@ export default function GraphGrid({ onOpenSignalPicker, onOpenPanelConfig }: Pro
     [updateLayout],
   );
 
+  const handleExport = useCallback(async (panelId: string) => {
+    const panel = useGraphStore.getState().panels.find((p) => p.id === panelId);
+    if (!panel) return;
+
+    const csv = buildPanelCsv(panel, useGraphStore.getState().seriesBuffers);
+    if (!csv) return;
+
+    const path = await pickFileToSave({
+      defaultPath: `${panel.title.replace(/[^a-zA-Z0-9_-]/g, '_')}.csv`,
+      filters: [{ name: "CSV", extensions: ["csv"] }],
+    });
+    if (!path) return;
+
+    await saveCatalog(path, csv);
+  }, []);
+
   const rglLayout = useMemo(
     () => layout.map((l) => ({ i: l.i, x: l.x, y: l.y, w: l.w, h: l.h })),
     [layout],
@@ -76,6 +95,7 @@ export default function GraphGrid({ onOpenSignalPicker, onOpenPanelConfig }: Pro
                 panel={panel}
                 onOpenSignalPicker={() => onOpenSignalPicker(panel.id)}
                 onOpenPanelConfig={() => onOpenPanelConfig(panel.id)}
+                onExport={() => handleExport(panel.id)}
               >
                 {panel.type === "line-chart" ? (
                   <LineChartPanel panel={panel} />

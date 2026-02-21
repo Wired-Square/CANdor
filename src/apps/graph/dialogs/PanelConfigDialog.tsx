@@ -21,6 +21,7 @@ export default function PanelConfigDialog({ isOpen, onClose, panelId, onReplaceS
   const updatePanel = useGraphStore((s) => s.updatePanel);
   const updateSignalColour = useGraphStore((s) => s.updateSignalColour);
   const updateSignalDisplayName = useGraphStore((s) => s.updateSignalDisplayName);
+  const updateSignalYAxis = useGraphStore((s) => s.updateSignalYAxis);
   const reorderSignals = useGraphStore((s) => s.reorderSignals);
   const { settings } = useSettings();
 
@@ -226,6 +227,33 @@ export default function PanelConfigDialog({ isOpen, onClose, panelId, onReplaceS
                         }
                         className="h-7 w-10 cursor-pointer bg-transparent border border-[color:var(--border-default)] rounded shrink-0"
                       />
+                    )}
+                    {/* Y-axis toggle (line-chart with 2+ signals) */}
+                    {panel.type === "line-chart" && panel.signals.length >= 2 && (
+                      <div className="flex shrink-0 rounded border border-[color:var(--border-default)] overflow-hidden">
+                        <button
+                          onClick={() => updateSignalYAxis(panel.id, signal.frameId, signal.signalName, 'left')}
+                          className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                            (signal.yAxis ?? 'left') === 'left'
+                              ? 'bg-blue-600 text-white'
+                              : 'text-[color:var(--text-muted)] hover:bg-[var(--hover-bg)]'
+                          }`}
+                          title="Left Y-axis"
+                        >
+                          L
+                        </button>
+                        <button
+                          onClick={() => updateSignalYAxis(panel.id, signal.frameId, signal.signalName, 'right')}
+                          className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                            signal.yAxis === 'right'
+                              ? 'bg-blue-600 text-white'
+                              : 'text-[color:var(--text-muted)] hover:bg-[var(--hover-bg)]'
+                          }`}
+                          title="Right Y-axis"
+                        >
+                          R
+                        </button>
+                      </div>
                     )}
                     <input
                       type="text"

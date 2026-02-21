@@ -3,9 +3,11 @@
 import { useRef, useEffect, useCallback } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import { useGraphStore, buildAlignedData, getSignalLabel, type GraphPanel, type SignalRef } from "../../../../../stores/graphStore";
+import { useGraphStore, buildAlignedData, getSignalLabel, type GraphPanel } from "../../../../../stores/graphStore";
 import { useSettings } from "../../../../../hooks/useSettings";
 import { textSecondary } from "../../../../../styles/colourTokens";
+import { formatValue } from "../../../utils/graphFormat";
+import { tooltipPlugin, wheelZoomPlugin, panPlugin, measurementPlugin, type ConfidenceColours } from "./chartPlugins";
 
 interface Props {
   panel: GraphPanel;
@@ -16,119 +18,25 @@ function getCssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
-/** Format a value for tooltip display */
-function formatValue(v: number | null | undefined): string {
-  if (v == null) return "—";
-  if (Math.abs(v) >= 1000) return v.toFixed(1);
-  if (Math.abs(v) >= 100) return v.toFixed(2);
-  return v.toFixed(3);
-}
-
 /** Responsive breakpoints */
 const COMPACT_WIDTH = 350;
 const COMPACT_HEIGHT = 180;
-
-/** Tooltip plugin for uPlot — shows signal values at cursor position.
- *  Appended to document.body so it can overflow panel boundaries. */
-function tooltipPlugin(
-  signals: SignalRef[],
-  confidenceColours?: { none: string; low: string; medium: string; high: string },
-): uPlot.Plugin {
-  let tooltip: HTMLDivElement;
-
-  return {
-    hooks: {
-      init(_u: uPlot) {
-        tooltip = document.createElement("div");
-        tooltip.style.cssText = `
-          display: none;
-          position: fixed;
-          pointer-events: none;
-          z-index: 9999;
-          padding: 6px 10px;
-          border-radius: 6px;
-          font-size: 11px;
-          line-height: 1.5;
-          white-space: nowrap;
-          background: var(--bg-surface);
-          color: var(--text-primary);
-          border: 1px solid var(--border-default);
-          box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-        `;
-        document.body.appendChild(tooltip);
-      },
-      setCursor(u: uPlot) {
-        const idx = u.cursor.idx;
-        if (idx == null || idx < 0) {
-          tooltip.style.display = "none";
-          return;
-        }
-
-        const ts = u.data[0]?.[idx];
-        if (ts == null) {
-          tooltip.style.display = "none";
-          return;
-        }
-
-        // Build tooltip content
-        const time = new Date(ts * 1000).toLocaleTimeString();
-        let html = `<div style="color: var(--text-muted); margin-bottom: 2px;">${time}</div>`;
-
-        for (let i = 0; i < signals.length; i++) {
-          const val = u.data[i + 1]?.[idx];
-          const sig = signals[i];
-          html += `<div style="display: flex; align-items: center; gap: 6px;">`;
-          html += `<span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: ${sig.colour}; flex-shrink: 0;"></span>`;
-          html += `<span style="color: var(--text-secondary);">${getSignalLabel(sig)}</span>`;
-          if (sig.confidence && confidenceColours) {
-            const confCol = confidenceColours[sig.confidence] || confidenceColours.none;
-            html += `<span style="display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: ${confCol}; flex-shrink: 0;" title="Confidence: ${sig.confidence}"></span>`;
-          }
-          html += `<span style="margin-left: auto; font-family: ui-monospace, monospace; font-weight: 500;">${formatValue(val as number | null)}</span>`;
-          if (sig.unit) html += `<span style="color: var(--text-muted); font-size: 10px;">${sig.unit}</span>`;
-          html += `</div>`;
-        }
-
-        tooltip.innerHTML = html;
-        tooltip.style.display = "block";
-
-        // Position tooltip in screen coordinates near cursor
-        const overRect = u.over.getBoundingClientRect();
-        const cursorLeft = u.cursor.left ?? 0;
-        const cursorTop = u.cursor.top ?? 0;
-        const tipRect = tooltip.getBoundingClientRect();
-
-        let tipX = overRect.left + cursorLeft + 12;
-        let tipY = overRect.top + cursorTop - tipRect.height / 2;
-
-        // Flip to left side if too close to right edge of viewport
-        if (tipX + tipRect.width > window.innerWidth - 8) {
-          tipX = overRect.left + cursorLeft - tipRect.width - 12;
-        }
-        // Clamp vertical position to viewport
-        tipY = Math.max(4, Math.min(tipY, window.innerHeight - tipRect.height - 4));
-
-        tooltip.style.left = `${tipX}px`;
-        tooltip.style.top = `${tipY}px`;
-      },
-      destroy(_u: uPlot) {
-        tooltip?.remove();
-      },
-    },
-  };
-}
 
 /** Build uPlot options for this panel */
 function buildOptions(
   panel: GraphPanel,
   width: number,
   height: number,
-  confidenceColours?: { none: string; low: string; medium: string; high: string },
+  confidenceColours?: ConfidenceColours,
+  onUserInteraction?: () => void,
 ): uPlot.Options {
   const textColour = getCssVar("--text-primary") || "#e2e8f0";
   const gridColour = getCssVar("--border-default") || "rgba(255,255,255,0.1)";
   const isCompactW = width < COMPACT_WIDTH;
   const isCompactH = height < COMPACT_HEIGHT;
+
+  const hasRightAxis = panel.signals.some((s) => s.yAxis === "right");
+  const callbacks = { onUserInteraction };
 
   const series: uPlot.Series[] = [
     {}, // x-axis (time)
@@ -137,42 +45,77 @@ function buildOptions(
       stroke: sig.colour,
       width: 2,
       points: { show: false },
+      scale: sig.yAxis === "right" ? "y2" : "y",
     })),
   ];
+
+  const axes: uPlot.Axis[] = [
+    // X-axis (time)
+    {
+      stroke: textColour,
+      grid: { stroke: gridColour, width: 1 },
+      ticks: { stroke: gridColour, width: 1 },
+      ...(isCompactH ? { show: false } : {}),
+    },
+    // Left Y-axis
+    {
+      stroke: textColour,
+      grid: { stroke: gridColour, width: 1 },
+      ticks: { stroke: gridColour, width: 1 },
+      size: isCompactW ? 40 : 60,
+      scale: "y",
+    },
+  ];
+
+  // Right Y-axis (only if any signal uses it)
+  if (hasRightAxis) {
+    axes.push({
+      side: 1,
+      stroke: textColour,
+      grid: { show: false },
+      ticks: { stroke: gridColour, width: 1 },
+      size: isCompactW ? 40 : 60,
+      scale: "y2",
+    });
+  }
 
   return {
     width,
     height,
     series,
-    plugins: [tooltipPlugin(panel.signals, confidenceColours)],
+    plugins: [
+      tooltipPlugin(panel.signals, confidenceColours),
+      wheelZoomPlugin(callbacks),
+      panPlugin(callbacks),
+      measurementPlugin(panel.signals, confidenceColours),
+    ],
     cursor: {
-      drag: { x: false, y: false },
+      drag: { x: true, y: false },
       points: {
         size: 6,
         fill: (_u: uPlot, seriesIdx: number) => panel.signals[seriesIdx - 1]?.colour ?? "#fff",
       },
     },
     scales: {
-      x: {
-        time: true,
-      },
+      x: { time: true },
+      y: { auto: true },
+      ...(hasRightAxis ? { y2: { auto: true } } : {}),
     },
-    axes: [
-      {
-        stroke: textColour,
-        grid: { stroke: gridColour, width: 1 },
-        ticks: { stroke: gridColour, width: 1 },
-        ...(isCompactH ? { show: false } : {}),
-      },
-      {
-        stroke: textColour,
-        grid: { stroke: gridColour, width: 1 },
-        ticks: { stroke: gridColour, width: 1 },
-        size: isCompactW ? 40 : 60,
-      },
-    ],
+    axes,
     legend: {
       show: !isCompactH && panel.signals.length > 1,
+    },
+    hooks: {
+      // Detect user-initiated drag-zoom (uPlot built-in)
+      setScale: [
+        (_u: uPlot, key: string) => {
+          if (key === "x") {
+            // This fires for both programmatic and user setScale calls.
+            // We'll handle the distinction in the component by tracking
+            // whether the call was triggered by updateData (programmatic).
+          }
+        },
+      ],
     },
   };
 }
@@ -182,12 +125,22 @@ function responsiveKey(w: number, h: number): string {
   return `${w < COMPACT_WIDTH ? "cw" : "nw"}_${h < COMPACT_HEIGHT ? "ch" : "nh"}`;
 }
 
+/** Stable key for signal config changes that should trigger chart recreation */
+function signalConfigKey(panel: GraphPanel): string {
+  return panel.signals.map((s) =>
+    `${s.frameId}:${s.signalName}:${s.colour}:${s.displayName ?? ''}:${s.yAxis ?? 'left'}`
+  ).join('|');
+}
+
 export default function LineChartPanel({ panel }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
   const respKeyRef = useRef<string>("");
+  const isUpdatingDataRef = useRef(false);
   const dataVersion = useGraphStore((s) => s.dataVersion);
   const seriesBuffers = useGraphStore((s) => s.seriesBuffers);
+  const zoomResetVersion = useGraphStore((s) => s.zoomResetVersion);
+  const setFollowMode = useGraphStore((s) => s.setFollowMode);
   const { settings } = useSettings();
 
   const confidenceColours = settings ? {
@@ -196,6 +149,16 @@ export default function LineChartPanel({ panel }: Props) {
     medium: settings.signal_colour_medium || '#3b82f6',
     high: settings.signal_colour_high || '#22c55e',
   } : undefined;
+
+  // Follow mode: treat undefined as true (backwards compat)
+  const followMode = panel.followMode !== false;
+
+  const handleUserInteraction = useCallback(() => {
+    // Only disable follow if user manually zoomed/panned (not programmatic)
+    if (!isUpdatingDataRef.current) {
+      setFollowMode(panel.id, false);
+    }
+  }, [panel.id, setFollowMode]);
 
   // Destroy chart on unmount
   useEffect(() => {
@@ -206,6 +169,7 @@ export default function LineChartPanel({ panel }: Props) {
   }, []);
 
   // Re-create chart when panel signals change (series config changes)
+  const sigKey = signalConfigKey(panel);
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -217,7 +181,7 @@ export default function LineChartPanel({ panel }: Props) {
     if (panel.signals.length === 0) return;
 
     const rect = el.getBoundingClientRect();
-    const opts = buildOptions(panel, rect.width, rect.height, confidenceColours);
+    const opts = buildOptions(panel, rect.width, rect.height, confidenceColours, handleUserInteraction);
     const data = buildAlignedData(panel.signals, seriesBuffers) as uPlot.AlignedData;
 
     const chart = new uPlot(opts, data, el);
@@ -225,7 +189,7 @@ export default function LineChartPanel({ panel }: Props) {
     respKeyRef.current = responsiveKey(rect.width, rect.height);
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [panel.signals.length, ...panel.signals.map((s) => `${s.frameId}:${s.signalName}:${s.colour}:${s.displayName ?? ''}`)]);
+  }, [panel.signals.length, sigKey]);
 
   // Update data when dataVersion changes (new signal values pushed)
   const updateData = useCallback(() => {
@@ -233,12 +197,43 @@ export default function LineChartPanel({ panel }: Props) {
     if (!chart || panel.signals.length === 0) return;
 
     const data = buildAlignedData(panel.signals, useGraphStore.getState().seriesBuffers) as uPlot.AlignedData;
+
+    // Mark as programmatic so zoom/pan plugins don't disable follow mode
+    isUpdatingDataRef.current = true;
     chart.setData(data);
-  }, [panel.signals]);
+
+    // Follow mode: auto-scroll to show the full buffer
+    if (followMode && data[0] && data[0].length > 1) {
+      const timestamps = data[0] as number[];
+      const firstTs = timestamps[0];
+      const lastTs = timestamps[timestamps.length - 1];
+      if (firstTs != null && lastTs != null && lastTs > firstTs) {
+        chart.setScale("x", { min: firstTs, max: lastTs });
+      }
+    }
+
+    isUpdatingDataRef.current = false;
+  }, [panel.signals, followMode]);
 
   useEffect(() => {
     updateData();
   }, [dataVersion, updateData]);
+
+  // Reset zoom when triggerZoomReset is called
+  useEffect(() => {
+    if (zoomResetVersion === 0) return; // skip initial
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    const data = chart.data;
+    if (data[0] && data[0].length > 1) {
+      const timestamps = data[0] as number[];
+      isUpdatingDataRef.current = true;
+      chart.setScale("x", { min: timestamps[0], max: timestamps[timestamps.length - 1] });
+      isUpdatingDataRef.current = false;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoomResetVersion]);
 
   // Handle resize — setSize for normal resizes, recreate chart when crossing responsive thresholds
   useEffect(() => {
@@ -258,7 +253,7 @@ export default function LineChartPanel({ panel }: Props) {
 
           if (panel.signals.length === 0) return;
 
-          const opts = buildOptions(panel, width, height, confidenceColours);
+          const opts = buildOptions(panel, width, height, confidenceColours, handleUserInteraction);
           const data = buildAlignedData(panel.signals, useGraphStore.getState().seriesBuffers) as uPlot.AlignedData;
           const chart = new uPlot(opts, data, el);
           chartRef.current = chart;
@@ -271,7 +266,7 @@ export default function LineChartPanel({ panel }: Props) {
 
     observer.observe(el);
     return () => observer.disconnect();
-  }, [panel.signals]);
+  }, [panel.signals, handleUserInteraction]);
 
   if (panel.signals.length === 0) {
     return (
@@ -283,5 +278,47 @@ export default function LineChartPanel({ panel }: Props) {
     );
   }
 
-  return <div ref={containerRef} className="w-full h-full" />;
+  return (
+    <div className="relative w-full h-full">
+      <div ref={containerRef} className="w-full h-full" />
+
+      {/* Stats overlay */}
+      {panel.showStats && (
+        <div
+          className="absolute top-1 right-1 pointer-events-none"
+          style={{
+            background: "var(--bg-surface)",
+            opacity: 0.92,
+            border: "1px solid var(--border-default)",
+            borderRadius: 6,
+            padding: "4px 8px",
+            fontSize: 10,
+            lineHeight: 1.6,
+            zIndex: 10,
+          }}
+        >
+          {panel.signals.map((sig) => {
+            const key = `${sig.frameId}:${sig.signalName}`;
+            const series = seriesBuffers.get(key);
+            const avg = series && series.sampleCount > 0 ? series.sum / series.sampleCount : null;
+            return (
+              <div key={key} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: sig.colour, flexShrink: 0 }} />
+                <span style={{ color: "var(--text-muted)", fontFamily: "ui-monospace, monospace", whiteSpace: "nowrap" }}>
+                  {formatValue(series?.min === Infinity ? null : series?.min)}
+                  {" / "}
+                  {formatValue(avg)}
+                  {" / "}
+                  {formatValue(series?.max === -Infinity ? null : series?.max)}
+                </span>
+              </div>
+            );
+          })}
+          <div style={{ color: "var(--text-muted)", fontSize: 9, textAlign: "center", marginTop: 1 }}>
+            min / avg / max
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }

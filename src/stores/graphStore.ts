@@ -43,6 +43,8 @@ export interface SignalRef {
   colour: string;
   displayName?: string;
   confidence?: Confidence;
+  /** Which Y-axis this signal is plotted on (line-chart only). Default: 'left'. */
+  yAxis?: 'left' | 'right';
 }
 
 /** Get the display label for a signal (friendly name if set, otherwise raw signal name) */
@@ -73,10 +75,15 @@ export interface SignalTimeSeries {
   count: number;
   latestValue: number;
   latestTimestamp: number;
+  /** Running statistics (reset on clearData) */
+  min: number;
+  max: number;
+  sum: number;
+  sampleCount: number;
 }
 
-/** Time-series buffer capacity */
-const TIMESERIES_CAPACITY = 1000;
+/** Default time-series buffer capacity (configurable via settings) */
+let timeseriesCapacity = 10_000;
 
 /** A panel definition stored in the layout */
 export interface GraphPanel {
@@ -89,6 +96,10 @@ export interface GraphPanel {
   maxValue: number;
   /** Which signal to show as the primary gauge reading (index into signals array) */
   primarySignalIndex?: number;
+  /** Whether the chart auto-scrolls to follow the latest data (line-chart only). Default: true. */
+  followMode?: boolean;
+  /** Whether to show the statistics overlay (line-chart only). Default: false. */
+  showStats?: boolean;
 }
 
 /** react-grid-layout layout item */
@@ -114,12 +125,16 @@ export interface SignalValueEntry {
 
 function createTimeSeries(): SignalTimeSeries {
   return {
-    timestamps: new Float64Array(TIMESERIES_CAPACITY),
-    values: new Float64Array(TIMESERIES_CAPACITY),
+    timestamps: new Float64Array(timeseriesCapacity),
+    values: new Float64Array(timeseriesCapacity),
     writeIndex: 0,
     count: 0,
     latestValue: 0,
     latestTimestamp: 0,
+    min: Infinity,
+    max: -Infinity,
+    sum: 0,
+    sampleCount: 0,
   };
 }
 
@@ -195,11 +210,16 @@ interface GraphState {
   /** Monotonically increasing version counter — panels subscribe to this to know when to re-read buffers */
   dataVersion: number;
 
+  // ── Chart interaction ──
+  /** Monotonically increasing counter — line charts reset zoom when this changes */
+  zoomResetVersion: number;
+
   // ── Actions ──
   loadCatalog: (path: string) => Promise<void>;
   initFromSettings: (defaultCatalog?: string, decoderDir?: string, defaultReadProfile?: string | null) => Promise<void>;
   setIoProfile: (profile: string | null) => void;
   setPlaybackSpeed: (speed: number) => void;
+  setBufferCapacity: (capacity: number) => void;
 
   // Panel management
   addPanel: (type: PanelType) => void;
@@ -210,9 +230,13 @@ interface GraphState {
   removeSignalFromPanel: (panelId: string, frameId: number, signalName: string) => void;
   updateSignalColour: (panelId: string, frameId: number, signalName: string, colour: string) => void;
   updateSignalDisplayName: (panelId: string, frameId: number, signalName: string, displayName: string) => void;
+  updateSignalYAxis: (panelId: string, frameId: number, signalName: string, yAxis: 'left' | 'right') => void;
   reorderSignals: (panelId: string, fromIndex: number, toIndex: number) => void;
   replaceSignalSource: (panelId: string, oldFrameId: number, oldSignalName: string, newFrameId: number, newSignalName: string, newUnit?: string) => void;
   updateLayout: (layout: LayoutItem[]) => void;
+  setFollowMode: (panelId: string, follow: boolean) => void;
+  toggleStats: (panelId: string) => void;
+  triggerZoomReset: () => void;
 
   // Layout persistence
   savedLayouts: GraphLayout[];
@@ -246,6 +270,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
   seriesBuffers: new Map(),
   dataVersion: 0,
+  zoomResetVersion: 0,
 
   // ── Actions ──
 
@@ -326,6 +351,10 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
   setIoProfile: (profile) => set({ ioProfile: profile }),
   setPlaybackSpeed: (speed) => set({ playbackSpeed: speed }),
+  setBufferCapacity: (capacity) => {
+    const clamped = Math.max(1_000, Math.min(100_000, capacity));
+    timeseriesCapacity = clamped;
+  },
 
   // ── Panel management ──
 
@@ -513,6 +542,25 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     scheduleAutoSave();
   },
 
+  updateSignalYAxis: (panelId, frameId, signalName, yAxis) => {
+    const { panels } = get();
+    set({
+      panels: panels.map((p) =>
+        p.id === panelId
+          ? {
+              ...p,
+              signals: p.signals.map((s) =>
+                s.frameId === frameId && s.signalName === signalName
+                  ? { ...s, yAxis }
+                  : s
+              ),
+            }
+          : p
+      ),
+    });
+    scheduleAutoSave();
+  },
+
   reorderSignals: (panelId, fromIndex, toIndex) => {
     const { panels } = get();
     set({
@@ -576,6 +624,30 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     scheduleAutoSave();
   },
 
+  setFollowMode: (panelId, follow) => {
+    const { panels } = get();
+    set({
+      panels: panels.map((p) =>
+        p.id === panelId ? { ...p, followMode: follow } : p
+      ),
+    });
+    scheduleAutoSave();
+  },
+
+  toggleStats: (panelId) => {
+    const { panels } = get();
+    set({
+      panels: panels.map((p) =>
+        p.id === panelId ? { ...p, showStats: !p.showStats } : p
+      ),
+    });
+    scheduleAutoSave();
+  },
+
+  triggerZoomReset: () => {
+    set((state) => ({ zoomResetVersion: state.zoomResetVersion + 1 }));
+  },
+
   // ── Layout persistence ──
 
   loadSavedLayouts: async () => {
@@ -634,12 +706,19 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         created = true;
       }
 
+      const cap = series.timestamps.length;
       series.timestamps[series.writeIndex] = timestamp;
       series.values[series.writeIndex] = value;
-      series.writeIndex = (series.writeIndex + 1) % TIMESERIES_CAPACITY;
-      if (series.count < TIMESERIES_CAPACITY) series.count++;
+      series.writeIndex = (series.writeIndex + 1) % cap;
+      if (series.count < cap) series.count++;
       series.latestValue = value;
       series.latestTimestamp = timestamp;
+
+      // Running statistics
+      if (value < series.min) series.min = value;
+      if (value > series.max) series.max = value;
+      series.sum += value;
+      series.sampleCount++;
     }
 
     // Only replace the map reference if we created new entries, otherwise

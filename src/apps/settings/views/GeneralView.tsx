@@ -14,6 +14,8 @@ type GeneralViewProps = {
   onChangeDefaultFrameType: (value: DefaultFrameType) => void;
   queryResultLimit: number;
   onChangeQueryResultLimit: (value: number) => void;
+  graphBufferSize: number;
+  onChangeGraphBufferSize: (value: number) => void;
   preventIdleSleep: boolean;
   onChangePreventIdleSleep: (value: boolean) => void;
   keepDisplayAwake: boolean;
@@ -28,6 +30,8 @@ export default function GeneralView({
   onChangeDefaultFrameType,
   queryResultLimit,
   onChangeQueryResultLimit,
+  graphBufferSize,
+  onChangeGraphBufferSize,
   preventIdleSleep,
   onChangePreventIdleSleep,
   keepDisplayAwake,
@@ -88,6 +92,26 @@ export default function GeneralView({
             const value = Number(e.target.value);
             if (value >= 100 && value <= 100000) {
               onChangeQueryResultLimit(value);
+            }
+          }}
+        />
+      </div>
+
+      <div className="space-y-2">
+        <label className={labelDefault}>Graph Buffer Size</label>
+        <p className={helpText}>
+          Samples per signal in graph ring buffers. Higher values show more history but use more memory.
+        </p>
+        <Input
+          type="number"
+          min={1000}
+          max={100000}
+          step={1000}
+          value={graphBufferSize}
+          onChange={(e) => {
+            const value = Number(e.target.value);
+            if (value >= 1000 && value <= 100000) {
+              onChangeGraphBufferSize(value);
             }
           }}
         />

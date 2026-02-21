@@ -90,6 +90,8 @@ export default function Settings() {
   const setDefaultFrameType = useSettingsStore((s) => s.setDefaultFrameType);
   const queryResultLimit = useSettingsStore((s) => s.general.queryResultLimit);
   const setQueryResultLimit = useSettingsStore((s) => s.setQueryResultLimit);
+  const graphBufferSize = useSettingsStore((s) => s.general.graphBufferSize);
+  const setGraphBufferSize = useSettingsStore((s) => s.setGraphBufferSize);
   const preventIdleSleep = useSettingsStore((s) => s.general.preventIdleSleep);
   const setPreventIdleSleep = useSettingsStore((s) => s.setPreventIdleSleep);
   const keepDisplayAwake = useSettingsStore((s) => s.general.keepDisplayAwake);
@@ -251,6 +253,8 @@ export default function Settings() {
               onChangeDefaultFrameType={setDefaultFrameType}
               queryResultLimit={queryResultLimit}
               onChangeQueryResultLimit={setQueryResultLimit}
+              graphBufferSize={graphBufferSize}
+              onChangeGraphBufferSize={setGraphBufferSize}
               preventIdleSleep={preventIdleSleep}
               onChangePreventIdleSleep={setPreventIdleSleep}
               keepDisplayAwake={keepDisplayAwake}

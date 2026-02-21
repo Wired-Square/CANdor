@@ -89,6 +89,7 @@ export interface AppSettings {
   discovery_history_buffer?: number;
   query_result_limit?: number;
   session_manager_stats_interval?: number;
+  graph_buffer_size?: number;
   // Theme settings
   theme_mode?: ThemeMode;
   theme_bg_primary_light?: string;

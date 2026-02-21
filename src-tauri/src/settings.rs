@@ -44,6 +44,8 @@ pub struct AppSettings {
     pub display_timezone: String, // "local" | "utc"
     #[serde(default = "default_session_manager_stats_interval")]
     pub session_manager_stats_interval: u32, // seconds (0 = disabled)
+    #[serde(default = "default_graph_buffer_size")]
+    pub graph_buffer_size: u32, // samples per signal in graph ring buffers
 
     // Theme settings
     #[serde(default = "default_theme_mode")]
@@ -133,6 +135,9 @@ fn default_display_timezone() -> String {
 }
 fn default_session_manager_stats_interval() -> u32 {
     60 // default to 60 seconds
+}
+fn default_graph_buffer_size() -> u32 {
+    10_000 // samples per signal in graph ring buffers
 }
 
 // Theme defaults
@@ -244,6 +249,7 @@ impl Default for AppSettings {
             binary_one_colour: default_binary_one_colour(),
             display_timezone: default_display_timezone(),
             session_manager_stats_interval: default_session_manager_stats_interval(),
+            graph_buffer_size: default_graph_buffer_size(),
             // Theme settings
             theme_mode: default_theme_mode(),
             // Light mode
@@ -308,6 +314,7 @@ impl AppSettings {
             binary_one_colour: default_binary_one_colour(),
             display_timezone: default_display_timezone(),
             session_manager_stats_interval: default_session_manager_stats_interval(),
+            graph_buffer_size: default_graph_buffer_size(),
             // Theme settings
             theme_mode: default_theme_mode(),
             // Light mode

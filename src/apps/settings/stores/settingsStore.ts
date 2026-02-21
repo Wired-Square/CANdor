@@ -104,6 +104,7 @@ interface AppSettings {
   discovery_history_buffer?: number;
   query_result_limit?: number;
   session_manager_stats_interval?: number;
+  graph_buffer_size?: number;
   // Theme settings
   theme_mode?: ThemeMode;
   theme_bg_primary_light?: string;
@@ -287,6 +288,7 @@ interface SettingsState {
     defaultFrameType: DefaultFrameType;
     queryResultLimit: number;
     sessionManagerStatsInterval: number;
+    graphBufferSize: number;
     preventIdleSleep: boolean;
     keepDisplayAwake: boolean;
     telemetryEnabled: boolean;
@@ -364,6 +366,7 @@ interface SettingsState {
   setDefaultFrameType: (type: DefaultFrameType) => void;
   setQueryResultLimit: (limit: number) => void;
   setSessionManagerStatsInterval: (interval: number) => void;
+  setGraphBufferSize: (size: number) => void;
   setPreventIdleSleep: (value: boolean) => void;
   setKeepDisplayAwake: (value: boolean) => void;
   setTelemetryEnabled: (value: boolean) => void;
@@ -429,6 +432,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     defaultFrameType: 'can',
     queryResultLimit: 10000,
     sessionManagerStatsInterval: 60,
+    graphBufferSize: 10000,
     preventIdleSleep: true,
     keepDisplayAwake: false,
     telemetryEnabled: false,
@@ -501,6 +505,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         discovery_history_buffer: settings.discovery_history_buffer ?? 100000,
         query_result_limit: settings.query_result_limit ?? 10000,
         session_manager_stats_interval: settings.session_manager_stats_interval ?? 60,
+        graph_buffer_size: settings.graph_buffer_size ?? 10000,
         default_frame_type: (settings.default_frame_type as DefaultFrameType) ?? 'can',
         // Theme settings
         theme_mode: (settings.theme_mode as ThemeMode) ?? 'auto',
@@ -592,6 +597,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           defaultFrameType: normalized.default_frame_type ?? 'can',
           queryResultLimit: normalized.query_result_limit ?? 10000,
           sessionManagerStatsInterval: normalized.session_manager_stats_interval ?? 60,
+          graphBufferSize: normalized.graph_buffer_size ?? 10000,
           preventIdleSleep: normalized.prevent_idle_sleep ?? true,
           keepDisplayAwake: normalized.keep_display_awake ?? false,
           telemetryEnabled: normalized.telemetry_enabled ?? false,
@@ -690,6 +696,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         discovery_history_buffer: general.discoveryHistoryBuffer,
         query_result_limit: general.queryResultLimit,
         session_manager_stats_interval: general.sessionManagerStatsInterval,
+        graph_buffer_size: general.graphBufferSize,
         // Power management
         prevent_idle_sleep: general.preventIdleSleep,
         keep_display_awake: general.keepDisplayAwake,
@@ -759,6 +766,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       discovery_history_buffer: general.discoveryHistoryBuffer,
       query_result_limit: general.queryResultLimit,
       session_manager_stats_interval: general.sessionManagerStatsInterval,
+      graph_buffer_size: general.graphBufferSize,
       // Power management
       prevent_idle_sleep: general.preventIdleSleep,
       keep_display_awake: general.keepDisplayAwake,
@@ -1091,6 +1099,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setSessionManagerStatsInterval: (interval) => {
     set((state) => ({
       general: { ...state.general, sessionManagerStatsInterval: interval },
+    }));
+    scheduleSave(get().saveSettings);
+  },
+
+  setGraphBufferSize: (size) => {
+    set((state) => ({
+      general: { ...state.general, graphBufferSize: size },
     }));
     scheduleSave(get().saveSettings);
   },
