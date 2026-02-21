@@ -65,20 +65,24 @@ class WindowManager {
   }
 
   /**
-   * Save current window geometry to persistent storage
+   * Save current window geometry to persistent storage.
+   *
+   * Stores logical (point) coordinates — the native macOS coordinate system.
+   * outerPosition()/outerSize() return physical pixels, so we divide by the
+   * window's current scaleFactor to convert to points. On restore, LogicalPosition
+   * and LogicalSize set the position/size in points directly, which is independent
+   * of which monitor the window happens to start on.
    */
-  async saveGeometry(label: WindowLabel): Promise<void> {
+  async saveGeometry(label: string): Promise<void> {
     const window = await WebviewWindow.getByLabel(label);
     if (!window) return;
 
     try {
-      // Use logical coordinates for consistency
       const position = await window.outerPosition();
       const size = await window.outerSize();
-
-      // Convert physical to logical (outerPosition/outerSize return physical pixels)
       const scaleFactor = await window.scaleFactor();
 
+      // Convert physical pixels → logical points
       const geometry = {
         x: Math.round(position.x / scaleFactor),
         y: Math.round(position.y / scaleFactor),
@@ -86,15 +90,13 @@ class WindowManager {
         height: Math.round(size.height / scaleFactor),
       };
 
-      console.log(`[WindowManager] Saving ${label} geometry (scale: ${scaleFactor}):`, geometry);
+      console.log(`[WindowManager] Saving ${label} geometry (logical):`, geometry);
 
       await saveWindowState(label, {
         geometry,
         wasOpen: true,
         lastFocused: Date.now(),
       });
-
-      console.log(`[WindowManager] Successfully saved ${label} geometry`);
     } catch (error) {
       console.error(`Failed to save geometry for ${label}:`, error);
     }
@@ -103,7 +105,7 @@ class WindowManager {
   /**
    * Restore window geometry from persistent storage
    */
-  async restoreGeometry(label: WindowLabel): Promise<void> {
+  async restoreGeometry(label: string): Promise<void> {
     const state = await loadWindowState(label);
 
     const window = await WebviewWindow.getByLabel(label);
@@ -121,32 +123,28 @@ class WindowManager {
     }
 
     const { x, y, width, height } = state.geometry;
-    console.log(`[WindowManager] Restoring ${label} geometry:`, { x, y, width, height });
+    console.log(`[WindowManager] Restoring ${label} geometry (logical):`, { x, y, width, height });
 
-    // Validate geometry is within screen bounds
+    // Validate geometry is within screen bounds (both in logical coords)
     const isOnScreen = await this.isGeometryOnScreen({ x, y, width, height });
-    console.log(`[WindowManager] Geometry on screen:`, isOnScreen);
 
     if (isOnScreen) {
       try {
-        // Apply geometry BEFORE showing to avoid visible jump
-        console.log(`[WindowManager] Applying saved geometry: ${width}x${height} at (${x}, ${y})`);
+        // Apply as logical (point) coordinates — works correctly across mixed-DPI monitors
+        // because macOS positions windows in a global point coordinate space.
         await window.setSize(new LogicalSize(width, height));
         await window.setPosition(new LogicalPosition(x, y));
 
-        // Now show the window at the correct position
         await window.show();
         await window.setFocus();
         console.log(`[WindowManager] Successfully restored geometry for ${label}`);
       } catch (error) {
         console.error(`Failed to restore geometry for ${label}:`, error);
-        // Fallback to center if restoration fails
         await window.center();
         await window.show();
         await window.setFocus();
       }
     } else {
-      // Fallback to center if saved position is off-screen
       console.log(`[WindowManager] Geometry off-screen, centering ${label}`);
       await window.center();
       await window.show();
@@ -155,7 +153,9 @@ class WindowManager {
   }
 
   /**
-   * Check if geometry is within current monitor bounds
+   * Check if geometry is within current monitor bounds.
+   * Saved geometry is in logical (point) coordinates, so we convert
+   * monitor bounds from physical to logical for comparison.
    */
   private async isGeometryOnScreen(geometry: WindowGeometry): Promise<boolean> {
     try {
@@ -163,17 +163,24 @@ class WindowManager {
       const { x, y, width, height } = geometry;
 
       return monitors.some((monitor) => {
-        const monitorRight = monitor.position.x + monitor.size.width;
-        const monitorBottom = monitor.position.y + monitor.size.height;
+        // Convert monitor physical bounds → logical (points)
+        const scale = monitor.scaleFactor;
+        const mx = monitor.position.x / scale;
+        const my = monitor.position.y / scale;
+        const mw = monitor.size.width / scale;
+        const mh = monitor.size.height / scale;
+
+        const monitorRight = mx + mw;
+        const monitorBottom = my + mh;
         const windowRight = x + width;
         const windowBottom = y + height;
 
         // Check if window is at least partially visible on this monitor
         return (
           x < monitorRight &&
-          windowRight > monitor.position.x &&
+          windowRight > mx &&
           y < monitorBottom &&
-          windowBottom > monitor.position.y
+          windowBottom > my
         );
       });
     } catch (error) {

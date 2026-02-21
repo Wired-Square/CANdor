@@ -56,6 +56,8 @@ All notable changes to CANdor will be documented in this file.
 
 ### Fixed
 
+- **Window shrinking on mixed-DPI multi-monitor Macs**: Removed `tauri-plugin-window-state` which incorrectly converted between physical and logical coordinates on mixed-DPI setups, causing windows to progressively shrink on each restart. Replaced with custom persistence using logical (point) coordinates that work correctly across monitors with different scale factors.
+
 - **Panel settings number inputs**: Changed min/max value fields from `type="number"` to `type="text"` with `inputMode="decimal"`, fixing inability to highlight and retype values on Windows and twitchy behaviour on Mac.
 
 - **Panel settings input styling**: Upgraded inputs from bare `inputBase` to `inputSimple` for proper padding, background, border, and focus ring.

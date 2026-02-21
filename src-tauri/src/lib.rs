@@ -759,10 +759,6 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init());
 
-    // Window state plugin only available on desktop
-    #[cfg(not(target_os = "ios"))]
-    let builder = builder.plugin(tauri_plugin_window_state::Builder::new().build());
-
     // Keep screen on plugin for iOS (prevents screen dimming during sessions)
     #[cfg(target_os = "ios")]
     let builder = builder.plugin(tauri_plugin_keep_screen_on::init());

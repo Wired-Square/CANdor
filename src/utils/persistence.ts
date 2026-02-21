@@ -77,7 +77,7 @@ export interface WindowPersistence {
  * Save window state to persistent storage
  */
 export async function saveWindowState(
-  label: WindowLabel,
+  label: string,
   state: WindowPersistence
 ): Promise<void> {
   await storeSet(`windows.state.${label}`, state);
@@ -87,7 +87,7 @@ export async function saveWindowState(
  * Load window state from persistent storage
  */
 export async function loadWindowState(
-  label: WindowLabel
+  label: string
 ): Promise<WindowPersistence | null> {
   const state = await storeGet<WindowPersistence>(`windows.state.${label}`);
   return state || null;

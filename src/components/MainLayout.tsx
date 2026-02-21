@@ -26,6 +26,7 @@ import {
   unregisterOpenPanelFn,
   openPanel,
 } from "../utils/windowCommunication";
+import { useWindowPersistence } from "../hooks/useWindowPersistence";
 import {
   getOpenMainWindows,
   addOpenMainWindow,
@@ -294,6 +295,9 @@ export default function MainLayout() {
   const windowLabel = getCurrentWebviewWindow().label;
   const isDynamicWindow = windowLabel.startsWith("main-");
   const layoutKey = getLayoutKey(windowLabel);
+
+  // Persist and restore window geometry (size + position) across restarts
+  useWindowPersistence(windowLabel);
 
   // Load saved layout on mount
   useEffect(() => {

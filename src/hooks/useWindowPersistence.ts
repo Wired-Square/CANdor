@@ -1,12 +1,14 @@
-// Hook for automatic window geometry persistence
+// Hook for automatic window geometry persistence (save on resize/move, restore on mount)
 
 import { useEffect, useRef } from 'react';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { windowManager } from '../managers/WindowManager';
-import type { WindowLabel } from '../utils/windows';
 
 /**
- * Hook to automatically save window geometry on resize/move
+ * Hook to automatically save and restore window geometry.
+ *
+ * On mount: restores saved geometry (position + size) from persistent storage.
+ * During use: debounced saves on resize/move events.
  *
  * IMPORTANT: We do NOT save geometry in onCloseRequested because:
  * 1. Async operations during window close race with WebView destruction
@@ -14,20 +16,34 @@ import type { WindowLabel } from '../utils/windows';
  *    on macOS 26.2 (Tahoe) and later
  * 3. The debounced saves on resize/move are sufficient for persistence
  *
- * @param label - Window label for this window
+ * @param label - Window label (any string, supports dashboard/main-N/secondary windows)
  */
-export function useWindowPersistence(label: WindowLabel) {
+export function useWindowPersistence(label: string) {
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const allowSavingRef = useRef(false);
   const isClosingRef = useRef(false);
 
+  // Restore geometry on mount
+  useEffect(() => {
+    windowManager.restoreGeometry(label).catch((error) => {
+      console.error(`[useWindowPersistence] Failed to restore geometry for ${label}:`, error);
+    });
+  }, [label]);
+
+  // Save geometry on resize/move
   useEffect(() => {
     console.log(`[useWindowPersistence] Setting up persistence for ${label}`);
     const currentWindow = getCurrentWebviewWindow();
 
+    // Reset refs on (re-)mount — required for React Strict Mode which unmounts/remounts
+    // effects in development. The cleanup sets isClosingRef=true, so without this reset
+    // all saves would be permanently blocked after the Strict Mode re-mount.
+    isClosingRef.current = false;
+    allowSavingRef.current = false;
+
     // Don't save geometry changes for the first 2 seconds after window creation
     // This prevents saving the intermediate sizes during initial rendering
-    setTimeout(() => {
+    const initTimer = setTimeout(() => {
       console.log(`[useWindowPersistence] Enabling geometry saving for ${label}`);
       allowSavingRef.current = true;
     }, 2000);
@@ -73,6 +89,7 @@ export function useWindowPersistence(label: WindowLabel) {
     // Cleanup
     return () => {
       isClosingRef.current = true;
+      clearTimeout(initTimer);
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
