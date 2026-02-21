@@ -2,7 +2,7 @@
 
 import { type ReactNode, useRef, useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Trash2, Settings2, Copy, Maximize2, ChevronsRight, BarChart2, Download, EllipsisVertical } from "lucide-react";
+import { Trash2, Settings2, Copy, Maximize2, ChevronsRight, BarChart2, Download, EllipsisVertical, Image, FileCode } from "lucide-react";
 import { iconSm } from "../../../../styles/spacing";
 import { iconButtonHover } from "../../../../styles/buttonStyles";
 import { useGraphStore, type GraphPanel } from "../../../../stores/graphStore";
@@ -29,17 +29,19 @@ interface Props {
   panel: GraphPanel;
   onOpenPanelConfig: () => void;
   onExport?: () => void;
+  onExportPng?: () => void;
+  onExportSvg?: () => void;
   children: ReactNode;
 }
 
-export default function PanelWrapper({ panel, onOpenPanelConfig, onExport, children }: Props) {
+export default function PanelWrapper({ panel, onOpenPanelConfig, onExport, onExportPng, onExportSvg, children }: Props) {
   const clonePanel = useGraphStore((s) => s.clonePanel);
   const removePanel = useGraphStore((s) => s.removePanel);
   const triggerZoomReset = useGraphStore((s) => s.triggerZoomReset);
   const setFollowMode = useGraphStore((s) => s.setFollowMode);
   const toggleStats = useGraphStore((s) => s.toggleStats);
 
-  const isLineChart = panel.type === "line-chart";
+  const hasTimeSeriesControls = panel.type === "line-chart" || panel.type === "flow";
   const followMode = panel.followMode !== false;
 
   // -- Hover menu state --
@@ -194,8 +196,8 @@ export default function PanelWrapper({ panel, onOpenPanelConfig, onExport, child
             </div>
           )}
 
-          {/* Line-chart controls */}
-          {isLineChart && (
+          {/* Time-series controls (line-chart + flow) */}
+          {hasTimeSeriesControls && (
             <>
               <button
                 onClick={() => setFollowMode(panel.id, !followMode)}
@@ -220,11 +222,28 @@ export default function PanelWrapper({ panel, onOpenPanelConfig, onExport, child
           )}
 
           {/* Export */}
-          {onExport && (
-            <button onClick={onExport} className={menuItem}>
-              <Download className={iconSm} />
-              Export CSV
-            </button>
+          {(onExport || onExportPng || onExportSvg) && (
+            <>
+              {onExportPng && (
+                <button onClick={onExportPng} className={menuItem}>
+                  <Image className={iconSm} />
+                  Export PNG
+                </button>
+              )}
+              {onExportSvg && (
+                <button onClick={onExportSvg} className={menuItem}>
+                  <FileCode className={iconSm} />
+                  Export SVG
+                </button>
+              )}
+              {onExport && (
+                <button onClick={onExport} className={menuItem}>
+                  <Download className={iconSm} />
+                  Export CSV
+                </button>
+              )}
+              <div className={menuDivider} />
+            </>
           )}
 
           {/* Configure */}

@@ -2,7 +2,7 @@
 //
 // CSV export builder for graph panel data.
 
-import { readTimeSeries, getSignalLabel, type GraphPanel, type SignalTimeSeries } from "../../../stores/graphStore";
+import { readTimeSeries, getSignalLabel, type GraphPanel, type SignalTimeSeries, type SignalRef } from "../../../stores/graphStore";
 import { formatTimestampIso } from "./graphFormat";
 
 /**
@@ -66,4 +66,25 @@ export function buildPanelCsv(
   }
 
   return lines.join("\n") + "\n";
+}
+
+/**
+ * Build CSV for a flow panel (raw byte time-series).
+ * Constructs synthetic signal refs from targetFrameId + byteCount.
+ */
+export function buildFlowPanelCsv(
+  panel: GraphPanel,
+  buffers: Map<string, SignalTimeSeries>,
+): string {
+  if (panel.targetFrameId == null) return "";
+  const count = panel.byteCount ?? 8;
+  const signals: SignalRef[] = Array.from({ length: count }, (_, i) => ({
+    frameId: panel.targetFrameId!,
+    signalName: `byte[${i}]`,
+    colour: "#000",
+  }));
+
+  // Reuse the same CSV logic as buildPanelCsv with synthetic signals
+  const syntheticPanel: GraphPanel = { ...panel, signals };
+  return buildPanelCsv(syntheticPanel, buffers);
 }

@@ -1,6 +1,6 @@
 // ui/src/apps/graph/dialogs/PanelConfigDialog.tsx
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { X, GripVertical, ArrowLeftRight, Plus, Trash2 } from "lucide-react";
 import { iconLg, iconSm } from "../../../styles/spacing";
 import { bgSurface, borderDivider, hoverLight, inputSimple, selectSimple, primaryButtonBase } from "../../../styles";
@@ -8,6 +8,7 @@ import { iconButtonHover, iconButtonDanger } from "../../../styles/buttonStyles"
 import Dialog from "../../../components/Dialog";
 import { useGraphStore, getSignalLabel, getConfidenceColour } from "../../../stores/graphStore";
 import { useSettings } from "../../../hooks/useSettings";
+import { formatFrameId } from "../../../utils/frameIds";
 
 interface Props {
   isOpen: boolean;
@@ -25,6 +26,7 @@ export default function PanelConfigDialog({ isOpen, onClose, panelId, onAddSigna
   const updateSignalYAxis = useGraphStore((s) => s.updateSignalYAxis);
   const reorderSignals = useGraphStore((s) => s.reorderSignals);
   const removeSignalFromPanel = useGraphStore((s) => s.removeSignalFromPanel);
+  const discoveredFrameIds = useGraphStore((s) => s.discoveredFrameIds);
   const { settings } = useSettings();
 
   const panel = panels.find((p) => p.id === panelId);
@@ -33,6 +35,14 @@ export default function PanelConfigDialog({ isOpen, onClose, panelId, onAddSigna
   const [minValue, setMinValue] = useState("0");
   const [maxValue, setMaxValue] = useState("100");
   const [primarySignalIndex, setPrimarySignalIndex] = useState("0");
+  const [targetFrameId, setTargetFrameId] = useState("");
+  const [byteCount, setByteCount] = useState("8");
+  const [histogramBins, setHistogramBins] = useState("20");
+
+  const sortedFrameIds = useMemo(
+    () => Array.from(discoveredFrameIds).sort((a, b) => a - b),
+    [discoveredFrameIds],
+  );
 
   // Drag-and-drop state
   const [dragIndex, setDragIndex] = useState<number | null>(null);
@@ -45,6 +55,9 @@ export default function PanelConfigDialog({ isOpen, onClose, panelId, onAddSigna
       setMinValue(String(panel.minValue));
       setMaxValue(String(panel.maxValue));
       setPrimarySignalIndex(String(panel.primarySignalIndex ?? 0));
+      setTargetFrameId(panel.targetFrameId != null ? String(panel.targetFrameId) : "");
+      setByteCount(String(panel.byteCount ?? 8));
+      setHistogramBins(String(panel.histogramBins ?? 20));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panelId]);
@@ -84,6 +97,13 @@ export default function PanelConfigDialog({ isOpen, onClose, panelId, onAddSigna
       minValue: parseFloat(minValue) || 0,
       maxValue: parseFloat(maxValue) || 100,
       ...(panel.type === "gauge" ? { primarySignalIndex: parseInt(primarySignalIndex, 10) || 0 } : {}),
+      ...((panel.type === "flow" || panel.type === "heatmap") ? {
+        targetFrameId: targetFrameId ? parseInt(targetFrameId, 10) : undefined,
+        byteCount: Math.max(1, Math.min(8, parseInt(byteCount, 10) || 8)),
+      } : {}),
+      ...(panel.type === "histogram" ? {
+        histogramBins: Math.max(5, Math.min(200, parseInt(histogramBins, 10) || 20)),
+      } : {}),
     });
     onClose();
   };
@@ -179,8 +199,70 @@ export default function PanelConfigDialog({ isOpen, onClose, panelId, onAddSigna
             </div>
           )}
 
+          {/* Frame ID picker (flow + heatmap panels) */}
+          {(panel.type === "flow" || panel.type === "heatmap") && (
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-[color:var(--text-secondary)] mb-1">
+                  Frame ID
+                </label>
+                <select
+                  value={targetFrameId}
+                  onChange={(e) => setTargetFrameId(e.target.value)}
+                  className={`${selectSimple} w-full`}
+                >
+                  <option value="">Select a frame ID…</option>
+                  {sortedFrameIds.map((id) => (
+                    <option key={id} value={String(id)}>
+                      {formatFrameId(id)} ({id})
+                    </option>
+                  ))}
+                </select>
+                {sortedFrameIds.length === 0 && (
+                  <p className="text-[10px] text-[color:var(--text-muted)] mt-1">
+                    Start a session to discover frame IDs
+                  </p>
+                )}
+              </div>
+              {panel.type === "flow" && (
+                <div>
+                  <label className="block text-xs font-medium text-[color:var(--text-secondary)] mb-1">
+                    Byte Count (1–8)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={8}
+                    value={byteCount}
+                    onChange={(e) => setByteCount(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    className={`${inputSimple} w-24`}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Histogram bin count */}
+          {panel.type === "histogram" && (
+            <div>
+              <label className="block text-xs font-medium text-[color:var(--text-secondary)] mb-1">
+                Bin Count (5–200)
+              </label>
+              <input
+                type="number"
+                min={5}
+                max={200}
+                value={histogramBins}
+                onChange={(e) => setHistogramBins(e.target.value)}
+                onKeyDown={handleKeyDown}
+                className={`${inputSimple} w-24`}
+              />
+            </div>
+          )}
+
           {/* Signals — drag reorder, colour, display name, replace */}
-          {panel.signals.length > 0 && (
+          {panel.type !== "flow" && panel.type !== "heatmap" && panel.signals.length > 0 && (
             <div>
               <label className="block text-xs font-medium text-[color:var(--text-secondary)] mb-2">
                 Signals
@@ -300,7 +382,7 @@ export default function PanelConfigDialog({ isOpen, onClose, panelId, onAddSigna
 
           {/* Action buttons */}
           <div className="flex gap-2">
-            {onAddSignals && (
+            {onAddSignals && panel.type !== "flow" && panel.type !== "heatmap" && (
               <button
                 onClick={() => onAddSignals(panel.id)}
                 className={`${iconButtonHover} flex items-center gap-1.5 px-3 py-2 rounded text-sm text-[color:var(--text-secondary)] border border-[var(--border-default)]`}

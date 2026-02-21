@@ -162,6 +162,26 @@ export const CSV_FILTERS: DialogFilter[] = [
 ];
 
 /**
+ * Dialog filter for PNG image files
+ */
+export const PNG_FILTERS: DialogFilter[] = [
+  {
+    name: "PNG Images",
+    extensions: ["png"],
+  },
+];
+
+/**
+ * Dialog filter for SVG image files
+ */
+export const SVG_FILTERS: DialogFilter[] = [
+  {
+    name: "SVG Images",
+    extensions: ["svg"],
+  },
+];
+
+/**
  * Pick a catalog file to open
  */
 export async function pickCatalogToOpen(defaultDir?: string): Promise<string | null> {

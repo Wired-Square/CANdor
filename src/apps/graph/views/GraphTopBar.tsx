@@ -1,6 +1,6 @@
 // ui/src/apps/graph/views/GraphTopBar.tsx
 
-import { BarChart3, Plus, LineChart, Gauge, List, Save, Layout, X, AlertTriangle, Glasses } from "lucide-react";
+import { BarChart3, Plus, LineChart, Gauge, List, Save, Layout, X, AlertTriangle, Glasses, Waves, Grid3X3, BarChart2, Sparkles } from "lucide-react";
 import AppTopBar from "../../../components/AppTopBar";
 import { iconButtonBase, iconButtonHoverDanger, toggleButtonClass } from "../../../styles/buttonStyles";
 import { inputBase } from "../../../styles/inputStyles";
@@ -55,6 +55,9 @@ interface Props {
   // Raw view mode
   rawViewMode: boolean;
   onToggleRawView: () => void;
+
+  // Candidate signals
+  onOpenCandidates?: () => void;
 }
 
 export default function GraphTopBar({
@@ -84,6 +87,7 @@ export default function GraphTopBar({
   catalogFilename,
   rawViewMode,
   onToggleRawView,
+  onOpenCandidates,
 }: Props) {
   const addPanel = useGraphStore((s) => s.addPanel);
 
@@ -188,6 +192,19 @@ export default function GraphTopBar({
               <List className={iconSm} />
               List
             </button>
+            <div className="my-1 border-t border-[var(--border-default)]" />
+            <button onClick={() => handleAddPanel('flow')} className={menuItem}>
+              <Waves className={iconSm} />
+              Flow View
+            </button>
+            <button onClick={() => handleAddPanel('heatmap')} className={menuItem}>
+              <Grid3X3 className={iconSm} />
+              Bit Heatmap
+            </button>
+            <button onClick={() => handleAddPanel('histogram')} className={menuItem}>
+              <BarChart2 className={iconSm} />
+              Histogram
+            </button>
           </div>
         )}
       </div>
@@ -288,6 +305,17 @@ export default function GraphTopBar({
           </div>
         )}
       </div>
+
+      {/* Candidate signals wizard */}
+      {onOpenCandidates && (
+        <button
+          onClick={onOpenCandidates}
+          className={iconButtonBase}
+          title="Generate candidate signal panels"
+        >
+          <Sparkles className={iconMd} />
+        </button>
+      )}
 
       {/* Raw view toggle */}
       <button

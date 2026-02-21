@@ -1,5 +1,6 @@
 // ui/src/apps/graph/views/panels/gauge/GaugePanel.tsx
 
+import { useRef, useEffect } from "react";
 import { useGraphStore, getConfidenceColour, type GraphPanel } from "../../../../../stores/graphStore";
 import { useSettings } from "../../../../../hooks/useSettings";
 import { textSecondary } from "../../../../../styles/colourTokens";
@@ -8,6 +9,7 @@ import PanelTooltip from "../PanelTooltip";
 
 interface Props {
   panel: GraphPanel;
+  svgRef?: React.MutableRefObject<(() => SVGSVGElement | null) | null>;
 }
 
 /** SVG radial gauge constants */
@@ -34,9 +36,20 @@ function describeArc(cx: number, cy: number, r: number, startAngle: number, endA
   return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 0 ${end.x} ${end.y}`;
 }
 
-export default function GaugePanel({ panel }: Props) {
+export default function GaugePanel({ panel, svgRef: svgRefProp }: Props) {
   const signalCount = panel.signals.length;
   const { settings } = useSettings();
+  const svgElRef = useRef<SVGSVGElement>(null);
+
+  // Expose SVG ref for image export
+  useEffect(() => {
+    if (svgRefProp) {
+      svgRefProp.current = () => svgElRef.current;
+    }
+    return () => {
+      if (svgRefProp) svgRefProp.current = null;
+    };
+  }, [svgRefProp]);
 
   // Subscribe to data updates via stable selectors (avoid returning new arrays)
   const dataVersion = useGraphStore((s) => s.dataVersion);
@@ -98,7 +111,7 @@ export default function GaugePanel({ panel }: Props) {
       showColourDot
       className="flex items-center justify-center h-full p-1"
     >
-      <svg viewBox="0 0 200 165" className="w-full h-full">
+      <svg ref={svgElRef} viewBox="0 0 200 165" className="w-full h-full">
         {/* Arc rings — one per signal */}
         {rings.map(({ sig, radius, pct, valueAngle, stroke: sw }, i) => (
           <g key={`${sig.frameId}:${sig.signalName}`}>

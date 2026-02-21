@@ -18,6 +18,7 @@ import CatalogPickerDialog from "../../dialogs/CatalogPickerDialog";
 import IoReaderPickerDialog from "../../dialogs/IoReaderPickerDialog";
 import SignalPickerDialog from "./dialogs/SignalPickerDialog";
 import PanelConfigDialog from "./dialogs/PanelConfigDialog";
+import CandidateSignalsDialog from "./dialogs/CandidateSignalsDialog";
 import { useDialogManager } from "../../hooks/useDialogManager";
 import { decodeSignal } from "../../utils/signalDecode";
 import { extractBits } from "../../utils/bits";
@@ -44,6 +45,7 @@ export default function Graph() {
     'catalogPicker',
     'signalPicker',
     'panelConfig',
+    'candidateSignals',
   ] as const);
 
   // Store selectors
@@ -151,10 +153,70 @@ export default function Graph() {
     const catalogFrames = framesRef.current;
     const byteOrder = defaultByteOrderRef.current;
     const mask = frameIdMaskRef.current;
+    const store = useGraphStore.getState();
 
     for (const f of receivedFrames) {
       const timestamp = f.timestamp_us !== undefined ? f.timestamp_us / 1_000_000 : Date.now() / 1000;
       const maskedFrameId = mask !== undefined ? (f.frame_id & mask) : f.frame_id;
+
+      // Record all seen frame IDs (for flow/heatmap frame pickers)
+      store.recordFrameId(maskedFrameId);
+
+      // Raw byte ingestion for flow/heatmap panels
+      for (const panel of store.panels) {
+        if ((panel.type === 'flow' || panel.type === 'heatmap') && panel.targetFrameId === maskedFrameId) {
+          if (panel.type === 'flow') {
+            const count = panel.byteCount ?? 8;
+            for (let i = 0; i < Math.min(count, f.bytes.length); i++) {
+              pendingValuesRef.current.push({
+                frameId: maskedFrameId,
+                signalName: `byte[${i}]`,
+                value: f.bytes[i],
+                timestamp,
+              });
+            }
+          }
+          if (panel.type === 'heatmap') {
+            store.recordBitChanges(maskedFrameId, f.bytes);
+          }
+        }
+      }
+
+      // Candidate signal decode (byte_<offset>_<bits>b_<endian> pattern)
+      for (const panel of store.panels) {
+        if (panel.type !== 'line-chart') continue;
+        for (const sig of panel.signals) {
+          if (sig.frameId !== maskedFrameId) continue;
+          const m = /^byte_(\d+)_(\d+)b_(le|be)$/.exec(sig.signalName);
+          if (!m) continue;
+          const offset = parseInt(m[1], 10);
+          const bits = parseInt(m[2], 10);
+          const byteLen = bits / 8;
+          if (offset + byteLen > f.bytes.length) continue;
+          let value: number;
+          if (bits === 8) {
+            value = f.bytes[offset];
+          } else if (bits === 16) {
+            value = m[3] === "le"
+              ? f.bytes[offset] | (f.bytes[offset + 1] << 8)
+              : (f.bytes[offset] << 8) | f.bytes[offset + 1];
+          } else {
+            // 32-bit
+            value = m[3] === "le"
+              ? f.bytes[offset] | (f.bytes[offset + 1] << 8) | (f.bytes[offset + 2] << 16) | ((f.bytes[offset + 3] << 24) >>> 0)
+              : ((f.bytes[offset] << 24) >>> 0) | (f.bytes[offset + 1] << 16) | (f.bytes[offset + 2] << 8) | f.bytes[offset + 3];
+            value = value >>> 0; // unsigned
+          }
+          pendingValuesRef.current.push({
+            frameId: maskedFrameId,
+            signalName: sig.signalName,
+            value,
+            timestamp,
+          });
+        }
+      }
+
+      // Catalog-based decode
       const frame = catalogFrames.get(maskedFrameId);
       if (!frame) continue;
 
@@ -379,6 +441,7 @@ export default function Graph() {
           catalogFilename={catalogFilenameFromPath(catalogPath)}
           rawViewMode={rawViewMode}
           onToggleRawView={handleToggleRawView}
+          onOpenCandidates={() => dialogs.candidateSignals.open()}
         />
       }
     >
@@ -432,6 +495,11 @@ export default function Graph() {
         panelId={configuringPanelId}
         onAddSignals={handleAddSignals}
         onReplaceSignal={handleReplaceSignal}
+      />
+
+      <CandidateSignalsDialog
+        isOpen={dialogs.candidateSignals.isOpen}
+        onClose={() => dialogs.candidateSignals.close()}
       />
     </AppLayout>
   );

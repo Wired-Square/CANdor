@@ -21,7 +21,7 @@ import { storeGet, storeSet } from '../api/store';
 // ─────────────────────────────────────────
 
 /** Type of visualisation panel */
-export type PanelType = 'line-chart' | 'gauge' | 'list';
+export type PanelType = 'line-chart' | 'gauge' | 'list' | 'flow' | 'heatmap' | 'histogram';
 
 /** Colour palette for signal lines */
 const SIGNAL_COLOURS = [
@@ -96,10 +96,16 @@ export interface GraphPanel {
   maxValue: number;
   /** Which signal to show as the primary gauge reading (index into signals array) */
   primarySignalIndex?: number;
-  /** Whether the chart auto-scrolls to follow the latest data (line-chart only). Default: true. */
+  /** Whether the chart auto-scrolls to follow the latest data (line-chart/flow only). Default: true. */
   followMode?: boolean;
-  /** Whether to show the statistics overlay (line-chart only). Default: false. */
+  /** Whether to show the statistics overlay (line-chart/flow only). Default: false. */
   showStats?: boolean;
+  /** Flow/heatmap: the CAN frame ID to plot raw bytes for */
+  targetFrameId?: number;
+  /** Flow: number of bytes to plot (auto-detected from incoming frames, default 8) */
+  byteCount?: number;
+  /** Histogram: number of bins (default 20) */
+  histogramBins?: number;
 }
 
 /** react-grid-layout layout item */
@@ -214,6 +220,12 @@ interface GraphState {
   /** Monotonically increasing counter — line charts reset zoom when this changes */
   zoomResetVersion: number;
 
+  // ── Raw byte tracking (flow view / heatmap) ──
+  /** Frame IDs seen during the current session (for flow/heatmap frame pickers) */
+  discoveredFrameIds: Set<number>;
+  /** Bit change counters for heatmap panels: key = frameId */
+  bitChangeCounts: Map<number, { counts: Uint32Array; lastBytes: Uint8Array; totalFrames: number }>;
+
   // ── Actions ──
   loadCatalog: (path: string) => Promise<void>;
   initFromSettings: (defaultCatalog?: string, decoderDir?: string, defaultReadProfile?: string | null) => Promise<void>;
@@ -225,7 +237,7 @@ interface GraphState {
   addPanel: (type: PanelType) => void;
   clonePanel: (panelId: string) => void;
   removePanel: (panelId: string) => void;
-  updatePanel: (panelId: string, updates: Partial<Pick<GraphPanel, 'title' | 'minValue' | 'maxValue' | 'primarySignalIndex'>>) => void;
+  updatePanel: (panelId: string, updates: Partial<Pick<GraphPanel, 'title' | 'minValue' | 'maxValue' | 'primarySignalIndex' | 'targetFrameId' | 'byteCount' | 'histogramBins'>>) => void;
   addSignalToPanel: (panelId: string, frameId: number, signalName: string, unit?: string) => void;
   removeSignalFromPanel: (panelId: string, frameId: number, signalName: string) => void;
   updateSignalColour: (panelId: string, frameId: number, signalName: string, colour: string) => void;
@@ -249,6 +261,10 @@ interface GraphState {
   // Data ingestion
   pushSignalValues: (entries: SignalValueEntry[]) => void;
   clearData: () => void;
+
+  // Raw byte tracking (flow view / heatmap)
+  recordFrameId: (frameId: number) => void;
+  recordBitChanges: (frameId: number, bytes: number[]) => void;
 }
 
 export const useGraphStore = create<GraphState>((set, get) => ({
@@ -271,6 +287,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   seriesBuffers: new Map(),
   dataVersion: 0,
   zoomResetVersion: 0,
+  discoveredFrameIds: new Set(),
+  bitChangeCounts: new Map(),
 
   // ── Actions ──
 
@@ -369,6 +387,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       'line-chart': 'Line Chart',
       'gauge': 'Gauge',
       'list': 'List',
+      'flow': 'Flow View',
+      'heatmap': 'Bit Heatmap',
+      'histogram': 'Histogram',
     };
 
     const newPanel: GraphPanel = {
@@ -384,6 +405,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       'line-chart': { w: 6, h: 3 },
       'gauge': { w: 3, h: 3 },
       'list': { w: 3, h: 3 },
+      'flow': { w: 6, h: 3 },
+      'heatmap': { w: 3, h: 3 },
+      'histogram': { w: 4, h: 3 },
     };
 
     const newLayoutItem: LayoutItem = {
@@ -477,7 +501,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     const newSignal: SignalRef = { frameId, signalName, unit, colour, confidence };
 
     // Auto-set title to first signal name when panel still has its default title
-    const isDefaultTitle = panel.title === 'Gauge' || panel.title === 'Line Chart' || panel.title === 'List';
+    const isDefaultTitle = panel.title === 'Gauge' || panel.title === 'Line Chart' || panel.title === 'List'
+      || panel.title === 'Flow View' || panel.title === 'Bit Heatmap' || panel.title === 'Histogram';
     const newTitle = (panel.signals.length === 0 && isDefaultTitle) ? signalName : panel.title;
 
     set({
@@ -669,6 +694,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       layout: structuredClone(savedLayout.layout),
       seriesBuffers: new Map(),
       dataVersion: 0,
+      discoveredFrameIds: new Set(),
+      bitChangeCounts: new Map(),
     });
     scheduleAutoSave();
   },
@@ -731,7 +758,56 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   },
 
   clearData: () => {
-    set({ seriesBuffers: new Map(), dataVersion: 0 });
+    set({
+      seriesBuffers: new Map(),
+      dataVersion: 0,
+      discoveredFrameIds: new Set(),
+      bitChangeCounts: new Map(),
+    });
+  },
+
+  recordFrameId: (frameId) => {
+    const ids = get().discoveredFrameIds;
+    if (!ids.has(frameId)) {
+      const next = new Set(ids);
+      next.add(frameId);
+      set({ discoveredFrameIds: next });
+    }
+  },
+
+  recordBitChanges: (frameId, bytes) => {
+    const map = get().bitChangeCounts;
+    let entry = map.get(frameId);
+    if (!entry) {
+      entry = {
+        counts: new Uint32Array(64),
+        lastBytes: new Uint8Array(8),
+        totalFrames: 0,
+      };
+      // Initialise lastBytes with current frame to avoid spurious first-frame changes
+      for (let i = 0; i < Math.min(bytes.length, 8); i++) {
+        entry.lastBytes[i] = bytes[i];
+      }
+      const next = new Map(map);
+      next.set(frameId, entry);
+      set({ bitChangeCounts: next });
+      entry.totalFrames++;
+      return;
+    }
+    // XOR to find changed bits
+    const len = Math.min(bytes.length, 8);
+    for (let byteIdx = 0; byteIdx < len; byteIdx++) {
+      const diff = entry.lastBytes[byteIdx] ^ bytes[byteIdx];
+      if (diff !== 0) {
+        for (let bit = 0; bit < 8; bit++) {
+          if (diff & (1 << bit)) {
+            entry.counts[byteIdx * 8 + bit]++;
+          }
+        }
+      }
+      entry.lastBytes[byteIdx] = bytes[byteIdx];
+    }
+    entry.totalFrames++;
   },
 }));
 

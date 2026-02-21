@@ -854,6 +854,7 @@ pub fn run() {
             update_menu_focus_state,
             catalog::open_catalog,
             catalog::save_catalog,
+            catalog::save_binary_file,
             catalog::validate_catalog,
             catalog::test_decode_frame,
             catalog::list_catalogs,

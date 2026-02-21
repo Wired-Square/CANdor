@@ -6,6 +6,16 @@ All notable changes to CANdor will be documented in this file.
 
 ### Added
 
+- **Graph flow view panel**: New panel type for plotting raw data bytes of a selected CAN frame ID over time. Works without a catalog — essential for reverse engineering. Plots byte[0]..byte[N] as coloured lines with full zoom, pan, follow mode, stats, and measurement support. Configure the target frame ID and byte count (1–8) in Panel Settings.
+
+- **Graph bit heatmap panel**: New panel type showing an 8×8 grid (8 bytes × 8 bits) colour-coded by bit change frequency for a selected frame ID. Static bits appear grey, frequently-changing bits glow hot red. Hover cells for byte index, bit position, change count, and change rate.
+
+- **Graph histogram panel**: New panel type showing value distribution as a bar chart using decoded signal data. Supports multiple overlaid signals with semi-transparent colours. Configurable bin count (5–200) in Panel Settings.
+
+- **Graph candidate signal plots**: A wizard dialog (Sparkles button in the top bar) that auto-generates line-chart panels for hypothesised signal combinations on a selected frame ID. Configure bit lengths (8/16/32-bit), endianness, and byte range. Optionally uses Discovery analysis hints to skip static/counter bytes.
+
+- **Graph image export**: All panel types support PNG and SVG export via the overflow menu. Canvas-based panels (line-chart, flow, histogram) export from the chart canvas; SVG-based panels (gauge, heatmap) export natively. SVG export for charts generates vector `<polyline>` output with optional embedded JavaScript for interactive pan/zoom/hover tooltips in a browser.
+
 - **Graph zoom and pan**: Line charts now support drag-select zoom, mouse wheel zoom (centred on cursor), and Shift+drag / middle-click pan. A reset zoom button in the panel header restores the full view.
 
 - **Graph follow mode**: During live capture, line charts auto-scroll to keep the latest data visible. Automatically disables when the user manually zooms or pans. A toggle button (chevrons icon) in the panel header re-enables it.

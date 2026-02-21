@@ -103,6 +103,13 @@ export async function importDbc(content: string): Promise<string> {
 }
 
 /**
+ * Write raw bytes to a file (used for image export)
+ */
+export async function saveBinaryFile(path: string, data: number[]): Promise<void> {
+  await invoke("save_binary_file", { path, data });
+}
+
+/**
  * DBC multiplexing export mode
  * - "extended": Uses SG_MUL_VAL_ with proper mNM notation for nested mux (default)
  * - "flattened": Legacy mode that flattens nested mux into composite values

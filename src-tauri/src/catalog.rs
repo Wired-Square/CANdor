@@ -110,6 +110,13 @@ pub async fn save_catalog(path: String, content: String) -> Result<(), String> {
         .map_err(|e| format!("Failed to write catalog file: {}", e))
 }
 
+/// Write raw bytes to a file path (used for PNG image export)
+#[tauri::command]
+pub async fn save_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    std::fs::write(&path, data)
+        .map_err(|e| format!("Failed to write file: {}", e))
+}
+
 /// Validation result returned to frontend
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ValidationResult {
