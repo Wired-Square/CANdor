@@ -330,16 +330,17 @@ export default function Graph() {
     await loadCatalog(path);
   }, [loadCatalog]);
 
-  const openSignalPicker = useCallback((panelId: string) => {
-    setConfiguringPanelId(panelId);
-    setReplacingSignalIndex(null);
-    dialogs.signalPicker.open();
-  }, [dialogs.signalPicker]);
-
   const openPanelConfig = useCallback((panelId: string) => {
     setConfiguringPanelId(panelId);
     dialogs.panelConfig.open();
   }, [dialogs.panelConfig]);
+
+  const handleAddSignals = useCallback((panelId: string) => {
+    setConfiguringPanelId(panelId);
+    setReplacingSignalIndex(null);
+    dialogs.panelConfig.close();
+    dialogs.signalPicker.open();
+  }, [dialogs]);
 
   const handleReplaceSignal = useCallback((panelId: string, signalIndex: number) => {
     setConfiguringPanelId(panelId);
@@ -389,7 +390,6 @@ export default function Graph() {
         />
       ) : (
         <GraphGrid
-          onOpenSignalPicker={openSignalPicker}
           onOpenPanelConfig={openPanelConfig}
         />
       )}
@@ -419,6 +419,7 @@ export default function Graph() {
         onClose={() => {
           dialogs.signalPicker.close();
           setReplacingSignalIndex(null);
+          dialogs.panelConfig.open();
         }}
         panelId={configuringPanelId}
         replacingSignalIndex={replacingSignalIndex}
@@ -429,6 +430,7 @@ export default function Graph() {
         isOpen={dialogs.panelConfig.isOpen}
         onClose={() => dialogs.panelConfig.close()}
         panelId={configuringPanelId}
+        onAddSignals={handleAddSignals}
         onReplaceSignal={handleReplaceSignal}
       />
     </AppLayout>

@@ -34,7 +34,15 @@ All notable changes to CANdor will be documented in this file.
 
 - **Shared CodeView component**: The Catalog Editor's text mode editor extracted to `src/components/CodeView.tsx` for reuse across apps.
 
+- **`iconButtonDanger` style token**: New button style with persistent red icon colour and danger hover background, for delete actions that should be visually distinct at rest.
+
 ### Changed
+
+- **Graph panel configuration flow**: The "Add signals" button moved from the panel header toolbar into the Configure Panel dialog. Signal selection now uses OK/Cancel confirmation — changes are only applied on OK.
+
+- **Graph signal removal**: Signals can now be removed directly from the Configure Panel dialog via a red bin icon per signal row.
+
+- **Graph panel delete icon**: Panel remove button in the header toolbar now uses a red bin icon (consistent with signal removal) instead of an X.
 
 - **Graph panel header hover scope**: Icon bar now expands only when hovering the header itself, not the entire panel, reducing accidental reveals during chart interaction.
 

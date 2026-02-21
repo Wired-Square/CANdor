@@ -1,13 +1,18 @@
 // ui/src/apps/graph/dialogs/SignalPickerDialog.tsx
 
-import { useState, useMemo } from "react";
-import { X, ChevronRight, ChevronDown, Check, Search } from "lucide-react";
-import { iconSm, iconLg } from "../../../styles/spacing";
-import { bgSurface, borderDivider, textSecondary, hoverLight, inputSimple } from "../../../styles";
+import { useState, useMemo, useEffect, useCallback } from "react";
+import { ChevronRight, ChevronDown, Check, Search } from "lucide-react";
+import { iconSm } from "../../../styles/spacing";
+import { bgSurface, borderDivider, textSecondary, hoverLight, inputSimple, primaryButtonBase } from "../../../styles";
 import Dialog from "../../../components/Dialog";
 import { useGraphStore } from "../../../stores/graphStore";
 import { formatFrameId } from "../../../utils/frameIds";
 import { getAllFrameSignals } from "../../../utils/frameSignals";
+
+/** Key used to identify a signal selection. */
+function signalKey(frameId: number, signalName: string): string {
+  return `${frameId}:${signalName}`;
+}
 
 interface Props {
   isOpen: boolean;
@@ -28,9 +33,34 @@ export default function SignalPickerDialog({ isOpen, onClose, panelId, replacing
   const [expandedFrames, setExpandedFrames] = useState<Set<number>>(new Set());
   const [search, setSearch] = useState("");
 
+  // Buffered selection state — changes only apply on OK
+  const [initialKeys, setInitialKeys] = useState<Set<string>>(new Set());
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [unitMap, setUnitMap] = useState<Map<string, string | undefined>>(new Map());
+
+  // Replace mode: the signal the user picked as replacement
+  const [replacementTarget, setReplacementTarget] = useState<{ frameId: number; signalName: string; unit?: string } | null>(null);
+
   const panel = panels.find((p) => p.id === panelId);
   const isReplaceMode = replacingSignalIndex !== null && replacingSignalIndex !== undefined;
   const replacingSignal = isReplaceMode && panel ? panel.signals[replacingSignalIndex] : null;
+
+  // Snapshot current signals when dialog opens
+  useEffect(() => {
+    if (isOpen && panel) {
+      const keys = new Set(panel.signals.map((s) => signalKey(s.frameId, s.signalName)));
+      setInitialKeys(keys);
+      setSelectedKeys(new Set(keys));
+      setUnitMap(new Map(panel.signals.map((s) => [signalKey(s.frameId, s.signalName), s.unit])));
+      setReplacementTarget(null);
+    }
+    if (!isOpen) {
+      setExpandedFrames(new Set());
+      setSearch("");
+      setReplacementTarget(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, panelId]);
 
   // Sort frames by ID, filter by search query — must be before early return
   const needle = search.toLowerCase();
@@ -44,40 +74,60 @@ export default function SignalPickerDialog({ isOpen, onClose, panelId, replacing
     );
   }, [frames, needle]);
 
-  if (!panel) {
-    return (
-      <Dialog isOpen={isOpen} onBackdropClick={onClose} maxWidth="max-w-md">
-        <div className={`${bgSurface} rounded-xl shadow-xl p-4`}>
-          <p className="text-sm text-[color:var(--text-muted)]">Panel not found.</p>
-        </div>
-      </Dialog>
-    );
-  }
+  const handleSignalClick = useCallback((frameId: number, signalName: string, unit?: string) => {
+    const key = signalKey(frameId, signalName);
+    if (isReplaceMode) {
+      setReplacementTarget({ frameId, signalName, unit });
+    } else {
+      setSelectedKeys((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) {
+          next.delete(key);
+        } else {
+          next.add(key);
+        }
+        return next;
+      });
+      setUnitMap((prev) => {
+        const next = new Map(prev);
+        next.set(key, unit);
+        return next;
+      });
+    }
+  }, [isReplaceMode]);
 
-  const isSignalSelected = (frameId: number, signalName: string) =>
-    panel.signals.some((s) => s.frameId === frameId && s.signalName === signalName);
+  const handleOk = useCallback(() => {
+    if (!panel) { onClose(); return; }
 
-  const handleSignalClick = (frameId: number, signalName: string, unit?: string) => {
-    if (isReplaceMode && replacingSignal) {
+    if (isReplaceMode && replacingSignal && replacementTarget) {
       replaceSignalSource(
         panel.id,
         replacingSignal.frameId,
         replacingSignal.signalName,
-        frameId,
-        signalName,
-        unit,
+        replacementTarget.frameId,
+        replacementTarget.signalName,
+        replacementTarget.unit,
       );
       onReplaceDone?.();
-      onClose();
     } else {
-      // Normal toggle mode
-      if (isSignalSelected(frameId, signalName)) {
-        removeSignalFromPanel(panel.id, frameId, signalName);
-      } else {
-        addSignalToPanel(panel.id, frameId, signalName, unit);
+      // Apply diff: add new, remove old
+      for (const key of selectedKeys) {
+        if (!initialKeys.has(key)) {
+          const [fid, ...rest] = key.split(":");
+          const name = rest.join(":");
+          addSignalToPanel(panel.id, Number(fid), name, unitMap.get(key));
+        }
+      }
+      for (const key of initialKeys) {
+        if (!selectedKeys.has(key)) {
+          const [fid, ...rest] = key.split(":");
+          const name = rest.join(":");
+          removeSignalFromPanel(panel.id, Number(fid), name);
+        }
       }
     }
-  };
+    onClose();
+  }, [panel, isReplaceMode, replacingSignal, replacementTarget, selectedKeys, initialKeys, unitMap, addSignalToPanel, removeSignalFromPanel, replaceSignalSource, onReplaceDone, onClose]);
 
   const toggleFrame = (frameId: number) => {
     setExpandedFrames((prev) => {
@@ -91,27 +141,32 @@ export default function SignalPickerDialog({ isOpen, onClose, panelId, replacing
     });
   };
 
+  if (!panel) {
+    return (
+      <Dialog isOpen={isOpen} onBackdropClick={onClose} maxWidth="max-w-md">
+        <div className={`${bgSurface} rounded-xl shadow-xl p-4`}>
+          <p className="text-sm text-[color:var(--text-muted)]">Panel not found.</p>
+        </div>
+      </Dialog>
+    );
+  }
+
+  const isSignalSelected = (frameId: number, signalName: string) =>
+    selectedKeys.has(signalKey(frameId, signalName));
+
   return (
     <Dialog isOpen={isOpen} onBackdropClick={onClose} maxWidth="max-w-md">
       <div className={`${bgSurface} rounded-xl shadow-xl overflow-hidden`}>
         {/* Header */}
-        <div className={`p-4 ${borderDivider} flex items-center justify-between`}>
-          <div>
-            <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">
-              {isReplaceMode ? "Replace Signal" : "Select Signals"}
-            </h2>
-            {isReplaceMode && replacingSignal && (
-              <p className={`text-xs ${textSecondary} mt-0.5`}>
-                Replacing: {replacingSignal.displayName || replacingSignal.signalName}
-              </p>
-            )}
-          </div>
-          <button
-            onClick={onClose}
-            className={`p-1 rounded ${hoverLight} transition-colors`}
-          >
-            <X className={iconLg} />
-          </button>
+        <div className={`p-4 ${borderDivider}`}>
+          <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">
+            {isReplaceMode ? "Replace Signal" : "Select Signals"}
+          </h2>
+          {isReplaceMode && replacingSignal && (
+            <p className={`text-xs ${textSecondary} mt-0.5`}>
+              Replacing: {replacingSignal.displayName || replacingSignal.signalName}
+            </p>
+          )}
         </div>
 
         {/* Search */}
@@ -181,8 +236,8 @@ export default function SignalPickerDialog({ isOpen, onClose, panelId, replacing
                       <div className="pl-8">
                         {numericSignals.map((signal) => {
                           const selected = isSignalSelected(frameId, signal.name!);
-                          const isCurrentReplacement = isReplaceMode && replacingSignal &&
-                            replacingSignal.frameId === frameId && replacingSignal.signalName === signal.name;
+                          const isCurrentReplacement = isReplaceMode && replacementTarget &&
+                            replacementTarget.frameId === frameId && replacementTarget.signalName === signal.name;
                           return (
                             <button
                               key={signal.name}
@@ -232,6 +287,22 @@ export default function SignalPickerDialog({ isOpen, onClose, panelId, replacing
               })}
             </div>
           )}
+        </div>
+
+        {/* Footer — OK / Cancel */}
+        <div className={`p-4 border-t border-[var(--border-default)] flex justify-end gap-2`}>
+          <button
+            onClick={onClose}
+            className={`px-4 py-2 rounded text-sm font-medium text-[color:var(--text-secondary)] ${hoverLight} transition-colors`}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleOk}
+            className={`${primaryButtonBase} px-4`}
+          >
+            OK
+          </button>
         </div>
       </div>
     </Dialog>

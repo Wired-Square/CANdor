@@ -14,7 +14,6 @@ import { pickFileToSave } from "../../../api/dialogs";
 import { saveCatalog } from "../../../api/catalog";
 
 interface Props {
-  onOpenSignalPicker: (panelId: string) => void;
   onOpenPanelConfig: (panelId: string) => void;
 }
 
@@ -28,7 +27,7 @@ const dragConfig = {
   handle: ".drag-handle",
 };
 
-export default function GraphGrid({ onOpenSignalPicker, onOpenPanelConfig }: Props) {
+export default function GraphGrid({ onOpenPanelConfig }: Props) {
   const panels = useGraphStore((s) => s.panels);
   const layout = useGraphStore((s) => s.layout);
   const updateLayout = useGraphStore((s) => s.updateLayout);
@@ -93,7 +92,6 @@ export default function GraphGrid({ onOpenSignalPicker, onOpenPanelConfig }: Pro
             <div key={panel.id}>
               <PanelWrapper
                 panel={panel}
-                onOpenSignalPicker={() => onOpenSignalPicker(panel.id)}
                 onOpenPanelConfig={() => onOpenPanelConfig(panel.id)}
                 onExport={() => handleExport(panel.id)}
               >

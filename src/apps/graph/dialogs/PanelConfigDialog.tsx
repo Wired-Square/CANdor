@@ -1,10 +1,10 @@
 // ui/src/apps/graph/dialogs/PanelConfigDialog.tsx
 
 import { useState, useEffect, useCallback } from "react";
-import { X, GripVertical, ArrowLeftRight } from "lucide-react";
+import { X, GripVertical, ArrowLeftRight, Plus, Trash2 } from "lucide-react";
 import { iconLg, iconSm } from "../../../styles/spacing";
 import { bgSurface, borderDivider, hoverLight, inputSimple, selectSimple, primaryButtonBase } from "../../../styles";
-import { iconButtonHover } from "../../../styles/buttonStyles";
+import { iconButtonHover, iconButtonDanger } from "../../../styles/buttonStyles";
 import Dialog from "../../../components/Dialog";
 import { useGraphStore, getSignalLabel, getConfidenceColour } from "../../../stores/graphStore";
 import { useSettings } from "../../../hooks/useSettings";
@@ -13,16 +13,18 @@ interface Props {
   isOpen: boolean;
   onClose: () => void;
   panelId: string | null;
+  onAddSignals?: (panelId: string) => void;
   onReplaceSignal?: (panelId: string, signalIndex: number) => void;
 }
 
-export default function PanelConfigDialog({ isOpen, onClose, panelId, onReplaceSignal }: Props) {
+export default function PanelConfigDialog({ isOpen, onClose, panelId, onAddSignals, onReplaceSignal }: Props) {
   const panels = useGraphStore((s) => s.panels);
   const updatePanel = useGraphStore((s) => s.updatePanel);
   const updateSignalColour = useGraphStore((s) => s.updateSignalColour);
   const updateSignalDisplayName = useGraphStore((s) => s.updateSignalDisplayName);
   const updateSignalYAxis = useGraphStore((s) => s.updateSignalYAxis);
   const reorderSignals = useGraphStore((s) => s.reorderSignals);
+  const removeSignalFromPanel = useGraphStore((s) => s.removeSignalFromPanel);
   const { settings } = useSettings();
 
   const panel = panels.find((p) => p.id === panelId);
@@ -98,7 +100,7 @@ export default function PanelConfigDialog({ isOpen, onClose, panelId, onReplaceS
         {/* Header */}
         <div className={`p-4 ${borderDivider} flex items-center justify-between`}>
           <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">
-            Panel Settings
+            Configure Panel
           </h2>
           <button
             onClick={onClose}
@@ -282,19 +284,39 @@ export default function PanelConfigDialog({ isOpen, onClose, panelId, onReplaceS
                         <ArrowLeftRight className={iconSm} />
                       </button>
                     )}
+                    {/* Remove signal */}
+                    <button
+                      onClick={() => removeSignalFromPanel(panel.id, signal.frameId, signal.signalName)}
+                      className={`${iconButtonDanger} p-1 shrink-0`}
+                      title="Remove signal"
+                    >
+                      <Trash2 className={iconSm} />
+                    </button>
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {/* Save button */}
-          <button
-            onClick={handleSave}
-            className={`${primaryButtonBase} w-full`}
-          >
-            Save
-          </button>
+          {/* Action buttons */}
+          <div className="flex gap-2">
+            {onAddSignals && (
+              <button
+                onClick={() => onAddSignals(panel.id)}
+                className={`${iconButtonHover} flex items-center gap-1.5 px-3 py-2 rounded text-sm text-[color:var(--text-secondary)] border border-[var(--border-default)]`}
+                title="Add signals"
+              >
+                <Plus className={iconSm} />
+                Add Signals
+              </button>
+            )}
+            <button
+              onClick={handleSave}
+              className={`${primaryButtonBase} flex-1`}
+            >
+              Save
+            </button>
+          </div>
         </div>
       </div>
     </Dialog>

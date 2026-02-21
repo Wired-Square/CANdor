@@ -234,6 +234,12 @@ export const iconButtonHoverDanger =
   "p-2 hover:bg-[var(--status-danger-bg)] rounded-lg transition-colors";
 
 /**
+ * Icon button with persistent danger colour + danger hover — always-red delete icon
+ */
+export const iconButtonDanger =
+  "p-2 text-[color:var(--status-danger-text)] hover:bg-[var(--status-danger-bg)] rounded-lg transition-colors";
+
+/**
  * Compact icon button with hover - for tight layouts (star buttons, inline actions)
  */
 export const iconButtonHoverCompact =

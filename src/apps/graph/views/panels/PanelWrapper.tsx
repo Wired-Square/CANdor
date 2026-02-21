@@ -1,9 +1,9 @@
 // ui/src/apps/graph/views/panels/PanelWrapper.tsx
 
 import { type ReactNode, useRef, useCallback, useEffect } from "react";
-import { X, Settings2, Plus, Copy, Maximize2, ChevronsRight, BarChart2, Download } from "lucide-react";
+import { Trash2, Settings2, Copy, Maximize2, ChevronsRight, BarChart2, Download } from "lucide-react";
 import { iconSm } from "../../../../styles/spacing";
-import { iconButtonHover, iconButtonHoverDanger } from "../../../../styles/buttonStyles";
+import { iconButtonHover, iconButtonDanger } from "../../../../styles/buttonStyles";
 import { useGraphStore, type GraphPanel } from "../../../../stores/graphStore";
 
 /** Compact toggle button for the panel icon bar (p-0.5 sizing). */
@@ -20,13 +20,12 @@ const DRAG_THRESHOLD = 5;
 
 interface Props {
   panel: GraphPanel;
-  onOpenSignalPicker: () => void;
   onOpenPanelConfig: () => void;
   onExport?: () => void;
   children: ReactNode;
 }
 
-export default function PanelWrapper({ panel, onOpenSignalPicker, onOpenPanelConfig, onExport, children }: Props) {
+export default function PanelWrapper({ panel, onOpenPanelConfig, onExport, children }: Props) {
   const clonePanel = useGraphStore((s) => s.clonePanel);
   const removePanel = useGraphStore((s) => s.removePanel);
   const triggerZoomReset = useGraphStore((s) => s.triggerZoomReset);
@@ -143,15 +142,6 @@ export default function PanelWrapper({ panel, onOpenSignalPicker, onOpenPanelCon
                 </button>
               )}
 
-              {/* Add signal */}
-              <button
-                onClick={onOpenSignalPicker}
-                className={`p-0.5 rounded ${iconButtonHover}`}
-                title="Add signals"
-              >
-                <Plus className={iconSm} />
-              </button>
-
               {/* Configure */}
               <button
                 onClick={onOpenPanelConfig}
@@ -170,13 +160,13 @@ export default function PanelWrapper({ panel, onOpenSignalPicker, onOpenPanelCon
                 <Copy className={iconSm} />
               </button>
 
-              {/* Close */}
+              {/* Remove */}
               <button
                 onClick={() => removePanel(panel.id)}
-                className={`p-0.5 rounded ${iconButtonHoverDanger}`}
+                className={`p-0.5 rounded ${iconButtonDanger}`}
                 title="Remove panel"
               >
-                <X className={iconSm} />
+                <Trash2 className={iconSm} />
               </button>
             </div>
           </div>
