@@ -71,9 +71,14 @@ html, body {
   align-items: center;
 }
 
-/* DEBUG: Make prefix actions visible */
-.dockview-theme-abyss .dv-tabs-and-actions-container > div:first-child {
+/* Reserve space for prefix actions only when logo is present */
+.dockview-theme-abyss .dv-pre-actions-container:has(button) {
   min-width: 40px;
+}
+
+/* Collapse prefix actions container when no logo is present (split panes) */
+.dockview-theme-abyss .dv-pre-actions-container:not(:has(button)) {
+  display: none;
 }
 
 /* Tab content - make it flexbox to align icon and title */
