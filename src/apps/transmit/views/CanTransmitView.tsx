@@ -11,6 +11,7 @@ import {
   borderDataView,
   textDataSecondary,
 } from "../../../styles/colourTokens";
+import { emptyStateContainer, emptyStateText, emptyStateHeading, emptyStateDescription } from "../../../styles/typography";
 import { playButtonBase, buttonBase } from "../../../styles/buttonStyles";
 import { byteToHex } from "../../../utils/byteUtils";
 import CanFrameEditor from "../components/CanFrameEditor";
@@ -73,10 +74,10 @@ export default function CanTransmitView() {
   // If not connected
   if (!isConnected) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8">
-        <div className={`${textDataSecondary} text-center`}>
-          <p className="text-lg font-medium">Not Connected</p>
-          <p className="text-sm mt-2">
+      <div className={emptyStateContainer}>
+        <div className={emptyStateText}>
+          <p className={emptyStateHeading}>Not Connected</p>
+          <p className={emptyStateDescription}>
             Connect to an interface to transmit CAN frames.
           </p>
         </div>

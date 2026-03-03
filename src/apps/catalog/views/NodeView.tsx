@@ -3,7 +3,7 @@
 import React from "react";
 import { Plus, Trash2, Pencil } from "lucide-react";
 import { iconMd, flexRowGap2 } from "../../../styles/spacing";
-import { caption, labelSmallMuted, monoBody, iconButtonHover, iconButtonHoverDanger, textMedium, bgSecondary, sectionHeaderText, hoverLight } from "../../../styles";
+import { caption, labelSmallMuted, monoBody, iconButtonHover, iconButtonHoverDanger, textMedium, bgSecondary, sectionHeaderText, hoverLight, emptyStateText } from "../../../styles";
 import type { TomlNode } from "../types";
 import { tomlParse } from "../toml";
 import { formatFrameId } from "../utils";
@@ -236,7 +236,7 @@ export default function NodeView({
           ))}
         </div>
       ) : (
-        <div className="text-sm text-[color:var(--text-muted)]">No items</div>
+        <div className={emptyStateText}>No items</div>
       )}
 
       <div className="space-y-2">
@@ -295,7 +295,7 @@ export default function NodeView({
               })()}
 
               {frame.signals.length === 0 ? (
-                <div className={caption}>No signals defined.</div>
+                <div className={emptyStateText}>No signals defined.</div>
               ) : (
                 <div className="space-y-2">
                   {frame.signals.map((signal, idx) => (

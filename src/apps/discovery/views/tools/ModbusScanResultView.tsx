@@ -2,7 +2,7 @@
 
 import { X } from "lucide-react";
 import type { ModbusScanResults } from "../../../../stores/discoveryToolboxStore";
-import { bgDataView, textMuted, textPrimary, textSecondary, borderDefault } from "../../../../styles";
+import { bgDataView, textMuted, textPrimary, textSecondary, borderDefault, emptyStateContainer, emptyStateText } from "../../../../styles";
 import { iconSm } from "../../../../styles/spacing";
 import { bytesToHex } from "../../../../utils/byteUtils";
 
@@ -66,8 +66,8 @@ export default function ModbusScanResultView({ results, onClose, onCancel }: Pro
       {/* Results table */}
       <div className="flex-1 overflow-auto">
         {frames.length === 0 ? (
-          <div className={`flex items-center justify-center h-full text-sm ${textMuted}`}>
-            {isScanning ? 'Scanning...' : 'No results found'}
+          <div className={emptyStateContainer}>
+            <p className={emptyStateText}>{isScanning ? 'Scanning...' : 'No results found'}</p>
           </div>
         ) : scanType === 'unit-id' ? (
           /* Unit ID scan table — shows device identification when available */

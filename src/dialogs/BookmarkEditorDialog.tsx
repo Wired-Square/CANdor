@@ -8,7 +8,7 @@ import { useSessionStore } from "../stores/sessionStore";
 import { iconMd, iconLg, flexRowGap2 } from "../styles/spacing";
 import Dialog from "../components/Dialog";
 import { Input, SecondaryButton, PrimaryButton, DangerButton } from "../components/forms";
-import { h2, labelSmall, captionMuted, borderDefault, bgSecondary, hoverLight, sectionHeaderText } from "../styles";
+import { h2, labelSmall, captionMuted, borderDefault, bgSecondary, hoverLight, sectionHeaderText, emptyStateText } from "../styles";
 import {
   getAllFavorites,
   updateFavorite,
@@ -287,9 +287,9 @@ export default function BookmarkEditorDialog({
           {/* Left: Bookmark List */}
           <div className={`w-1/2 border-r ${borderDefault} overflow-y-auto`}>
             {isLoading ? (
-              <div className="p-4 text-sm text-slate-400">Loading...</div>
+              <div className={`p-4 ${emptyStateText}`}>Loading...</div>
             ) : bookmarks.length === 0 ? (
-              <div className="p-4 text-sm text-slate-400">
+              <div className={`p-4 ${emptyStateText}`}>
                 No bookmarks saved yet.
               </div>
             ) : (

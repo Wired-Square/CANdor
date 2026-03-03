@@ -7,7 +7,7 @@ import { PlaybackControls } from "../../../components/PlaybackControls";
 import { validateChecksum, type ChecksumAlgorithm, type ChecksumValidationResult } from "../../../api/checksums";
 import { badgeDarkPanelInfo, badgeDarkPanelSuccess, badgeDarkPanelDanger, badgeDarkPanelPurple, badgeDarkPanelCyan } from "../../../styles/badgeStyles";
 import { parseCanId } from "../../../utils/catalogParser";
-import { caption, emptyStateText, bgSurface, bgDataView, textPrimary, textMuted, textDataPrimary, textDataPurple, textDataCyan, textDataYellow, textDataOrange, textDataAmber, borderDefault, hoverBg, textSecondary } from "../../../styles";
+import { caption, emptyStateContainer, emptyStateText, bgSurface, bgDataView, textPrimary, textMuted, textDataPrimary, textDataPurple, textDataCyan, textDataYellow, textDataOrange, textDataAmber, borderDefault, hoverBg, textSecondary } from "../../../styles";
 import type { PlaybackState, PlaybackSpeed } from "../../../components/TimeController";
 import type { IOCapabilities } from '../../../api/io';
 import { formatFrameId } from "../../../utils/frameIds";
@@ -778,7 +778,7 @@ function FrameCard({
 
           if (!hasContent) {
             return (
-              <div className={`px-3 py-2 ${caption}`}>
+              <div className={`px-3 py-2 ${emptyStateText}`}>
                 No signals decoded yet.
               </div>
             );
@@ -1574,14 +1574,18 @@ export default function DecoderFramesView({
                 ))
             )}
             {selectedFrames.length === 0 && (
-              <div className={emptyStateText}>No frames selected.</div>
+              <div className={emptyStateContainer}>
+                <p className={emptyStateText}>No frames selected.</p>
+              </div>
             )}
           </>
         ) : activeTab === 'unmatched' ? (
           // Unmatched frames tab content - timestamped list of raw frames
           <div className="space-y-1">
             {unmatchedFrames.length === 0 ? (
-              <div className={emptyStateText}>No unmatched frames.</div>
+              <div className={emptyStateContainer}>
+                <p className={emptyStateText}>No unmatched frames.</p>
+              </div>
             ) : (
               unmatchedFrames.slice(-100).reverse().map((frame, idx) => {
                 const date = new Date(frame.timestamp * 1000);
@@ -1620,7 +1624,9 @@ export default function DecoderFramesView({
           // Filtered frames tab content - deselected frames + processing-filtered frames
           <>
             {deselectedFrames.length === 0 && filteredFrames.length === 0 && (
-              <div className={emptyStateText}>No filtered frames.</div>
+              <div className={emptyStateContainer}>
+                <p className={emptyStateText}>No filtered frames.</p>
+              </div>
             )}
             {deselectedFrames.map((f) => (
               <FrameCard

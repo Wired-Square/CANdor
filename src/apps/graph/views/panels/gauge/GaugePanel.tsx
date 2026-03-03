@@ -3,7 +3,7 @@
 import { useRef, useEffect } from "react";
 import { useGraphStore, getConfidenceColour, type GraphPanel } from "../../../../../stores/graphStore";
 import { useSettings } from "../../../../../hooks/useSettings";
-import { emptyStateText } from "../../../../../styles/typography";
+import { emptyStateContainer, emptyStateText } from "../../../../../styles/typography";
 import { formatValue } from "../../../utils/graphFormat";
 import PanelTooltip from "../PanelTooltip";
 
@@ -95,7 +95,7 @@ export default function GaugePanel({ panel, svgRef: svgRefProp }: Props) {
 
   if (signalCount === 0) {
     return (
-      <div className="flex items-center justify-center h-full">
+      <div className={emptyStateContainer}>
         <p className={emptyStateText}>Click + to add a signal</p>
       </div>
     );

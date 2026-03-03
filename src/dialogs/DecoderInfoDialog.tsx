@@ -3,7 +3,7 @@
 import { X, FileText, Shuffle, Zap, GitBranch, Clock, Layers } from "lucide-react";
 import { iconMd, iconXs, iconLg, flexRowGap2, paddingCardSm } from "../styles/spacing";
 import { cardDefault } from "../styles/cardStyles";
-import { caption, captionMuted, sectionHeaderText } from "../styles/typography";
+import { caption, captionMuted, sectionHeaderText, emptyStateText } from "../styles/typography";
 import { borderDivider, hoverLight, bgSurface } from "../styles";
 import Dialog from "../components/Dialog";
 import { useDiscoveryStore } from "../stores/discoveryStore";
@@ -158,7 +158,7 @@ function FramesSection({ knowledge }: FramesSectionProps) {
             Frames
           </h3>
         </div>
-        <p className={captionMuted}>
+        <p className={emptyStateText}>
           No frames discovered yet.
         </p>
       </section>

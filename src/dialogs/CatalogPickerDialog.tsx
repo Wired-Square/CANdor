@@ -2,7 +2,7 @@
 
 import { Check, X } from "lucide-react";
 import { iconMd, iconLg } from "../styles/spacing";
-import { caption, textMedium, borderDivider, hoverLight, bgSurface } from "../styles";
+import { caption, textMedium, borderDivider, hoverLight, bgSurface, emptyStateText } from "../styles";
 import Dialog from "../components/Dialog";
 import type { CatalogMetadata } from "../api/catalog";
 
@@ -44,7 +44,7 @@ export default function CatalogPickerDialog({
         </div>
         <div className="max-h-[50vh] overflow-y-auto">
           {catalogs.length === 0 ? (
-            <div className="p-4 text-sm text-[color:var(--text-muted)]">
+            <div className={`p-4 ${emptyStateText}`}>
               No catalogs found. Add TOML catalog files to your decoder directory.
             </div>
           ) : (

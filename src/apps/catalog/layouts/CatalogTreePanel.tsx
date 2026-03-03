@@ -3,6 +3,7 @@
 import React from "react";
 import { Cable, Filter, Network, Plus, Server, UserPlus } from "lucide-react";
 import { iconMd, iconXs } from "../../../styles/spacing";
+import { emptyStateText, emptyStateHeading } from "../../../styles/typography";
 import ResizableSidebar from "../../../components/ResizableSidebar";
 import type { TomlNode, ProtocolType, CanProtocolConfig, ModbusProtocolConfig, SerialProtocolConfig } from "../types";
 
@@ -201,9 +202,9 @@ export default function CatalogTreePanel({
         onScroll={onScroll ? (e) => onScroll((e.target as HTMLDivElement).scrollTop) : undefined}
       >
         {!catalogPath ? (
-          <p className="text-sm text-[color:var(--text-muted)]">Open a catalog file to view its structure</p>
+          <p className={`${emptyStateText} ${emptyStateHeading}`}>Open a catalog file to view its structure</p>
         ) : parsedTree.length === 0 ? (
-          <p className="text-sm text-[color:var(--text-muted)]">No structure to display</p>
+          <p className={`${emptyStateText} ${emptyStateHeading}`}>No structure to display</p>
         ) : (
           <div className="space-y-1">{parsedTree.map((node) => renderTreeNode(node, 0))}</div>
         )}

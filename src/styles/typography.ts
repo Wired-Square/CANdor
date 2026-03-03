@@ -91,14 +91,14 @@ export const sectionHeaderText = "text-sm font-medium text-[color:var(--text-sec
 /** Empty state container - centres content vertically and horizontally */
 export const emptyStateContainer = "flex-1 flex flex-col items-center justify-center gap-4 p-8";
 
-/** Empty state text wrapper - applies muted colour and centering */
-export const emptyStateText = "text-[color:var(--text-secondary)] text-center";
+/** Empty state text wrapper - applies muted colour, centering, and resets font */
+export const emptyStateText = "text-sm font-sans text-[color:var(--text-muted)] text-center";
 
-/** Empty state heading - medium weight, base size */
-export const emptyStateHeading = "text-base font-medium";
+/** Empty state heading - medium weight */
+export const emptyStateHeading = "text-sm font-medium";
 
 /** Empty state description - smaller, with top margin */
-export const emptyStateDescription = "text-sm mt-2";
+export const emptyStateDescription = "text-xs mt-2";
 
 /** Empty state hint - extra small, for additional context (inherits colour from emptyStateText) */
 export const emptyStateHint = "text-xs mt-1 opacity-60";

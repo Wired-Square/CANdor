@@ -8,6 +8,7 @@ import { getTraits, type ActiveSessionInfo } from "../../../api/io";
 import type { IOProfile } from "../../../hooks/useSettings";
 import { iconSm } from "../../../styles/spacing";
 import { iconButtonHover, iconButtonHoverDanger } from "../../../styles/buttonStyles";
+import { emptyStateText } from "../../../styles/typography";
 import { tlog } from "../../../api/settings";
 
 interface SessionDetailPanelProps {
@@ -41,7 +42,7 @@ export default function SessionDetailPanel({
   if (!selectedNode) {
     return (
       <div className="w-64 border-l border-[color:var(--border-default)] bg-[var(--bg-surface)] p-4">
-        <p className="text-sm text-[color:var(--text-muted)]">
+        <p className={emptyStateText}>
           Select a node to view details
         </p>
       </div>

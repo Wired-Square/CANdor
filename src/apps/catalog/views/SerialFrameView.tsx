@@ -3,7 +3,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { Pencil, Settings, Trash2 } from "lucide-react";
 import { iconMd, iconXs } from "../../../styles/spacing";
-import { caption, labelSmall, labelSmallMuted, monoBody, iconButtonHover, iconButtonHoverDanger, bgSecondary, hoverLight } from "../../../styles";
+import { caption, labelSmall, labelSmallMuted, monoBody, iconButtonHover, iconButtonHoverDanger, bgSecondary, hoverLight, emptyStateText } from "../../../styles";
 import BitPreview, { BitRange } from "../../../components/BitPreview";
 import type { TomlNode } from "../types";
 import { tomlParse } from "../toml";
@@ -369,7 +369,7 @@ export default function SerialFrameView({
             })()}
 
           {(!selectedNode.metadata?.signals || selectedNode.metadata.signals.length === 0) && (
-            <div className={`text-sm text-[color:var(--text-muted)] p-4 ${bgSecondary} rounded-lg`}>
+            <div className={`${emptyStateText} p-4 ${bgSecondary} rounded-lg`}>
               No signals defined. Click "+ Add Signal" to create one.
             </div>
           )}

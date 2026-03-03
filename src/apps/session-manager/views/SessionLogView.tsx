@@ -31,6 +31,10 @@ import {
   bgDataView,
   borderDefault,
   hoverBg,
+  emptyStateContainer,
+  emptyStateText,
+  emptyStateHeading,
+  emptyStateDescription,
 } from "../../../styles";
 import { COPY_FEEDBACK_TIMEOUT_MS } from "../../../constants";
 import { toolbarElementHeight } from "../../../styles/inputStyles";
@@ -334,10 +338,10 @@ export default function SessionLogView() {
         className={`flex-1 overflow-auto pb-4 ${bgDataView}`}
       >
         {entries.length === 0 ? (
-          <div className={`flex items-center justify-center h-full ${textMuted}`}>
-            <div className="text-center">
-              <p className="text-sm">No log entries</p>
-              <p className="text-xs mt-1">Session events will appear here</p>
+          <div className={emptyStateContainer}>
+            <div className={emptyStateText}>
+              <p className={emptyStateHeading}>No log entries</p>
+              <p className={emptyStateDescription}>Session events will appear here</p>
             </div>
           </div>
         ) : (

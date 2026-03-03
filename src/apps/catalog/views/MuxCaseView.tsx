@@ -3,7 +3,7 @@
 import React from "react";
 import { Pencil, Trash2 } from "lucide-react";
 import { iconMd, flexRowGap2 } from "../../../styles/spacing";
-import { caption, labelSmallMuted, iconButtonHover, iconButtonHoverDanger, bgSecondary, sectionHeaderText, hoverLight } from "../../../styles";
+import { caption, labelSmallMuted, iconButtonHover, iconButtonHoverDanger, bgSecondary, sectionHeaderText, hoverLight, emptyStateText } from "../../../styles";
 import ConfirmDeleteDialog from "../../../dialogs/ConfirmDeleteDialog";
 import BitPreview, { BitRange } from "../../../components/BitPreview";
 import { tomlParse } from "../toml";
@@ -206,7 +206,7 @@ export default function MuxCaseView({
             Signals ({caseSignals.length})
           </div>
           {caseSignals.length === 0 ? (
-            <div className="text-sm text-[color:var(--text-muted)]">No signals in this case yet.</div>
+            <div className={emptyStateText}>No signals in this case yet.</div>
           ) : (
             <div className="space-y-2">
               {caseSignals.map((signal: any, idx: number) => (

@@ -9,6 +9,7 @@ import { listCatalogs, type CatalogMetadata } from "../../api/catalog";
 import { Eye } from "lucide-react";
 import AppLayout from "../../components/AppLayout";
 import { borderDataView, bgDataView } from "../../styles/colourTokens";
+import { emptyStateContainer, emptyStateText, emptyStateHeading } from "../../styles/typography";
 import CatalogTreePanel from "./layouts/CatalogTreePanel";
 import CatalogToolbar from "./layouts/CatalogToolbar";
 import SelectionHeader from "./layouts/SelectionHeader";
@@ -461,10 +462,10 @@ export default function CatalogEditor() {
           ) : (
             <div className="flex-1 p-6 overflow-y-auto overflow-x-hidden bg-[var(--bg-primary)]">
               {!catalogPath ? (
-                <div className="flex items-center justify-center h-full text-[color:var(--text-muted)]">
-                  <div className="text-center">
+                <div className={emptyStateContainer}>
+                  <div className={emptyStateText}>
                     <Eye className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                    <p>Open a catalog file to view in UI mode</p>
+                    <p className={emptyStateHeading}>Open a catalog file to view in UI mode</p>
                   </div>
                 </div>
               ) : forms.editingFrame && !selectedNode ? (

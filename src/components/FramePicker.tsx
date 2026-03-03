@@ -3,7 +3,7 @@
 import { useMemo, memo, useState } from "react";
 import { ChevronDown, ChevronRight, AlertTriangle, Save, Star, CheckCheck, SquareSlash } from "lucide-react";
 import { iconSm } from "../styles/spacing";
-import { labelSmall, caption, captionMuted } from "../styles/typography";
+import { labelSmall, captionMuted, emptyStateText } from "../styles/typography";
 import { hoverLight } from "../styles";
 import { formatFrameId } from "../utils/frameIds";
 import type { FrameInfo } from "../types/common";
@@ -327,7 +327,7 @@ function FramePicker({
                 </label>
               ))}
               {!anyFrames && (
-                <div className={`px-3 py-4 ${caption}`}>
+                <div className={`px-3 py-4 ${emptyStateText}`}>
                   No frames discovered yet.
                 </div>
               )}

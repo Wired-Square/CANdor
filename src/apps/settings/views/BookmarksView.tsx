@@ -2,6 +2,7 @@
 import { Bookmark, Edit2, Plus, Trash2 } from "lucide-react";
 import { iconMd, iconSm, flexRowGap2 } from "../../../styles/spacing";
 import { cardDefault } from "../../../styles/cardStyles";
+import { emptyStateText, emptyStateHeading, emptyStateDescription } from "../../../styles/typography";
 import { iconButtonHover, iconButtonHoverDanger } from "../../../styles/buttonStyles";
 import { PrimaryButton } from "../../../components/forms";
 import type { TimeRangeFavorite } from "../../../utils/favorites";
@@ -63,10 +64,10 @@ export default function BookmarksView({
       </div>
 
       {bookmarks.length === 0 ? (
-        <div className="text-center py-12 text-[color:var(--text-muted)]">
+        <div className={`text-center py-12 ${emptyStateText}`}>
           <Bookmark className="w-12 h-12 mx-auto mb-4 opacity-50" />
-          <p>No bookmarks saved yet</p>
-          <p className="text-sm mt-2">Create bookmarks from the Decoder or Discovery apps</p>
+          <p className={emptyStateHeading}>No bookmarks saved yet</p>
+          <p className={emptyStateDescription}>Create bookmarks from the Decoder or Discovery apps</p>
         </div>
       ) : (
         <div className="space-y-6">

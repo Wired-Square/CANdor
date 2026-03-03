@@ -2,7 +2,7 @@
 
 import { Trash2 } from "lucide-react";
 import { iconMd } from "../../../styles/spacing";
-import { caption, iconButtonHoverDanger, bgSecondary, sectionHeaderText, hoverLight } from "../../../styles";
+import { caption, iconButtonHoverDanger, bgSecondary, sectionHeaderText, hoverLight, emptyStateText } from "../../../styles";
 import type { TomlNode } from "../types";
 
 export type GenericChildrenViewProps = {
@@ -80,7 +80,7 @@ export default function GenericChildrenView({ selectedNode, onSelectNode, onRequ
           ))}
         </div>
       ) : (
-        <div className="text-sm text-[color:var(--text-muted)]">No items</div>
+        <div className={emptyStateText}>No items</div>
       )}
     </div>
   );

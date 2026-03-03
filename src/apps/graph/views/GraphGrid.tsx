@@ -11,7 +11,7 @@ import FlowViewPanel from "./panels/flow/FlowViewPanel";
 import HeatmapPanel from "./panels/heatmap/HeatmapPanel";
 import HistogramPanel from "./panels/histogram/HistogramPanel";
 import { useCallback, useMemo, useRef } from "react";
-import { textSecondary } from "../../../styles/colourTokens";
+import { emptyStateContainer, emptyStateText } from "../../../styles/typography";
 import { buildPanelCsv, buildFlowPanelCsv } from "../utils/graphExport";
 import { pickFileToSave, PNG_FILTERS, SVG_FILTERS } from "../../../api/dialogs";
 import { saveCatalog } from "../../../api/catalog";
@@ -203,8 +203,8 @@ export default function GraphGrid({ onOpenPanelConfig }: Props) {
 
   if (panels.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <p className={`text-sm ${textSecondary}`}>
+      <div className={emptyStateContainer}>
+        <p className={emptyStateText}>
           Add a panel using the "Add Panel" button above.
         </p>
       </div>

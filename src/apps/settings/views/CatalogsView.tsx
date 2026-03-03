@@ -2,6 +2,7 @@
 import { BookOpen, Copy, Edit2, Trash2 } from "lucide-react";
 import { iconMd, flexRowGap2 } from "../../../styles/spacing";
 import { cardDefault } from "../../../styles/cardStyles";
+import { emptyStateText, emptyStateHeading, emptyStateDescription } from "../../../styles/typography";
 import { iconButtonHover, iconButtonHoverDanger } from "../../../styles/buttonStyles";
 import { badgeMetadata } from "../../../styles/badgeStyles";
 import type { CatalogFile } from "../stores/settingsStore";
@@ -28,10 +29,10 @@ export default function CatalogsView({
       </div>
 
       {catalogs.length === 0 ? (
-        <div className="text-center py-12 text-[color:var(--text-muted)]">
+        <div className={`text-center py-12 ${emptyStateText}`}>
           <BookOpen className="w-12 h-12 mx-auto mb-4 opacity-50" />
-          <p>No catalogs found in decoder directory</p>
-          <p className="text-sm mt-2">Add .toml catalog files to {decoderDir || "the decoder directory"}</p>
+          <p className={emptyStateHeading}>No catalogs found in decoder directory</p>
+          <p className={emptyStateDescription}>Add .toml catalog files to {decoderDir || "the decoder directory"}</p>
         </div>
       ) : (
         <div className="space-y-3">
