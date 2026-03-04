@@ -1,7 +1,7 @@
 // src/apps/transmit/hooks/handlers/useTransmitSessionHandlers.ts
 //
 // Session-related handlers for Transmit: stop and resume.
-// IO picker dialog handlers are centralised in useIOPickerHandlers.
+// IO picker dialog handlers are centralised in useIOSourcePickerHandlers.
 
 import { useCallback } from "react";
 

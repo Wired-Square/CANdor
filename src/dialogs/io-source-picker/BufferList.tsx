@@ -1,4 +1,4 @@
-// ui/src/dialogs/io-reader-picker/BufferList.tsx
+// ui/src/dialogs/io-source-picker/BufferList.tsx
 //
 // Shows buffers available for replay (from completed sessions or CSV imports).
 
@@ -14,9 +14,9 @@ import { renameBuffer } from "../../api/buffer";
 type Props = {
   buffers: BufferMetadata[];
   selectedBufferId: string | null;
-  checkedReaderId: string | null;
-  /** Reader IDs selected in multi-bus mode */
-  checkedReaderIds?: string[];
+  checkedSourceId: string | null;
+  /** Source IDs selected in multi-bus mode */
+  checkedSourceIds?: string[];
   onSelectBuffer: (bufferId: string) => void;
   onDeleteBuffer: (bufferId: string) => void;
   onClearAllBuffers: () => void;
@@ -29,8 +29,8 @@ type Props = {
 export default function BufferList({
   buffers,
   selectedBufferId,
-  checkedReaderId,
-  checkedReaderIds = [],
+  checkedSourceId,
+  checkedSourceIds = [],
   onSelectBuffer,
   onDeleteBuffer,
   onClearAllBuffers,
@@ -97,7 +97,7 @@ export default function BufferList({
       </div>
       <div className="p-3 space-y-2">
         {buffers.map((buffer) => {
-          const isThisBufferSelected = selectedBufferId === buffer.id && !checkedReaderId && checkedReaderIds.length === 0;
+          const isThisBufferSelected = selectedBufferId === buffer.id && !checkedSourceId && checkedSourceIds.length === 0;
           const isRenaming = renamingId === buffer.id;
           const sessionId = activeSessionBufferMap.get(buffer.id);
           const isInSession = sessionId !== undefined;

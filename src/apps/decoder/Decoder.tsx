@@ -5,7 +5,7 @@ import { listen, emit } from "@tauri-apps/api/event";
 import { useSettings, getDisplayFrameIdFormat } from "../../hooks/useSettings";
 import { useDecoderStore, getDecodedFrames, getDecodedPerSource, getUnmatchedFrames, getFilteredFrames } from "../../stores/decoderStore";
 import { useIOSessionManager, type SessionReconfigurationInfo } from '../../hooks/useIOSessionManager';
-import { useIOPickerHandlers } from '../../hooks/useIOPickerHandlers';
+import { useIOSourcePickerHandlers } from '../../hooks/useIOSourcePickerHandlers';
 import { useMenuSessionControl } from '../../hooks/useMenuSessionControl';
 import { useEffectiveBufferMetadata } from "../../hooks/useEffectiveBufferMetadata";
 import { useFocusStore } from '../../stores/focusStore';
@@ -23,7 +23,7 @@ import AppLayout from "../../components/AppLayout";
 import DecoderTopBar from "./views/DecoderTopBar";
 import DecoderFramesView from "./views/DecoderFramesView";
 import FramePickerDialog from "../../dialogs/FramePickerDialog";
-import IoReaderPickerDialog from "../../dialogs/IoReaderPickerDialog";
+import IoSourcePickerDialog from "../../dialogs/IoSourcePickerDialog";
 import { getBufferMetadata, type BufferMetadata } from "../../api/buffer";
 import SpeedPickerDialog from "../../dialogs/SpeedPickerDialog";
 import CatalogPickerDialog from "../../dialogs/CatalogPickerDialog";
@@ -77,7 +77,7 @@ export default function Decoder() {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   // Ingest speed setting (for dialog display)
-  const [ingestSpeed, setIngestSpeed] = useState(0); // 0 = no limit
+  const [loadSpeed, setIngestSpeed] = useState(0); // 0 = no limit
 
   // Playback direction state (for buffer replay)
   const [playbackDirection, setPlaybackDirection] = useState<"forward" | "backward">("forward");
@@ -501,8 +501,8 @@ export default function Decoder() {
     handleLeave,
     isDetached,
     // Ingest state
-    isIngesting,
-    stopIngest,
+    isLoading,
+    stopLoad,
     // Session switching methods
     stopWatch,
     resumeWithNewBuffer,
@@ -717,7 +717,7 @@ export default function Decoder() {
   });
 
   // Centralised IO picker handlers
-  const ioPickerProps = useIOPickerHandlers({
+  const ioPickerProps = useIOSourcePickerHandlers({
     manager,
     closeDialog: () => dialogs.ioReaderPicker.close(),
     mergeOptions: (options) => {
@@ -988,8 +988,8 @@ export default function Decoder() {
             isRealtime={isRealtime}
             speed={playbackSpeed}
             supportsSpeed={capabilities?.supports_speed_control ?? false}
-            isStreaming={isDecoding || isIngesting}
-            onStopStream={isDecoding ? handlers.handleStopWatch : stopIngest}
+            isStreaming={isDecoding || isLoading}
+            onStopStream={isDecoding ? handlers.handleStopWatch : stopLoad}
             isStopped={isStopped || canReturnToLive}
             onResume={resumeWithNewBuffer}
             onLeave={!isDetached ? handleLeave : undefined}
@@ -1103,7 +1103,7 @@ export default function Decoder() {
         onSaveAsNewSelectionSet={() => dialogs.saveSelectionSet.open()}
       />
 
-      <IoReaderPickerDialog
+      <IoSourcePickerDialog
         {...ioPickerProps}
         isOpen={dialogs.ioReaderPicker.isOpen}
         onClose={() => dialogs.ioReaderPicker.close()}
@@ -1115,8 +1115,8 @@ export default function Decoder() {
         onImport={(meta) => setBufferMetadata(meta)}
         bufferMetadata={bufferMetadata}
         defaultDir={settings?.dump_dir}
-        ingestSpeed={ingestSpeed}
-        onIngestSpeedChange={(speed) => setIngestSpeed(speed)}
+        loadSpeed={loadSpeed}
+        onLoadSpeedChange={(speed) => setIngestSpeed(speed)}
         allowMultiSelect={true}
       />
 

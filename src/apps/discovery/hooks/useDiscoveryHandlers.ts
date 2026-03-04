@@ -28,7 +28,7 @@ import type { PlaybackSpeed, FrameMessage } from "../../../stores/discoveryStore
 import type { BufferMetadata, TimestampedByte } from "../../../api/buffer";
 import type { ExportDataMode } from "../../../dialogs/ExportFramesDialog";
 import type { SelectionSet } from "../../../utils/selectionSets";
-import { isBufferProfileId, type IngestOptions as ManagerIngestOptions } from "../../../hooks/useIOSessionManager";
+import { isBufferProfileId, type LoadOptions as ManagerLoadOptions } from "../../../hooks/useIOSessionManager";
 import type { TimeRangeFavorite } from "../../../utils/favorites";
 
 export interface UseDiscoveryHandlersParams {
@@ -87,8 +87,8 @@ export interface UseDiscoveryHandlersParams {
   // Manager session switching methods
   stopWatch: () => Promise<void>;
   selectProfile: (profileId: string | null) => void;
-  watchSingleSource: (profileId: string, options: ManagerIngestOptions) => Promise<void>;
-  jumpToBookmark: (bookmark: TimeRangeFavorite, options?: Omit<ManagerIngestOptions, "startTime" | "endTime" | "maxFrames">) => Promise<void>;
+  watchSingleSource: (profileId: string, options: ManagerLoadOptions) => Promise<void>;
+  jumpToBookmark: (bookmark: TimeRangeFavorite, options?: Omit<ManagerLoadOptions, "startTime" | "endTime" | "maxFrames">) => Promise<void>;
 
   // Session actions
   setIoProfile: (profileId: string | null) => void;
@@ -154,8 +154,8 @@ export type DiscoveryHandlers = DiscoverySessionHandlers &
 
 export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): DiscoveryHandlers {
   // Session handlers (IO profile change, buffer switching)
-  // Note: Dialog handlers (start/stop ingest, join, skip, multi-select) are centralised
-  // in useIOPickerHandlers, called directly from Discovery.tsx.
+  // Note: Dialog handlers (start/stop load, join, skip, multi-select) are centralised
+  // in useIOSourcePickerHandlers, called directly from Discovery.tsx.
   const sessionHandlers = useDiscoverySessionHandlers({
     selectProfile: params.selectProfile,
     watchSingleSource: params.watchSingleSource,

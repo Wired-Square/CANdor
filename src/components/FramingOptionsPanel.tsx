@@ -1,7 +1,7 @@
 // ui/src/components/FramingOptionsPanel.tsx
 //
 // Shared framing options panel used by:
-// - IoReaderPickerDialog (for capture-time framing)
+// - IoSourcePickerDialog (for capture-time framing)
 // - FramingModeDialog (for post-capture framing)
 //
 // Supports two styling variants:

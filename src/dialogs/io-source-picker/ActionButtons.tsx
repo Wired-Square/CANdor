@@ -1,4 +1,4 @@
-// ui/src/dialogs/io-reader-picker/ActionButtons.tsx
+// ui/src/dialogs/io-source-picker/ActionButtons.tsx
 
 import { Download, Loader2, Upload, Check, Plug, Play, GitMerge, Unplug, RotateCcw } from "lucide-react";
 import type { IOProfile } from "../../hooks/useSettings";
@@ -8,11 +8,11 @@ import { primaryButtonBase, successButtonBase, panelFooter, errorBoxCompact, dan
 import { iconMd, iconSm } from "../../styles/spacing";
 
 type Props = {
-  /** Dialog mode: "streaming" shows Watch/Ingest, "connect" shows just Connect */
+  /** Dialog mode: "streaming" shows Connect/Load, "connect" shows just Connect */
   mode?: "streaming" | "connect";
-  isIngesting: boolean;
-  ingestProfileId: string | null;
-  checkedReaderId: string | null;
+  isLoading: boolean;
+  loadProfileId: string | null;
+  checkedSourceId: string | null;
   checkedProfile: IOProfile | null;
   isBufferSelected: boolean;
   /** Whether the checked profile has an active session (is "live") */
@@ -24,14 +24,14 @@ type Props = {
   importError: string | null;
   onImport: () => void;
   // Actions
-  onIngestClick: () => void;
-  onWatchClick: () => void;
+  onLoadClick: () => void;
+  onConnectClick?: () => void;
   /** Called when user wants to join an existing live session */
   onJoinClick?: () => void;
   /** Called when user wants to start a stopped session */
   onStartClick?: () => void;
   onClose: () => void;
-  /** Called when user wants to continue without selecting a reader */
+  /** Called when user wants to continue without selecting a source */
   onSkip?: () => void;
   // Multi-select mode
   /** Whether multi-select mode is active */
@@ -39,7 +39,7 @@ type Props = {
   /** Number of profiles selected in multi-select mode */
   multiSelectCount?: number;
   /** Called when user wants to watch multiple profiles (multi-bus mode) */
-  onMultiWatchClick?: () => void;
+  onMultiConnectClick?: () => void;
   /** Called when user wants to release/reset the dialog state */
   onRelease?: () => void;
   /** Called when user wants to restart a live session with updated config */
@@ -49,14 +49,14 @@ type Props = {
   /** Called when user wants to restart a live multi-source session with updated config */
   onMultiRestartClick?: () => void;
   /** Called when user clicks Connect in connect mode (creates session without streaming) */
-  onConnectClick?: () => void;
+  onConnectOnlyClick?: () => void;
 };
 
 export default function ActionButtons({
   mode = "streaming",
-  isIngesting,
-  ingestProfileId,
-  checkedReaderId,
+  isLoading,
+  loadProfileId,
+  checkedSourceId,
   checkedProfile,
   isBufferSelected,
   isCheckedProfileLive,
@@ -64,27 +64,27 @@ export default function ActionButtons({
   isImporting,
   importError,
   onImport,
-  onIngestClick,
-  onWatchClick,
+  onLoadClick,
+  onConnectClick,
   onJoinClick,
   onStartClick,
   onClose,
   onSkip,
   multiSelectMode = false,
   multiSelectCount = 0,
-  onMultiWatchClick,
+  onMultiConnectClick,
   onRelease,
   onRestartClick,
   isMultiSourceLive = false,
   onMultiRestartClick,
-  onConnectClick,
+  onConnectOnlyClick,
 }: Props) {
-  const isCsvSelected = checkedReaderId === CSV_EXTERNAL_ID;
+  const isCsvSelected = checkedSourceId === CSV_EXTERNAL_ID;
   const isCheckedRealtime = checkedProfile ? isRealtimeProfile(checkedProfile) : false;
 
   // Show release button when there's a selection that can be released
-  const hasSelection = checkedReaderId !== null || isBufferSelected || (multiSelectMode && multiSelectCount > 0);
-  const showRelease = onRelease && hasSelection && !isIngesting;
+  const hasSelection = checkedSourceId !== null || isBufferSelected || (multiSelectMode && multiSelectCount > 0);
+  const showRelease = onRelease && hasSelection && !isLoading;
 
   // Leave button component for inline use - red button that leaves the session
   const releaseButton = showRelease ? (
@@ -100,17 +100,17 @@ export default function ActionButtons({
 
   return (
     <div className={panelFooter}>
-      {isIngesting ? (
+      {isLoading ? (
         <div className="flex items-center justify-center gap-2 text-sm text-[color:var(--text-muted)]">
           <Loader2 className={`${iconMd} animate-spin`} />
-          <span>Loading from {ingestProfileId}...</span>
+          <span>Loading from {loadProfileId}...</span>
         </div>
       ) : multiSelectMode ? (
         // Multi-select mode - show Multi-Bus Watch/Restart buttons
-        multiSelectCount > 0 && onMultiWatchClick ? (
+        multiSelectCount > 0 && onMultiConnectClick ? (
           <div className="flex gap-2">
             <button
-              onClick={onMultiWatchClick}
+              onClick={onMultiConnectClick}
               className={`flex-1 ${successButtonBase}`}
             >
               <GitMerge className={iconMd} />
@@ -161,12 +161,12 @@ export default function ActionButtons({
             </div>
           )}
         </div>
-      ) : mode === "connect" && checkedReaderId ? (
+      ) : mode === "connect" && checkedSourceId ? (
         // Connect mode - show single Connect button (for Query app)
-        // Uses onConnectClick if provided (creates session without streaming), falls back to onWatchClick
+        // Uses onConnectOnlyClick if provided (creates session without streaming), falls back to onConnectClick
         <div className="flex gap-2">
           <button
-            onClick={onConnectClick ?? onWatchClick}
+            onClick={onConnectOnlyClick ?? onConnectClick}
             className={`flex-1 ${successButtonBase}`}
           >
             <Plug className={iconMd} />
@@ -174,7 +174,7 @@ export default function ActionButtons({
           </button>
           {releaseButton}
         </div>
-      ) : checkedReaderId && isBufferProfileId(checkedReaderId) ? (
+      ) : checkedSourceId && isBufferProfileId(checkedSourceId) ? (
         // Buffer session selected — just show Join (no Resume/Ingest/Watch)
         <div className="flex gap-2">
           <button
@@ -186,8 +186,8 @@ export default function ActionButtons({
           </button>
           {releaseButton}
         </div>
-      ) : checkedReaderId ? (
-        // IO reader selected - show action buttons based on session state
+      ) : checkedSourceId ? (
+        // IO source selected - show action buttons based on session state
         isCheckedProfileLive && !isCheckedProfileStopped && onJoinClick ? (
           // Profile has a running session - show Join + Restart buttons
           <div className="flex gap-2">
@@ -227,7 +227,7 @@ export default function ActionButtons({
             <div className="flex gap-2">
               {!isCheckedRealtime && (
                 <button
-                  onClick={onIngestClick}
+                  onClick={onLoadClick}
                   className={`flex-1 ${primaryButtonBase}`}
                 >
                   <Download className={iconMd} />
@@ -235,7 +235,7 @@ export default function ActionButtons({
                 </button>
               )}
               <button
-                onClick={onWatchClick}
+                onClick={onConnectClick}
                 className={`flex-1 ${primaryButtonBase}`}
               >
                 <Plug className={iconMd} />
@@ -248,7 +248,7 @@ export default function ActionButtons({
           <div className="flex gap-2">
             {!isCheckedRealtime && (
               <button
-                onClick={onIngestClick}
+                onClick={onLoadClick}
                 className={`flex-1 ${successButtonBase}`}
               >
                 <Download className={iconMd} />
@@ -256,7 +256,7 @@ export default function ActionButtons({
               </button>
             )}
             <button
-              onClick={onWatchClick}
+              onClick={onConnectClick}
               className={`flex-1 ${primaryButtonBase}`}
             >
               <Plug className={iconMd} />

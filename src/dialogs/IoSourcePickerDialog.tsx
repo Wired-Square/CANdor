@@ -1,4 +1,4 @@
-// ui/src/dialogs/IoReaderPickerDialog.tsx
+// ui/src/dialogs/IoSourcePickerDialog.tsx
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { X } from "lucide-react";
@@ -49,29 +49,29 @@ import { getAllFavorites, type TimeRangeFavorite } from "../utils/favorites";
 import type { TimeBounds } from "../components/TimeBoundsInput";
 
 // Import extracted components
-import { BufferList } from "./io-reader-picker";
-import { ReaderList } from "./io-reader-picker";
-import { IngestOptions } from "./io-reader-picker";
-import { FramingOptions, FilterOptions } from "./io-reader-picker";
-import { ActionButtons } from "./io-reader-picker";
-import { IngestStatus } from "./io-reader-picker";
-import GvretBusConfig from "./io-reader-picker/GvretBusConfig";
-import SingleBusConfig from "./io-reader-picker/SingleBusConfig";
+import { BufferList } from "./io-source-picker";
+import { SourceList } from "./io-source-picker";
+import { LoadOptions } from "./io-source-picker";
+import { FramingOptions, FilterOptions } from "./io-source-picker";
+import { ActionButtons } from "./io-source-picker";
+import { LoadStatus } from "./io-source-picker";
+import GvretBusConfig from "./io-source-picker/GvretBusConfig";
+import SingleBusConfig from "./io-source-picker/SingleBusConfig";
 import {
   localToIsoWithOffset,
   CSV_EXTERNAL_ID,
-  generateIngestSessionId,
+  generateLoadSessionId,
   isRealtimeProfile,
   validateProfileSelection,
-} from "./io-reader-picker";
+} from "./io-source-picker";
 import { isBufferProfileId } from "../hooks/useIOSessionManager";
-import type { FramingConfig, InterfaceFramingConfig } from "./io-reader-picker";
+import type { FramingConfig, InterfaceFramingConfig } from "./io-source-picker";
 
 // Re-export constants for backward compatibility
-export { BUFFER_PROFILE_ID } from "./io-reader-picker";
+export { BUFFER_PROFILE_ID } from "./io-source-picker";
 
-/** Options passed when starting ingest */
-export interface IngestOptions {
+/** Options passed when starting a load or connect operation */
+export interface LoadOptions {
   /** Playback speed (0 = no limit, 1 = realtime, etc.) */
   speed: number;
   /** Start time in ISO-8601 format (for recorded sources) */
@@ -112,7 +112,7 @@ export interface IngestOptions {
 const EMPTY_SELECTED_IDS: string[] = [];
 
 type Props = {
-  /** Dialog mode: "streaming" shows Watch/Ingest, "connect" shows just Connect */
+  /** Dialog mode: "streaming" shows Connect/Load, "connect" shows just Connect */
   mode?: "streaming" | "connect";
   isOpen: boolean;
   onClose: () => void;
@@ -132,24 +132,24 @@ type Props = {
   bufferMetadata?: BufferMetadata | null;
   /** Default directory for file picker */
   defaultDir?: string;
-  /** External ingest state - when provided, dialog uses external state instead of internal */
-  isIngesting?: boolean;
-  /** Profile ID currently being ingested */
-  ingestProfileId?: string | null;
-  /** Current frame count during ingest */
-  ingestFrameCount?: number;
-  /** Current ingest speed */
-  ingestSpeed?: number;
-  /** Called when ingest speed changes */
-  onIngestSpeedChange?: (speed: number) => void;
-  /** Called to start ingest/watch */
-  onStartIngest?: (profileId: string, closeDialog: boolean, options: IngestOptions) => void;
-  /** Called to start ingest/watch with multiple profiles (multi-bus mode) */
-  onStartMultiIngest?: (profileIds: string[], closeDialog: boolean, options: IngestOptions) => void;
-  /** Called to stop ingest */
-  onStopIngest?: () => void;
-  /** Error message during ingest */
-  ingestError?: string | null;
+  /** External load state - when provided, dialog uses external state instead of internal */
+  isLoading?: boolean;
+  /** Profile ID currently being loaded */
+  loadProfileId?: string | null;
+  /** Current frame count during load */
+  loadFrameCount?: number;
+  /** Current load speed */
+  loadSpeed?: number;
+  /** Called when load speed changes */
+  onLoadSpeedChange?: (speed: number) => void;
+  /** Called to start load/connect */
+  onStartLoad?: (profileId: string, closeDialog: boolean, options: LoadOptions) => void;
+  /** Called to start load/connect with multiple profiles (multi-bus mode) */
+  onStartMultiLoad?: (profileIds: string[], closeDialog: boolean, options: LoadOptions) => void;
+  /** Called to stop load */
+  onStopLoad?: () => void;
+  /** Error message during load */
+  loadError?: string | null;
   /** Called when user wants to join an existing streaming session.
    * For multi-source sessions, sourceProfileIds will contain the individual source profile IDs.
    */
@@ -160,7 +160,7 @@ type Props = {
   allowMultiSelect?: boolean;
   /** Map of profile ID to disabled status with reason (for transmit mode) */
   disabledProfiles?: Map<string, { canTransmit: boolean; reason?: string }>;
-  /** Called when user wants to continue without selecting a reader */
+  /** Called when user wants to continue without selecting a source */
   onSkip?: () => void;
   /** Listener ID for this app (e.g., "discovery", "decoder") - required for Leave button */
   listenerId?: string;
@@ -168,7 +168,7 @@ type Props = {
   onConnect?: (profileId: string) => void;
 };
 
-export default function IoReaderPickerDialog({
+export default function IoSourcePickerDialog({
   mode = "streaming",
   isOpen,
   onClose,
@@ -182,16 +182,16 @@ export default function IoReaderPickerDialog({
   onBufferFramingConfig,
   bufferMetadata: _bufferMetadata, // Deprecated - dialog now fetches buffers directly
   defaultDir,
-  // External ingest state (optional - if provided, dialog uses external state)
-  isIngesting: externalIsIngesting,
-  ingestProfileId: externalIngestProfileId,
-  ingestFrameCount: externalIngestFrameCount,
-  ingestSpeed: externalIngestSpeed,
-  onIngestSpeedChange,
-  onStartIngest,
-  onStartMultiIngest,
-  onStopIngest,
-  ingestError: externalIngestError,
+  // External load state (optional - if provided, dialog uses external state)
+  isLoading: externalIsLoading,
+  loadProfileId: externalLoadProfileId,
+  loadFrameCount: externalLoadFrameCount,
+  loadSpeed: externalLoadSpeed,
+  onLoadSpeedChange,
+  onStartLoad,
+  onStartMultiLoad,
+  onStopLoad,
+  loadError: externalLoadError,
   onJoinSession,
   hideBuffers = false,
   allowMultiSelect = false,
@@ -219,20 +219,20 @@ export default function IoReaderPickerDialog({
   const [buffers, setBuffers] = useState<BufferMetadata[]>([]);
   const [selectedBufferId, setSelectedBufferId] = useState<string | null>(null);
 
-  // Internal ingest state (used when external state not provided)
-  const [internalIsIngesting, setInternalIsIngesting] = useState(false);
-  const [internalIngestProfileId, setInternalIngestProfileId] = useState<string | null>(null);
-  const [internalIngestFrameCount, setInternalIngestFrameCount] = useState(0);
-  const [internalIngestError, setInternalIngestError] = useState<string | null>(null);
-  const internalIngestSessionIdRef = useRef<string | null>(null);
+  // Internal load state (used when external state not provided)
+  const [internalIsLoading, setInternalIsLoading] = useState(false);
+  const [internalLoadProfileId, setInternalLoadProfileId] = useState<string | null>(null);
+  const [internalLoadFrameCount, setInternalLoadFrameCount] = useState(0);
+  const [internalLoadError, setInternalLoadError] = useState<string | null>(null);
+  const internalLoadSessionIdRef = useRef<string | null>(null);
   const unlistenRefs = useRef<Array<() => void>>([]);
 
   // Currently checked IO reader (for single-select / non-multi-source-capable profiles)
-  const [checkedReaderId, setCheckedReaderId] = useState<string | null>(null);
+  const [checkedSourceId, setCheckedReaderId] = useState<string | null>(null);
 
   // Multi-bus selection (for multi-source-capable profiles like CAN interfaces)
-  // Multi-bus mode is implicit when checkedReaderIds.length > 1
-  const [checkedReaderIds, setCheckedReaderIds] = useState<string[]>([]);
+  // Multi-bus mode is implicit when checkedSourceIds.length > 1
+  const [checkedSourceIds, setCheckedReaderIds] = useState<string[]>([]);
 
   // Validation error for incompatible profile selection
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -269,29 +269,29 @@ export default function IoReaderPickerDialog({
   const [profileUsage, setProfileUsage] = useState<Map<string, ProfileUsageInfo>>(new Map());
 
   // Use external state if provided, otherwise use internal state
-  const useExternalState = onStartIngest !== undefined;
-  const isIngesting = useExternalState ? (externalIsIngesting ?? false) : internalIsIngesting;
-  const ingestProfileId = useExternalState ? (externalIngestProfileId ?? null) : internalIngestProfileId;
-  const ingestFrameCount = useExternalState ? (externalIngestFrameCount ?? 0) : internalIngestFrameCount;
-  const ingestError = useExternalState ? (externalIngestError ?? null) : internalIngestError;
+  const useExternalState = onStartLoad !== undefined;
+  const isLoading = useExternalState ? (externalIsLoading ?? false) : internalIsLoading;
+  const loadProfileId = useExternalState ? (externalLoadProfileId ?? null) : internalLoadProfileId;
+  const loadFrameCount = useExternalState ? (externalLoadFrameCount ?? 0) : internalLoadFrameCount;
+  const loadError = useExternalState ? (externalLoadError ?? null) : internalLoadError;
 
   // All profiles are read profiles now (mode field removed)
   const readProfiles = ioProfiles;
 
   // Get the checked profile object (null for CSV external)
   const checkedProfile = useMemo(() => {
-    if (!checkedReaderId || checkedReaderId === CSV_EXTERNAL_ID) return null;
-    return readProfiles.find((p) => p.id === checkedReaderId) || null;
-  }, [checkedReaderId, readProfiles]);
+    if (!checkedSourceId || checkedSourceId === CSV_EXTERNAL_ID) return null;
+    return readProfiles.find((p) => p.id === checkedSourceId) || null;
+  }, [checkedSourceId, readProfiles]);
 
   // Is the checked profile a real-time source?
   const isCheckedRealtime = checkedProfile ? isRealtimeProfile(checkedProfile) : false;
 
   // Is the checked reader an active multi-source session?
   const checkedMultiSourceSession = useMemo(() => {
-    if (!checkedReaderId) return null;
-    return activeMultiSourceSessions.find((s) => s.sessionId === checkedReaderId) || null;
-  }, [checkedReaderId, activeMultiSourceSessions]);
+    if (!checkedSourceId) return null;
+    return activeMultiSourceSessions.find((s) => s.sessionId === checkedSourceId) || null;
+  }, [checkedSourceId, activeMultiSourceSessions]);
 
   // Is the checked selection an active session that can be joined?
   // This is ONLY true when the user explicitly selects an Active Session from the list.
@@ -300,19 +300,19 @@ export default function IoReaderPickerDialog({
   const isCheckedProfileLive = checkedMultiSourceSession !== null;
 
   // Get the session for the checked profile (if any) to check its state
-  const checkedProfileSession = checkedReaderId ? getSessionForProfile(checkedReaderId) : undefined;
+  const checkedProfileSession = checkedSourceId ? getSessionForProfile(checkedSourceId) : undefined;
   const isCheckedProfileStopped = checkedProfileSession?.ioState === "stopped";
 
   // Find if there's a live multi-source session for the selected profiles (multi-bus mode)
   const liveMultiSourceSession = useMemo(() => {
-    if (checkedReaderIds.length === 0) return null;
+    if (checkedSourceIds.length === 0) return null;
     // Find a session whose source profiles match our selection
     return activeMultiSourceSessions.find((session) => {
       const sessionProfileIds = session.multiSourceConfigs?.map((c) => c.profileId) || [];
       // Check if selected profiles are a subset of or match the session's profiles
-      return checkedReaderIds.every((id) => sessionProfileIds.includes(id));
+      return checkedSourceIds.every((id) => sessionProfileIds.includes(id));
     }) || null;
-  }, [checkedReaderIds, activeMultiSourceSessions]);
+  }, [checkedSourceIds, activeMultiSourceSessions]);
 
   const isMultiSourceLive = liveMultiSourceSession !== null;
 
@@ -346,12 +346,12 @@ export default function IoReaderPickerDialog({
         maxFrames: undefined,
         timezoneMode: "local",
       });
-      // Speed 0 means unlimited (ingest mode) - not valid for Watch, so default to 1x
-      setSelectedSpeed(externalIngestSpeed && externalIngestSpeed > 0 ? externalIngestSpeed : 1);
+      // Speed 0 means unlimited (load mode) - not valid for Watch, so default to 1x
+      setSelectedSpeed(externalLoadSpeed && externalLoadSpeed > 0 ? externalLoadSpeed : 1);
       setFramingConfig(null);
-      // If currently ingesting, pre-select that profile; otherwise use currently selected profile
+      // If currently loading, pre-select that profile; otherwise use currently selected profile
       // Buffer profiles are treated as regular sessions (shown in collapsed view like other sessions)
-      const initialReaderId = ingestProfileId ?? selectedId;
+      const initialReaderId = loadProfileId ?? selectedId;
       setCheckedReaderId(initialReaderId);
       setImportError(null);
 
@@ -371,10 +371,10 @@ export default function IoReaderPickerDialog({
       setSingleBusOverrideMap(new Map());
       probedProfilesRef.current.clear();
     }
-  // Note: externalIngestSpeed intentionally not in deps - we only use it for initialization
-  // If it were a dep, changing speed would re-run this effect and reset checkedReaderId
+  // Note: externalLoadSpeed intentionally not in deps - we only use it for initialization
+  // If it were a dep, changing speed would re-run this effect and reset checkedSourceId
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, ingestProfileId, selectedId, selectedIds]);
+  }, [isOpen, loadProfileId, selectedId, selectedIds]);
 
   // Refresh buffer list periodically while dialog is open
   // This catches transitions from streaming to stopped even if the stream-ended
@@ -403,7 +403,7 @@ export default function IoReaderPickerDialog({
     const fetchSessions = async () => {
       try {
         const sessions = await listActiveSessions();
-        console.log("[IoReaderPickerDialog] All active sessions:", sessions);
+        console.log("[IoSourcePickerDialog] All active sessions:", sessions);
         // Show joinable sessions:
         // - multi_source: multi-bus sessions
         // - buffer: sessions switched to buffer replay (e.g., stopped live sessions)
@@ -413,7 +413,7 @@ export default function IoReaderPickerDialog({
           s.deviceType === "buffer" ||
           (s.capabilities.supports_time_range && !s.capabilities.is_realtime)
         );
-        console.log("[IoReaderPickerDialog] Joinable sessions:", joinableSessions);
+        console.log("[IoSourcePickerDialog] Joinable sessions:", joinableSessions);
         setActiveMultiSourceSessions(joinableSessions);
 
         // Fetch profile usage info for all profiles
@@ -427,7 +427,7 @@ export default function IoReaderPickerDialog({
           setProfileUsage(usageMap);
         }
       } catch (err) {
-        console.error("[IoReaderPickerDialog] Error fetching sessions:", err);
+        console.error("[IoSourcePickerDialog] Error fetching sessions:", err);
       }
     };
 
@@ -442,21 +442,21 @@ export default function IoReaderPickerDialog({
 
   // Filter bookmarks for the checked profile
   const profileBookmarks = useMemo(() => {
-    if (!checkedReaderId || checkedReaderId === CSV_EXTERNAL_ID) return [];
-    return bookmarks.filter((b) => b.profileId === checkedReaderId);
-  }, [bookmarks, checkedReaderId]);
+    if (!checkedSourceId || checkedSourceId === CSV_EXTERNAL_ID) return [];
+    return bookmarks.filter((b) => b.profileId === checkedSourceId);
+  }, [bookmarks, checkedSourceId]);
 
   // Multi-bus mode is active when at least one profile is selected in multi-select
-  const isMultiBusMode = checkedReaderIds.length > 0;
+  const isMultiBusMode = checkedSourceIds.length > 0;
 
   // Probe all real-time devices in multi-bus mode
   useEffect(() => {
-    if (!isOpen || checkedReaderIds.length === 0) {
+    if (!isOpen || checkedSourceIds.length === 0) {
       return;
     }
 
     // Find real-time profiles among the selected ones
-    const realtimeProfileIds = checkedReaderIds.filter((id) => {
+    const realtimeProfileIds = checkedSourceIds.filter((id) => {
       const profile = readProfiles.find((p) => p.id === id);
       return profile && isRealtimeProfile(profile);
     });
@@ -580,7 +580,7 @@ export default function IoReaderPickerDialog({
           }
         })
         .catch((err) => {
-          console.error(`[IoReaderPickerDialog] Probe failed for ${profileId}:`, err);
+          console.error(`[IoSourcePickerDialog] Probe failed for ${profileId}:`, err);
           setDeviceProbeResultMap((prev) => new Map(prev).set(profileId, {
             success: false,
             deviceType: isMultiBus ? "gvret" : "unknown",
@@ -607,7 +607,7 @@ export default function IoReaderPickerDialog({
     // Note: isProfileInUse and getSessionForProfile are stable store functions,
     // intentionally excluded from deps to prevent infinite loops
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, checkedReaderIds, readProfiles]);
+  }, [isOpen, checkedSourceIds, readProfiles]);
 
   // Cleanup listeners on unmount
   useEffect(() => {
@@ -617,26 +617,26 @@ export default function IoReaderPickerDialog({
     };
   }, []);
 
-  // Handle ingest completion (internal state only)
-  const handleInternalIngestComplete = useCallback(
+  // Handle load completion (internal state only)
+  const handleInternalLoadComplete = useCallback(
     async (payload: StreamEndedPayload) => {
-      console.log("Ingest complete:", payload);
-      setInternalIsIngesting(false);
-      setInternalIngestProfileId(null);
+      console.log("Load complete:", payload);
+      setInternalIsLoading(false);
+      setInternalLoadProfileId(null);
 
       // Cleanup listeners
       unlistenRefs.current.forEach((unlisten) => unlisten());
       unlistenRefs.current = [];
 
-      // Destroy the ingest session using the tracked session ID
-      const sessionId = internalIngestSessionIdRef.current;
+      // Destroy the load session using the tracked session ID
+      const sessionId = internalLoadSessionIdRef.current;
       if (sessionId) {
         try {
           await destroyReaderSession(sessionId);
         } catch (e) {
-          console.error("Failed to destroy ingest session:", e);
+          console.error("Failed to destroy load session:", e);
         }
-        internalIngestSessionIdRef.current = null;
+        internalLoadSessionIdRef.current = null;
       }
 
       if (payload.buffer_available && payload.count > 0) {
@@ -663,14 +663,14 @@ export default function IoReaderPickerDialog({
     [onImport]
   );
 
-  // Start ingesting from a profile (internal state mode)
-  const handleInternalStartIngest = async (profileId: string, options: IngestOptions) => {
-    setInternalIngestError(null);
-    setInternalIngestFrameCount(0);
+  // Start loading from a profile (internal state mode)
+  const handleInternalStartLoad = async (profileId: string, options: LoadOptions) => {
+    setInternalLoadError(null);
+    setInternalLoadFrameCount(0);
 
-    // Generate unique session ID for this ingest
-    const sessionId = generateIngestSessionId();
-    internalIngestSessionIdRef.current = sessionId;
+    // Generate unique session ID for this load
+    const sessionId = generateLoadSessionId();
+    internalLoadSessionIdRef.current = sessionId;
 
     try {
       // Clear existing buffer first
@@ -679,15 +679,15 @@ export default function IoReaderPickerDialog({
       // Set up event listeners for this session
       const unlistenStreamEnded = await listen<StreamEndedPayload>(
         `stream-ended:${sessionId}`,
-        (event) => handleInternalIngestComplete(event.payload)
+        (event) => handleInternalLoadComplete(event.payload)
       );
       const unlistenError = await listen<string>(`session-error:${sessionId}`, (event) => {
-        setInternalIngestError(event.payload);
+        setInternalLoadError(event.payload);
       });
       const unlistenFrames = await listen<{ frames: unknown[] } | unknown[]>(`frame-message:${sessionId}`, (event) => {
         // Handle both legacy array format and new FrameBatchPayload format
         const frames = Array.isArray(event.payload) ? event.payload : event.payload.frames;
-        setInternalIngestFrameCount((prev) => prev + frames.length);
+        setInternalLoadFrameCount((prev) => prev + frames.length);
       });
 
       unlistenRefs.current = [unlistenStreamEnded, unlistenError, unlistenFrames];
@@ -714,21 +714,21 @@ export default function IoReaderPickerDialog({
 
       await startReaderSession(sessionId);
 
-      setInternalIsIngesting(true);
-      setInternalIngestProfileId(profileId);
+      setInternalIsLoading(true);
+      setInternalLoadProfileId(profileId);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      setInternalIngestError(msg);
-      internalIngestSessionIdRef.current = null;
+      setInternalLoadError(msg);
+      internalLoadSessionIdRef.current = null;
       // Cleanup on error
       unlistenRefs.current.forEach((unlisten) => unlisten());
       unlistenRefs.current = [];
     }
   };
 
-  // Build ingest options from current state
-  const buildIngestOptions = (speed: number): IngestOptions => {
-    const opts: IngestOptions = { speed };
+  // Build load options from current state
+  const buildLoadOptions = (speed: number): LoadOptions => {
+    const opts: LoadOptions = { speed };
 
     // Add time range for recorded sources
     // Convert datetime-local values based on timezone mode
@@ -765,31 +765,31 @@ export default function IoReaderPickerDialog({
       opts.minFrameLength = minFrameLength;
     }
 
-    console.log("[buildIngestOptions] Built options:", opts);
-    console.log("[buildIngestOptions] framingConfig state:", framingConfig);
+    console.log("[buildLoadOptions] Built options:", opts);
+    console.log("[buildLoadOptions] framingConfig state:", framingConfig);
 
     return opts;
   };
 
-  // Handle Ingest button - runs at max speed (speed=0), keeps dialog open
-  const handleIngestClick = () => {
-    if (!checkedReaderId || !checkedProfile) return;
-    const options = buildIngestOptions(0); // 0 = max speed / no limit
+  // Handle Load button - runs at max speed (speed=0), keeps dialog open
+  const handleLoadClick = () => {
+    if (!checkedSourceId || !checkedProfile) return;
+    const options = buildLoadOptions(0); // 0 = max speed / no limit
     if (useExternalState) {
-      onStartIngest?.(checkedReaderId, false, options);
+      onStartLoad?.(checkedSourceId, false, options);
     } else {
-      handleInternalStartIngest(checkedReaderId, options);
+      handleInternalStartLoad(checkedSourceId, options);
     }
   };
 
   // Handle Watch button - uses selected speed, closes dialog
-  const handleWatchClick = () => {
-    if (!checkedReaderId || !checkedProfile) return;
-    const options = buildIngestOptions(selectedSpeed);
+  const handleConnectClick = () => {
+    if (!checkedSourceId || !checkedProfile) return;
+    const options = buildLoadOptions(selectedSpeed);
     if (useExternalState) {
-      onStartIngest?.(checkedReaderId, true, options);
+      onStartLoad?.(checkedSourceId, true, options);
     } else {
-      handleInternalStartIngest(checkedReaderId, options);
+      handleInternalStartLoad(checkedSourceId, options);
     }
     onClose();
   };
@@ -797,11 +797,11 @@ export default function IoReaderPickerDialog({
   // Handle Join button - join an existing live session (no options needed)
   // This also handles joining active multi-source sessions
   const handleJoinClick = () => {
-    if (onJoinSession && checkedReaderId) {
+    if (onJoinSession && checkedSourceId) {
       // Check if this is a multi-source session and get source profile IDs
-      const multiSourceSession = activeMultiSourceSessions.find((s) => s.sessionId === checkedReaderId);
+      const multiSourceSession = activeMultiSourceSessions.find((s) => s.sessionId === checkedSourceId);
       const sourceProfileIds = multiSourceSession?.multiSourceConfigs?.map((c) => c.profileId);
-      onJoinSession(checkedReaderId, sourceProfileIds);
+      onJoinSession(checkedSourceId, sourceProfileIds);
     }
     onClose();
   };
@@ -812,8 +812,8 @@ export default function IoReaderPickerDialog({
       try {
         await startSession(checkedProfileSession.id);
         // After starting, join the session
-        if (onJoinSession && checkedReaderId) {
-          onJoinSession(checkedReaderId);
+        if (onJoinSession && checkedSourceId) {
+          onJoinSession(checkedSourceId);
         }
         onClose();
       } catch (e) {
@@ -824,10 +824,10 @@ export default function IoReaderPickerDialog({
 
   // Handle Restart button - destroy existing session and start a new one with updated config
   const handleRestartClick = async () => {
-    if (!checkedReaderId || !checkedProfile) return;
+    if (!checkedSourceId || !checkedProfile) return;
 
     // Destroy the existing session first
-    const existingSession = getSessionForProfile(checkedReaderId);
+    const existingSession = getSessionForProfile(checkedSourceId);
     if (existingSession) {
       try {
         await destroyReaderSession(existingSession.id);
@@ -838,18 +838,18 @@ export default function IoReaderPickerDialog({
     }
 
     // Now start a new session with the updated config
-    const options = buildIngestOptions(selectedSpeed);
+    const options = buildLoadOptions(selectedSpeed);
     if (useExternalState) {
-      onStartIngest?.(checkedReaderId, true, options);
+      onStartLoad?.(checkedSourceId, true, options);
     } else {
-      handleInternalStartIngest(checkedReaderId, options);
+      handleInternalStartLoad(checkedSourceId, options);
     }
     onClose();
   };
 
   // Handle Multi-Bus Restart button - destroy existing multi-source session and create a new one
   const handleMultiRestartClick = async () => {
-    if (checkedReaderIds.length === 0) return;
+    if (checkedSourceIds.length === 0) return;
 
     // Destroy the existing multi-source session first
     if (liveMultiSourceSession) {
@@ -870,22 +870,22 @@ export default function IoReaderPickerDialog({
     setTimeBounds(bounds);
   }, []);
 
-  // Stop ingesting
-  const handleStopIngest = async () => {
+  // Stop loading
+  const handleStopLoad = async () => {
     if (useExternalState) {
-      onStopIngest?.();
+      onStopLoad?.();
     } else {
-      const sessionId = internalIngestSessionIdRef.current;
+      const sessionId = internalLoadSessionIdRef.current;
       if (!sessionId) return;
       try {
         await stopReaderSession(sessionId);
         // The stream-ended event will handle the rest
       } catch (e) {
-        console.error("Failed to stop ingest:", e);
+        console.error("Failed to stop load:", e);
         // Force cleanup
-        setInternalIsIngesting(false);
-        setInternalIngestProfileId(null);
-        internalIngestSessionIdRef.current = null;
+        setInternalIsLoading(false);
+        setInternalLoadProfileId(null);
+        internalLoadSessionIdRef.current = null;
         unlistenRefs.current.forEach((unlisten) => unlisten());
         unlistenRefs.current = [];
       }
@@ -896,7 +896,7 @@ export default function IoReaderPickerDialog({
   const handleSpeedChange = (speed: number) => {
     setSelectedSpeed(speed);
     if (useExternalState) {
-      onIngestSpeedChange?.(speed);
+      onLoadSpeedChange?.(speed);
     }
   };
 
@@ -947,8 +947,8 @@ export default function IoReaderPickerDialog({
 
     // Unregister from any active sessions (doesn't destroy them, other listeners can still use them)
     // Single-select mode: unregister from session for the checked profile
-    if (checkedReaderId && checkedReaderId !== CSV_EXTERNAL_ID) {
-      const session = getSessionForProfile(checkedReaderId);
+    if (checkedSourceId && checkedSourceId !== CSV_EXTERNAL_ID) {
+      const session = getSessionForProfile(checkedSourceId);
       if (session) {
         try {
           await unregisterSessionListener(session.id, listenerId);
@@ -959,7 +959,7 @@ export default function IoReaderPickerDialog({
     }
 
     // Multi-select mode: unregister from sessions for all checked profiles
-    for (const profileId of checkedReaderIds) {
+    for (const profileId of checkedSourceIds) {
       const session = getSessionForProfile(profileId);
       if (session) {
         try {
@@ -978,7 +978,7 @@ export default function IoReaderPickerDialog({
     // Clear buffer selection
     setSelectedBufferId(null);
 
-    // Reset ingest options
+    // Reset load options
     setTimeBounds({
       startTime: "",
       endTime: "",
@@ -1005,8 +1005,8 @@ export default function IoReaderPickerDialog({
 
   // Handle Watch button for multi-bus mode
   const handleMultiWatchClick = () => {
-    if (checkedReaderIds.length === 0) return;
-    const options = buildIngestOptions(selectedSpeed);
+    if (checkedSourceIds.length === 0) return;
+    const options = buildLoadOptions(selectedSpeed);
 
     // Build combined bus mappings from both GVRET and single-bus devices
     const combinedBusMappings = new Map<string, BusMapping[]>();
@@ -1039,7 +1039,7 @@ export default function IoReaderPickerDialog({
 
     // Fallback: checked profiles not in either map get default bus mappings
     // (e.g., modbus_tcp profiles that aren't GVRET or single-bus override devices)
-    for (const profileId of checkedReaderIds) {
+    for (const profileId of checkedSourceIds) {
       if (!combinedBusMappings.has(profileId)) {
         const profile = readProfiles.find(p => p.id === profileId);
         if (profile) {
@@ -1055,8 +1055,8 @@ export default function IoReaderPickerDialog({
       options.perInterfaceFraming = framingConfigMap;
     }
 
-    console.log("[IoReaderPickerDialog] handleMultiWatchClick - bus mappings:", {
-      checkedReaderIds,
+    console.log("[IoSourcePickerDialog] handleMultiConnectClick - bus mappings:", {
+      checkedSourceIds,
       combinedBusMappingsSize: combinedBusMappings.size,
       combinedBusMappingsEntries: Array.from(combinedBusMappings.entries()).map(([k, v]) => ({
         profileId: k,
@@ -1064,10 +1064,10 @@ export default function IoReaderPickerDialog({
       })),
       perInterfaceFramingSize: framingConfigMap.size,
     });
-    if (onStartMultiIngest) {
-      onStartMultiIngest(checkedReaderIds, true, options);
+    if (onStartMultiLoad) {
+      onStartMultiLoad(checkedSourceIds, true, options);
     }
-    onSelectMultiple?.(checkedReaderIds);
+    onSelectMultiple?.(checkedSourceIds);
     onClose();
   };
 
@@ -1197,7 +1197,7 @@ export default function IoReaderPickerDialog({
 
   // Check if a bytes buffer is selected (for framing options)
   const selectedBuffer = selectedBufferId ? buffers.find((b) => b.id === selectedBufferId) : null;
-  const isBytesBufferSelected = selectedBuffer?.buffer_type === "bytes" && !checkedReaderId;
+  const isBytesBufferSelected = selectedBuffer?.buffer_type === "bytes" && !checkedSourceId;
 
   // Handle OK button click for buffer selection - pass framing config if configured
   const handleBufferOkClick = () => {
@@ -1222,22 +1222,22 @@ export default function IoReaderPickerDialog({
           </button>
         </div>
 
-        <IngestStatus
-          isIngesting={isIngesting}
-          ingestFrameCount={ingestFrameCount}
-          ingestError={ingestError}
-          onStopIngest={handleStopIngest}
+        <LoadStatus
+          isLoading={isLoading}
+          loadFrameCount={loadFrameCount}
+          loadError={loadError}
+          onStopLoad={handleStopLoad}
         />
 
         <div className="max-h-[60vh] overflow-y-auto">
-          <ReaderList
+          <SourceList
             ioProfiles={ioProfiles}
-            checkedReaderId={checkedReaderId}
-            checkedReaderIds={checkedReaderIds}
+            checkedSourceId={checkedSourceId}
+            checkedSourceIds={checkedSourceIds}
             defaultId={defaultId}
-            isIngesting={isIngesting}
+            isLoading={isLoading}
             bufferNames={new Map(buffers.map((b) => [b.id, b.name]))}
-            onSelectReader={(id) => {
+            onSelectSource={(id) => {
               setCheckedReaderId(id);
               // Clear multi-bus selection when selecting a single profile
               // (ensures mutual exclusivity between single-select and multi-select)
@@ -1247,7 +1247,7 @@ export default function IoReaderPickerDialog({
                 setSelectedBufferId(null);
               }
             }}
-            onToggleReader={handleToggleReader}
+            onToggleSource={handleToggleReader}
             isProfileLive={isProfileInUse}
             getSessionForProfile={getSessionForProfile}
             validationError={validationError}
@@ -1285,7 +1285,7 @@ export default function IoReaderPickerDialog({
               if (isGvret || probeResult?.isMultiBus) {
                 let busConfig = gvretBusConfigMap.get(profileId);
                 if (!busConfig && probeResult) {
-                  const profileIndex = checkedReaderIds.indexOf(profileId);
+                  const profileIndex = checkedSourceIds.indexOf(profileId);
                   const offset = profileIndex >= 0 ? profileIndex : 0;
                   busConfig = createDefaultBusMappings(probeResult.busCount || 5, offset);
                 }
@@ -1355,8 +1355,8 @@ export default function IoReaderPickerDialog({
               <BufferList
                 buffers={buffers}
                 selectedBufferId={selectedBufferId}
-                checkedReaderId={checkedReaderId}
-                checkedReaderIds={checkedReaderIds}
+                checkedSourceId={checkedSourceId}
+                checkedSourceIds={checkedSourceIds}
                 onSelectBuffer={handleSelectBuffer}
                 onDeleteBuffer={handleDeleteBuffer}
                 onClearAllBuffers={handleClearAllBuffers}
@@ -1374,14 +1374,14 @@ export default function IoReaderPickerDialog({
             ) : undefined}
           />
 
-          {/* Show ingest options when creating a new session */}
+          {/* Show load options when creating a new session */}
           {/* Hide when: connect mode, joining an existing session, or nothing selected */}
-          {mode !== "connect" && (checkedReaderId || isMultiBusMode) && !checkedMultiSourceSession && (
+          {mode !== "connect" && (checkedSourceId || isMultiBusMode) && !checkedMultiSourceSession && (
             <>
-              <IngestOptions
-                checkedReaderId={checkedReaderId}
+              <LoadOptions
+                checkedSourceId={checkedSourceId}
                 checkedProfile={checkedProfile}
-                isIngesting={isIngesting}
+                isLoading={isLoading}
                 timeBounds={timeBounds}
                 onTimeBoundsChange={handleTimeBoundsChange}
                 selectedSpeed={selectedSpeed}
@@ -1395,8 +1395,8 @@ export default function IoReaderPickerDialog({
                   <FramingOptions
                     checkedProfile={checkedProfile}
                     ioProfiles={ioProfiles}
-                    checkedReaderIds={checkedReaderIds}
-                    isIngesting={isIngesting}
+                    checkedSourceIds={checkedSourceIds}
+                    isLoading={isLoading}
                     framingConfig={framingConfig}
                     onFramingConfigChange={setFramingConfig}
                     isBytesBufferSelected={isBytesBufferSelected}
@@ -1405,8 +1405,8 @@ export default function IoReaderPickerDialog({
                   <FilterOptions
                     checkedProfile={checkedProfile}
                     ioProfiles={ioProfiles}
-                    checkedReaderIds={checkedReaderIds}
-                    isIngesting={isIngesting}
+                    checkedSourceIds={checkedSourceIds}
+                    isLoading={isLoading}
                     minFrameLength={minFrameLength}
                     onMinFrameLengthChange={setMinFrameLength}
                     isBytesBufferSelected={isBytesBufferSelected}
@@ -1419,9 +1419,9 @@ export default function IoReaderPickerDialog({
 
         <ActionButtons
           mode={mode}
-          isIngesting={isIngesting}
-          ingestProfileId={ingestProfileId}
-          checkedReaderId={checkedReaderId}
+          isLoading={isLoading}
+          loadProfileId={loadProfileId}
+          checkedSourceId={checkedSourceId}
           checkedProfile={checkedProfile}
           isBufferSelected={isBufferSelected}
           isCheckedProfileLive={isCheckedProfileLive}
@@ -1429,22 +1429,22 @@ export default function IoReaderPickerDialog({
           isImporting={isImporting}
           importError={importError}
           onImport={handleImport}
-          onIngestClick={handleIngestClick}
-          onWatchClick={handleWatchClick}
+          onLoadClick={handleLoadClick}
+          onConnectClick={handleConnectClick}
           onJoinClick={handleJoinClick}
           onStartClick={handleStartClick}
           onClose={handleBufferOkClick}
           onSkip={onSkip}
           multiSelectMode={isMultiBusMode}
-          multiSelectCount={checkedReaderIds.length}
-          onMultiWatchClick={handleMultiWatchClick}
+          multiSelectCount={checkedSourceIds.length}
+          onMultiConnectClick={handleMultiWatchClick}
           onRelease={listenerId && isCheckedProfileLive ? handleRelease : undefined}
           // Only show Restart for profiles, not for selecting existing sessions
           onRestartClick={isCheckedProfileLive && !isCheckedProfileStopped && !checkedMultiSourceSession ? handleRestartClick : undefined}
           isMultiSourceLive={isMultiSourceLive}
           onMultiRestartClick={isMultiSourceLive ? handleMultiRestartClick : undefined}
-          onConnectClick={checkedReaderId && onConnect ? () => {
-            onConnect(checkedReaderId);
+          onConnectOnlyClick={checkedSourceId && onConnect ? () => {
+            onConnect(checkedSourceId);
             onClose();
           } : undefined}
         />

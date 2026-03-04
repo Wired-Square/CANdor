@@ -1,12 +1,12 @@
-// ui/src/dialogs/io-reader-picker/index.ts
+// ui/src/dialogs/io-source-picker/index.ts
 
 export { default as BufferList } from "./BufferList";
-export { default as ReaderList } from "./ReaderList";
-export { default as IngestOptions } from "./IngestOptions";
+export { default as SourceList } from "./SourceList";
+export { default as LoadOptions } from "./LoadOptions";
 export { default as FramingOptions } from "./FramingOptions";
 export { default as FilterOptions } from "./FilterOptions";
 export { default as ActionButtons } from "./ActionButtons";
-export { default as IngestStatus } from "./IngestStatus";
+export { default as LoadStatus } from "./LoadStatus";
 export { default as GvretBusConfig } from "./GvretBusConfig";
 export { default as SingleBusConfig } from "./SingleBusConfig";
 
@@ -21,7 +21,7 @@ export {
   SPEED_OPTIONS,
   BUFFER_PROFILE_ID,
   CSV_EXTERNAL_ID,
-  generateIngestSessionId,
+  generateLoadSessionId,
   isRealtimeProfile,
   isMultiSourceCapable,
   validateProfileSelection,

@@ -1,4 +1,4 @@
-// ui/src/dialogs/io-reader-picker/GvretBusConfig.tsx
+// ui/src/dialogs/io-source-picker/GvretBusConfig.tsx
 //
 // Bus configuration UI for GVRET devices.
 // Shows available buses with toggles to enable/disable and optional bus remapping.

@@ -65,7 +65,7 @@ export interface TimeControllerProps {
   capabilities?: IOCapabilities | null;
 }
 
-import { SPEED_OPTIONS } from "../dialogs/io-reader-picker/utils";
+import { SPEED_OPTIONS } from "../dialogs/io-source-picker/utils";
 
 export default function TimeController({
   state,

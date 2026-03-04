@@ -4,14 +4,14 @@
 // Delegates session orchestration to useIOSessionManager methods.
 
 import { useCallback } from "react";
-import type { IngestOptions } from "../../../../hooks/useIOSessionManager";
+import type { LoadOptions } from "../../../../hooks/useIOSessionManager";
 import { useQueryStore } from "../../stores/queryStore";
 
 export interface UseQuerySessionHandlersParams {
   // Session manager actions
   watchSingleSource: (
     profileId: string,
-    options: IngestOptions
+    options: LoadOptions
   ) => Promise<void>;
   stopWatch: () => Promise<void>;
 

@@ -1,12 +1,12 @@
 // ui/src/apps/decoder/hooks/handlers/useDecoderSessionHandlers.ts
 //
 // Session-related handlers for Decoder: stop watch, IO profile change.
-// Dialog handlers (start/stop ingest, join, skip, multi-select) are now
-// centralised in useIOPickerHandlers.
+// Dialog handlers (start/stop load, join, skip, multi-select) are now
+// centralised in useIOSourcePickerHandlers.
 
 import { useCallback } from "react";
 import type { PlaybackSpeed } from "../../../../components/TimeController";
-import { isBufferProfileId, type IngestOptions } from "../../../../hooks/useIOSessionManager";
+import { isBufferProfileId, type LoadOptions } from "../../../../hooks/useIOSessionManager";
 import { useBufferSession } from "../../../../hooks/useBufferSession";
 import type { BufferMetadata } from "../../../../api/buffer";
 
@@ -14,7 +14,7 @@ export interface UseDecoderSessionHandlersParams {
   // Manager session switching methods
   stopWatch: () => Promise<void>;
   selectProfile: (profileId: string | null) => void;
-  watchSingleSource: (profileId: string, options: IngestOptions) => Promise<void>;
+  watchSingleSource: (profileId: string, options: LoadOptions) => Promise<void>;
 
   // Playback (for buffer session speed)
   playbackSpeed: PlaybackSpeed;

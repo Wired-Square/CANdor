@@ -6,7 +6,7 @@ import { useCallback } from "react";
 import { useTimeHandlers } from "../../../../hooks/useTimeHandlers";
 import type { IOCapabilities } from "../../../../api/io";
 import type { TimeRangeFavorite } from "../../../../utils/favorites";
-import type { IngestOptions } from "../../../../hooks/useIOSessionManager";
+import type { LoadOptions } from "../../../../hooks/useIOSessionManager";
 
 export interface UseDecoderTimeHandlersParams {
   // Session actions
@@ -34,7 +34,7 @@ export interface UseDecoderTimeHandlersParams {
   setActiveBookmarkId: (id: string | null) => void;
 
   // Manager method for jumping to bookmarks
-  jumpToBookmark: (bookmark: TimeRangeFavorite, options?: Omit<IngestOptions, "startTime" | "endTime" | "maxFrames">) => Promise<void>;
+  jumpToBookmark: (bookmark: TimeRangeFavorite, options?: Omit<LoadOptions, "startTime" | "endTime" | "maxFrames">) => Promise<void>;
 }
 
 export function useDecoderTimeHandlers({

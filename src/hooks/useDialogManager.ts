@@ -39,7 +39,7 @@ export type DialogManagerResult<T extends readonly string[]> = {
  * dialogs.ioReaderPicker.close()   // closes the dialog
  *
  * // In JSX
- * <IoReaderPickerDialog
+ * <IoSourcePickerDialog
  *   isOpen={dialogs.ioReaderPicker.isOpen}
  *   onClose={dialogs.ioReaderPicker.close}
  * />

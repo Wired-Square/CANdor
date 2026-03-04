@@ -10,14 +10,14 @@ import {
   useQueryUIHandlers,
   type QueryUIHandlers,
 } from "./handlers/useQueryUIHandlers";
-import type { IngestOptions } from "../../../hooks/useIOSessionManager";
+import type { LoadOptions } from "../../../hooks/useIOSessionManager";
 import type { TimeRangeFavorite } from "../../../utils/favorites";
 
 export interface UseQueryHandlersParams {
   // Session manager actions
   watchSingleSource: (
     profileId: string,
-    options: IngestOptions
+    options: LoadOptions
   ) => Promise<void>;
   stopWatch: () => Promise<void>;
 

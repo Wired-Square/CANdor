@@ -1,6 +1,6 @@
-// ui/src/dialogs/io-reader-picker/utils.ts
+// ui/src/dialogs/io-source-picker/utils.ts
 //
-// Utility functions for the IoReaderPickerDialog
+// Utility functions for the IoSourcePickerDialog
 
 /** Convert a datetime-local value to ISO-8601 string with explicit timezone offset */
 export function localToIsoWithOffset(datetimeLocal: string): string {
@@ -51,13 +51,13 @@ export const BUFFER_PROFILE_ID = "__imported_buffer__";
 export const CSV_EXTERNAL_ID = "__csv_external__";
 
 /**
- * Generate a unique session ID for ingest operations.
- * Pattern: ingest_{shortId}
- * Examples: ingest_a7f3c9, ingest_b2c4d6
+ * Generate a unique session ID for load operations.
+ * Pattern: load_{shortId}
+ * Examples: load_a7f3c9, load_b2c4d6
  */
-export function generateIngestSessionId(): string {
+export function generateLoadSessionId(): string {
   const shortId = Math.random().toString(16).slice(2, 8);
-  return `ingest_${shortId}`;
+  return `load_${shortId}`;
 }
 
 // ============================================================================

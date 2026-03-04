@@ -3,18 +3,18 @@
 // Session-related handlers for Discovery: IO profile change and buffer switching.
 // Delegates session orchestration to useIOSessionManager methods; only adds Discovery-specific logic
 // (buffer cleanup).
-// Note: Dialog handlers (start/stop ingest, join, skip) are centralised in useIOPickerHandlers.
+// Note: Dialog handlers (start/stop load, join, skip) are centralised in useIOSourcePickerHandlers.
 // Note: Playback handlers (play/pause/stop/step) are in useDiscoveryPlaybackHandlers.
 
 import { useCallback } from "react";
 import { getBufferFrameInfo, setActiveBuffer, type BufferMetadata } from "../../../../api/buffer";
-import { isBufferProfileId, type IngestOptions } from "../../../../hooks/useIOSessionManager";
+import { isBufferProfileId, type LoadOptions } from "../../../../hooks/useIOSessionManager";
 import { useBufferSession } from "../../../../hooks/useBufferSession";
 
 export interface UseDiscoverySessionHandlersParams {
   // Session actions
   selectProfile: (profileId: string | null) => void;
-  watchSingleSource: (profileId: string, options: IngestOptions) => Promise<void>;
+  watchSingleSource: (profileId: string, options: LoadOptions) => Promise<void>;
 
   // Store actions
   updateCurrentTime?: (timeSeconds: number) => void;
@@ -134,8 +134,8 @@ export function useDiscoverySessionHandlers({
     setBackendByteCount,
   ]);
 
-  // Note: Dialog handlers (start/stop ingest, join, skip, multi-select) are now provided
-  // by the centralised useIOPickerHandlers hook in Discovery.tsx.
+  // Note: Dialog handlers (start/stop load, join, skip, multi-select) are now provided
+  // by the centralised useIOSourcePickerHandlers hook in Discovery.tsx.
   // Note: Playback handlers (play/pause/stop/step) are in useDiscoveryPlaybackHandlers.
 
   return {

@@ -1,4 +1,4 @@
-// ui/src/dialogs/io-reader-picker/FilterOptions.tsx
+// ui/src/dialogs/io-source-picker/FilterOptions.tsx
 //
 // Filter configuration options for serial data sources.
 // Allows filtering frames during capture based on minimum length.
@@ -15,9 +15,9 @@ type Props = {
   /** All IO profiles (for multi-bus mode lookup) */
   ioProfiles?: IOProfile[];
   /** Selected profile IDs for multi-bus mode */
-  checkedReaderIds?: string[];
-  /** Whether ingesting is in progress */
-  isIngesting: boolean;
+  checkedSourceIds?: string[];
+  /** Whether loading is in progress */
+  isLoading: boolean;
   /** Current minimum frame length filter (0 = no filter) */
   minFrameLength: number;
   /** Called when filter config changes */
@@ -42,14 +42,14 @@ function supportsFiltering(profile: IOProfile | null): boolean {
 export default function FilterOptions({
   checkedProfile,
   ioProfiles = [],
-  checkedReaderIds = [],
-  isIngesting,
+  checkedSourceIds = [],
+  isLoading,
   minFrameLength,
   onMinFrameLengthChange,
   isBytesBufferSelected = false,
 }: Props) {
   // Check if any selected profile in multi-bus mode supports filtering
-  const anyMultiBusProfileSupportsFiltering = checkedReaderIds.some((id) => {
+  const anyMultiBusProfileSupportsFiltering = checkedSourceIds.some((id) => {
     const profile = ioProfiles.find((p) => p.id === id);
     return supportsFiltering(profile || null);
   });
@@ -58,8 +58,8 @@ export default function FilterOptions({
   // 1. A serial IO profile is selected, OR
   // 2. Any profile in multi-bus selection supports filtering, OR
   // 3. A bytes buffer is selected
-  // Don't show while ingesting
-  const showFilter = (supportsFiltering(checkedProfile) || anyMultiBusProfileSupportsFiltering || isBytesBufferSelected) && !isIngesting;
+  // Don't show while loading
+  const showFilter = (supportsFiltering(checkedProfile) || anyMultiBusProfileSupportsFiltering || isBytesBufferSelected) && !isLoading;
   if (!showFilter) {
     return null;
   }

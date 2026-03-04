@@ -8,7 +8,7 @@ import { Send, AlertCircle } from "lucide-react";
 import { useTransmitStore } from "../../stores/transmitStore";
 import { useSessionStore } from "../../stores/sessionStore";
 import { useIOSessionManager } from "../../hooks/useIOSessionManager";
-import { useIOPickerHandlers } from "../../hooks/useIOPickerHandlers";
+import { useIOSourcePickerHandlers } from "../../hooks/useIOSourcePickerHandlers";
 import { useDialogManager } from "../../hooks/useDialogManager";
 import { useMenuSessionControl } from "../../hooks/useMenuSessionControl";
 import { useSettings, type IOProfile } from "../../hooks/useSettings";
@@ -28,7 +28,7 @@ import CanTransmitView from "./views/CanTransmitView";
 import SerialTransmitView from "./views/SerialTransmitView";
 import TransmitQueueView from "./views/TransmitQueueView";
 import TransmitHistoryView from "./views/TransmitHistoryView";
-import IoReaderPickerDialog from "../../dialogs/IoReaderPickerDialog";
+import IoSourcePickerDialog from "../../dialogs/IoSourcePickerDialog";
 
 // ============================================================================
 // Helper: Check if a profile can transmit
@@ -170,7 +170,7 @@ export default function Transmit() {
   });
 
   // Centralised IO picker dialog handlers
-  const ioPickerProps = useIOPickerHandlers({
+  const ioPickerProps = useIOSourcePickerHandlers({
     manager,
     closeDialog: () => dialogs.ioReaderPicker.close(),
   });
@@ -386,7 +386,7 @@ export default function Transmit() {
       </div>
 
       {/* IO Picker Dialog */}
-      <IoReaderPickerDialog
+      <IoSourcePickerDialog
         {...ioPickerProps}
         isOpen={dialogs.ioReaderPicker.isOpen}
         onClose={() => dialogs.ioReaderPicker.close()}

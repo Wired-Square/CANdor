@@ -5,7 +5,7 @@ import { iconMd, iconLg } from "../styles/spacing";
 import Dialog from "../components/Dialog";
 import type { PlaybackSpeed } from "../components/TimeController";
 import { h2, cardElevated, paddingCard, borderDefault, hoverLight, roundedDefault, textSuccess, textMedium } from "../styles";
-import { SPEED_OPTIONS } from "./io-reader-picker/utils";
+import { SPEED_OPTIONS } from "./io-source-picker/utils";
 
 type Props = {
   isOpen: boolean;

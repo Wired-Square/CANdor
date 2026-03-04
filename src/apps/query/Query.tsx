@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSettings } from "../../hooks/useSettings";
 import { useIOSessionManager } from "../../hooks/useIOSessionManager";
-import { useIOPickerHandlers } from "../../hooks/useIOPickerHandlers";
+import { useIOSourcePickerHandlers } from "../../hooks/useIOSourcePickerHandlers";
 import { useMenuSessionControl } from "../../hooks/useMenuSessionControl";
 import { useQueryStore } from "./stores/queryStore";
 import { useSessionStore } from "../../stores/sessionStore";
@@ -32,7 +32,7 @@ import QueryBuilderPanel from "./views/QueryBuilderPanel";
 import QueuePanel from "./views/QueuePanel";
 import ResultsPanel from "./views/ResultsPanel";
 import StatsPanel from "./views/StatsPanel";
-import IoReaderPickerDialog from "../../dialogs/IoReaderPickerDialog";
+import IoSourcePickerDialog from "../../dialogs/IoSourcePickerDialog";
 import ErrorDialog from "../../dialogs/ErrorDialog";
 import CatalogPickerDialog from "../../dialogs/CatalogPickerDialog";
 import AddBookmarkDialog from "../../dialogs/AddBookmarkDialog";
@@ -280,7 +280,7 @@ export default function Query() {
   });
 
   // Centralised IO picker dialog handlers (connect, skip, etc.)
-  const ioPickerProps = useIOPickerHandlers({
+  const ioPickerProps = useIOSourcePickerHandlers({
     manager,
     closeDialog: () => dialogs.ioReaderPicker.close(),
   });
@@ -453,7 +453,7 @@ export default function Query() {
       </AppTabView>
 
       {/* IO Reader Picker Dialog - connect mode for database selection */}
-      <IoReaderPickerDialog
+      <IoSourcePickerDialog
         mode="connect"
         {...ioPickerProps}
         isOpen={dialogs.ioReaderPicker.isOpen}

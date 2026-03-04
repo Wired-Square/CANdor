@@ -1,4 +1,4 @@
-// ui/src/dialogs/io-reader-picker/SingleBusConfig.tsx
+// ui/src/dialogs/io-source-picker/SingleBusConfig.tsx
 //
 // Status and bus configuration UI for single-bus devices (slcan, gs_usb, socketcan, serial).
 // Shows device status (online/offline) and allows setting a bus number override.

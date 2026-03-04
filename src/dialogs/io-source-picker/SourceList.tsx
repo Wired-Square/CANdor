@@ -1,4 +1,4 @@
-// ui/src/dialogs/io-reader-picker/ReaderList.tsx
+// ui/src/dialogs/io-source-picker/SourceList.tsx
 
 import { Bookmark, Wifi, Database, FolderOpen, GitMerge, Radio, Play, Lock } from "lucide-react";
 import type { IOProfile } from "../../hooks/useSettings";
@@ -31,14 +31,14 @@ export interface ProfileDisabledStatus {
 
 type Props = {
   ioProfiles: IOProfile[];
-  checkedReaderId: string | null;
-  /** Selected reader IDs for multi-bus sessions */
-  checkedReaderIds?: string[];
+  checkedSourceId: string | null;
+  /** Selected source IDs for multi-bus sessions */
+  checkedSourceIds?: string[];
   defaultId?: string | null;
-  isIngesting: boolean;
-  onSelectReader: (readerId: string | null) => void;
-  /** Called when toggling a multi-source-capable reader */
-  onToggleReader?: (readerId: string) => void;
+  isLoading: boolean;
+  onSelectSource: (sourceId: string | null) => void;
+  /** Called when toggling a multi-source-capable source */
+  onToggleSource?: (sourceId: string) => void;
   /** Check if a profile has an active session (is "live") */
   isProfileLive?: (profileId: string) => boolean;
   /** Get session for a profile (to check state) */
@@ -67,14 +67,14 @@ type Props = {
   bufferNames?: Map<string, string>;
 };
 
-export default function ReaderList({
+export default function SourceList({
   ioProfiles,
-  checkedReaderId,
-  checkedReaderIds = [],
+  checkedSourceId,
+  checkedSourceIds = [],
   defaultId,
-  isIngesting,
-  onSelectReader,
-  onToggleReader,
+  isLoading,
+  onSelectSource,
+  onToggleSource,
   isProfileLive,
   getSessionForProfile,
   renderProfileExtra,
@@ -95,16 +95,16 @@ export default function ReaderList({
   const recordedProfiles = readProfiles.filter((p) => !isRealtimeProfile(p));
 
   // Multi-bus mode is implicit when >1 interface is selected
-  const isMultiBusMode = checkedReaderIds.length > 1;
+  const isMultiBusMode = checkedSourceIds.length > 1;
 
-  const isCsvSelected = checkedReaderId === CSV_EXTERNAL_ID;
-  const checkedProfile = checkedReaderId && checkedReaderId !== CSV_EXTERNAL_ID
-    ? readProfiles.find((p) => p.id === checkedReaderId) || null
+  const isCsvSelected = checkedSourceId === CSV_EXTERNAL_ID;
+  const checkedProfile = checkedSourceId && checkedSourceId !== CSV_EXTERNAL_ID
+    ? readProfiles.find((p) => p.id === checkedSourceId) || null
     : null;
 
   // Check if selected reader is a multi-source session
-  const checkedMultiSourceSession = checkedReaderId
-    ? activeMultiSourceSessions.find((s) => s.sessionId === checkedReaderId) || null
+  const checkedMultiSourceSession = checkedSourceId
+    ? activeMultiSourceSessions.find((s) => s.sessionId === checkedSourceId) || null
     : null;
 
   // Get bus number from profile connection config
@@ -121,9 +121,9 @@ export default function ReaderList({
     return readProfiles.find((p) => p.id === sessionId) || null;
   };
 
-  // When a single reader is selected (not multi-bus) and not ingesting, show collapsed view
-  // Multi-bus mode (checkedReaderIds.length > 0) always shows full list
-  if (checkedReaderId && checkedReaderIds.length === 0 && !isIngesting) {
+  // When a single source is selected (not multi-bus) and not loading, show collapsed view
+  // Multi-bus mode (checkedSourceIds.length > 0) always shows full list
+  if (checkedSourceId && checkedSourceIds.length === 0 && !isLoading) {
     // Determine display name and subtitle based on selection type
     let displayName: string;
     let subtitle: string;
@@ -178,7 +178,7 @@ export default function ReaderList({
       subtitle = checkedProfile.kind;
     } else {
       displayName = "Unknown";
-      subtitle = checkedReaderId;
+      subtitle = checkedSourceId;
     }
 
     // Styling: purple for multi-source, cyan for buffer, green for recorded, blue for profiles
@@ -218,7 +218,7 @@ export default function ReaderList({
         </div>
         <div className="px-3 py-2">
           <button
-            onClick={() => onSelectReader(null)}
+            onClick={() => onSelectSource(null)}
             className={`w-full px-3 py-2 flex items-center gap-3 text-left rounded-lg transition-colors hover:brightness-95 ${bgClass}`}
           >
             {icon || (
@@ -333,7 +333,7 @@ export default function ReaderList({
           </div>
           <div className="px-3 pb-2 space-y-1">
             {joinableSessions.map((session) => {
-              const isSelected = checkedReaderId === session.sessionId;
+              const isSelected = checkedSourceId === session.sessionId;
               const info = getSessionDisplayInfo(session);
               const IconComponent = info.icon;
 
@@ -407,8 +407,8 @@ export default function ReaderList({
           </div>
           <div className="px-3 pb-2 space-y-1">
             <button
-              onClick={() => onSelectReader(isCsvSelected ? null : CSV_EXTERNAL_ID)}
-              disabled={isIngesting}
+              onClick={() => onSelectSource(isCsvSelected ? null : CSV_EXTERNAL_ID)}
+              disabled={isLoading}
               className={`w-full px-3 py-2 flex items-center gap-3 text-left rounded-lg transition-colors disabled:opacity-50 ${
                 isCsvSelected
                   ? "bg-[var(--status-info-bg)] border border-[color:var(--status-info-border)]"
@@ -442,15 +442,15 @@ export default function ReaderList({
           </div>
           <div className="px-3 pb-2 space-y-1">
             {recordedProfiles.map((profile) => (
-              <ReaderButton
+              <SourceButton
                 key={profile.id}
                 profile={profile}
-                isChecked={checkedReaderId === profile.id}
+                isChecked={checkedSourceId === profile.id}
                 isDefault={profile.id === defaultId}
-                isIngesting={isIngesting}
+                isLoading={isLoading}
                 isLive={isProfileLive?.(profile.id) ?? false}
                 sessionState={getSessionForProfile?.(profile.id)?.ioState}
-                onSelect={onSelectReader}
+                onSelect={onSelectSource}
                 usageInfo={profileUsage?.get(profile.id)}
                 isRealtime={false}
               />
@@ -469,7 +469,7 @@ export default function ReaderList({
               {isMultiBusMode && (
                 <span className={badgeSmallPurple}>
                   <GitMerge className={`${iconXs} inline mr-1`} />
-                  {checkedReaderIds.length} buses
+                  {checkedSourceIds.length} buses
                 </span>
               )}
             </div>
@@ -485,28 +485,28 @@ export default function ReaderList({
             {realtimeProfiles.map((profile) => {
               const canMultiSelect = allowMultiSelect && isMultiSourceCapable(profile);
               const isProfileChecked = canMultiSelect
-                ? checkedReaderIds.includes(profile.id)
-                : checkedReaderId === profile.id;
+                ? checkedSourceIds.includes(profile.id)
+                : checkedSourceId === profile.id;
               const disabledStatus = disabledProfiles?.get(profile.id);
               const isDisabledForTransmit = disabledStatus && !disabledStatus.canTransmit;
               const isDisabled = isDisabledForTransmit;
               const disabledReason = isDisabledForTransmit ? disabledStatus?.reason : undefined;
 
               // Handler: multi-source-capable profiles toggle, others select exclusively
-              const handleSelect = canMultiSelect && onToggleReader
-                ? () => onToggleReader(profile.id)
-                : onSelectReader;
+              const handleSelect = canMultiSelect && onToggleSource
+                ? () => onToggleSource(profile.id)
+                : onSelectSource;
 
               // Get usage info for this profile
               const usage = profileUsage?.get(profile.id);
 
               return (
                 <div key={profile.id}>
-                  <ReaderButton
+                  <SourceButton
                     profile={profile}
                     isChecked={isProfileChecked}
                     isDefault={false}
-                    isIngesting={isIngesting}
+                    isLoading={isLoading}
                     isLive={isProfileLive?.(profile.id) ?? false}
                     sessionState={getSessionForProfile?.(profile.id)?.ioState}
                     onSelect={handleSelect}
@@ -536,11 +536,11 @@ export default function ReaderList({
 }
 
 // Helper component for reader buttons
-function ReaderButton({
+function SourceButton({
   profile,
   isChecked,
   isDefault,
-  isIngesting,
+  isLoading,
   isLive,
   sessionState,
   onSelect,
@@ -554,10 +554,10 @@ function ReaderButton({
   profile: IOProfile;
   isChecked: boolean;
   isDefault: boolean;
-  isIngesting: boolean;
+  isLoading: boolean;
   isLive: boolean;
   sessionState?: string;
-  onSelect: (readerId: string | null) => void;
+  onSelect: (sourceId: string | null) => void;
   useCheckbox?: boolean;
   busNumber?: number;
   isDisabled?: boolean;
@@ -600,7 +600,7 @@ function ReaderButton({
       className={`w-full px-3 py-2 flex items-center gap-3 text-left rounded-lg transition-colors ${
         isDisabled
           ? "opacity-60 cursor-not-allowed border border-[color:var(--border-default)] bg-[var(--bg-surface)]"
-          : isIngesting
+          : isLoading
           ? "opacity-50 cursor-not-allowed"
           : useCheckbox && isChecked
           ? "bg-[var(--status-purple-bg)] border border-[color:var(--status-purple-border)] cursor-pointer"
@@ -616,7 +616,7 @@ function ReaderButton({
             : "bg-[var(--status-success-bg)]/50 border border-[color:var(--status-success-border)] hover:bg-[var(--status-success-bg)] cursor-pointer"
           : "hover:bg-[var(--hover-bg)] border border-transparent cursor-pointer"
       }`}
-      onClick={isDisabled || isIngesting ? undefined : () => onSelect(isChecked && !useCheckbox ? null : profile.id)}
+      onClick={isDisabled || isLoading ? undefined : () => onSelect(isChecked && !useCheckbox ? null : profile.id)}
       role={isDisabled ? undefined : "button"}
       tabIndex={isDisabled ? undefined : 0}
     >

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
 import { useSettings, getDisplayFrameIdFormat, getSaveFrameIdFormat } from "../../hooks/useSettings";
 import { useIOSessionManager, type SessionReconfigurationInfo } from '../../hooks/useIOSessionManager';
-import { useIOPickerHandlers } from '../../hooks/useIOPickerHandlers';
+import { useIOSourcePickerHandlers } from '../../hooks/useIOSourcePickerHandlers';
 import { useMenuSessionControl } from '../../hooks/useMenuSessionControl';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useDiscoveryStore, type FrameMessage, type PlaybackSpeed } from "../../stores/discoveryStore";
@@ -27,7 +27,7 @@ import SpeedPickerDialog from "../../dialogs/SpeedPickerDialog";
 import ExportFramesDialog, { type ExportDataMode } from "../../dialogs/ExportFramesDialog";
 import BookmarkEditorDialog from "../../dialogs/BookmarkEditorDialog";
 import SaveSelectionSetDialog from "../../dialogs/SaveSelectionSetDialog";
-import IoReaderPickerDialog from "../../dialogs/IoReaderPickerDialog";
+import IoSourcePickerDialog from "../../dialogs/IoSourcePickerDialog";
 import { useSelectionSets } from "../../hooks/useSelectionSets";
 import { isBufferProfileId } from "../../hooks/useIOSessionManager";
 import { useEffectiveBufferMetadata } from "../../hooks/useEffectiveBufferMetadata";
@@ -481,7 +481,7 @@ export default function Discovery() {
   }, [isBufferMode, bufferMode.enabled]);
 
   // Centralised IO picker handlers - ensures consistent behavior with other apps
-  const ioPickerProps = useIOPickerHandlers({
+  const ioPickerProps = useIOSourcePickerHandlers({
     manager,
     closeDialog: () => dialogs.ioReaderPicker.close(),
     onJoinSession: (_sessionId, sourceProfileIds) => {
@@ -511,7 +511,7 @@ export default function Discovery() {
       setSourceProfileId(profileId);
 
       // Sync framing config (watch mode only)
-      if (mode === "watch") {
+      if (mode === "connect") {
         if (options.framingEncoding && options.framingEncoding !== "raw") {
           const storeFramingConfig =
             options.framingEncoding === "slip"
@@ -1059,7 +1059,7 @@ export default function Discovery() {
         profileId={sourceProfileId || ioProfile}
       />
 
-      <IoReaderPickerDialog
+      <IoSourcePickerDialog
         isOpen={dialogs.ioReaderPicker.isOpen}
         onClose={() => dialogs.ioReaderPicker.close()}
         ioProfiles={settings?.io_profiles || []}
@@ -1071,8 +1071,8 @@ export default function Discovery() {
         onImport={setBufferMetadata}
         bufferMetadata={bufferMetadata}
         defaultDir={settings?.dump_dir}
-        ingestSpeed={playbackSpeed}
-        onIngestSpeedChange={(speed) => handlers.handleSpeedChange(speed)}
+        loadSpeed={playbackSpeed}
+        onLoadSpeedChange={(speed) => handlers.handleSpeedChange(speed)}
         allowMultiSelect={true}
       />
 

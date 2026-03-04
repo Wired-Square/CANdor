@@ -1,7 +1,7 @@
 // ui/src/components/FilterOptionsPanel.tsx
 //
 // Shared filter options panel used by:
-// - IoReaderPickerDialog (for capture-time filtering)
+// - IoSourcePickerDialog (for capture-time filtering)
 // - FilterDialog (for post-capture filtering)
 //
 // Supports two styling variants:

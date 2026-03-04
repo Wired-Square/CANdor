@@ -7,7 +7,7 @@ import { useCallback } from "react";
 import { localToUtc } from "../utils/timeFormat";
 import type { TimeRangeFavorite } from "../utils/favorites";
 import type { IOCapabilities } from "../api/io";
-import type { IngestOptions } from "./useIOSessionManager";
+import type { LoadOptions } from "./useIOSessionManager";
 
 export interface UseTimeHandlersParams {
   // Session actions
@@ -32,7 +32,7 @@ export interface UseTimeHandlersParams {
   // Manager method for jumping to bookmarks
   jumpToBookmark: (
     bookmark: TimeRangeFavorite,
-    options?: Omit<IngestOptions, "startTime" | "endTime" | "maxFrames">
+    options?: Omit<LoadOptions, "startTime" | "endTime" | "maxFrames">
   ) => Promise<void>;
 
   // Optional callbacks for app-specific side effects before the backend call

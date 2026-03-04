@@ -1,4 +1,4 @@
-// ui/src/dialogs/io-reader-picker/FramingOptions.tsx
+// ui/src/dialogs/io-source-picker/FramingOptions.tsx
 //
 // Framing configuration options for serial data sources.
 // Allows capturing both raw bytes and framed data simultaneously.
@@ -31,9 +31,9 @@ type Props = {
   /** All IO profiles (for multi-bus mode lookup) */
   ioProfiles?: IOProfile[];
   /** Selected profile IDs for multi-bus mode */
-  checkedReaderIds?: string[];
-  /** Whether ingesting is in progress */
-  isIngesting: boolean;
+  checkedSourceIds?: string[];
+  /** Whether loading is in progress */
+  isLoading: boolean;
   /** Current framing configuration */
   framingConfig: FramingConfig | null;
   /** Called when framing config changes */
@@ -89,14 +89,14 @@ function toFramingConfig(panelConfig: FramingPanelConfig | null): FramingConfig 
 export default function FramingOptions({
   checkedProfile,
   ioProfiles = [],
-  checkedReaderIds = [],
-  isIngesting,
+  checkedSourceIds = [],
+  isLoading,
   framingConfig,
   onFramingConfigChange,
   isBytesBufferSelected = false,
 }: Props) {
   // Check if any selected profile in multi-bus mode supports framing
-  const anyMultiBusProfileSupportsFraming = checkedReaderIds.some((id) => {
+  const anyMultiBusProfileSupportsFraming = checkedSourceIds.some((id) => {
     const profile = ioProfiles.find((p) => p.id === id);
     return supportsFraming(profile || null);
   });
@@ -105,8 +105,8 @@ export default function FramingOptions({
   // 1. A serial IO profile is selected (for capture with framing), OR
   // 2. Any profile in multi-bus selection supports framing, OR
   // 3. A bytes buffer is selected (to apply framing to existing bytes)
-  // Don't show while ingesting
-  const showFraming = (supportsFraming(checkedProfile) || anyMultiBusProfileSupportsFraming || isBytesBufferSelected) && !isIngesting;
+  // Don't show while loading
+  const showFraming = (supportsFraming(checkedProfile) || anyMultiBusProfileSupportsFraming || isBytesBufferSelected) && !isLoading;
   if (!showFraming) {
     return null;
   }

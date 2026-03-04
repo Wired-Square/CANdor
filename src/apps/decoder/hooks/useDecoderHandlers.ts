@@ -26,7 +26,7 @@ import type { PlaybackSpeed } from "../../../components/TimeController";
 import type { IOCapabilities } from "../../../api/io";
 import type { BufferMetadata } from "../../../api/buffer";
 import type { FrameDetail } from "../../../types/decoder";
-import type { IngestOptions as ManagerIngestOptions } from "../../../hooks/useIOSessionManager";
+import type { LoadOptions as ManagerLoadOptions } from "../../../hooks/useIOSessionManager";
 import type { TimeRangeFavorite } from "../../../utils/favorites";
 import type { SelectionSet } from "../../../utils/selectionSets";
 
@@ -80,8 +80,8 @@ export interface UseDecoderHandlersParams {
   // Manager session switching methods
   stopWatch: () => Promise<void>;
   selectProfile: (profileId: string | null) => void;
-  watchSingleSource: (profileId: string, options: ManagerIngestOptions) => Promise<void>;
-  jumpToBookmark: (bookmark: TimeRangeFavorite, options?: Omit<ManagerIngestOptions, "startTime" | "endTime" | "maxFrames">) => Promise<void>;
+  watchSingleSource: (profileId: string, options: ManagerLoadOptions) => Promise<void>;
+  jumpToBookmark: (bookmark: TimeRangeFavorite, options?: Omit<ManagerLoadOptions, "startTime" | "endTime" | "maxFrames">) => Promise<void>;
 
   // Dialog controls
   openSaveSelectionSet: () => void;
@@ -112,7 +112,7 @@ export type DecoderHandlers = DecoderSessionHandlers &
 
 export function useDecoderHandlers(params: UseDecoderHandlersParams): DecoderHandlers {
   // Session handlers (stop watch, IO profile change)
-  // Dialog handlers (start/stop ingest, join, skip) are now in useIOPickerHandlers
+  // Dialog handlers (start/stop load, join, skip) are now in useIOSourcePickerHandlers
   const sessionHandlers = useDecoderSessionHandlers({
     stopWatch: params.stopWatch,
     selectProfile: params.selectProfile,

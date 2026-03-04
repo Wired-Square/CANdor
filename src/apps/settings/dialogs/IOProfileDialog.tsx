@@ -12,7 +12,7 @@ import GsUsbDevicePicker from "../components/GsUsbDevicePicker";
 import LinuxCanSetupHelper from "../components/LinuxCanSetupHelper";
 import SecurePasswordField from "../components/SecurePasswordField";
 import IODeviceStatus, { type DeviceProbeState, type DeviceProbeResult } from "../components/IODeviceStatus";
-import { GvretBusConfig, type BusMappingWithProtocol } from "../../../dialogs/io-reader-picker";
+import { GvretBusConfig, type BusMappingWithProtocol } from "../../../dialogs/io-source-picker";
 import { Input, Select, FormField, PrimaryButton, SecondaryButton } from "../../../components/forms";
 import {
   h2,

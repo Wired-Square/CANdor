@@ -5,7 +5,7 @@ import { useSettings } from "../../hooks/useSettings";
 import { useGraphStore, type SignalValueEntry } from "../../stores/graphStore";
 import { useIOSessionManager } from "../../hooks/useIOSessionManager";
 import { useMenuSessionControl } from "../../hooks/useMenuSessionControl";
-import { useIOPickerHandlers } from "../../hooks/useIOPickerHandlers";
+import { useIOSourcePickerHandlers } from "../../hooks/useIOSourcePickerHandlers";
 import { useSessionStore } from "../../stores/sessionStore";
 import { useSettingsStore } from "../settings/stores/settingsStore";
 import { listCatalogs, type CatalogMetadata } from "../../api/catalog";
@@ -20,7 +20,7 @@ import GraphTopBar from "./views/GraphTopBar";
 import GraphGrid from "./views/GraphGrid";
 import CodeView from "../../components/CodeView";
 import CatalogPickerDialog from "../../dialogs/CatalogPickerDialog";
-import IoReaderPickerDialog from "../../dialogs/IoReaderPickerDialog";
+import IoSourcePickerDialog from "../../dialogs/IoSourcePickerDialog";
 import SignalPickerDialog from "./dialogs/SignalPickerDialog";
 import PanelConfigDialog from "./dialogs/PanelConfigDialog";
 import CandidateSignalsDialog from "./dialogs/CandidateSignalsDialog";
@@ -413,7 +413,7 @@ export default function Graph() {
   }, [sessionCatalogPath, sessionId, multiBusProfiles, sourceProfileId]);
 
   // Centralised IO picker handlers
-  const ioPickerProps = useIOPickerHandlers({
+  const ioPickerProps = useIOSourcePickerHandlers({
     manager,
     closeDialog: () => dialogs.ioReaderPicker.close(),
     mergeOptions: (options) => mergeSerialConfig(useGraphStore.getState().serialConfig, options),
@@ -559,7 +559,7 @@ export default function Graph() {
         title="Select Graph Catalog"
       />
 
-      <IoReaderPickerDialog
+      <IoSourcePickerDialog
         {...ioPickerProps}
         isOpen={dialogs.ioReaderPicker.isOpen}
         onClose={() => dialogs.ioReaderPicker.close()}

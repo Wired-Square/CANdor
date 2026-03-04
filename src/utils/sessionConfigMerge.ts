@@ -1,23 +1,23 @@
 // ui/src/utils/sessionConfigMerge.ts
 //
-// Shared utility for merging catalog config into IO session ingest options.
+// Shared utility for merging catalog config into IO session load options.
 // Used by Decoder, Graph, and any app that loads a catalog and starts a session.
 
-import type { IngestOptions as ManagerIngestOptions } from "../hooks/useIOSessionManager";
-import type { IngestOptions as DialogIngestOptions } from "../dialogs/IoReaderPickerDialog";
+import type { LoadOptions as ManagerLoadOptions } from "../hooks/useIOSessionManager";
+import type { LoadOptions as DialogLoadOptions } from "../dialogs/IoSourcePickerDialog";
 import type { SerialFrameConfig } from "./frameExport";
 
 /**
- * Merge serial frame config from a catalog into dialog ingest options,
- * producing ManagerIngestOptions suitable for watchSingleSource/watchMultiSource.
+ * Merge serial frame config from a catalog into dialog load options,
+ * producing ManagerLoadOptions suitable for watchSingleSource/watchMultiSource.
  *
  * Catalog config takes precedence for frame ID and source address extraction.
  * Dialog options take precedence for speed, time range, and max frames.
  */
 export function mergeSerialConfig(
   serialConfig: SerialFrameConfig | null,
-  options: DialogIngestOptions,
-): ManagerIngestOptions {
+  options: DialogLoadOptions,
+): ManagerLoadOptions {
   return {
     ...options,
     // Frame ID extraction from catalog
@@ -30,7 +30,7 @@ export function mergeSerialConfig(
     // Min frame length: dialog option takes precedence if set
     minFrameLength: options.minFrameLength ?? serialConfig?.min_frame_length,
     // Framing encoding: dialog option takes precedence if set
-    framingEncoding: options.framingEncoding ?? serialConfig?.encoding as ManagerIngestOptions["framingEncoding"],
+    framingEncoding: options.framingEncoding ?? serialConfig?.encoding as ManagerLoadOptions["framingEncoding"],
   };
 }
 
@@ -40,8 +40,8 @@ export function mergeSerialConfig(
  */
 export function mergeSerialConfigForWatch(
   serialConfig: SerialFrameConfig | null,
-  options: DialogIngestOptions,
-): ManagerIngestOptions {
+  options: DialogLoadOptions,
+): ManagerLoadOptions {
   return {
     ...mergeSerialConfig(serialConfig, options),
     emitRawBytes: true,

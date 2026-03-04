@@ -1,4 +1,4 @@
-// ui/src/dialogs/io-reader-picker/IngestOptions.tsx
+// ui/src/dialogs/io-source-picker/LoadOptions.tsx
 
 import { sectionHeader, caption, captionMuted } from "../../styles/typography";
 import { borderDivider, bgSurface } from "../../styles";
@@ -8,9 +8,9 @@ import TimeBoundsInput, { type TimeBounds } from "../../components/TimeBoundsInp
 import { SPEED_OPTIONS, CSV_EXTERNAL_ID, isRealtimeProfile } from "./utils";
 
 type Props = {
-  checkedReaderId: string | null;
+  checkedSourceId: string | null;
   checkedProfile: IOProfile | null;
-  isIngesting: boolean;
+  isLoading: boolean;
   // Time bounds (combined start/end/maxFrames/timezone)
   timeBounds: TimeBounds;
   onTimeBoundsChange: (bounds: TimeBounds) => void;
@@ -21,18 +21,18 @@ type Props = {
   profileBookmarks: TimeRangeFavorite[];
 };
 
-export default function IngestOptions({
-  checkedReaderId,
+export default function LoadOptions({
+  checkedSourceId,
   checkedProfile,
-  isIngesting,
+  isLoading,
   timeBounds,
   onTimeBoundsChange,
   selectedSpeed,
   onSpeedChange,
   profileBookmarks,
 }: Props) {
-  // Don't show options if no reader is checked, CSV is selected, or ingesting
-  if (!checkedReaderId || checkedReaderId === CSV_EXTERNAL_ID || isIngesting) {
+  // Don't show options if no source is checked, CSV is selected, or loading
+  if (!checkedSourceId || checkedSourceId === CSV_EXTERNAL_ID || isLoading) {
     return null;
   }
 
@@ -54,7 +54,7 @@ export default function IngestOptions({
           />
         )}
 
-        {/* Speed (for Watch mode, recorded sources only) */}
+        {/* Speed (for Connect mode, recorded sources only) */}
         {!isCheckedRealtime && (
           <div>
             <label className={`block ${caption} mb-1`}>

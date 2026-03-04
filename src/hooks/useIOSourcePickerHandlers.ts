@@ -1,15 +1,15 @@
-// ui/src/hooks/useIOPickerHandlers.ts
+// ui/src/hooks/useIOSourcePickerHandlers.ts
 //
-// Centralised hook for IO picker dialog handling.
+// Centralised hook for IO source picker dialog handling.
 // Provides consistent behavior across Decoder, Discovery, and other apps
-// that use IoReaderPickerDialog.
+// that use IoSourcePickerDialog.
 
 import { useCallback } from "react";
-import type { UseIOSessionManagerResult, IngestOptions as ManagerIngestOptions } from "./useIOSessionManager";
+import type { UseIOSessionManagerResult, LoadOptions as ManagerLoadOptions } from "./useIOSessionManager";
 import { withAppError } from "../utils/appError";
 
-/** Options passed from IoReaderPickerDialog */
-export interface DialogIngestOptions {
+/** Options passed from IoSourcePickerDialog */
+export interface DialogLoadOptions {
   speed: number;
   startTime?: string;
   endTime?: string;
@@ -26,36 +26,36 @@ export interface DialogIngestOptions {
   emitRawBytes?: boolean;
   busOverride?: number;
   busMappings?: Map<string, import("../api/io").BusMapping[]>;
-  perInterfaceFraming?: Map<string, import("../dialogs/io-reader-picker").InterfaceFramingConfig>;
+  perInterfaceFraming?: Map<string, import("../dialogs/io-source-picker").InterfaceFramingConfig>;
 }
 
 /** Configuration for the IO picker handlers hook */
-export interface UseIOPickerHandlersOptions {
+export interface UseIOSourcePickerHandlersOptions {
   /** The IO session manager result */
   manager: UseIOSessionManagerResult;
   /** Close the IO picker dialog */
   closeDialog: () => void;
   /** Optional callback to merge app-specific options (e.g., catalog serial config) */
-  mergeOptions?: (options: DialogIngestOptions) => ManagerIngestOptions;
+  mergeOptions?: (options: DialogLoadOptions) => ManagerLoadOptions;
   /** Optional callback when multi-bus mode is set */
   onMultiBusSet?: (profileIds: string[]) => void;
   /** Optional callback when joining a session */
   onJoinSession?: (sessionId: string, sourceProfileIds?: string[]) => void;
-  /** Callback before starting single-source watch or ingest (for app-specific setup like serial/framing config) */
-  onBeforeStart?: (profileId: string, options: DialogIngestOptions, mode: "watch" | "ingest") => void;
-  /** Callback before starting multi-source watch or ingest */
-  onBeforeMultiStart?: (profileIds: string[], options: DialogIngestOptions, mode: "watch" | "ingest") => void;
+  /** Callback before starting single-source connect or load (for app-specific setup like serial/framing config) */
+  onBeforeStart?: (profileId: string, options: DialogLoadOptions, mode: "connect" | "load") => void;
+  /** Callback before starting multi-source connect or load */
+  onBeforeMultiStart?: (profileIds: string[], options: DialogLoadOptions, mode: "connect" | "load") => void;
 }
 
-/** Props to pass to IoReaderPickerDialog */
-export interface IOPickerDialogProps {
-  isIngesting: boolean;
-  ingestProfileId: string | null;
-  ingestFrameCount: number;
-  ingestError: string | null;
-  onStartIngest: (profileId: string, closeDialog: boolean, options: DialogIngestOptions) => Promise<void>;
-  onStartMultiIngest: (profileIds: string[], closeDialog: boolean, options: DialogIngestOptions) => Promise<void>;
-  onStopIngest: () => Promise<void>;
+/** Props to pass to IoSourcePickerDialog */
+export interface IOSourcePickerDialogProps {
+  isLoading: boolean;
+  loadProfileId: string | null;
+  loadFrameCount: number;
+  loadError: string | null;
+  onStartLoad: (profileId: string, closeDialog: boolean, options: DialogLoadOptions) => Promise<void>;
+  onStartMultiLoad: (profileIds: string[], closeDialog: boolean, options: DialogLoadOptions) => Promise<void>;
+  onStopLoad: () => Promise<void>;
   onJoinSession: (sessionId: string, sourceProfileIds?: string[]) => Promise<void>;
   onSkip: () => Promise<void>;
   onSelectMultiple: (profileIds: string[]) => void;
@@ -63,10 +63,10 @@ export interface IOPickerDialogProps {
 }
 
 /**
- * Centralised hook for IO picker dialog handling.
- * Returns handlers and props that can be spread onto IoReaderPickerDialog.
+ * Centralised hook for IO source picker dialog handling.
+ * Returns handlers and props that can be spread onto IoSourcePickerDialog.
  */
-export function useIOPickerHandlers({
+export function useIOSourcePickerHandlers({
   manager,
   closeDialog,
   mergeOptions,
@@ -74,37 +74,37 @@ export function useIOPickerHandlers({
   onJoinSession: onJoinSessionCallback,
   onBeforeStart,
   onBeforeMultiStart,
-}: UseIOPickerHandlersOptions): IOPickerDialogProps {
+}: UseIOSourcePickerHandlersOptions): IOSourcePickerDialogProps {
   const {
     ioProfile,
     isStreaming,
     isBufferMode,
     watchFrameCount,
-    isIngesting,
-    ingestProfileId,
-    ingestFrameCount,
-    ingestError,
-    stopIngest,
+    isLoading,
+    loadProfileId,
+    loadFrameCount,
+    loadError,
+    stopLoad,
     stopWatch,
     watchSingleSource,
     watchMultiSource,
-    ingestSingleSource,
-    ingestMultiSource,
+    loadSingleSource,
+    loadMultiSource,
     joinSession,
     skipReader,
     selectMultipleProfiles,
     connectOnly,
   } = manager;
 
-  // Handle Watch/Ingest from IoReaderPickerDialog
-  const handleDialogStartIngest = useCallback(
-    async (profileId: string, closeDialogFlag: boolean, options: DialogIngestOptions) => {
-      const mode = closeDialogFlag ? "watch" : "ingest";
+  // Handle Connect/Load from IoSourcePickerDialog
+  const handleDialogStartLoad = useCallback(
+    async (profileId: string, closeDialogFlag: boolean, options: DialogLoadOptions) => {
+      const mode = closeDialogFlag ? "connect" : "load";
       const mergedOptions = mergeOptions ? mergeOptions(options) : options;
 
       await withAppError(
-        closeDialogFlag ? "Watch Error" : "Ingest Error",
-        closeDialogFlag ? "Failed to start watch session" : "Failed to start ingest",
+        closeDialogFlag ? "Connect Error" : "Load Error",
+        closeDialogFlag ? "Failed to start connect session" : "Failed to start load",
         async () => {
           onBeforeStart?.(profileId, options, mode);
 
@@ -112,23 +112,23 @@ export function useIOPickerHandlers({
             await watchSingleSource(profileId, mergedOptions);
             closeDialog();
           } else {
-            await ingestSingleSource(profileId, mergedOptions);
+            await loadSingleSource(profileId, mergedOptions);
           }
         }
       );
     },
-    [watchSingleSource, ingestSingleSource, closeDialog, mergeOptions, onBeforeStart]
+    [watchSingleSource, loadSingleSource, closeDialog, mergeOptions, onBeforeStart]
   );
 
-  // Handle multi-bus Watch/Ingest
-  const handleDialogStartMultiIngest = useCallback(
-    async (profileIds: string[], closeDialogFlag: boolean, options: DialogIngestOptions) => {
-      const mode = closeDialogFlag ? "watch" : "ingest";
+  // Handle multi-bus Connect/Load
+  const handleDialogStartMultiLoad = useCallback(
+    async (profileIds: string[], closeDialogFlag: boolean, options: DialogLoadOptions) => {
+      const mode = closeDialogFlag ? "connect" : "load";
       const mergedOptions = mergeOptions ? mergeOptions(options) : options;
 
       await withAppError(
-        closeDialogFlag ? "Multi-Bus Error" : "Multi-Bus Ingest Error",
-        closeDialogFlag ? "Failed to start multi-bus session" : "Failed to start multi-bus ingest",
+        closeDialogFlag ? "Multi-Bus Error" : "Multi-Bus Load Error",
+        closeDialogFlag ? "Failed to start multi-bus session" : "Failed to start multi-bus load",
         async () => {
           onBeforeMultiStart?.(profileIds, options, mode);
 
@@ -136,25 +136,25 @@ export function useIOPickerHandlers({
             await watchMultiSource(profileIds, mergedOptions);
             closeDialog();
           } else {
-            await ingestMultiSource(profileIds, mergedOptions);
+            await loadMultiSource(profileIds, mergedOptions);
           }
         }
       );
     },
-    [watchMultiSource, ingestMultiSource, closeDialog, mergeOptions, onBeforeMultiStart]
+    [watchMultiSource, loadMultiSource, closeDialog, mergeOptions, onBeforeMultiStart]
   );
 
-  // Handle stopping from the dialog - routes to streaming or ingest stop
+  // Handle stopping from the dialog - routes to streaming or load stop
   // Note: Uses isStreaming (session is running) rather than isWatching (app initiated watch)
   // because the app may be joined to a session another app started
-  const handleDialogStopIngest = useCallback(async () => {
-    if (isStreaming && !isIngesting) {
+  const handleDialogStopLoad = useCallback(async () => {
+    if (isStreaming && !isLoading) {
       await stopWatch();
       // The stream-ended event will handle buffer transition
-    } else if (isIngesting) {
-      await stopIngest();
+    } else if (isLoading) {
+      await stopLoad();
     }
-  }, [isStreaming, isIngesting, stopWatch, stopIngest]);
+  }, [isStreaming, isLoading, stopWatch, stopLoad]);
 
   // Handle joining an existing session
   const handleJoinSession = useCallback(
@@ -172,7 +172,7 @@ export function useIOPickerHandlers({
     closeDialog();
   }, [skipReader, closeDialog]);
 
-  // Handle connect-only from IoReaderPickerDialog (connect mode)
+  // Handle connect-only from IoSourcePickerDialog (connect mode)
   // Dialog handles closing itself after onConnect
   const handleConnect = useCallback(
     async (profileId: string) => {
@@ -194,15 +194,15 @@ export function useIOPickerHandlers({
     // State props for the dialog
     // Note: Uses isStreaming (session is running) rather than isWatching (app initiated watch)
     // so the dialog correctly shows streaming state even when joined to another app's session.
-    // Buffer sessions are excluded — buffer playback is not ingestion.
-    isIngesting: isIngesting || (isStreaming && !isBufferMode),
-    ingestProfileId: isIngesting ? ingestProfileId : (isStreaming && !isBufferMode ? ioProfile : null),
-    ingestFrameCount: isIngesting ? ingestFrameCount : watchFrameCount,
-    ingestError: ingestError ?? null,
+    // Buffer sessions are excluded — buffer playback is not loading.
+    isLoading: isLoading || (isStreaming && !isBufferMode),
+    loadProfileId: isLoading ? loadProfileId : (isStreaming && !isBufferMode ? ioProfile : null),
+    loadFrameCount: isLoading ? loadFrameCount : watchFrameCount,
+    loadError: loadError ?? null,
     // Handlers
-    onStartIngest: handleDialogStartIngest,
-    onStartMultiIngest: handleDialogStartMultiIngest,
-    onStopIngest: handleDialogStopIngest,
+    onStartLoad: handleDialogStartLoad,
+    onStartMultiLoad: handleDialogStartMultiLoad,
+    onStopLoad: handleDialogStopLoad,
     onJoinSession: handleJoinSession,
     onSkip: handleSkip,
     onSelectMultiple: handleSelectMultiple,
