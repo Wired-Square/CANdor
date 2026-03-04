@@ -1,6 +1,6 @@
 // ui/src/dialogs/io-reader-picker/ActionButtons.tsx
 
-import { Download, Eye, Loader2, Upload, Check, Plug, Play, GitMerge, Unplug, RotateCcw } from "lucide-react";
+import { Download, Loader2, Upload, Check, Plug, Play, GitMerge, Unplug, RotateCcw } from "lucide-react";
 import type { IOProfile } from "../../hooks/useSettings";
 import { CSV_EXTERNAL_ID, isRealtimeProfile } from "./utils";
 import { isBufferProfileId } from "../../hooks/useIOSessionManager";
@@ -103,7 +103,7 @@ export default function ActionButtons({
       {isIngesting ? (
         <div className="flex items-center justify-center gap-2 text-sm text-[color:var(--text-muted)]">
           <Loader2 className={`${iconMd} animate-spin`} />
-          <span>Ingesting from {ingestProfileId}...</span>
+          <span>Loading from {ingestProfileId}...</span>
         </div>
       ) : multiSelectMode ? (
         // Multi-select mode - show Multi-Bus Watch/Restart buttons
@@ -114,7 +114,7 @@ export default function ActionButtons({
               className={`flex-1 ${successButtonBase}`}
             >
               <GitMerge className={iconMd} />
-              <span>Watch</span>
+              <span>Connect</span>
             </button>
             {isMultiSourceLive && onMultiRestartClick && (
               <button
@@ -129,7 +129,7 @@ export default function ActionButtons({
           </div>
         ) : (
           <div className="text-center text-sm text-[color:var(--text-muted)] py-1">
-            Select real-time readers to watch
+            Select real-time sources to connect
           </div>
         )
       ) : isCsvSelected ? (
@@ -223,7 +223,7 @@ export default function ActionButtons({
               </button>
               {releaseButton}
             </div>
-            {/* Row 2: Watch/Ingest to reinitialize with new options */}
+            {/* Row 2: Connect/Load to reinitialize with new options */}
             <div className="flex gap-2">
               {!isCheckedRealtime && (
                 <button
@@ -231,20 +231,20 @@ export default function ActionButtons({
                   className={`flex-1 ${primaryButtonBase}`}
                 >
                   <Download className={iconMd} />
-                  <span>Ingest</span>
+                  <span>Load</span>
                 </button>
               )}
               <button
                 onClick={onWatchClick}
                 className={`flex-1 ${primaryButtonBase}`}
               >
-                <Eye className={iconMd} />
-                <span>Watch</span>
+                <Plug className={iconMd} />
+                <span>Connect</span>
               </button>
             </div>
           </div>
         ) : (
-          // No session exists - show Watch/Ingest to create new session
+          // No session exists - show Connect/Load to create new session
           <div className="flex gap-2">
             {!isCheckedRealtime && (
               <button
@@ -252,15 +252,15 @@ export default function ActionButtons({
                 className={`flex-1 ${successButtonBase}`}
               >
                 <Download className={iconMd} />
-                <span>Ingest</span>
+                <span>Load</span>
               </button>
             )}
             <button
               onClick={onWatchClick}
               className={`flex-1 ${primaryButtonBase}`}
             >
-              <Eye className={iconMd} />
-              <span>Watch</span>
+              <Plug className={iconMd} />
+              <span>Connect</span>
             </button>
             {releaseButton}
           </div>
@@ -283,11 +283,11 @@ export default function ActionButtons({
           onClick={onSkip}
           className={`w-full ${primaryButtonBase}`}
         >
-          <span>Continue Without Reader</span>
+          <span>Continue Without Source</span>
         </button>
       ) : (
         <div className="text-center text-sm text-[color:var(--text-muted)] py-1">
-          {mode === "connect" ? "Select a database to connect" : "Select an IO reader to continue"}
+          {mode === "connect" ? "Select a database to connect" : "Select a source to continue"}
         </div>
       )}
     </div>

@@ -883,7 +883,7 @@ export default function IOProfileDialog({
           {/* CSV File */}
           {profileForm.kind === "csv_file" && (
             <div className={`${spaceYDefault} border-t ${borderDefault} pt-6`}>
-              <h3 className={h3}>CSV File Reader</h3>
+              <h3 className={h3}>CSV File</h3>
 
               <FormField label="File Path (optional)" variant="default">
                 <Input

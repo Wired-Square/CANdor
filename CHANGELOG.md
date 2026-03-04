@@ -13,6 +13,10 @@ All notable changes to WireTAP will be documented in this file.
 - **iOS npm scripts**: Added `ios:init`, `ios:dev`, and `ios:build` scripts to `package.json`
 - **iOS version bumping**: `bump-version.js` now updates `CFBundleShortVersionString` and `CFBundleVersion` in `Info.plist` and `project.yml`
 
+### Changed
+
+- **Clearer session UI terminology**: Renamed user-facing labels throughout the IO source picker and session controls to be more intuitive. "IO Reader" and "Reader" are now "Source" (sources can both receive and transmit frames). The "Watch" action button is now "Connect" (creating a new session from a realtime device) and "Ingest" is now "Load" (loading recorded data). "Watch Speed" is now "Playback Speed". The top-bar button label "No reader" is now "No source".
+
 ### Fixed
 
 - **Modbus TCP probe**: Added missing `modbus_tcp` handler in `probe_device()` — selecting a Modbus TCP profile in the Data Source dialog no longer fails with "not a real-time device". The probe now checks TCP reachability (with timeout) and reports success or a meaningful connection error.

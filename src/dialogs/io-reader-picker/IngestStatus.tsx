@@ -34,7 +34,7 @@ export default function IngestStatus({
           <div className={`flex items-center ${gapSmall}`}>
             <Loader2 className={`${iconMd} animate-spin ${textSuccess}`} />
             <span className={`text-sm ${textSuccess}`}>
-              Ingesting: {ingestFrameCount.toLocaleString()} frames
+              Loading: {ingestFrameCount.toLocaleString()} frames
             </span>
           </div>
           <button

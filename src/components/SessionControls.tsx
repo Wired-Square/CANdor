@@ -86,7 +86,7 @@ export function ReaderButton({
     displayName = ioProfile;
     sessionIdInDisplayName = true; // Don't show sessionId separately
   } else {
-    displayName = "No reader";
+    displayName = "No source";
   }
 
   const isDefaultReader = !isBufferProfile && !showAsMultiBus && selectedProfile?.id === defaultReadProfileId;
@@ -147,7 +147,7 @@ export function ReaderButton({
         onClick={onClick}
         disabled={disabled}
         className={buttonBase}
-        title={showTooltip ? undefined : "Select IO Reader"}
+        title={showTooltip ? undefined : "Select source"}
       >
         {showAsMultiBus ? (
           <GitMerge className={`${iconSm} text-purple-500 flex-shrink-0`} />

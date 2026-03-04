@@ -214,7 +214,7 @@ export default function ReaderList({
     return (
       <div className={borderDivider}>
         <div className={`px-4 py-2 bg-[var(--bg-surface)] ${sectionHeader}`}>
-          IO Reader
+          Source
         </div>
         <div className="px-3 py-2">
           <button
@@ -528,7 +528,7 @@ export default function ReaderList({
 
       {readProfiles.length === 0 && !isCsvSelected && (
         <div className="p-4 text-sm text-[color:var(--text-muted)]">
-          No IO readers configured. Add one in Settings.
+          No sources configured. Add one in Settings.
         </div>
       )}
     </div>

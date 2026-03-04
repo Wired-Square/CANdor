@@ -58,7 +58,7 @@ export default function IngestOptions({
         {!isCheckedRealtime && (
           <div>
             <label className={`block ${caption} mb-1`}>
-              Watch Speed
+              Playback Speed
             </label>
             <select
               value={selectedSpeed}
@@ -72,7 +72,7 @@ export default function IngestOptions({
               ))}
             </select>
             <div className={`${captionMuted} mt-1`}>
-              Ingest always runs at max speed
+              Loading always runs at max speed
             </div>
           </div>
         )}
