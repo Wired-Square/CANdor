@@ -373,17 +373,6 @@ export default function Transmit() {
               )}
             </button>
             <button
-              onClick={() => handlers.handleTabClick("history")}
-              className={dataViewTabClass(activeTab === "history")}
-            >
-              History
-              {historyDbCount > 0 && (
-                <span className={`ml-1.5 text-xs ${tabCountColorClass("gray")}`}>
-                  ({historyDbCount.toLocaleString()})
-                </span>
-              )}
-            </button>
-            <button
               onClick={() => handlers.handleTabClick("replay")}
               className={dataViewTabClass(activeTab === "replay", activeReplays.size > 0)}
             >
@@ -391,6 +380,17 @@ export default function Transmit() {
               {activeReplays.size > 0 && (
                 <span className={`ml-1.5 text-xs ${tabCountColorClass("green")}`}>
                   ({activeReplays.size})
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => handlers.handleTabClick("history")}
+              className={dataViewTabClass(activeTab === "history")}
+            >
+              History
+              {historyDbCount > 0 && (
+                <span className={`ml-1.5 text-xs ${tabCountColorClass("gray")}`}>
+                  ({historyDbCount.toLocaleString()})
                 </span>
               )}
             </button>

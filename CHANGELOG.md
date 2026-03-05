@@ -16,6 +16,8 @@ All notable changes to WireTAP will be documented in this file.
 
 - **Tab navigation**: "Send to Transmit" now opens the Frame tab; "Add to Transmit Queue" opens the Queue tab.
 
+- **Replay tab reordered**: Moved the Replay tab between Queue and History in the Transmit panel so it is always visible in tab order
+
 - **Virtual CAN device**: New "Virtual CAN (Testing)" IO profile that generates synthetic CAN frames without real hardware. Configurable frame rate (Hz) and bus count (1/2/4/8 buses). Transmitted frames are looped back as received frames so the full transmit path can be exercised end-to-end. Available on all platforms including iOS.
 
 - **Discovery find bar (⌘F)**: Press Cmd/Ctrl+F or click the Search icon in the Discovery tab bar to open a find bar that searches across the entire frame buffer. Matches are highlighted in the table and you can navigate through them with Enter (next), Shift+Enter (previous), or the chevron buttons. Supports toggling between searching the ID column, the Data column, or both. Spaces in the search field are ignored so `1A 2B` and `1A2B` find the same frames. In buffer-first mode (CSV, recorded sources) the search runs as a SQLite query on the backend; in streaming/in-memory mode it scans the full in-memory frame buffer.
