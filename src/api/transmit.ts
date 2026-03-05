@@ -111,6 +111,21 @@ export interface RepeatStoppedEvent {
   reason: string;
 }
 
+/** Emitted once when a replay task begins */
+export interface ReplayStartedEvent {
+  replay_id: string;
+  total_frames: number;
+  speed: number;
+  loop_replay: boolean;
+}
+
+/** Emitted ~4× per second during a replay to report progress */
+export interface ReplayProgressEvent {
+  replay_id: string;
+  frames_sent: number;
+  total_frames: number;
+}
+
 // ============================================================================
 // Profile Query API
 // ============================================================================
@@ -312,4 +327,51 @@ export async function ioStopRepeatGroup(groupId: string): Promise<void> {
  */
 export async function ioStopAllGroupRepeats(): Promise<void> {
   return invoke("io_stop_all_group_repeats");
+}
+
+// ============================================================================
+// Replay API
+// ============================================================================
+
+/** A single frame with its original capture timestamp for time-accurate replay. */
+export interface ReplayFrame {
+  /** Original capture timestamp in microseconds since UNIX epoch. */
+  timestamp_us: number;
+  /** The CAN frame to transmit. */
+  frame: CanTransmitFrame;
+}
+
+/**
+ * Start a time-accurate replay of captured frames.
+ * Frames are transmitted in order with delays derived from original timestamps / speed.
+ * History events are emitted as `transmit-history`. A `repeat-stopped` event fires when done.
+ * @param sessionId - Target session to transmit on
+ * @param replayId - Unique ID for this replay (used to stop it)
+ * @param frames - Frames to replay, sorted by timestamp_us ascending
+ * @param speed - Playback speed multiplier (1.0 = realtime, 2.0 = twice as fast)
+ * @param loopReplay - Whether to loop indefinitely
+ */
+export async function ioStartReplay(
+  sessionId: string,
+  replayId: string,
+  frames: ReplayFrame[],
+  speed: number,
+  loopReplay: boolean
+): Promise<void> {
+  return invoke("io_start_replay", { sessionId, replayId, frames, speed, loopReplay });
+}
+
+/**
+ * Stop an active replay by ID.
+ * @param replayId - ID of the replay to stop
+ */
+export async function ioStopReplay(replayId: string): Promise<void> {
+  return invoke("io_stop_replay", { replayId });
+}
+
+/**
+ * Stop all active replays.
+ */
+export async function ioStopAllReplays(): Promise<void> {
+  return invoke("io_stop_all_replays");
 }

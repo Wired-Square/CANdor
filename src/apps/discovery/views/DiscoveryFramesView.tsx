@@ -1,6 +1,6 @@
 // ui/src/apps/discovery/views/DiscoveryFramesView.tsx
 import React, { useEffect, useRef, useMemo, memo, useState, useCallback } from "react";
-import { FileText, Hash, Network, Filter, Calculator, Snowflake, RefreshCw, Copy, ClipboardCopy, Target, Send, BarChart3, Bookmark, Search } from "lucide-react";
+import { FileText, Hash, Network, Filter, Calculator, Snowflake, RefreshCw, Copy, ClipboardCopy, Target, Send, BarChart3, Bookmark, Search, Play } from "lucide-react";
 import { iconSm, iconXs, flexRowGap2 } from "../../../styles/spacing";
 import { formatIsoUs, formatHumanUs, renderDeltaNode } from "../../../utils/timeFormat";
 import { useDiscoveryStore, TOOL_TAB_CONFIG } from "../../../stores/discoveryStore";
@@ -30,6 +30,8 @@ import { useTransmitStore } from "../../../stores/transmitStore";
 import { useGraphStore } from "../../../stores/graphStore";
 import { useSessionStore } from "../../../stores/sessionStore";
 import type { FrameRow } from "../components/FrameDataTable";
+import BulkAddToTransmitDialog from "../../../dialogs/BulkAddToTransmitDialog";
+import ReplayDialog from "../../../dialogs/ReplayDialog";
 
 const DEFAULT_SPEED_OPTIONS: PlaybackSpeed[] = [0.125, 0.25, 0.5, 1, 2, 10, 30, 60];
 
@@ -161,6 +163,10 @@ function DiscoveryFramesView({
   const [findResults, setFindResults] = useState<number[]>([]);   // filteredOffsets in the entire buffer
   const [findCurrentIndex, setFindCurrentIndex] = useState(-1);
   const [isFindSearching, setIsFindSearching] = useState(false);
+
+  // Bulk-add / replay dialog state
+  const [showBulkAddDialog, setShowBulkAddDialog] = useState(false);
+  const [showReplayDialog, setShowReplayDialog] = useState(false);
 
   // Context menu state (frame rows)
   const [contextMenu, setContextMenu] = useState<{
@@ -588,8 +594,19 @@ function DiscoveryFramesView({
             bus: frame.bus ?? 0,
           });
           if (sourceSessionId) useSessionStore.getState().requestSessionJoin("transmit", sourceSessionId);
+          useTransmitStore.getState().setActiveTab("frame");
           openPanel("transmit");
         },
+      },
+      {
+        label: 'Add to Transmit queue',
+        icon: <Send className={iconXs} />,
+        onClick: () => setShowBulkAddDialog(true),
+      },
+      {
+        label: 'Replay frames',
+        icon: <Play className={iconXs} />,
+        onClick: () => setShowReplayDialog(true),
       },
       {
         label: 'Graph',
@@ -1003,6 +1020,20 @@ function DiscoveryFramesView({
       >
         <Search className={iconSm} />
       </button>
+      <button
+        onClick={() => setShowBulkAddDialog(true)}
+        className={`p-1.5 rounded transition-colors ${bgSurface} ${textSecondary} hover:brightness-95`}
+        title="Add frames to Transmit queue"
+      >
+        <Send className={iconSm} />
+      </button>
+      <button
+        onClick={() => setShowReplayDialog(true)}
+        className={`p-1.5 rounded transition-colors ${bgSurface} ${textSecondary} hover:brightness-95`}
+        title="Replay frames"
+      >
+        <Play className={iconSm} />
+      </button>
       {isStreaming && (
         <>
           <button
@@ -1291,6 +1322,16 @@ function DiscoveryFramesView({
         onClose={closeHeaderContextMenu}
       />
     )}
+
+    <BulkAddToTransmitDialog
+      isOpen={showBulkAddDialog}
+      onClose={() => setShowBulkAddDialog(false)}
+    />
+    <ReplayDialog
+      isOpen={showReplayDialog}
+      onClose={() => setShowReplayDialog(false)}
+      bufferId={bufferId ?? null}
+    />
     </>
   );
 }

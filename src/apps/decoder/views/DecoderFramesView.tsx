@@ -1120,6 +1120,7 @@ export default function DecoderFramesView({
             bus: frame.bus ?? 0,
           });
           if (sourceSessionId) useSessionStore.getState().requestSessionJoin("transmit", sourceSessionId);
+          useTransmitStore.getState().setActiveTab("frame");
           openPanel("transmit");
         },
       },
@@ -1266,6 +1267,7 @@ export default function DecoderFramesView({
             bus: 0,
           });
           if (sourceSessionId) useSessionStore.getState().requestSessionJoin("transmit", sourceSessionId);
+          useTransmitStore.getState().setActiveTab("frame");
           openPanel("transmit");
         },
       },

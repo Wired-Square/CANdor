@@ -21,6 +21,7 @@ mod settings;
 mod smp_upgrade;
 mod store_manager;
 mod transmit;
+mod replay;
 
 use std::sync::Mutex;
 #[cfg(not(target_os = "ios"))]
@@ -1121,6 +1122,10 @@ pub fn run() {
             transmit::io_start_repeat_group,
             transmit::io_stop_repeat_group,
             transmit::io_stop_all_group_repeats,
+            // Time-accurate frame replay
+            replay::io_start_replay,
+            replay::io_stop_replay,
+            replay::io_stop_all_replays,
             // Centralised store API (replaces tauri-plugin-store for multi-window support)
             store_manager::store_get,
             store_manager::store_set,

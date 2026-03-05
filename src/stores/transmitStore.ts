@@ -9,6 +9,7 @@ import {
   type CanTransmitFrame,
   type TransmitProfile,
   type TransmitResult,
+  type ReplayFrame,
   getTransmitCapableProfiles,
   // IO session-based transmit
   ioTransmitCanFrame,
@@ -20,6 +21,9 @@ import {
   ioStartRepeatGroup,
   ioStopRepeatGroup,
   ioStopAllGroupRepeats,
+  // Replay
+  ioStartReplay,
+  ioStopReplay,
 } from "../api/transmit";
 
 import { useSessionStore } from "./sessionStore";
@@ -72,6 +76,15 @@ export interface TransmitQueueItem {
   groupName?: string;
 }
 
+/** Progress info for an active replay */
+export interface ReplayProgressInfo {
+  totalFrames: number;
+  framesSent: number;
+  speed: number;
+  loopReplay: boolean;
+  profileName: string;
+}
+
 /** History entry for transmitted packets */
 export interface TransmitHistoryItem {
   /** Unique ID */
@@ -83,7 +96,7 @@ export interface TransmitHistoryItem {
   /** Display name for the profile */
   profileName: string;
   /** Type of transmission */
-  type: "can" | "serial";
+  type: "can" | "serial" | "replay";
   /** CAN frame (if type is 'can') */
   frame?: CanTransmitFrame;
   /** Serial bytes (if type is 'serial') */
@@ -92,6 +105,16 @@ export interface TransmitHistoryItem {
   success: boolean;
   /** Error message if failed */
   error?: string;
+  /** Frames sent during replay (if type is 'replay') */
+  replayFramesSent?: number;
+  /** Total frames in replay (if type is 'replay') */
+  replayTotalFrames?: number;
+  /** Playback speed (if type is 'replay') */
+  replaySpeed?: number;
+  /** Whether this is the start entry (true) vs the end entry (false/undefined) */
+  replayStarted?: boolean;
+  /** Whether the replay was set to loop */
+  replayLoopReplay?: boolean;
 }
 
 // IOSessionConnection type removed - now using sessionStore for session management
@@ -193,6 +216,8 @@ export interface TransmitState {
   // Queue Actions
   /** Add current CAN frame to queue */
   addCanToQueue: () => void;
+  /** Add multiple CAN frames to queue (bulk, from Discovery) */
+  addCanFramesBulk: (frames: Array<{ frame_id: number; bytes: number[]; bus: number; is_extended: boolean; dlc: number }>, profileId: string, profileName: string, intervalMs?: number, groupName?: string) => void;
   /** Add current serial bytes to queue */
   addSerialToQueue: () => void;
   /** Remove item from queue */
@@ -231,6 +256,22 @@ export interface TransmitState {
   stopAllGroupRepeats: () => Promise<void>;
   /** Check if a group is currently repeating */
   isGroupRepeating: (groupName: string) => boolean;
+
+  // Replay Actions
+  /** Active replay IDs */
+  activeReplays: Set<string>;
+  /** Progress info per active replay */
+  replayProgress: Map<string, ReplayProgressInfo>;
+  /** Start a time-accurate frame replay */
+  startReplay: (sessionId: string, replayId: string, frames: ReplayFrame[], speed: number, loop: boolean) => Promise<void>;
+  /** Stop a specific replay */
+  stopReplay: (replayId: string) => Promise<void>;
+  /** Called by `replay-started` event — records metadata for the progress banner */
+  markReplayStarted: (replayId: string, totalFrames: number, speed: number, loopReplay: boolean) => void;
+  /** Called by `replay-progress` event — updates frame count in the banner */
+  updateReplayProgress: (replayId: string, framesSent: number) => void;
+  /** Mark a replay as stopped (called by backend `repeat-stopped` event); adds a summary history entry */
+  markReplayStopped: (replayId: string, reason?: string) => void;
 
   // History Actions
   /** Clear history */
@@ -272,6 +313,8 @@ export const useTransmitStore = create<TransmitState>((set, get) => ({
   queue: [],
   history: [],
   activeGroups: new Set(),
+  activeReplays: new Set(),
+  replayProgress: new Map(),
   activeTab: "frame",
   isLoading: false,
   error: null,
@@ -465,6 +508,31 @@ export const useTransmitStore = create<TransmitState>((set, get) => ({
 
     set({ queue: [...state.queue, item] });
     useSessionStore.getState().setHasQueuedMessages(session.profileId, true);
+  },
+
+  addCanFramesBulk: (frames, profileId, profileName, intervalMs, groupName) => {
+    const state = get();
+    const newItems: TransmitQueueItem[] = frames.map((f) => ({
+      id: `queue-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      profileId,
+      profileName,
+      type: "can" as const,
+      canFrame: {
+        frame_id: f.frame_id,
+        data: f.bytes.slice(0, f.dlc),
+        bus: f.bus,
+        is_extended: f.is_extended,
+        is_fd: false,
+        is_brs: false,
+        is_rtr: false,
+      },
+      repeatIntervalMs: intervalMs ?? state.queueRepeatIntervalMs,
+      isRepeating: false,
+      enabled: true,
+      groupName: groupName || undefined,
+    }));
+    set({ queue: [...state.queue, ...newItems] });
+    useSessionStore.getState().setHasQueuedMessages(profileId, true);
   },
 
   addSerialToQueue: () => {
@@ -908,6 +976,115 @@ export const useTransmitStore = create<TransmitState>((set, get) => ({
     } catch (e) {
       set({ error: String(e) });
     }
+  },
+
+  // Replay Actions
+  startReplay: async (sessionId, replayId, frames, speed, loop) => {
+    const { sessions } = useSessionStore.getState();
+    const session = sessions[sessionId];
+    const profileName = session?.profileName ?? "Unknown";
+    try {
+      await ioStartReplay(sessionId, replayId, frames, speed, loop);
+      set((state) => {
+        const nextProgress = new Map(state.replayProgress);
+        nextProgress.set(replayId, { totalFrames: frames.length, framesSent: 0, speed, loopReplay: loop, profileName });
+        // Add a "started" history entry
+        const startedItem: TransmitHistoryItem = {
+          id: `replay-start-${replayId}`,
+          timestamp_us: Date.now() * 1000,
+          profileId: replayId,
+          profileName,
+          type: "replay",
+          success: true,
+          replayFramesSent: 0,
+          replayTotalFrames: frames.length,
+          replaySpeed: speed,
+          replayStarted: true,
+          replayLoopReplay: loop,
+        };
+        const maxHistory = useSettingsStore.getState().buffers.transmitMaxHistory;
+        const history = [startedItem, ...state.history].slice(0, maxHistory);
+        return {
+          activeReplays: new Set([...state.activeReplays, replayId]),
+          replayProgress: nextProgress,
+          history,
+        };
+      });
+    } catch (e) {
+      set({ error: String(e) });
+    }
+  },
+
+  stopReplay: async (replayId) => {
+    try {
+      await ioStopReplay(replayId);
+      // Don't clear replayProgress here — markReplayStopped will handle it
+      // when the backend fires the repeat-stopped event
+      set((state) => {
+        const nextReplays = new Set(state.activeReplays);
+        nextReplays.delete(replayId);
+        return { activeReplays: nextReplays };
+      });
+    } catch (e) {
+      set({ error: String(e) });
+    }
+  },
+
+  markReplayStarted: (replayId, totalFrames, speed, loopReplay) => {
+    set((state) => {
+      const existing = state.replayProgress.get(replayId);
+      const next = new Map(state.replayProgress);
+      next.set(replayId, { totalFrames, framesSent: existing?.framesSent ?? 0, speed, loopReplay, profileName: existing?.profileName ?? "" });
+      return { replayProgress: next };
+    });
+  },
+
+  updateReplayProgress: (replayId, framesSent) => {
+    set((state) => {
+      const existing = state.replayProgress.get(replayId);
+      if (!existing) return {};
+      const next = new Map(state.replayProgress);
+      next.set(replayId, { ...existing, framesSent });
+      return { replayProgress: next };
+    });
+  },
+
+  markReplayStopped: (replayId, reason) => {
+    set((state) => {
+      const info = state.replayProgress.get(replayId);
+      const nextReplays = new Set(state.activeReplays);
+      nextReplays.delete(replayId);
+      const nextProgress = new Map(state.replayProgress);
+      nextProgress.delete(replayId);
+
+      if (!info) {
+        return { activeReplays: nextReplays, replayProgress: nextProgress };
+      }
+
+      const completed = reason?.startsWith("Replay complete") ?? false;
+      const stoppedByUser = reason?.startsWith("Replay stopped") ?? false;
+      const success = completed || stoppedByUser;
+      // For completed non-loop: use totalFrames (progress may be stale). For all other cases: use last known framesSent.
+      const framesSent = completed && !info.loopReplay ? info.totalFrames : info.framesSent;
+      const summaryItem: TransmitHistoryItem = {
+        id: `replay-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        timestamp_us: Date.now() * 1000,
+        profileId: replayId,
+        profileName: info.profileName,
+        type: "replay",
+        success,
+        replayFramesSent: framesSent,
+        replayTotalFrames: info.totalFrames,
+        replaySpeed: info.speed,
+        replayLoopReplay: info.loopReplay,
+        error: success ? undefined : reason,
+      };
+
+      const maxHistory = useSettingsStore.getState().buffers.transmitMaxHistory;
+      const history = [summaryItem, ...state.history].slice(0, maxHistory);
+
+      return { activeReplays: nextReplays, replayProgress: nextProgress, history };
+    });
   },
 
   // History Actions

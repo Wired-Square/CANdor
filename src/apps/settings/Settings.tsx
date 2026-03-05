@@ -274,7 +274,7 @@ export default function Settings() {
   return (
     <AppLayout
       topBar={
-        <AppTopBar icon={Cog} iconColour="text-[color:var(--accent-warning)]" />
+        <AppTopBar icon={Cog} iconColour="text-slate-400" />
       }
     >
       {/* Sidebar + Content in bubble */}

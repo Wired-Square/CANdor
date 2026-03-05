@@ -10,6 +10,8 @@ import type {
   TransmitHistoryEvent,
   SerialTransmitHistoryEvent,
   RepeatStoppedEvent,
+  ReplayStartedEvent,
+  ReplayProgressEvent,
 } from "../../../api/transmit";
 
 interface UseTransmitHistorySubscriptionParams {
@@ -30,8 +32,28 @@ export function useTransmitHistorySubscription({
 }: UseTransmitHistorySubscriptionParams): void {
   const addHistoryItem = useTransmitStore((s) => s.addHistoryItem);
   const markRepeatStopped = useTransmitStore((s) => s.markRepeatStopped);
+  const markReplayStopped = useTransmitStore((s) => s.markReplayStopped);
+  const markReplayStarted = useTransmitStore((s) => s.markReplayStarted);
+  const updateReplayProgress = useTransmitStore((s) => s.updateReplayProgress);
 
   useEffect(() => {
+    // Replay lifecycle events
+    const unlistenReplayStarted = listen<ReplayStartedEvent>(
+      "replay-started",
+      (event) => {
+        const { replay_id, total_frames, speed, loop_replay } = event.payload;
+        markReplayStarted(replay_id, total_frames, speed, loop_replay);
+      }
+    );
+
+    const unlistenReplayProgress = listen<ReplayProgressEvent>(
+      "replay-progress",
+      (event) => {
+        const { replay_id, frames_sent } = event.payload;
+        updateReplayProgress(replay_id, frames_sent);
+      }
+    );
+
     // CAN transmit history events
     const unlistenCan = listen<TransmitHistoryEvent>(
       "transmit-history",
@@ -66,7 +88,7 @@ export function useTransmitHistorySubscription({
       }
     );
 
-    // Repeat stopped events (due to permanent error)
+    // Repeat stopped events (due to permanent error or completion)
     const unlistenStopped = listen<RepeatStoppedEvent>(
       "repeat-stopped",
       (event) => {
@@ -74,14 +96,18 @@ export function useTransmitHistorySubscription({
         console.warn(
           `[Transmit] Repeat stopped for ${data.queue_id}: ${data.reason}`
         );
+        // May be a queue repeat OR a replay — call both handlers (no-op if not applicable)
         markRepeatStopped(data.queue_id);
+        markReplayStopped(data.queue_id, data.reason);
       }
     );
 
     return () => {
+      unlistenReplayStarted.then((fn) => fn());
+      unlistenReplayProgress.then((fn) => fn());
       unlistenCan.then((fn) => fn());
       unlistenSerial.then((fn) => fn());
       unlistenStopped.then((fn) => fn());
     };
-  }, [addHistoryItem, markRepeatStopped, profileName]);
+  }, [addHistoryItem, markRepeatStopped, markReplayStopped, markReplayStarted, updateReplayProgress, profileName]);
 }

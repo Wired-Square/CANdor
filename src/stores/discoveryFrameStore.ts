@@ -28,6 +28,22 @@ export function getDiscoveryFrameBuffer(): FrameMessage[] {
   return _frameBuffer;
 }
 
+export type LastFrameData = {
+  bytes: number[];
+  bus: number;
+  is_extended: boolean;
+  dlc: number;
+};
+
+// Last observed frame data per frame ID — updated on every flush (last-writer-wins).
+// Used by bulk-add to Transmit queue so we don't need to scan the full buffer at click time.
+let _lastFrameDataMap: Map<number, LastFrameData> = new Map();
+
+/** Direct access to the last-seen frame data map. Read-only. */
+export function getLastFrameDataMap(): Map<number, LastFrameData> {
+  return _lastFrameDataMap;
+}
+
 export type FrameInfo = {
   len: number;
   isExtended?: boolean;
@@ -134,6 +150,16 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
           _frameBuffer = _frameBuffer.slice(-maxBuffer);
         }
 
+        // Keep last-seen data per frame ID (last-writer-wins, no allocation overhead)
+        for (const f of framesToProcess) {
+          _lastFrameDataMap.set(f.frame_id, {
+            bytes: f.bytes,
+            bus: f.bus ?? 0,
+            is_extended: f.is_extended ?? false,
+            dlc: f.dlc,
+          });
+        }
+
         const stateUpdate: Partial<DiscoveryFrameState> = {
           frameVersion: get().renderFrozen ? frameVersion : frameVersion + 1,
         };
@@ -217,6 +243,7 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
   clearBuffer: () => {
     pendingFrames = [];
     _frameBuffer = [];
+    _lastFrameDataMap = new Map();
     if (flushTimeout !== null) {
       clearTimeout(flushTimeout);
       flushTimeout = null;
@@ -235,6 +262,7 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
   clearAll: () => {
     pendingFrames = [];
     _frameBuffer = [];
+    _lastFrameDataMap = new Map();
     if (flushTimeout !== null) {
       clearTimeout(flushTimeout);
       flushTimeout = null;
@@ -263,8 +291,16 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
     const nextSeenIds = new Set<number>();
     const nextFrameInfoMap = new Map<number, FrameInfo>();
     const nextSelectedFrames = new Set<number>();
+    _lastFrameDataMap = new Map();
 
     for (const f of frames) {
+      // Rebuild last-seen data map (last-writer-wins as we iterate forward)
+      _lastFrameDataMap.set(f.frame_id, {
+        bytes: f.bytes,
+        bus: f.bus ?? 0,
+        is_extended: f.is_extended ?? false,
+        dlc: f.dlc,
+      });
       if (!nextSeenIds.has(f.frame_id)) {
         nextSeenIds.add(f.frame_id);
         if (activeSelectionSetSelectedIds) {

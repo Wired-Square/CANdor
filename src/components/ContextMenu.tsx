@@ -3,7 +3,7 @@
 // Reusable context menu component.
 // Renders a positioned dropdown at mouse coordinates with item actions.
 
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Check } from 'lucide-react';
 import { bgSurface, borderDefault, textPrimary } from '../styles';
 import { iconXs } from '../styles/spacing';
@@ -29,6 +29,21 @@ interface ContextMenuProps {
 
 export default function ContextMenu({ items, position, onClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const [adjustedPos, setAdjustedPos] = useState(position);
+
+  // Clamp to viewport after render so the menu never overflows edges
+  useLayoutEffect(() => {
+    const el = menuRef.current;
+    if (!el) return;
+    const { offsetWidth: w, offsetHeight: h } = el;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const MARGIN = 8;
+    setAdjustedPos({
+      x: Math.min(position.x, vw - w - MARGIN),
+      y: Math.min(position.y, vh - h - MARGIN),
+    });
+  }, [position]);
 
   // Close on outside click
   useEffect(() => {
@@ -54,7 +69,7 @@ export default function ContextMenu({ items, position, onClose }: ContextMenuPro
     <div
       ref={menuRef}
       className={`fixed py-1 min-w-[160px] ${bgSurface} border ${borderDefault} ${textPrimary} rounded-lg shadow-xl z-50`}
-      style={{ left: position.x, top: position.y }}
+      style={{ left: adjustedPos.x, top: adjustedPos.y }}
     >
       {items.map((item, idx) => {
         if (item.separator) {

@@ -3,7 +3,7 @@
 // Transmitted packet history view.
 
 import React, { useCallback, useMemo } from "react";
-import { Trash2, Check, X, Download } from "lucide-react";
+import { Trash2, Check, X, Download, StopCircle, Play } from "lucide-react";
 import { useTransmitStore } from "../../../stores/transmitStore";
 import type { BusSourceInfo } from "../../../stores/sessionStore";
 import { useSettings } from "../../../hooks/useSettings";
@@ -31,9 +31,12 @@ export default function TransmitHistoryView({ outputBusToSource }: TransmitHisto
 
   // Store selectors
   const history = useTransmitStore((s) => s.history);
+  const activeReplays = useTransmitStore((s) => s.activeReplays);
+  const replayProgress = useTransmitStore((s) => s.replayProgress);
 
   // Store actions
   const clearHistory = useTransmitStore((s) => s.clearHistory);
+  const stopReplay = useTransmitStore((s) => s.stopReplay);
 
   // Get timestamp format from settings
   const timestampFormat = settings?.display_time_format ?? "human";
@@ -161,22 +164,68 @@ export default function TransmitHistoryView({ outputBusToSource }: TransmitHisto
     return { total, success, failed };
   }, [history]);
 
-  // Empty state
-  if (history.length === 0) {
-    return (
-      <div className={emptyStateContainer}>
-        <div className={emptyStateText}>
-          <p className={emptyStateHeading}>No History</p>
-          <p className={emptyStateDescription}>
-            Transmitted packets will appear here.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="flex flex-col h-full">
+      {/* Active replay banners */}
+      {replayProgress.size > 0 && (
+        <div className={`border-b ${borderDataView}`}>
+          {[...replayProgress.entries()].map(([replayId, info]) => {
+            const pct = info.totalFrames > 0
+              ? Math.round((info.framesSent / info.totalFrames) * 100)
+              : 0;
+            return (
+              <div
+                key={replayId}
+                className={`flex items-center gap-3 px-4 py-2 ${bgDataToolbar}`}
+              >
+                <Play size={12} className="text-blue-400 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className={`text-xs ${textDataSecondary}`}>
+                      Replaying{info.loopReplay ? " (loop)" : ""}
+                      <span className="ml-1.5 font-mono">
+                        {info.framesSent} / {info.totalFrames}
+                      </span>
+                      <span className="ml-1.5 text-[color:var(--text-secondary)]">
+                        {info.speed}×
+                      </span>
+                    </span>
+                    <span className={`text-xs font-mono ${textDataSecondary}`}>{pct}%</span>
+                  </div>
+                  <div className={`h-1 rounded-full bg-[var(--bg-surface)] overflow-hidden`}>
+                    <div
+                      className="h-full bg-blue-500 transition-all duration-200"
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                </div>
+                <button
+                  onClick={() => stopReplay(replayId)}
+                  className="shrink-0 flex items-center gap-1 px-2 py-0.5 text-xs rounded border border-red-500/40 bg-red-600/15 text-red-400 hover:bg-red-600/25 transition-colors"
+                  title="Stop this replay"
+                >
+                  <StopCircle size={11} />
+                  Stop
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Empty state (no history yet) */}
+      {history.length === 0 && (
+        <div className={emptyStateContainer}>
+          <div className={emptyStateText}>
+            <p className={emptyStateHeading}>No History</p>
+            <p className={emptyStateDescription}>
+              Transmitted packets will appear here.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {history.length === 0 ? null : (<>
       {/* Toolbar */}
       <div
         className={`flex items-center gap-3 px-4 py-2 ${bgDataToolbar} border-b ${borderDataView}`}
@@ -191,6 +240,18 @@ export default function TransmitHistoryView({ outputBusToSource }: TransmitHisto
         </span>
 
         <div className="flex-1" />
+
+        {/* Stop active replays */}
+        {activeReplays.size > 0 && (
+          <button
+            onClick={() => activeReplays.forEach((id) => stopReplay(id))}
+            className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded border border-red-500/50 bg-red-600/20 text-red-400 hover:bg-red-600/30 transition-colors"
+            title="Stop all active replays"
+          >
+            <StopCircle size={13} />
+            Stop Replay{activeReplays.size > 1 ? `s (${activeReplays.size})` : ""}
+          </button>
+        )}
 
         <button
           onClick={handleExport}
@@ -228,14 +289,70 @@ export default function TransmitHistoryView({ outputBusToSource }: TransmitHisto
           </thead>
           <tbody>
             {history.map((item, index) => {
-              const formatted = formatHistoryItem(item);
-              if (!formatted) return null;
-
               // Get previous timestamp for delta-last (history is newest-first)
               // So the "previous" in chronological order is the next item in the array
               const prevTimestampUs = index < history.length - 1
                 ? history[index + 1].timestamp_us
                 : null;
+
+              // Replay row (started or summary)
+              if (item.type === "replay") {
+                const framesSent = item.replayFramesSent ?? 0;
+                const totalFrames = item.replayTotalFrames ?? 0;
+                const speed = item.replaySpeed ?? 1;
+                const isLoop = item.replayLoopReplay ?? false;
+
+                let frameInfo: string;
+                if (item.replayStarted) {
+                  frameInfo = isLoop
+                    ? `${totalFrames} frames/pass · ${speed}× · Loop`
+                    : `${totalFrames} frames · ${speed}×`;
+                } else if (isLoop) {
+                  frameInfo = `${framesSent} frames · ${speed}× · Loop`;
+                } else if (item.success) {
+                  frameInfo = `${totalFrames} frames · ${speed}×`;
+                } else {
+                  frameInfo = `${framesSent} / ${totalFrames} frames · ${speed}×`;
+                }
+
+                return (
+                  <tr key={item.id} className={`border-b ${borderDataView} ${hoverDataRow}`}>
+                    <td className="px-4 py-2">
+                      {item.replayStarted ? (
+                        <Play size={14} className="text-teal-400" />
+                      ) : item.success ? (
+                        <Check size={14} className="text-green-400" />
+                      ) : (
+                        <X size={14} className="text-red-400" />
+                      )}
+                    </td>
+                    <td className="px-4 py-2">
+                      <span className="font-mono text-gray-400 text-xs">
+                        {formatTimestamp(item.timestamp_us, prevTimestampUs)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2">
+                      <span className={`${textDataSecondary} text-xs truncate max-w-[120px] block`}>
+                        {item.profileName}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2">
+                      <span className="text-xs px-1.5 py-0.5 rounded bg-teal-600/30 text-teal-400">
+                        Replay
+                      </span>
+                    </td>
+                    <td className="px-4 py-2">
+                      <span className="font-mono text-gray-400 text-xs">{frameInfo}</span>
+                    </td>
+                    <td className="px-4 py-2">
+                      {item.error && <span className="text-red-400 text-xs">{item.error}</span>}
+                    </td>
+                  </tr>
+                );
+              }
+
+              const formatted = formatHistoryItem(item);
+              if (!formatted) return null;
 
               return (
                 <tr
@@ -315,6 +432,7 @@ export default function TransmitHistoryView({ outputBusToSource }: TransmitHisto
           </tbody>
         </table>
       </div>
+    </>)}
     </div>
   );
 }

@@ -1189,9 +1189,6 @@ pub fn emit_frames(
     session_id: &str,
     frames: Vec<FrameMessage>,
 ) {
-    // Tap into MITM router (non-blocking: uses try_lock + try_send, never blocks emit path)
-    crate::router::route_frames_to_routers(session_id, &frames);
-
     let active_listeners = get_active_listeners_sync(session_id);
     let payload = FrameBatchPayload {
         frames,

@@ -6,6 +6,12 @@ All notable changes to WireTAP will be documented in this file.
 
 ### Added
 
+- **Bulk add to Transmit queue**: Select any range of frame IDs in Discovery (using the hex Min/Max filter), choose a repeat interval and optional group name, and click "Add to Queue" to enqueue all matching frame IDs in the Transmit panel. Uses the last-seen byte values from the live capture. Accessible via the Send toolbar button or the right-click context menu in Discovery.
+
+- **Frame replay with timing**: Replay a range of frames from the Discovery buffer directly to a transmit-capable session, preserving original inter-frame timing. Configurable speed multiplier (0.25× – 10×), optional loop, per-frame or overridden target bus. Progress is shown in the Transmit History tab. Accessible via the Play toolbar button or context menu in Discovery.
+
+- **Tab navigation**: "Send to Transmit" now opens the Frame tab; "Add to Transmit Queue" opens the Queue tab.
+
 - **Virtual CAN device**: New "Virtual CAN (Testing)" IO profile that generates synthetic CAN frames without real hardware. Configurable frame rate (Hz) and bus count (1/2/4/8 buses). Transmitted frames are looped back as received frames so the full transmit path can be exercised end-to-end. Available on all platforms including iOS.
 
 - **Discovery find bar (⌘F)**: Press Cmd/Ctrl+F or click the Search icon in the Discovery tab bar to open a find bar that searches across the entire frame buffer. Matches are highlighted in the table and you can navigate through them with Enter (next), Shift+Enter (previous), or the chevron buttons. Supports toggling between searching the ID column, the Data column, or both. Spaces in the search field are ignored so `1A 2B` and `1A2B` find the same frames. In buffer-first mode (CSV, recorded sources) the search runs as a SQLite query on the backend; in streaming/in-memory mode it scans the full in-memory frame buffer.
