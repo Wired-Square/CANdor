@@ -1094,6 +1094,45 @@ export default function IOProfileDialog({
                 Does not participate in bus arbitration. Ideal for passive monitoring.
               </p>
 
+              {/* CAN FD Options (ELMUE firmware extension) */}
+              <div className={`border-t ${borderDefault} pt-4 mt-2`}>
+                <div className={flexRowGap2}>
+                  <input
+                    type="checkbox"
+                    id="slcan_enable_fd"
+                    checked={profileForm.connection.enable_fd === true}
+                    onChange={(e) => onUpdateConnectionField("enable_fd", e.target.checked)}
+                    className="w-4 h-4 text-blue-600 bg-[var(--bg-primary)] border-[color:var(--border-default)] rounded focus:ring-blue-500"
+                  />
+                  <label htmlFor="slcan_enable_fd" className="text-sm text-[color:var(--text-secondary)]">
+                    Enable CAN FD
+                  </label>
+                </div>
+                <p className="text-xs text-[color:var(--text-muted)] mt-1 ml-6">
+                  Enables CAN Flexible Data-rate for higher throughput and larger payloads (up to 64 bytes).
+                  Requires ELMUE CANable firmware with CAN FD support.
+                </p>
+
+                {profileForm.connection.enable_fd && (
+                  <div className="mt-3 space-y-3 pl-6">
+                    <FormField label="Data Phase Bitrate" variant="default">
+                      <Select
+                        variant="default"
+                        value={profileForm.connection.data_bitrate || "2000000"}
+                        onChange={(e) => onUpdateConnectionField("data_bitrate", e.target.value)}
+                      >
+                        <option value="500000">500 Kbit/s (Y0)</option>
+                        <option value="1000000">1 Mbit/s (Y1)</option>
+                        <option value="2000000">2 Mbit/s (Y2)</option>
+                        <option value="4000000">4 Mbit/s (Y4)</option>
+                        <option value="5000000">5 Mbit/s (Y5)</option>
+                        <option value="8000000">8 Mbit/s (Y8)</option>
+                      </Select>
+                    </FormField>
+                  </div>
+                )}
+              </div>
+
               {/* Advanced Serial Options */}
               <div className="border-t border-[color:var(--border-default)] pt-4 mt-4">
                 <button

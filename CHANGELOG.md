@@ -7,6 +7,11 @@ All notable changes to WireTAP will be documented in this file.
 ### Added
 
 - **CAN FD test script** (`scripts/canfd_test.py`): Linux utility for testing CAN FD setups — configures vcan or physical interfaces, sends distinctive 64-byte test patterns, and monitors traffic with bus health reporting
+- **SLCAN CAN FD support** (ELMUE firmware extension): Added CAN FD configuration and frame handling for SLCAN devices with ELMUE CANable firmware:
+  - "Enable CAN FD" checkbox and data phase bitrate dropdown (500K–8M) in the SLCAN profile dialog
+  - Codec support for FD frame prefixes (`d`/`D` without BRS, `b`/`B` with BRS) and DLC-to-length mapping for payloads up to 64 bytes
+  - Sends `Y` command during initialisation to set data phase bitrate and implicitly enable FD mode
+  - Transmit capability reports CAN FD support when FD is enabled in the profile
 
 ### Fixed
 

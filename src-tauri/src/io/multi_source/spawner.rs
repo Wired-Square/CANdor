@@ -240,6 +240,16 @@ async fn run_slcan_reader(
         .get("silent_mode")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let enable_fd = profile
+        .connection
+        .get("enable_fd")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let data_bitrate = profile
+        .connection
+        .get("data_bitrate")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(2_000_000) as u32;
 
     run_slcan_source(
         source_idx,
@@ -247,6 +257,8 @@ async fn run_slcan_reader(
         baud_rate,
         bitrate,
         silent_mode,
+        enable_fd,
+        data_bitrate,
         bus_mappings,
         stop_flag,
         tx,

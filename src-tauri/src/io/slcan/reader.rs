@@ -43,6 +43,16 @@ const SLCAN_BITRATES: [(u32, &str); 9] = [
     (1_000_000, "S8"),  // 1 Mbit/s
 ];
 
+/// slcan CAN FD data phase bitrate commands (Y0-Y8, ELMUE firmware extension)
+const SLCAN_DATA_BITRATES: [(u32, &str); 6] = [
+    (500_000,   "Y0"),  // 500 Kbit/s
+    (1_000_000, "Y1"),  // 1 Mbit/s
+    (2_000_000, "Y2"),  // 2 Mbit/s
+    (4_000_000, "Y4"),  // 4 Mbit/s
+    (5_000_000, "Y5"),  // 5 Mbit/s
+    (8_000_000, "Y8"),  // 8 Mbit/s
+];
+
 // ============================================================================
 // Types and Configuration
 // ============================================================================
@@ -77,6 +87,13 @@ pub struct SlcanConfig {
     /// If None, defaults to bus 0.
     #[serde(default)]
     pub bus_override: Option<u8>,
+    /// Enable CAN FD mode (ELMUE firmware extension).
+    /// Sends a Y command for data phase bitrate, which implicitly enables FD.
+    #[serde(default)]
+    pub enable_fd: bool,
+    /// CAN FD data phase bitrate in bits/second (default 2 Mbit/s)
+    #[serde(default = "default_data_bitrate")]
+    pub data_bitrate: u32,
 }
 
 #[allow(dead_code)]
@@ -85,6 +102,8 @@ fn default_data_bits() -> u8 { 8 }
 fn default_stop_bits() -> u8 { 1 }
 #[allow(dead_code)]
 fn default_parity() -> String { "none".to_string() }
+#[allow(dead_code)]
+fn default_data_bitrate() -> u32 { 2_000_000 }
 
 // ============================================================================
 // Utility Functions
@@ -106,13 +125,33 @@ pub fn find_bitrate_command(bitrate: u32) -> Result<&'static str, IoError> {
         })
 }
 
-/// Parse a single slcan frame line
+/// Find the slcan data phase bitrate command for a given bitrate (ELMUE FD extension)
+pub fn find_data_bitrate_command(bitrate: u32) -> Result<&'static str, IoError> {
+    SLCAN_DATA_BITRATES
+        .iter()
+        .find(|(rate, _)| *rate == bitrate)
+        .map(|(_, cmd)| *cmd)
+        .ok_or_else(|| {
+            let valid: Vec<String> = SLCAN_DATA_BITRATES.iter().map(|(r, _)| format!("{}", r)).collect();
+            IoError::configuration(format!(
+                "Invalid CAN FD data bitrate {}. Valid bitrates: {}",
+                bitrate,
+                valid.join(", ")
+            ))
+        })
+}
+
+/// CAN FD DLC-to-payload-length mapping (ISO 11898-2:2015).
+const DLC_LEN: [usize; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64];
+
+/// Parse a single slcan frame line (classic CAN or CAN FD).
 ///
 /// Format examples:
 ///   t1234AABBCCDD  -> Standard frame, ID=0x123, DLC=4, data=AA BB CC DD
 ///   T123456788AABBCCDD112233445566 -> Extended frame, ID=0x12345678, DLC=8
 ///   r1230          -> Standard RTR, ID=0x123, DLC=0
-///   R123456780     -> Extended RTR, ID=0x12345678, DLC=0
+///   d7E09112233445566778899AABBCC -> FD frame, ID=0x7E0, 12 bytes
+///   b7E0F...64 hex bytes... -> FD+BRS frame, ID=0x7E0, 64 bytes
 pub fn parse_slcan_frame(line: &str) -> Option<FrameMessage> {
     let bytes = line.as_bytes();
     if bytes.is_empty() {
@@ -120,12 +159,16 @@ pub fn parse_slcan_frame(line: &str) -> Option<FrameMessage> {
     }
 
     // Determine frame type from first character
-    let (is_extended, is_rtr) = match bytes[0] {
-        b't' => (false, false), // Standard data frame
-        b'T' => (true, false),  // Extended data frame
-        b'r' => (false, true),  // Standard RTR
-        b'R' => (true, true),   // Extended RTR
-        _ => return None,       // Not a frame (could be response like 'z', '\r', etc.)
+    let (is_extended, is_rtr, is_fd) = match bytes[0] {
+        b't' => (false, false, false),
+        b'T' => (true,  false, false),
+        b'r' => (false, true,  false),
+        b'R' => (true,  true,  false),
+        b'd' => (false, false, true),
+        b'D' => (true,  false, true),
+        b'b' => (false, false, true),
+        b'B' => (true,  false, true),
+        _ => return None, // Not a frame (could be response like 'z', '\r', etc.)
     };
 
     let id_len = if is_extended { 8 } else { 3 };
@@ -139,26 +182,32 @@ pub fn parse_slcan_frame(line: &str) -> Option<FrameMessage> {
     let id_str = std::str::from_utf8(&bytes[1..1 + id_len]).ok()?;
     let frame_id = u32::from_str_radix(id_str, 16).ok()?;
 
-    // Parse DLC (single hex digit)
+    // Parse DLC (single hex digit: 0-8 classic, 0-F for FD)
     let dlc_char = bytes[1 + id_len] as char;
-    let dlc = dlc_char.to_digit(16)? as u8;
+    let dlc_code = dlc_char.to_digit(16)? as u8;
 
-    // Validate DLC (max 8 for classic CAN)
-    if dlc > 8 {
+    let max_dlc = if is_fd { 15 } else { 8 };
+    if dlc_code > max_dlc {
         return None;
     }
 
+    let data_len = if is_fd {
+        DLC_LEN[dlc_code as usize]
+    } else {
+        dlc_code as usize
+    };
+
     // Parse data bytes (pairs of hex characters)
-    let mut data = Vec::with_capacity(dlc as usize);
-    if !is_rtr && dlc > 0 {
+    let mut data = Vec::with_capacity(data_len);
+    if !is_rtr && data_len > 0 {
         let data_start = 1 + id_len + 1;
-        let expected_len = data_start + (dlc as usize * 2);
+        let expected_len = data_start + (data_len * 2);
 
         if bytes.len() < expected_len {
             return None;
         }
 
-        for i in 0..dlc as usize {
+        for i in 0..data_len {
             let byte_str = std::str::from_utf8(&bytes[data_start + i * 2..data_start + i * 2 + 2]).ok()?;
             let byte = u8::from_str_radix(byte_str, 16).ok()?;
             data.push(byte);
@@ -170,13 +219,13 @@ pub fn parse_slcan_frame(line: &str) -> Option<FrameMessage> {
         timestamp_us: now_us(),
         frame_id,
         bus: 0,
-        dlc,
+        dlc: data_len as u8,
         bytes: data,
         is_extended,
-        is_fd: false,
+        is_fd,
         source_address: None,
         incomplete: None,
-        direction: None, // Received frames don't have direction set
+        direction: None,
     })
 }
 
@@ -453,6 +502,8 @@ pub async fn run_source(
     baud_rate: u32,
     bitrate: u32,
     silent_mode: bool,
+    enable_fd: bool,
+    data_bitrate: u32,
     bus_mappings: Vec<BusMapping>,
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
@@ -493,12 +544,21 @@ pub async fn run_source(
         let _ = port.flush();
         std::thread::sleep(Duration::from_millis(50));
 
-        // Set bitrate
+        // Set nominal bitrate
         let bitrate_cmd = find_bitrate_command(bitrate).map_err(String::from)?;
         port.write_all(format!("{}\r", bitrate_cmd).as_bytes())
             .map_err(|e| IoError::protocol(&device, format!("set bitrate: {}", e)).to_string())?;
         let _ = port.flush();
         std::thread::sleep(Duration::from_millis(50));
+
+        // Set data phase bitrate (ELMUE FD extension) — implicitly enables FD mode
+        if enable_fd {
+            let data_cmd = find_data_bitrate_command(data_bitrate).map_err(String::from)?;
+            port.write_all(format!("{}\r", data_cmd).as_bytes())
+                .map_err(|e| IoError::protocol(&device, format!("set data bitrate: {}", e)).to_string())?;
+            let _ = port.flush();
+            std::thread::sleep(Duration::from_millis(50));
+        }
 
         // Set mode: M0 = normal, M1 = silent
         let mode_cmd = if silent_mode { "M1" } else { "M0" };
@@ -529,8 +589,9 @@ pub async fn run_source(
     }
 
     tlog!(
-        "[slcan] Source {} connected to {} (bitrate: {}, silent: {})",
-        source_idx, port_path, bitrate, silent_mode
+        "[slcan] Source {} connected to {} (bitrate: {}, silent: {}, fd: {}{})",
+        source_idx, port_path, bitrate, silent_mode, enable_fd,
+        if enable_fd { format!(", data_bitrate: {}", data_bitrate) } else { String::new() }
     );
 
     // Emit device-connected event

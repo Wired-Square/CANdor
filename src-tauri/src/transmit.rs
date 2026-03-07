@@ -91,6 +91,11 @@ fn get_capabilities_for_kind(kind: &str, profile: &IOProfile) -> WriterCapabilit
                 .get("silent_mode")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
+            let enable_fd = profile
+                .connection
+                .get("enable_fd")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
             if silent_mode {
                 WriterCapabilities {
@@ -105,7 +110,7 @@ fn get_capabilities_for_kind(kind: &str, profile: &IOProfile) -> WriterCapabilit
                 WriterCapabilities {
                     can_transmit_can: true,
                     can_transmit_serial: false,
-                    supports_canfd: false, // Classic slcan doesn't support CAN FD
+                    supports_canfd: enable_fd,
                     supports_extended_id: true,
                     supports_rtr: true,
                     available_buses: vec![], // Single bus
