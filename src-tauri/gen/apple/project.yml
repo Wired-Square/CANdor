@@ -61,7 +61,7 @@ targets:
         RUST_LOG: info
     settings:
       base:
-        DEVELOPMENT_TEAM: 7HRWHQXNSP
+        DEVELOPMENT_TEAM: YZ6PQTJH79
         CODE_SIGN_IDENTITY: Apple Development
         CODE_SIGN_STYLE: Automatic
         ENABLE_BITCODE: false

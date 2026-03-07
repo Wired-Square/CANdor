@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 63;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -24,85 +24,85 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		0009D7A7453EB915512FD42F /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
-		02C59AE16A9FCA0B3B8F1F01 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
-		0543F7EAE4C00BDB088A8C93 /* common.rs */ = {isa = PBXFileReference; path = common.rs; sourceTree = "<group>"; };
+		0009D7A7453EB915512FD42F /* mod.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mod.rs; sourceTree = "<group>"; };
+		02C59AE16A9FCA0B3B8F1F01 /* mod.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mod.rs; sourceTree = "<group>"; };
+		0543F7EAE4C00BDB088A8C93 /* common.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = common.rs; sourceTree = "<group>"; };
 		06CE5C5E05ACC6E57C29C191 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
-		076FD32C2F261863FF02FA16 /* types.rs */ = {isa = PBXFileReference; path = types.rs; sourceTree = "<group>"; };
-		07EB3E2B69DFDD403A2B5B2D /* codec.rs */ = {isa = PBXFileReference; path = codec.rs; sourceTree = "<group>"; };
+		076FD32C2F261863FF02FA16 /* types.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = types.rs; sourceTree = "<group>"; };
+		07EB3E2B69DFDD403A2B5B2D /* codec.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = codec.rs; sourceTree = "<group>"; };
 		0EA4C7027D238420A4458240 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
-		0EACF71C06F77C857E0DB9A2 /* traits.rs */ = {isa = PBXFileReference; path = traits.rs; sourceTree = "<group>"; };
-		10D34AF059B33198B8FDCA08 /* ble_provision.rs */ = {isa = PBXFileReference; path = ble_provision.rs; sourceTree = "<group>"; };
+		0EACF71C06F77C857E0DB9A2 /* traits.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = traits.rs; sourceTree = "<group>"; };
+		10D34AF059B33198B8FDCA08 /* ble_provision.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = ble_provision.rs; sourceTree = "<group>"; };
 		11BF096B354744CBA1A0CEC3 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
-		164B65D54843A05562EF07FD /* usb.rs */ = {isa = PBXFileReference; path = usb.rs; sourceTree = "<group>"; };
-		185467352B490498D2DF6A01 /* ble_common.rs */ = {isa = PBXFileReference; path = ble_common.rs; sourceTree = "<group>"; };
-		1ABEB9FAE593966428177A3D /* tcp.rs */ = {isa = PBXFileReference; path = tcp.rs; sourceTree = "<group>"; };
+		164B65D54843A05562EF07FD /* usb.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = usb.rs; sourceTree = "<group>"; };
+		185467352B490498D2DF6A01 /* ble_common.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = ble_common.rs; sourceTree = "<group>"; };
+		1ABEB9FAE593966428177A3D /* tcp.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = tcp.rs; sourceTree = "<group>"; };
 		1F4F458201D67A2C63DA7DFD /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
-		20DCB25A8121B7090FE1D298 /* credentials.rs */ = {isa = PBXFileReference; path = credentials.rs; sourceTree = "<group>"; };
-		20E002B36EC223BA7B711201 /* sessions.rs */ = {isa = PBXFileReference; path = sessions.rs; sourceTree = "<group>"; };
-		234D73E3BB98FFE2735004CD /* types.rs */ = {isa = PBXFileReference; path = types.rs; sourceTree = "<group>"; };
+		20DCB25A8121B7090FE1D298 /* credentials.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = credentials.rs; sourceTree = "<group>"; };
+		20E002B36EC223BA7B711201 /* sessions.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = sessions.rs; sourceTree = "<group>"; };
+		234D73E3BB98FFE2735004CD /* types.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = types.rs; sourceTree = "<group>"; };
 		2478E852B2E34859152A0298 /* CoreBluetooth.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreBluetooth.framework; path = System/Library/Frameworks/CoreBluetooth.framework; sourceTree = SDKROOT; };
 		275CF7D7FF08AB4C3B36055A /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
-		30E9590C941B1EF23EFA3FDE /* postgres.rs */ = {isa = PBXFileReference; path = postgres.rs; sourceTree = "<group>"; };
-		3154D6516771A330C0583002 /* bufferquery.rs */ = {isa = PBXFileReference; path = bufferquery.rs; sourceTree = "<group>"; };
+		30E9590C941B1EF23EFA3FDE /* postgres.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = postgres.rs; sourceTree = "<group>"; };
+		3154D6516771A330C0583002 /* bufferquery.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = bufferquery.rs; sourceTree = "<group>"; };
 		3516036D1D2770E3E90CC676 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		36FE33AD077A43472FF58A54 /* codec.rs */ = {isa = PBXFileReference; path = codec.rs; sourceTree = "<group>"; };
-		3BFE0EF0732CD00383E8EEF6 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
-		40C1B6FD9211B4CA444B1DCC /* base.rs */ = {isa = PBXFileReference; path = base.rs; sourceTree = "<group>"; };
-		46DA29896CC9A70EA16E89EE /* reader.rs */ = {isa = PBXFileReference; path = reader.rs; sourceTree = "<group>"; };
-		48332D3F3686A99231C4BC8A /* csv.rs */ = {isa = PBXFileReference; path = csv.rs; sourceTree = "<group>"; };
-		4C4824E1E9B5E9A3A39DB442 /* buffer_store.rs */ = {isa = PBXFileReference; path = buffer_store.rs; sourceTree = "<group>"; };
-		53414B76528131B7B90EBCA1 /* codec.rs */ = {isa = PBXFileReference; path = codec.rs; sourceTree = "<group>"; };
-		54DBCC6520B53A636AF54944 /* transmit.rs */ = {isa = PBXFileReference; path = transmit.rs; sourceTree = "<group>"; };
-		596FBCFEA15A8AF5BEF7C8DD /* error.rs */ = {isa = PBXFileReference; path = error.rs; sourceTree = "<group>"; };
-		5B0CE3E7BF11980EB610755D /* buffer_db.rs */ = {isa = PBXFileReference; path = buffer_db.rs; sourceTree = "<group>"; };
-		5B8C74E9B8301DDD91418D95 /* scanner.rs */ = {isa = PBXFileReference; path = scanner.rs; sourceTree = "<group>"; };
-		5B96E114EE56D56009678230 /* profile_tracker.rs */ = {isa = PBXFileReference; path = profile_tracker.rs; sourceTree = "<group>"; };
-		5F3DC97DCBE6DE97AFCF09F3 /* merge.rs */ = {isa = PBXFileReference; path = merge.rs; sourceTree = "<group>"; };
-		61E191469F7D85E83E9C5D33 /* buffer.rs */ = {isa = PBXFileReference; path = buffer.rs; sourceTree = "<group>"; };
-		62DF0EA6CEE69F78B33B69D4 /* wiretap_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = wiretap_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		36FE33AD077A43472FF58A54 /* codec.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = codec.rs; sourceTree = "<group>"; };
+		3BFE0EF0732CD00383E8EEF6 /* mod.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mod.rs; sourceTree = "<group>"; };
+		40C1B6FD9211B4CA444B1DCC /* base.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = base.rs; sourceTree = "<group>"; };
+		46DA29896CC9A70EA16E89EE /* reader.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = reader.rs; sourceTree = "<group>"; };
+		48332D3F3686A99231C4BC8A /* csv.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = csv.rs; sourceTree = "<group>"; };
+		4C4824E1E9B5E9A3A39DB442 /* buffer_store.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = buffer_store.rs; sourceTree = "<group>"; };
+		53414B76528131B7B90EBCA1 /* codec.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = codec.rs; sourceTree = "<group>"; };
+		54DBCC6520B53A636AF54944 /* transmit.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = transmit.rs; sourceTree = "<group>"; };
+		596FBCFEA15A8AF5BEF7C8DD /* error.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = error.rs; sourceTree = "<group>"; };
+		5B0CE3E7BF11980EB610755D /* buffer_db.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = buffer_db.rs; sourceTree = "<group>"; };
+		5B8C74E9B8301DDD91418D95 /* scanner.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = scanner.rs; sourceTree = "<group>"; };
+		5B96E114EE56D56009678230 /* profile_tracker.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = profile_tracker.rs; sourceTree = "<group>"; };
+		5F3DC97DCBE6DE97AFCF09F3 /* merge.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = merge.rs; sourceTree = "<group>"; };
+		61E191469F7D85E83E9C5D33 /* buffer.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = buffer.rs; sourceTree = "<group>"; };
+		62DF0EA6CEE69F78B33B69D4 /* WireTAP.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WireTAP.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7109CBBCF0C172CF6B58118B /* wiretap_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = wiretap_iOS.entitlements; sourceTree = "<group>"; };
 		75632CE03E9C447F263B072C /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
-		7BCE540144CA9FF696763119 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
-		7F16903C19EE231433AE4BF4 /* pacing.rs */ = {isa = PBXFileReference; path = pacing.rs; sourceTree = "<group>"; };
-		800DF7F96488D0BBBA032CCE /* catalog.rs */ = {isa = PBXFileReference; path = catalog.rs; sourceTree = "<group>"; };
-		839AB0AD2BAE20EDE46C5F81 /* store_manager.rs */ = {isa = PBXFileReference; path = store_manager.rs; sourceTree = "<group>"; };
-		8411166ED6DCEED787766592 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
-		8AA132147B92107D03BA25F7 /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
-		8D2036BBBD5131C469D3DC4F /* linux.rs */ = {isa = PBXFileReference; path = linux.rs; sourceTree = "<group>"; };
+		7BCE540144CA9FF696763119 /* mod.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mod.rs; sourceTree = "<group>"; };
+		7F16903C19EE231433AE4BF4 /* pacing.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = pacing.rs; sourceTree = "<group>"; };
+		800DF7F96488D0BBBA032CCE /* catalog.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = catalog.rs; sourceTree = "<group>"; };
+		839AB0AD2BAE20EDE46C5F81 /* store_manager.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = store_manager.rs; sourceTree = "<group>"; };
+		8411166ED6DCEED787766592 /* mod.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mod.rs; sourceTree = "<group>"; };
+		8AA132147B92107D03BA25F7 /* main.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = main.rs; sourceTree = "<group>"; };
+		8D2036BBBD5131C469D3DC4F /* linux.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = linux.rs; sourceTree = "<group>"; };
 		9298E8A9BED4133826997427 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		940AFB78671A52B07487E822 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
-		9757617579EFADD711CE3679 /* utils.rs */ = {isa = PBXFileReference; path = utils.rs; sourceTree = "<group>"; };
+		9757617579EFADD711CE3679 /* utils.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = utils.rs; sourceTree = "<group>"; };
 		9A6A9270CD3501EE59243A9F /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
-		9EFE10A76AD64E09517389E9 /* framer.rs */ = {isa = PBXFileReference; path = framer.rs; sourceTree = "<group>"; };
+		9EFE10A76AD64E09517389E9 /* framer.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = framer.rs; sourceTree = "<group>"; };
 		A2341CB237F090B8237DEC6B /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
-		A54A6D0D692CC0B59C4636DF /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
+		A54A6D0D692CC0B59C4636DF /* mod.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mod.rs; sourceTree = "<group>"; };
 		A553AE357AD3BBC16C55655B /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		AA98AA9223B26C6C438521AB /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
-		AAE962706392E588D4780B12 /* reader.rs */ = {isa = PBXFileReference; path = reader.rs; sourceTree = "<group>"; };
-		ABB1950749A36AC3DFA897FA /* checksums.rs */ = {isa = PBXFileReference; path = checksums.rs; sourceTree = "<group>"; };
-		AD56A1AC30E8A348CB8F0B32 /* framing.rs */ = {isa = PBXFileReference; path = framing.rs; sourceTree = "<group>"; };
+		AAE962706392E588D4780B12 /* reader.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = reader.rs; sourceTree = "<group>"; };
+		ABB1950749A36AC3DFA897FA /* checksums.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = checksums.rs; sourceTree = "<group>"; };
+		AD56A1AC30E8A348CB8F0B32 /* framing.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = framing.rs; sourceTree = "<group>"; };
 		AEFB17A5AF88F082242E78E6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		C0D9740EAA2144B8EB2B2CFE /* smp_upgrade.rs */ = {isa = PBXFileReference; path = smp_upgrade.rs; sourceTree = "<group>"; };
-		C149C7D04A2FAFEB61230E5E /* reader.rs */ = {isa = PBXFileReference; path = reader.rs; sourceTree = "<group>"; };
-		C212E089CF1E6B0DEE03031A /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
-		C454E44391B0F79AFA14B2F3 /* reader.rs */ = {isa = PBXFileReference; path = reader.rs; sourceTree = "<group>"; };
-		C8B691423E1AA1C8BB2EA98D /* nusb_driver.rs */ = {isa = PBXFileReference; path = nusb_driver.rs; sourceTree = "<group>"; };
-		CC087A6CE1EE2B40DF0146F1 /* reader.rs */ = {isa = PBXFileReference; path = reader.rs; sourceTree = "<group>"; };
-		CCC952FA8D3659FD3613EFC4 /* device_scan.rs */ = {isa = PBXFileReference; path = device_scan.rs; sourceTree = "<group>"; };
-		D01AC28D6CB53C20D53A7FEC /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
-		D2F51F2619C3AA6E2B3BB203 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
-		D340CAD0A714EF3CCBF960AC /* dbc_import.rs */ = {isa = PBXFileReference; path = dbc_import.rs; sourceTree = "<group>"; };
-		DBA0E28445391CFEA2ED37F0 /* buffers.rs */ = {isa = PBXFileReference; path = buffers.rs; sourceTree = "<group>"; };
-		E8B7C8E8366D88403CBC94E0 /* codec.rs */ = {isa = PBXFileReference; path = codec.rs; sourceTree = "<group>"; };
-		E990EFC195CFBE963ADB5510 /* dbquery.rs */ = {isa = PBXFileReference; path = dbquery.rs; sourceTree = "<group>"; };
-		EA6F54A78AE62209C245999B /* spawner.rs */ = {isa = PBXFileReference; path = spawner.rs; sourceTree = "<group>"; };
-		EC5D2B31253C3496929A8091 /* logging.rs */ = {isa = PBXFileReference; path = logging.rs; sourceTree = "<group>"; };
-		F2421286725E67B1B972AE65 /* dbc_export.rs */ = {isa = PBXFileReference; path = dbc_export.rs; sourceTree = "<group>"; };
-		F2EB96AEFD2E2E91C9404783 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
-		F943A1D228321B419A18E7C9 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
-		FB27245F4561AD038CB8EA3D /* settings.rs */ = {isa = PBXFileReference; path = settings.rs; sourceTree = "<group>"; };
-		FC37D5E0F81399851D3ACED4 /* codec.rs */ = {isa = PBXFileReference; path = codec.rs; sourceTree = "<group>"; };
+		C0D9740EAA2144B8EB2B2CFE /* smp_upgrade.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = smp_upgrade.rs; sourceTree = "<group>"; };
+		C149C7D04A2FAFEB61230E5E /* reader.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = reader.rs; sourceTree = "<group>"; };
+		C212E089CF1E6B0DEE03031A /* lib.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = lib.rs; sourceTree = "<group>"; };
+		C454E44391B0F79AFA14B2F3 /* reader.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = reader.rs; sourceTree = "<group>"; };
+		C8B691423E1AA1C8BB2EA98D /* nusb_driver.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = nusb_driver.rs; sourceTree = "<group>"; };
+		CC087A6CE1EE2B40DF0146F1 /* reader.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = reader.rs; sourceTree = "<group>"; };
+		CCC952FA8D3659FD3613EFC4 /* device_scan.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = device_scan.rs; sourceTree = "<group>"; };
+		D01AC28D6CB53C20D53A7FEC /* mod.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mod.rs; sourceTree = "<group>"; };
+		D2F51F2619C3AA6E2B3BB203 /* mod.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mod.rs; sourceTree = "<group>"; };
+		D340CAD0A714EF3CCBF960AC /* dbc_import.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = dbc_import.rs; sourceTree = "<group>"; };
+		DBA0E28445391CFEA2ED37F0 /* buffers.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = buffers.rs; sourceTree = "<group>"; };
+		E8B7C8E8366D88403CBC94E0 /* codec.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = codec.rs; sourceTree = "<group>"; };
+		E990EFC195CFBE963ADB5510 /* dbquery.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = dbquery.rs; sourceTree = "<group>"; };
+		EA6F54A78AE62209C245999B /* spawner.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = spawner.rs; sourceTree = "<group>"; };
+		EC5D2B31253C3496929A8091 /* logging.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = logging.rs; sourceTree = "<group>"; };
+		F2421286725E67B1B972AE65 /* dbc_export.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = dbc_export.rs; sourceTree = "<group>"; };
+		F2EB96AEFD2E2E91C9404783 /* mod.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mod.rs; sourceTree = "<group>"; };
+		F943A1D228321B419A18E7C9 /* mod.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mod.rs; sourceTree = "<group>"; };
+		FB27245F4561AD038CB8EA3D /* settings.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = settings.rs; sourceTree = "<group>"; };
+		FC37D5E0F81399851D3ACED4 /* codec.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = codec.rs; sourceTree = "<group>"; };
 		FFAAE65CF9ACFEC6A689C442 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
@@ -276,7 +276,7 @@
 		866A0B21997824494FD9FBCD /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				62DF0EA6CEE69F78B33B69D4 /* wiretap_iOS.app */,
+				62DF0EA6CEE69F78B33B69D4 /* WireTAP.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -373,13 +373,6 @@
 			path = wiretap_iOS;
 			sourceTree = "<group>";
 		};
-		"TEMP_143EA398-87D2-4142-A275-9962B346645A" /* x86_64 */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = x86_64;
-			sourceTree = "<group>";
-		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -400,7 +393,7 @@
 			packageProductDependencies = (
 			);
 			productName = wiretap_iOS;
-			productReference = 62DF0EA6CEE69F78B33B69D4 /* wiretap_iOS.app */;
+			productReference = 62DF0EA6CEE69F78B33B69D4 /* WireTAP.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -413,7 +406,6 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					0710301C30D4830DBA8DA57C = {
-						DevelopmentTeam = 7HRWHQXNSP;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -428,7 +420,6 @@
 			);
 			mainGroup = 85656E58F685FD3C2EA3DE95;
 			minimizedProjectReferenceProxies = 1;
-			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -491,14 +482,12 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
-				ARCHS = (
-					arm64,
-				);
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = wiretap_iOS/wiretap_iOS.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 7HRWHQXNSP;
+				DEVELOPMENT_TEAM = YZ6PQTJH79;
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -510,10 +499,22 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
-				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
-				PRODUCT_BUNDLE_IDENTIFIER = com.wiredsquare.wiretap;
-				PRODUCT_NAME = "WireTAP";
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION)",
+					"$(SDKROOT)/usr/lib/swift",
+					"$(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)",
+					"$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION)",
+					"$(SDKROOT)/usr/lib/swift",
+					"$(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)",
+					"$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.wiredsquare.WireTAP;
+				PRODUCT_NAME = WireTAP;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
@@ -643,14 +644,12 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
-				ARCHS = (
-					arm64,
-				);
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = wiretap_iOS/wiretap_iOS.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 7HRWHQXNSP;
+				DEVELOPMENT_TEAM = YZ6PQTJH79;
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -662,10 +661,22 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
-				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
-				PRODUCT_BUNDLE_IDENTIFIER = com.wiredsquare.wiretap;
-				PRODUCT_NAME = "WireTAP";
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION)",
+					"$(SDKROOT)/usr/lib/swift",
+					"$(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)",
+					"$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION)",
+					"$(SDKROOT)/usr/lib/swift",
+					"$(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)",
+					"$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.wiredsquare.WireTAP;
+				PRODUCT_NAME = WireTAP;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
