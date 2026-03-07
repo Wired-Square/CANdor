@@ -64,12 +64,12 @@ pub enum GsUsbBreq {
     Timestamp = 6,
     Identify = 7,
     GetUserId = 8,
-    SetUserId = 10,
-    DataBittiming = 11,
-    BtConstExt = 12,
-    SetTermination = 13,
-    GetTermination = 14,
-    GetState = 15,
+    SetUserId = 9,
+    DataBittiming = 10,
+    BtConstExt = 11,
+    SetTermination = 12,
+    GetTermination = 13,
+    GetState = 14,
 }
 
 /// CAN mode flags
@@ -80,6 +80,7 @@ pub mod can_mode {
     pub const TRIPLE_SAMPLE: u32 = 1 << 2;
     pub const ONE_SHOT: u32 = 1 << 3;
     pub const HW_TIMESTAMP: u32 = 1 << 4;
+    pub const PAD_PKTS_TO_MAX_PKT_SIZE: u32 = 1 << 7;
     pub const FD: u32 = 1 << 8;
 }
 
@@ -100,6 +101,10 @@ pub mod can_feature {
     pub const BERR_REPORTING: u32 = 1 << 12;
     pub const GET_STATE: u32 = 1 << 13;
 }
+
+/// CAN FD DLC-to-payload-length mapping (ISO 11898-2:2015).
+/// DLC codes 0-8 map directly; 9-15 map to 12, 16, 20, 24, 32, 48, 64 bytes.
+pub const DLC_LEN: [usize; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64];
 
 /// CAN FD frame flags (in GsHostFrame.flags field)
 pub mod can_fd_flags {
@@ -235,10 +240,11 @@ impl GsHostFrameFd {
         self.can_id & can_id_flags::ID_MASK
     }
 
-    /// Get data bytes based on length.
-    /// For CAN FD, can_dlc contains the actual byte count (up to 64).
+    /// Get data bytes based on DLC code.
+    /// For CAN FD, can_dlc contains the DLC code (0-15) which maps to 0-64 bytes
+    /// via the standard DLC-to-length table.
     pub fn get_data(&self) -> &[u8] {
-        let len = (self.can_dlc as usize).min(64);
+        let len = DLC_LEN[(self.can_dlc as usize).min(15)];
         &self.data[..len]
     }
 
@@ -343,6 +349,78 @@ impl GsDeviceBtConst {
             brp_min: self.brp_min,
             brp_max: self.brp_max,
             brp_inc: if self.brp_inc == 0 { 1 } else { self.brp_inc },
+        }
+    }
+}
+
+/// Extended BT_CONST response (72 bytes) — includes both nominal and data phase constraints.
+/// Returned by BT_CONST_EXT request on devices that advertise `can_feature::BT_CONST_EXT`.
+#[derive(Debug, Clone, Copy)]
+pub struct GsDeviceBtConstExtended {
+    // Nominal phase (bytes 0-39, same layout as GsDeviceBtConst)
+    pub feature: u32,
+    pub fclk_can: u32,
+    pub tseg1_min: u32,
+    pub tseg1_max: u32,
+    pub tseg2_min: u32,
+    pub tseg2_max: u32,
+    pub sjw_max: u32,
+    pub brp_min: u32,
+    pub brp_max: u32,
+    pub brp_inc: u32,
+    // Data phase (bytes 40-71)
+    pub dtseg1_min: u32,
+    pub dtseg1_max: u32,
+    pub dtseg2_min: u32,
+    pub dtseg2_max: u32,
+    pub dsjw_max: u32,
+    pub dbrp_min: u32,
+    pub dbrp_max: u32,
+    pub dbrp_inc: u32,
+}
+
+impl GsDeviceBtConstExtended {
+    pub const SIZE: usize = 72;
+
+    /// Parse from a byte slice (must be at least 72 bytes).
+    pub fn from_bytes(data: &[u8]) -> Option<Self> {
+        if data.len() < Self::SIZE {
+            return None;
+        }
+        let u = |off: usize| u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
+        Some(GsDeviceBtConstExtended {
+            feature:    u(0),
+            fclk_can:   u(4),
+            tseg1_min:  u(8),
+            tseg1_max:  u(12),
+            tseg2_min:  u(16),
+            tseg2_max:  u(20),
+            sjw_max:    u(24),
+            brp_min:    u(28),
+            brp_max:    u(32),
+            brp_inc:    u(36),
+            dtseg1_min: u(40),
+            dtseg1_max: u(44),
+            dtseg2_min: u(48),
+            dtseg2_max: u(52),
+            dsjw_max:   u(56),
+            dbrp_min:   u(60),
+            dbrp_max:   u(64),
+            dbrp_inc:   u(68),
+        })
+    }
+
+    /// Extract data phase bittiming constraints.
+    pub fn data_constraints(&self) -> BittimingConstraints {
+        BittimingConstraints {
+            tseg1_min: self.dtseg1_min,
+            tseg1_max: self.dtseg1_max,
+            tseg2_min: self.dtseg2_min,
+            tseg2_max: self.dtseg2_max,
+            sjw_max:   self.dsjw_max,
+            brp_min:   self.dbrp_min,
+            brp_max:   self.dbrp_max,
+            brp_inc:   if self.dbrp_inc == 0 { 1 } else { self.dbrp_inc },
         }
     }
 }
@@ -998,5 +1076,56 @@ mod tests {
         // This should fail — constraints are too tight
         let timing = calculate_bittiming_constrained(48_000_000, 2_000_000, 75.0, &c);
         assert!(timing.is_none(), "should not find timing with impossibly tight constraints");
+    }
+
+    #[test]
+    fn test_bt_const_extended_parsing() {
+        let mut data = [0u8; 72];
+        // Nominal phase
+        data[0..4].copy_from_slice(&0x500u32.to_le_bytes()); // feature: FD | BT_CONST_EXT
+        data[4..8].copy_from_slice(&80_000_000u32.to_le_bytes()); // fclk_can
+        data[8..12].copy_from_slice(&1u32.to_le_bytes()); // tseg1_min
+        data[12..16].copy_from_slice(&256u32.to_le_bytes()); // tseg1_max
+        data[16..20].copy_from_slice(&1u32.to_le_bytes()); // tseg2_min
+        data[20..24].copy_from_slice(&128u32.to_le_bytes()); // tseg2_max
+        data[24..28].copy_from_slice(&128u32.to_le_bytes()); // sjw_max
+        data[28..32].copy_from_slice(&1u32.to_le_bytes()); // brp_min
+        data[32..36].copy_from_slice(&1024u32.to_le_bytes()); // brp_max
+        data[36..40].copy_from_slice(&1u32.to_le_bytes()); // brp_inc
+        // Data phase (tighter constraints)
+        data[40..44].copy_from_slice(&1u32.to_le_bytes()); // dtseg1_min
+        data[44..48].copy_from_slice(&32u32.to_le_bytes()); // dtseg1_max
+        data[48..52].copy_from_slice(&1u32.to_le_bytes()); // dtseg2_min
+        data[52..56].copy_from_slice(&16u32.to_le_bytes()); // dtseg2_max
+        data[56..60].copy_from_slice(&16u32.to_le_bytes()); // dsjw_max
+        data[60..64].copy_from_slice(&1u32.to_le_bytes()); // dbrp_min
+        data[64..68].copy_from_slice(&32u32.to_le_bytes()); // dbrp_max
+        data[68..72].copy_from_slice(&1u32.to_le_bytes()); // dbrp_inc
+
+        let ext = GsDeviceBtConstExtended::from_bytes(&data).expect("should parse 72 bytes");
+        assert_eq!(ext.fclk_can, 80_000_000);
+        assert_eq!(ext.tseg1_max, 256);
+        assert_eq!(ext.dtseg1_max, 32);
+        assert_eq!(ext.dtseg2_max, 16);
+        assert_eq!(ext.dbrp_max, 32);
+
+        let dc = ext.data_constraints();
+        assert_eq!(dc.tseg1_max, 32);
+        assert_eq!(dc.tseg2_max, 16);
+        assert_eq!(dc.brp_max, 32);
+
+        // Data phase constraints should work for 2 Mbps at 80 MHz
+        let timing = calculate_bittiming_constrained(80_000_000, 2_000_000, 75.0, &dc);
+        assert!(timing.is_some(), "should find timing for 2Mbps with data phase constraints");
+        let t = timing.unwrap();
+        let brp = { t.brp };
+        let seg1 = { t.phase_seg1 };
+        let seg2 = { t.phase_seg2 };
+        assert!(brp <= 32, "brp {} exceeds device limit", brp);
+        assert!(seg1 <= 32, "seg1 {} exceeds device limit", seg1);
+        assert!(seg2 <= 16, "seg2 {} exceeds device limit", seg2);
+
+        // Should reject short buffer
+        assert!(GsDeviceBtConstExtended::from_bytes(&data[..40]).is_none());
     }
 }

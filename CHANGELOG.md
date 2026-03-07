@@ -2,6 +2,20 @@
 
 All notable changes to WireTAP will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **gs_usb CAN FD initialisation**: Fixed three issues preventing CAN FD from working on candleLight devices (e.g. ELMUE Candlelight 2.5):
+  - Corrected gs_usb vendor request codes (`DataBittiming`, `BtConstExt`, and others) which were off by one, causing the firmware to reject FD-specific commands
+  - Fixed BT_CONST_EXT parsing to read the full 72-byte extended response and extract data phase timing constraints (previously only read 40 bytes, missing the data phase fields entirely)
+  - Fixed bulk transfer buffer size for FD mode to account for USB packet padding (76 → 128 bytes), and enabled the `PAD_PKTS_TO_MAX_PKT_SIZE` mode flag
+  - Added MODE RESET before bittiming configuration to match the Linux gs_usb driver initialisation sequence
+- **gs_usb CAN FD frame data truncation**: Fixed CAN FD frames showing only 8 bytes of data despite DLC indicating up to 64 bytes:
+  - Fixed `GsHostFrameFd::get_data()` to use the standard DLC-to-length mapping (DLC 15 → 64 bytes, DLC 14 → 48 bytes, etc.) instead of treating the DLC code as a raw byte count
+  - Improved FD frame detection to handle firmware that doesn't set the FD flag on received frames (falls back to DLC > 8 check)
+  - Fixed the `dlc` field to report the actual byte count instead of the raw DLC code, aligning with SocketCAN behaviour
+
 ## [0.5.2] - 2026-03-05
 
 ### Fixed

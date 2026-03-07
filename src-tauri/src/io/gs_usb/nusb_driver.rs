@@ -20,9 +20,10 @@ use tauri::AppHandle;
 
 use super::{
     can_fd_flags, can_feature, can_id_flags, can_mode, get_bittiming_for_bitrate,
-    GsDeviceBittiming, GsDeviceBtConst, GsDeviceConfig, GsDeviceMode, GsHostFrame, GsHostFrameFd,
-    GsUsbBreq, GsUsbConfig, GsUsbDeviceInfo, GsUsbProbeResult, GS_USB_HOST_FORMAT, GS_USB_PIDS,
-    GS_USB_VID,
+    GsDeviceBittiming, GsDeviceBtConst, GsDeviceBtConstExtended, GsDeviceConfig, GsDeviceMode,
+    GsHostFrame, GsHostFrameFd,
+    GsUsbBreq, GsUsbConfig, GsUsbDeviceInfo, GsUsbProbeResult, DLC_LEN, GS_USB_HOST_FORMAT,
+    GS_USB_PIDS, GS_USB_VID,
 };
 use tokio::sync::mpsc;
 
@@ -600,8 +601,10 @@ async fn run_gs_usb_stream(
     let mut last_emit_time = std::time::Instant::now();
     let emit_interval = Duration::from_millis(25);
 
-    // Buffer size: 76 bytes for FD mode (can hold both classic and FD frames), 64 for classic
-    let buf_size = if config.enable_fd { GsHostFrameFd::SIZE } else { 64 };
+    // Buffer size: must accommodate padding to USB max packet size (64 bytes for full-speed).
+    // Devices with PAD_PKTS_TO_MAX_PKT_SIZE round up to the next packet boundary.
+    // FD frame = 76 bytes → padded to 128 bytes; classic = 32 bytes → padded to 64 bytes.
+    let buf_size = if config.enable_fd { 128 } else { 64 };
 
     // Pre-submit multiple read requests for better throughput
     for _ in 0..4 {
@@ -641,21 +644,24 @@ async fn run_gs_usb_stream(
                         let len = completion.actual_len;
                         let data = &completion.buffer[..len];
 
-                        // Parse frame - check flags byte to determine if FD
-                        // Flags byte is at offset 10 in both classic and FD frames
+                        // Parse frame - check flags byte and DLC to determine if FD.
+                        // Some firmware versions don't set the FD flag on received frames,
+                        // so also detect FD by DLC > 8 when FD mode is enabled.
                         let frame_msg = if len >= GsHostFrame::SIZE {
-                            let is_fd_frame = len >= 12 && (data[10] & can_fd_flags::FD) != 0;
+                            let has_fd_flag = len >= 12 && (data[10] & can_fd_flags::FD) != 0;
+                            let is_fd_frame = has_fd_flag || (config.enable_fd && data[8] > 8);
 
                             if is_fd_frame && len >= GsHostFrameFd::SIZE {
                                 // Parse as FD frame
                                 GsHostFrameFd::from_bytes(data).and_then(|gs_frame| {
                                     if gs_frame.is_rx() {
+                                        let actual_len = DLC_LEN[(gs_frame.can_dlc as usize).min(15)];
                                         Some(FrameMessage {
                                             protocol: "can".to_string(),
                                             timestamp_us: now_us(),
                                             frame_id: gs_frame.get_can_id(),
                                             bus: config.bus_override.unwrap_or(gs_frame.channel),
-                                            dlc: gs_frame.can_dlc,
+                                            dlc: actual_len as u8,
                                             bytes: gs_frame.get_data().to_vec(),
                                             is_extended: gs_frame.is_extended(),
                                             is_fd: true,
@@ -774,6 +780,16 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
     let fclk_can = bt_const.map(|c| c.fclk_can).unwrap_or(48_000_000);
     let nominal_constraints = bt_const.map(|c| c.constraints());
 
+    if let Some(ref c) = bt_const {
+        let (feat, fclk) = ({ c.feature }, { c.fclk_can });
+        let (t1min, t1max, t2min, t2max) = ({ c.tseg1_min }, { c.tseg1_max }, { c.tseg2_min }, { c.tseg2_max });
+        let (bmin, bmax) = ({ c.brp_min }, { c.brp_max });
+        tlog!(
+            "[gs_usb] BT_CONST: feature=0x{:X}, fclk={} Hz, tseg1={}-{}, tseg2={}-{}, brp={}-{}",
+            feat, fclk, t1min, t1max, t2min, t2max, bmin, bmax
+        );
+    }
+
     // Check FD feature flag before attempting FD setup
     if config.enable_fd {
         let has_fd = bt_const.map(|c| c.feature & can_feature::FD != 0).unwrap_or(false);
@@ -782,7 +798,30 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
         }
     }
 
-    // 3. Set bit timing - use device constraints when available
+    // 3. Reset device before configuring bittiming (matches Linux gs_usb driver sequence)
+    let reset_mode = GsDeviceMode {
+        mode: 0, // GS_CAN_MODE_RESET
+        flags: 0,
+    };
+    let reset_mode_bytes = unsafe {
+        std::slice::from_raw_parts(
+            &reset_mode as *const GsDeviceMode as *const u8,
+            GsDeviceMode::SIZE,
+        )
+    };
+    interface
+        .control_out(ControlOut {
+            control_type: ControlType::Vendor,
+            recipient: Recipient::Interface,
+            request: GsUsbBreq::Mode as u8,
+            value: config.channel as u16,
+            index: 0,
+            data: reset_mode_bytes,
+        }, CONTROL_TIMEOUT)
+        .await
+        .map_err(|e| format!("MODE RESET failed: {:?}", e))?;
+
+    // 4. Set bit timing - use device constraints when available
     let timing = if let Some(ref constraints) = nominal_constraints {
         super::calculate_bittiming_constrained(fclk_can, config.bitrate, config.sample_point, constraints)
             .or_else(|| super::calculate_bittiming(fclk_can, config.bitrate, config.sample_point))
@@ -829,31 +868,56 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
 
     // 4. If FD is enabled, set data phase bit timing
     if config.enable_fd {
-        // Query BT_CONST_EXT for data phase timing constraints
-        let bt_const_ext_result = interface
-            .control_in(ControlIn {
-                control_type: ControlType::Vendor,
-                recipient: Recipient::Interface,
-                request: GsUsbBreq::BtConstExt as u8,
-                value: config.channel as u16,
-                index: 0,
-                length: 40,
-            }, CONTROL_TIMEOUT)
-            .await
-            .ok()
-            .and_then(|data| GsDeviceBtConst::from_bytes(&data));
+        // Query BT_CONST_EXT for data phase timing constraints (72-byte extended response).
+        // Only attempt if the device advertises the BT_CONST_EXT feature flag.
+        let has_bt_const_ext = bt_const.map(|c| c.feature & can_feature::BT_CONST_EXT != 0).unwrap_or(false);
+        tlog!("[gs_usb] BT_CONST_EXT feature flag: {}", has_bt_const_ext);
+        let bt_const_ext_result: Option<GsDeviceBtConstExtended> = if has_bt_const_ext {
+            let ext_result = interface
+                .control_in(ControlIn {
+                    control_type: ControlType::Vendor,
+                    recipient: Recipient::Interface,
+                    request: GsUsbBreq::BtConstExt as u8,
+                    value: config.channel as u16,
+                    index: 0,
+                    length: GsDeviceBtConstExtended::SIZE as u16,
+                }, CONTROL_TIMEOUT)
+                .await;
+            match &ext_result {
+                Ok(data) => {
+                    tlog!("[gs_usb] BT_CONST_EXT response: {} bytes", data.len());
+                },
+                Err(e) => {
+                    tlog!("[gs_usb] BT_CONST_EXT request failed: {:?}", e);
+                }
+            }
+            ext_result
+                .ok()
+                .and_then(|data| {
+                    let parsed = GsDeviceBtConstExtended::from_bytes(&data);
+                    if parsed.is_none() {
+                        tlog!("[gs_usb] BT_CONST_EXT: failed to parse {} bytes (need {})", data.len(), GsDeviceBtConstExtended::SIZE);
+                    }
+                    parsed
+                })
+        } else {
+            tlog!("[gs_usb] BT_CONST_EXT not supported by device, using nominal constraints as fallback");
+            None
+        };
 
         let fclk_data = bt_const_ext_result.map(|c| c.fclk_can).unwrap_or(fclk_can);
-        let data_constraints = bt_const_ext_result.map(|c| c.constraints());
+        let data_constraints = bt_const_ext_result.map(|c| c.data_constraints())
+            .or_else(|| nominal_constraints);
 
         if let Some(ref dc) = data_constraints {
+            let source = if bt_const_ext_result.is_some() { "BT_CONST_EXT" } else { "BT_CONST (nominal fallback)" };
             tlog!(
-                "[gs_usb] FD data constraints: tseg1={}-{}, tseg2={}-{}, sjw_max={}, brp={}-{} (inc {}), clock: {} Hz",
-                dc.tseg1_min, dc.tseg1_max, dc.tseg2_min, dc.tseg2_max,
+                "[gs_usb] FD data constraints ({}): tseg1={}-{}, tseg2={}-{}, sjw_max={}, brp={}-{} (inc {}), clock: {} Hz",
+                source, dc.tseg1_min, dc.tseg1_max, dc.tseg2_min, dc.tseg2_max,
                 dc.sjw_max, dc.brp_min, dc.brp_max, dc.brp_inc, fclk_data
             );
         } else {
-            tlog!("[gs_usb] FD: BT_CONST_EXT not available, using nominal clock {} Hz", fclk_can);
+            tlog!("[gs_usb] FD: No constraints available for data phase, using nominal clock {} Hz", fclk_can);
         }
 
         // Calculate data phase timing using device constraints
@@ -896,6 +960,11 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
             )
         };
 
+        tlog!(
+            "[gs_usb] Sending DATA_BITTIMING ({} bytes): {:02X?}",
+            data_timing_bytes.len(), data_timing_bytes
+        );
+
         interface
             .control_out(ControlOut {
                 control_type: ControlType::Vendor,
@@ -919,6 +988,12 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
     // Add FD mode flag if enabled
     if config.enable_fd {
         mode_flags |= can_mode::FD;
+    }
+
+    // Enable packet padding if device supports it (matches Linux gs_usb driver)
+    let has_pad = bt_const.map(|c| c.feature & can_feature::PAD_PKTS_TO_MAX_PKT_SIZE != 0).unwrap_or(false);
+    if has_pad {
+        mode_flags |= can_mode::PAD_PKTS_TO_MAX_PKT_SIZE;
     }
 
     let mode = GsDeviceMode {
@@ -984,8 +1059,11 @@ pub fn parse_host_frame(data: &[u8]) -> Option<FrameMessage> {
         return None;
     }
 
-    // Check flags byte to determine if this is an FD frame
-    let is_fd_frame = data.len() >= 12 && (data[10] & can_fd_flags::FD) != 0;
+    // Check flags byte and DLC to determine if this is an FD frame.
+    // Some firmware versions don't set the FD flag on received frames,
+    // so also detect FD by DLC > 8 (only valid for CAN FD).
+    let has_fd_flag = data.len() >= 12 && (data[10] & can_fd_flags::FD) != 0;
+    let is_fd_frame = has_fd_flag || data[8] > 8;
 
     if is_fd_frame && data.len() >= GsHostFrameFd::SIZE {
         // Parse as FD frame
@@ -993,12 +1071,13 @@ pub fn parse_host_frame(data: &[u8]) -> Option<FrameMessage> {
         if !gs_frame.is_rx() {
             return None;
         }
+        let actual_len = DLC_LEN[(gs_frame.can_dlc as usize).min(15)];
         Some(FrameMessage {
             protocol: "can".to_string(),
             timestamp_us: now_us(),
             frame_id: gs_frame.get_can_id(),
             bus: gs_frame.channel,
-            dlc: gs_frame.can_dlc,
+            dlc: actual_len as u8,
             bytes: gs_frame.get_data().to_vec(),
             is_extended: gs_frame.is_extended(),
             is_fd: true,
@@ -1189,8 +1268,9 @@ pub async fn run_source(
         None
     };
 
-    // Buffer size: 76 bytes for FD mode, 64 for classic
-    let buf_size = if enable_fd { GsHostFrameFd::SIZE } else { 64 };
+    // Buffer size: must accommodate padding to USB max packet size (64 bytes for full-speed).
+    // FD frame = 76 bytes → padded to 128 bytes; classic = 32 bytes → padded to 64 bytes.
+    let buf_size = if enable_fd { 128 } else { 64 };
 
     // Pre-submit read requests
     for _ in 0..4 {
