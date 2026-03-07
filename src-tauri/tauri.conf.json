@@ -41,9 +41,7 @@
       "examples/*": "examples/"
     },
     "macOS": {
-      "infoPlist": "Info.plist",
-      "signingIdentity": "Apple Development: alex@wiredsquare.com (QH9YWB8VHW)",
-      "providerShortName": "YZ6PQTJH79"
+      "infoPlist": "Info.plist"
     }
   }
 }

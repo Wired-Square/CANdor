@@ -19,6 +19,10 @@ All notable changes to WireTAP will be documented in this file.
 
 - **CSV column auto-detection**: Unique roles (Frame ID, Timestamp, Sequence) are now deduplicated — if a column is already detected via header match, subsequent columns with similar content patterns are set to Ignore instead of producing duplicates.
 
+### Changed
+
+- **macOS code signing and notarisation**: Switched from Apple Development certificate to Developer ID Application certificate for GitHub releases. Added Apple notarisation so downloaded builds are trusted by Gatekeeper without manual overrides. Signing identity and team ID are now sourced from CI environment variables instead of being hardcoded in the Tauri config.
+
 ## [0.5.3] - 2026-03-07
 
 ### Added
