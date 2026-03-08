@@ -82,7 +82,7 @@ impl Default for VirtualDeviceConfig {
 }
 
 // CAN frame patterns — matching canfd_test.py test signal generator
-const CAN_PATTERNS: &[(u32, &[u8])] = &[
+pub const CAN_PATTERNS: &[(u32, &[u8])] = &[
     (0x100, &[0xC0, 0xFF, 0xEE, 0x42, 0xC0, 0xFF, 0xEE, 0x42]),
     (0x200, &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]),
     (0x300, &[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),
@@ -94,7 +94,7 @@ const CAN_PATTERNS: &[(u32, &[u8])] = &[
 ];
 
 // Modbus register numbers to cycle through (holding registers)
-const MODBUS_REGISTERS: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+pub const MODBUS_REGISTERS: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 /// Loopback message — either a CAN frame or raw bytes
 enum LoopbackMessage {
@@ -411,12 +411,12 @@ impl IODevice for VirtualDeviceReader {
 // ============================================================================
 
 /// Build a 64-byte CAN-FD payload by repeating a pattern
-fn repeat_to_64(pattern: &[u8]) -> Vec<u8> {
+pub fn repeat_to_64(pattern: &[u8]) -> Vec<u8> {
     pattern.iter().cycle().take(64).copied().collect()
 }
 
 /// Get the CAN-FD patterns (64-byte payloads)
-fn canfd_patterns() -> Vec<(u32, Vec<u8>)> {
+pub fn canfd_patterns() -> Vec<(u32, Vec<u8>)> {
     vec![
         (0x100, repeat_to_64(&[0xC0, 0xFF, 0xEE, 0x42])),
         (0x200, (0u8..64).collect()),

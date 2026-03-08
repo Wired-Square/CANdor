@@ -488,6 +488,9 @@ async fn run_serial_reader(
 
 /// Virtual CAN source for multi-source sessions: generates synthetic frames and sends
 /// them via the merge channel (no direct emit_frames call — merge task handles that).
+///
+/// Parses the same `interfaces` array config as `VirtualDeviceReader` in virtual_device/mod.rs,
+/// spawning one generator task per bus with independent frame rates and patterns.
 async fn run_virtual_reader(
     source_idx: usize,
     profile: &IOProfile,
@@ -495,22 +498,70 @@ async fn run_virtual_reader(
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
 ) {
-    const SYNTHETIC_FRAME_IDS: &[u32] = &[
-        0x100, 0x200, 0x300, 0x123, 0x456, 0x700, 0x1FF, 0x7FF,
-    ];
+    use crate::io::virtual_device::{canfd_patterns, CAN_PATTERNS, MODBUS_REGISTERS};
 
-    let frame_rate_hz = profile
+    // Parse traffic type
+    let traffic_type = match profile.connection.get("traffic_type").and_then(|v| v.as_str()) {
+        Some("canfd") => "canfd",
+        Some("modbus") => "modbus",
+        _ => "can",
+    };
+
+    // Parse per-bus interface configs from connection.interfaces array.
+    // Falls back to legacy bus_count / frame_rate_hz / signal_generator fields.
+    struct IfaceConfig {
+        bus: u8,
+        signal_generator: bool,
+        frame_rate_hz: f64,
+    }
+
+    let interfaces: Vec<IfaceConfig> = profile
         .connection
-        .get("frame_rate_hz")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(10.0)
-        .clamp(0.1, 1000.0);
-    let bus_count = profile
-        .connection
-        .get("bus_count")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(1)
-        .clamp(1, 8) as u8;
+        .get("interfaces")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| {
+                    let bus = item
+                        .get("bus")
+                        .and_then(|v| v.as_i64().map(|n| n as u8).or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                        .unwrap_or(0);
+                    let signal_generator = item
+                        .get("signal_generator")
+                        .and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| s != "false")))
+                        .unwrap_or(true);
+                    let frame_rate_hz = item
+                        .get("frame_rate_hz")
+                        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                        .unwrap_or(10.0)
+                        .clamp(0.1, 1000.0);
+                    Some(IfaceConfig { bus, signal_generator, frame_rate_hz })
+                })
+                .collect()
+        })
+        .unwrap_or_else(|| {
+            // Legacy fallback
+            let frame_rate_hz = profile
+                .connection
+                .get("frame_rate_hz")
+                .and_then(|v| v.as_str().and_then(|s| s.parse().ok()).or_else(|| v.as_f64()))
+                .unwrap_or(10.0)
+                .clamp(0.1, 1000.0);
+            let signal_generator = profile
+                .connection
+                .get("signal_generator")
+                .and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| s != "false")))
+                .unwrap_or(true);
+            let bus_count = profile
+                .connection
+                .get("bus_count")
+                .and_then(|v| v.as_str().and_then(|s| s.parse().ok()).or_else(|| v.as_i64().map(|n| n as u8)))
+                .unwrap_or(1)
+                .clamp(1, 8);
+            (0..bus_count)
+                .map(|bus| IfaceConfig { bus, signal_generator, frame_rate_hz })
+                .collect()
+        });
 
     let _ = tx
         .send(SourceMessage::Connected(
@@ -569,60 +620,136 @@ async fn run_virtual_reader(
         }
     });
 
-    let interval_us = (1_000_000.0 / frame_rate_hz) as u64;
-    let mut ticker = interval(Duration::from_micros(interval_us));
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Pre-compute CAN-FD patterns once (shared across bus tasks via Arc)
+    let canfd_pats = if traffic_type == "canfd" {
+        Arc::new(canfd_patterns())
+    } else {
+        Arc::new(Vec::new())
+    };
 
-    let mut counter: u64 = 0;
-
-    loop {
-        ticker.tick().await;
-
-        if stop_flag.load(Ordering::Relaxed) {
-            break;
+    // Spawn one generator task per bus interface
+    let mut gen_handles = Vec::new();
+    for iface in &interfaces {
+        if !iface.signal_generator {
+            continue;
         }
 
-        let frame_id = SYNTHETIC_FRAME_IDS[(counter as usize) % SYNTHETIC_FRAME_IDS.len()];
-        let device_bus = (counter as u8) % bus_count;
+        let tx_clone = tx.clone();
+        let stop_clone = stop_flag.clone();
+        let bus_mappings_clone = bus_mappings.clone();
+        let canfd_pats_clone = canfd_pats.clone();
+        let bus = iface.bus;
+        let hz = iface.frame_rate_hz;
+        let traffic = traffic_type.to_string();
 
-        // Map device bus to output bus via bus_mappings
-        let output_bus = bus_mappings
-            .iter()
-            .find(|m| m.device_bus == device_bus)
-            .map(|m| m.output_bus)
-            .unwrap_or(device_bus);
+        let handle = tokio::spawn(async move {
+            let interval_us = (1_000_000.0 / hz) as u64;
+            let mut ticker = interval(Duration::from_micros(interval_us));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        let ts = now_us();
-        let data = vec![
-            ((counter >> 24) & 0xFF) as u8,
-            ((counter >> 16) & 0xFF) as u8,
-            ((counter >> 8) & 0xFF) as u8,
-            (counter & 0xFF) as u8,
-            ((ts >> 24) & 0xFF) as u8,
-            ((ts >> 16) & 0xFF) as u8,
-            ((ts >> 8) & 0xFF) as u8,
-            (ts & 0xFF) as u8,
-        ];
+            // Map device bus to output bus
+            let output_bus = bus_mappings_clone
+                .iter()
+                .find(|m| m.device_bus == bus)
+                .map(|m| m.output_bus)
+                .unwrap_or(bus);
 
-        let frame = FrameMessage {
-            protocol: "can".to_string(),
-            timestamp_us: ts,
-            frame_id,
-            bus: output_bus,
-            dlc: data.len() as u8,
-            bytes: data,
-            is_extended: false,
-            is_fd: false,
-            source_address: None,
-            incomplete: None,
-            direction: Some("rx".to_string()),
-        };
+            let mut counter: u64 = 0;
 
-        if tx.send(SourceMessage::Frames(source_idx, vec![frame])).await.is_err() {
-            break;
-        }
+            loop {
+                ticker.tick().await;
 
-        counter = counter.wrapping_add(1);
+                if stop_clone.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                let ts = now_us();
+
+                let frame = match traffic.as_str() {
+                    "canfd" => {
+                        let pattern_idx = (counter as usize) % (canfd_pats_clone.len() + 1);
+                        let (frame_id, data) = if pattern_idx < canfd_pats_clone.len() {
+                            let (id, ref pat) = canfd_pats_clone[pattern_idx];
+                            (id, pat.clone())
+                        } else {
+                            // Counter frame (0x7E0) — 64 bytes
+                            let cycle = (counter / (canfd_pats_clone.len() as u64 + 1)) + 1;
+                            let c = (cycle as u16).to_be_bytes();
+                            (0x7E0, vec![c[0], c[1]].into_iter().cycle().take(64).collect())
+                        };
+                        FrameMessage {
+                            protocol: "can".to_string(),
+                            timestamp_us: ts,
+                            frame_id,
+                            bus: output_bus,
+                            dlc: data.len() as u8,
+                            bytes: data,
+                            is_extended: false,
+                            is_fd: true,
+                            source_address: None,
+                            incomplete: None,
+                            direction: Some("rx".to_string()),
+                        }
+                    }
+                    "modbus" => {
+                        let reg_idx = (counter as usize) % MODBUS_REGISTERS.len();
+                        let register = MODBUS_REGISTERS[reg_idx];
+                        let value = ((counter / MODBUS_REGISTERS.len() as u64) & 0xFFFF) as u16;
+                        let bytes = value.to_be_bytes().to_vec();
+                        FrameMessage {
+                            protocol: "modbus".to_string(),
+                            timestamp_us: ts,
+                            frame_id: register,
+                            bus: output_bus,
+                            dlc: bytes.len() as u8,
+                            bytes,
+                            is_extended: false,
+                            is_fd: false,
+                            source_address: None,
+                            incomplete: None,
+                            direction: Some("rx".to_string()),
+                        }
+                    }
+                    _ => {
+                        // Classic CAN
+                        let pattern_idx = (counter as usize) % (CAN_PATTERNS.len() + 1);
+                        let (frame_id, data) = if pattern_idx < CAN_PATTERNS.len() {
+                            let (id, pat) = CAN_PATTERNS[pattern_idx];
+                            (id, pat.to_vec())
+                        } else {
+                            let cycle = (counter / (CAN_PATTERNS.len() as u64 + 1)) + 1;
+                            let c = (cycle as u16).to_be_bytes();
+                            (0x7E0, vec![c[0], c[1], c[0], c[1], c[0], c[1], c[0], c[1]])
+                        };
+                        FrameMessage {
+                            protocol: "can".to_string(),
+                            timestamp_us: ts,
+                            frame_id,
+                            bus: output_bus,
+                            dlc: data.len() as u8,
+                            bytes: data,
+                            is_extended: false,
+                            is_fd: false,
+                            source_address: None,
+                            incomplete: None,
+                            direction: Some("rx".to_string()),
+                        }
+                    }
+                };
+
+                if tx_clone.send(SourceMessage::Frames(source_idx, vec![frame])).await.is_err() {
+                    break;
+                }
+
+                counter = counter.wrapping_add(1);
+            }
+        });
+        gen_handles.push(handle);
+    }
+
+    // Wait for all generator tasks to finish
+    for handle in gen_handles {
+        let _ = handle.await;
     }
 
     let _ = tx

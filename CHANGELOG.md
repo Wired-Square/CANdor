@@ -24,6 +24,10 @@ All notable changes to WireTAP will be documented in this file.
 
 - **Local notarisation scripts**: Added `notarise:build`, `notarise:history`, and `notarise:log` npm scripts for local signed builds and notarisation status checks. Added Apple signing placeholders to `.env.example`.
 
+### Fixed
+
+- **Virtual adapter multi-bus in multi-source sessions**: The multi-source spawner's virtual reader now correctly parses the `interfaces` array from profile config, matching the standalone `VirtualDeviceReader`. Previously it only read legacy top-level `bus_count`/`frame_rate_hz` fields, causing all frames to appear on Bus 0 at the default 10 Hz rate. Each bus now gets its own generator task with independent frame rate, correct CAN/CAN-FD/Modbus patterns, and proper `is_fd` flag for CAN-FD traffic.
+
 ## [0.5.4] - 2026-03-07
 
 ### Added
