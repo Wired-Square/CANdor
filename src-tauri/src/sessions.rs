@@ -1491,6 +1491,37 @@ pub async fn probe_device(
     #[cfg(not(target_os = "ios"))]
     use crate::io::slcan::reader::probe_slcan_device;
 
+    // Buffer IDs — metadata already in memory, no profile lookup needed
+    if profile_id.starts_with("buf_") || profile_id == "__imported_buffer__" {
+        if let Some(meta) = buffer_store::get_buffer_metadata(&profile_id) {
+            let bus_count = if meta.buses.is_empty() { 1 } else { meta.buses.len() as u8 };
+            let is_multi_bus = meta.buses.len() > 1;
+            let result = DeviceProbeResult {
+                success: true,
+                device_type: "buffer".to_string(),
+                is_multi_bus,
+                bus_count,
+                primary_info: Some(format!("{} buses", bus_count)),
+                secondary_info: Some(meta.id.clone()),
+                supports_fd: None,
+                error: None,
+            };
+            emit_device_probe(&app, DeviceProbePayload {
+                profile_id: profile_id.clone(),
+                device_type: "buffer".to_string(),
+                address: meta.id.clone(),
+                success: true,
+                cached: false,
+                bus_count,
+                error: None,
+            });
+            // Don't cache buffer probes — metadata may change as data streams in
+            return Ok(result);
+        } else {
+            return Err(format!("Buffer '{}' not found", profile_id));
+        }
+    }
+
     // Check cache first - if we have a successful probe result, return it immediately
     if let Some(cached) = get_cached_probe(&profile_id) {
         tlog!("[probe_device] Returning cached probe result for profile '{}'", profile_id);

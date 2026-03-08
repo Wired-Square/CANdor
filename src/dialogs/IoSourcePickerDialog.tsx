@@ -44,6 +44,7 @@ import {
   type ActiveSessionInfo,
   type DeviceProbeResult,
   type Protocol,
+  type TemporalMode,
   type ProfileUsageInfo,
 } from '../api/io';
 import { getAllFavorites, type TimeRangeFavorite } from "../utils/favorites";
@@ -223,6 +224,7 @@ export default function IoSourcePickerDialog({
   // Multi-buffer state
   const [buffers, setBuffers] = useState<BufferMetadata[]>([]);
   const [selectedBufferId, setSelectedBufferId] = useState<string | null>(null);
+  // (Buffer bus config now uses shared deviceBusConfigMap / singleBusOverrideMap via probeDevice)
 
   // Internal load state (used when external state not provided)
   const [internalIsLoading, setInternalIsLoading] = useState(false);
@@ -280,6 +282,50 @@ export default function IoSourcePickerDialog({
   const loadFrameCount = useExternalState ? (externalLoadFrameCount ?? 0) : internalLoadFrameCount;
   const loadError = useExternalState ? (externalLoadError ?? null) : internalLoadError;
 
+  // Probe a buffer and populate the shared device maps.
+  // All buffers go into deviceBusConfigMap (not singleBusOverrideMap) so the
+  // bus mapper always appears — even single-bus buffers show "Bus 0 → Bus 0".
+  const probeBuffer = useCallback(async (bufferId: string) => {
+    setDeviceProbeLoadingMap((prev) => new Map(prev).set(bufferId, true));
+    try {
+      const result = await probeDevice(bufferId);
+      setDeviceProbeResultMap((prev) => new Map(prev).set(bufferId, result));
+      // Use actual bus numbers from buffer metadata (may be non-sequential)
+      const buffer = buffers.find((b) => b.id === bufferId);
+      const busList = buffer?.buses?.length ? buffer.buses : [0]; // default to bus 0
+      const mappings: BusMapping[] = busList.map((bus) => ({
+        deviceBus: bus,
+        enabled: true,
+        outputBus: bus,
+        interfaceId: `can${bus}`,
+        traits: {
+          temporal_mode: "timeline" as TemporalMode,
+          protocols: ["can", "canfd"] as Protocol[],
+          can_transmit: false,
+        },
+      }));
+      setDeviceBusConfigMap((prev) => new Map(prev).set(bufferId, mappings));
+    } catch (err) {
+      console.error(`[IoSourcePickerDialog] Buffer probe failed for ${bufferId}:`, err);
+      setDeviceProbeResultMap((prev) => new Map(prev).set(bufferId, {
+        success: false,
+        deviceType: "buffer",
+        isMultiBus: false,
+        busCount: 0,
+        primaryInfo: null,
+        secondaryInfo: null,
+        supports_fd: null,
+        error: String(err),
+      }));
+    } finally {
+      setDeviceProbeLoadingMap((prev) => {
+        const newMap = new Map(prev);
+        newMap.delete(bufferId);
+        return newMap;
+      });
+    }
+  }, [buffers]);
+
   // All profiles are read profiles now (mode field removed)
   const readProfiles = ioProfiles;
 
@@ -335,6 +381,25 @@ export default function IoSourcePickerDialog({
           const matchingBuffer = loadedBuffers.find(b => b.id === selectedId);
           if (matchingBuffer) {
             setSelectedBufferId(matchingBuffer.id);
+            // Probe buffer to populate shared bus config maps
+            probeDevice(matchingBuffer.id)
+              .then((result) => {
+                setDeviceProbeResultMap((prev) => new Map(prev).set(matchingBuffer.id, result));
+                const busList = matchingBuffer.buses.length > 0 ? matchingBuffer.buses : [0];
+                const mappings: BusMapping[] = busList.map((bus) => ({
+                  deviceBus: bus,
+                  enabled: true,
+                  outputBus: bus,
+                  interfaceId: `can${bus}`,
+                  traits: {
+                    temporal_mode: "timeline" as TemporalMode,
+                    protocols: ["can", "canfd"] as Protocol[],
+                    can_transmit: false,
+                  },
+                }));
+                setDeviceBusConfigMap((prev) => new Map(prev).set(matchingBuffer.id, mappings));
+              })
+              .catch(console.error);
           } else {
             // Legacy buffer ID - fall back to most recent buffer
             const sorted = [...loadedBuffers].sort((a, b) => b.created_at - a.created_at);
@@ -355,9 +420,13 @@ export default function IoSourcePickerDialog({
       setSelectedSpeed(externalLoadSpeed && externalLoadSpeed > 0 ? externalLoadSpeed : 1);
       setFramingConfig(null);
       // If currently loading, pre-select that profile; otherwise use currently selected profile
-      // Buffer profiles are treated as regular sessions (shown in collapsed view like other sessions)
+      // Buffer IDs should NOT go into checkedReaderId — they use selectedBufferId instead
       const initialReaderId = loadProfileId ?? selectedId;
-      setCheckedReaderId(initialReaderId);
+      if (initialReaderId && isBufferProfileId(initialReaderId)) {
+        setCheckedReaderId(null);
+      } else {
+        setCheckedReaderId(initialReaderId);
+      }
       setImportError(null);
 
       // Initialize multi-bus selection state
@@ -370,6 +439,7 @@ export default function IoSourcePickerDialog({
       setValidationError(null);
 
       // Reset multi-select maps and probed profiles ref
+      // (buffer probe results will be populated after listOrphanedBuffers completes)
       setDeviceProbeResultMap(new Map());
       setDeviceProbeLoadingMap(new Map());
       setDeviceBusConfigMap(new Map());
@@ -799,6 +869,28 @@ export default function IoSourcePickerDialog({
     onClose();
   };
 
+  // Handle Connect for buffer source - passes bus mappings through options
+  const handleBufferConnectClick = () => {
+    // Use selectedBufferId (from clicking a buffer in the list)
+    // or fall back to checkedSourceId (when dialog reopens with buffer pre-selected)
+    const bufferId = selectedBufferId ?? checkedSourceId;
+    if (!bufferId) return;
+    const options = buildLoadOptions(selectedSpeed);
+    // Attach buffer bus mappings from shared device config map
+    const bufferMappings = deviceBusConfigMap.get(bufferId);
+    if (bufferMappings && bufferMappings.length > 0) {
+      const busMappings = new Map<string, BusMapping[]>();
+      busMappings.set(bufferId, bufferMappings);
+      options.busMappings = busMappings;
+    }
+    if (useExternalState) {
+      onStartLoad?.(bufferId, true, options);
+    } else {
+      handleInternalStartLoad(bufferId, options);
+    }
+    onClose();
+  };
+
   // Handle Join button - join an existing live session (no options needed)
   // This also handles joining active multi-source sessions
   const handleJoinClick = () => {
@@ -1211,21 +1303,23 @@ export default function IoSourcePickerDialog({
     }
   };
 
-  // Select a specific orphaned buffer
+  // Select a specific orphaned buffer (local dialog state only — no session created yet)
   const handleSelectBuffer = async (bufferId: string) => {
     try {
       await setActiveBuffer(bufferId);
       setCheckedReaderId(null);
       setSelectedBufferId(bufferId);
-      // Pass the actual buffer ID as the profile ID (e.g., "buffer_1")
-      // This allows unique session naming per buffer
-      onSelect(bufferId);
+      // Don't call onSelect here — that triggers session creation in the parent.
+      // Buffer sessions are only created when the user clicks Connect.
+
+      // Probe buffer to populate shared bus config maps
+      probeBuffer(bufferId);
     } catch (e) {
       console.error("Failed to set active buffer:", e);
     }
   };
 
-  const isBufferSelected = isBufferProfileId(selectedId);
+  const isBufferSelected = isBufferProfileId(selectedId) || selectedBufferId !== null;
 
   // Check if a bytes buffer is selected (for framing options)
   const selectedBuffer = selectedBufferId ? buffers.find((b) => b.id === selectedBufferId) : null;
@@ -1394,6 +1488,14 @@ export default function IoSourcePickerDialog({
                 onClearAllBuffers={handleClearAllBuffers}
                 onBufferRenamed={() => listOrphanedBuffers().then(setBuffers).catch(console.error)}
                 onBufferPersistenceChanged={() => listOrphanedBuffers().then(setBuffers).catch(console.error)}
+                busConfig={selectedBufferId ? deviceBusConfigMap.get(selectedBufferId) : undefined}
+                onBusConfigChange={(config) => {
+                  if (selectedBufferId) {
+                    setDeviceBusConfigMap((prev) => new Map(prev).set(selectedBufferId, config));
+                  }
+                }}
+                isProbing={selectedBufferId ? deviceProbeLoadingMap.get(selectedBufferId) ?? false : false}
+                probeError={selectedBufferId ? deviceProbeResultMap.get(selectedBufferId)?.error ?? null : null}
                 activeSessionBufferMap={new Map(
                   activeMultiSourceSessions
                     .filter((s) => s.deviceType === "buffer")
@@ -1476,6 +1578,7 @@ export default function IoSourcePickerDialog({
           onRestartClick={isCheckedProfileLive && !isCheckedProfileStopped && !checkedMultiSourceSession ? handleRestartClick : undefined}
           isMultiSourceLive={isMultiSourceLive}
           onMultiRestartClick={isMultiSourceLive ? handleMultiRestartClick : undefined}
+          onBufferConnectClick={selectedBufferId ? handleBufferConnectClick : undefined}
           onConnectOnlyClick={checkedSourceId && onConnect ? () => {
             onConnect(checkedSourceId);
             onClose();

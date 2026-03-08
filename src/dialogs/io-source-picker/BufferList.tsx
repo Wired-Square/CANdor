@@ -2,7 +2,7 @@
 //
 // Shows buffers available for replay (from completed sessions or CSV imports).
 
-import { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { Check, FileText, Trash2, Archive, Pencil, Database, Pin, PinOff } from "lucide-react";
 import { iconMd, iconSm, iconXs } from "../../styles/spacing";
 import { badgeSmallInfo } from "../../styles/badgeStyles";
@@ -10,6 +10,8 @@ import { sectionHeader, caption, captionMuted, textMedium } from "../../styles/t
 import { borderDivider, bgSurface } from "../../styles";
 import type { BufferMetadata } from "../../api/buffer";
 import { renameBuffer, setBufferPersistent } from "../../api/buffer";
+import DeviceBusConfig from "./DeviceBusConfig";
+import type { BusMapping } from "../../api/io";
 
 type Props = {
   buffers: BufferMetadata[];
@@ -26,6 +28,14 @@ type Props = {
   onBufferPersistenceChanged?: () => void;
   /** Map of buffer ID to session ID for buffers owned by active sessions */
   activeSessionBufferMap?: Map<string, string>;
+  /** Bus mappings for the selected buffer (from shared probe maps) */
+  busConfig?: BusMapping[];
+  /** Called when buffer bus config changes */
+  onBusConfigChange?: (config: BusMapping[]) => void;
+  /** Whether the buffer is being probed */
+  isProbing?: boolean;
+  /** Probe error message */
+  probeError?: string | null;
 };
 
 export default function BufferList({
@@ -39,6 +49,10 @@ export default function BufferList({
   onBufferRenamed,
   onBufferPersistenceChanged,
   activeSessionBufferMap = new Map(),
+  busConfig,
+  onBusConfigChange,
+  isProbing = false,
+  probeError = null,
 }: Props) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -115,8 +129,8 @@ export default function BufferList({
           const sessionId = activeSessionBufferMap.get(buffer.id);
           const isInSession = sessionId !== undefined;
           return (
+            <React.Fragment key={buffer.id}>
             <div
-              key={buffer.id}
               onClick={() => !isRenaming && onSelectBuffer(buffer.id)}
               role="button"
               tabIndex={0}
@@ -211,6 +225,19 @@ export default function BufferList({
                 <Trash2 className={iconSm} />
               </button>
             </div>
+            {/* Show bus mapping UI when this buffer is selected and has buses */}
+            {isThisBufferSelected && busConfig && busConfig.length > 0 && onBusConfigChange ? (
+              <DeviceBusConfig
+                deviceInfo={{ bus_count: busConfig.length }}
+                isLoading={isProbing}
+                error={probeError}
+                busConfig={busConfig}
+                onBusConfigChange={onBusConfigChange}
+                compact
+                showOutputBus
+              />
+            ) : null}
+          </React.Fragment>
           );
         })}
       </div>

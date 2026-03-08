@@ -50,6 +50,8 @@ type Props = {
   onMultiRestartClick?: () => void;
   /** Called when user clicks Connect in connect mode (creates session without streaming) */
   onConnectOnlyClick?: () => void;
+  /** Called when user clicks Connect for a buffer source (with bus mappings) */
+  onBufferConnectClick?: () => void;
 };
 
 export default function ActionButtons({
@@ -78,6 +80,7 @@ export default function ActionButtons({
   isMultiSourceLive = false,
   onMultiRestartClick,
   onConnectOnlyClick,
+  onBufferConnectClick,
 }: Props) {
   const isCsvSelected = checkedSourceId === CSV_EXTERNAL_ID;
   const isCheckedRealtime = checkedProfile ? isRealtimeProfile(checkedProfile) : false;
@@ -175,14 +178,14 @@ export default function ActionButtons({
           {releaseButton}
         </div>
       ) : checkedSourceId && isBufferProfileId(checkedSourceId) ? (
-        // Buffer session selected — just show Join (no Resume/Ingest/Watch)
+        // Buffer source selected — show Connect (with bus mappings)
         <div className="flex gap-2">
           <button
-            onClick={onJoinClick ?? onClose}
+            onClick={onBufferConnectClick ?? onJoinClick ?? onClose}
             className={`flex-1 ${successButtonBase}`}
           >
             <Plug className={iconMd} />
-            <span>Join</span>
+            <span>Connect</span>
           </button>
           {releaseButton}
         </div>
@@ -266,14 +269,14 @@ export default function ActionButtons({
           </div>
         )
       ) : isBufferSelected ? (
-        // Buffer is selected, no IO reader checked - show OK to keep buffer
+        // Buffer is selected - show Connect if bus mapping available, otherwise OK
         <div className="flex gap-2">
           <button
-            onClick={onClose}
-            className={`flex-1 ${primaryButtonBase}`}
+            onClick={onBufferConnectClick ?? onClose}
+            className={`flex-1 ${onBufferConnectClick ? successButtonBase : primaryButtonBase}`}
           >
-            <Check className={iconMd} />
-            <span>OK</span>
+            {onBufferConnectClick ? <Plug className={iconMd} /> : <Check className={iconMd} />}
+            <span>{onBufferConnectClick ? "Connect" : "OK"}</span>
           </button>
           {releaseButton}
         </div>
