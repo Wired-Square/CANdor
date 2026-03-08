@@ -633,10 +633,14 @@ async fn run_virtual_reader(
         Arc::new(Vec::new())
     };
 
-    // Register per-bus controls in the shared map and spawn generator tasks for ALL buses
-    // (even disabled ones — they check the traffic_enabled flag on each tick)
+    // Register per-bus controls in the shared map and spawn generator tasks for buses
+    // that have an enabled mapping (or all buses when no mappings are configured)
     let mut gen_handles: HashMap<u8, tokio::task::JoinHandle<()>> = HashMap::new();
     for iface in &interfaces {
+        // Skip buses that have no enabled mapping (but allow all when mappings are empty)
+        if !bus_mappings.is_empty() && !bus_mappings.iter().any(|m| m.device_bus == iface.bus && m.enabled) {
+            continue;
+        }
         let handle = spawn_bus_generator(
             iface.bus,
             iface.signal_generator,
@@ -664,6 +668,11 @@ async fn run_virtual_reader(
                     // Don't add if already exists
                     if gen_handles.contains_key(&bus) {
                         tlog!("[virtual_reader] Bus {} already exists, skipping add", bus);
+                        continue;
+                    }
+                    // Skip if bus has no enabled mapping
+                    if !bus_mappings.is_empty() && !bus_mappings.iter().any(|m| m.device_bus == bus && m.enabled) {
+                        tlog!("[virtual_reader] Bus {} has no enabled mapping, skipping add", bus);
                         continue;
                     }
                     let tt_str = match tt.as_str() {

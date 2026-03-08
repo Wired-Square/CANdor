@@ -11,6 +11,8 @@ export interface SessionNodeData {
   label: string;
   /** Input interface handles (one per source mapping, e.g., ["can0", "can1"]) */
   inputInterfaces?: string[];
+  /** Disabled input interfaces available for reconnection */
+  disabledInputInterfaces?: string[];
 }
 
 interface SessionNodeProps {
@@ -19,7 +21,12 @@ interface SessionNodeProps {
 }
 
 function SessionNode({ data, selected }: SessionNodeProps) {
-  const { session, label, inputInterfaces } = data;
+  const { session, label, inputInterfaces, disabledInputInterfaces } = data;
+  // Merge enabled + disabled interfaces for handle layout
+  const allInputs = [
+    ...(inputInterfaces ?? []).map((id) => ({ id, enabled: true })),
+    ...(disabledInputInterfaces ?? []).map((id) => ({ id, enabled: false })),
+  ].sort((a, b) => a.id.localeCompare(b.id));
   const isRunning = session.state === "running";
   const isStopped = session.state === "stopped";
   const isPaused = session.state === "paused";
@@ -72,10 +79,10 @@ function SessionNode({ data, selected }: SessionNodeProps) {
     <div
       className={`px-4 py-3 rounded-lg border-2 ${borderColour} ${bgColour} min-w-[180px] shadow-lg`}
     >
-      {/* Input handles — one per source interface, or a single default */}
-      {inputInterfaces && inputInterfaces.length > 1 ? (
-        inputInterfaces.map((ifaceId, i) => {
-          const pct = ((i + 1) / (inputInterfaces.length + 1)) * 100;
+      {/* Input handles — one per source interface (enabled + disabled), or a single default */}
+      {allInputs.length > 1 ? (
+        allInputs.map(({ id: ifaceId, enabled }, i) => {
+          const pct = ((i + 1) / (allInputs.length + 1)) * 100;
           return (
             <Handle
               key={ifaceId}
@@ -83,15 +90,29 @@ function SessionNode({ data, selected }: SessionNodeProps) {
               type="target"
               position={Position.Left}
               style={{ top: `${pct}%` }}
-              className="!w-3 !h-3 !bg-cyan-500 !border-2 !border-cyan-300"
+              className={
+                enabled
+                  ? "!w-3 !h-3 !bg-cyan-500 !border-2 !border-cyan-300"
+                  : "!w-3 !h-3 !bg-gray-600 !border-2 !border-gray-500 !opacity-50"
+              }
             />
           );
         })
+      ) : allInputs.length === 1 ? (
+        <Handle
+          type="target"
+          position={Position.Left}
+          id={`in-${allInputs[0].id}`}
+          className={
+            allInputs[0].enabled
+              ? "!w-3 !h-3 !bg-cyan-500 !border-2 !border-cyan-300"
+              : "!w-3 !h-3 !bg-gray-600 !border-2 !border-gray-500 !opacity-50"
+          }
+        />
       ) : (
         <Handle
           type="target"
           position={Position.Left}
-          id={inputInterfaces?.[0] ? `in-${inputInterfaces[0]}` : undefined}
           className="!w-3 !h-3 !bg-cyan-500 !border-2 !border-cyan-300"
         />
       )}

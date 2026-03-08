@@ -59,13 +59,21 @@ export function buildSessionGraph(
 
   // Build profileId → Set<deviceBus> for output handles on source nodes
   const profileDeviceBuses = new Map<string, Set<number>>();
+  const profileDisabledBuses = new Map<string, Set<number>>();
   sessions.forEach((session) => {
     session.multiSourceConfigs?.forEach((config) => {
-      const set = profileDeviceBuses.get(config.profileId) ?? new Set();
+      const enabledSet = profileDeviceBuses.get(config.profileId) ?? new Set();
+      const disabledSet = profileDisabledBuses.get(config.profileId) ?? new Set();
       for (const m of config.busMappings) {
-        if (m.enabled) set.add(m.deviceBus);
+        if (m.enabled) {
+          enabledSet.add(m.deviceBus);
+          disabledSet.delete(m.deviceBus);
+        } else if (!enabledSet.has(m.deviceBus)) {
+          disabledSet.add(m.deviceBus);
+        }
       }
-      profileDeviceBuses.set(config.profileId, set);
+      profileDeviceBuses.set(config.profileId, enabledSet);
+      profileDisabledBuses.set(config.profileId, disabledSet);
     });
   });
 
@@ -80,6 +88,10 @@ export function buildSessionGraph(
     );
     const deviceBusSet = profileDeviceBuses.get(profile.id);
     const outputBuses = deviceBusSet ? [...deviceBusSet].sort((a, b) => a - b) : undefined;
+    const disabledBusSet = profileDisabledBuses.get(profile.id);
+    const disabledBuses = disabledBusSet && disabledBusSet.size > 0
+      ? [...disabledBusSet].sort((a, b) => a - b)
+      : undefined;
 
     const nodeData: SourceNodeData = {
       profileId: profile.id,
@@ -88,6 +100,7 @@ export function buildSessionGraph(
       isRealtime,
       isActive: true,
       outputBuses,
+      disabledBuses,
     };
 
     nodes.push({
@@ -124,11 +137,21 @@ export function buildSessionGraph(
   sessions.forEach((session, index) => {
     // Collect all mapped input interfaces for this session (one per source mapping)
     const inputInterfaces: string[] = [];
+    const disabledInputInterfaces: string[] = [];
     session.sourceProfileIds.forEach((profileId) => {
       const sourceConfig = session.multiSourceConfigs?.find((c) => c.profileId === profileId);
-      const enabledMappings = sourceConfig?.busMappings.filter((m) => m.enabled) ?? [];
-      for (const m of enabledMappings) {
-        inputInterfaces.push(`bus${m.outputBus}`);
+      if (!sourceConfig) return;
+      const enabledOutputBuses = new Set<number>();
+      for (const m of sourceConfig.busMappings) {
+        if (m.enabled) {
+          inputInterfaces.push(`bus${m.outputBus}`);
+          enabledOutputBuses.add(m.outputBus);
+        }
+      }
+      for (const m of sourceConfig.busMappings) {
+        if (!m.enabled && !enabledOutputBuses.has(m.outputBus)) {
+          disabledInputInterfaces.push(`bus${m.outputBus}`);
+        }
       }
     });
 
@@ -136,6 +159,7 @@ export function buildSessionGraph(
       session,
       label: session.sessionId,
       inputInterfaces: inputInterfaces.length > 0 ? inputInterfaces : undefined,
+      disabledInputInterfaces: disabledInputInterfaces.length > 0 ? disabledInputInterfaces : undefined,
     };
 
     nodes.push({

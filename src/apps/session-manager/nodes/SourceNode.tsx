@@ -13,6 +13,8 @@ export interface SourceNodeData {
   isActive: boolean;
   /** Device bus numbers this source outputs (one handle per bus) */
   outputBuses?: number[];
+  /** Device bus numbers with disabled mappings (shown as muted handles) */
+  disabledBuses?: number[];
 }
 
 interface SourceNodeProps {
@@ -21,7 +23,12 @@ interface SourceNodeProps {
 }
 
 function SourceNode({ data, selected }: SourceNodeProps) {
-  const { profileName, deviceType, isRealtime, isActive, outputBuses } = data;
+  const { profileName, deviceType, isRealtime, isActive, outputBuses, disabledBuses } = data;
+  // Merge enabled + disabled buses for handle layout (disabled shown as muted)
+  const allBuses = [
+    ...(outputBuses ?? []).map((b) => ({ bus: b, enabled: true })),
+    ...(disabledBuses ?? []).map((b) => ({ bus: b, enabled: false })),
+  ].sort((a, b) => a.bus - b.bus);
 
   const borderColour = selected
     ? "border-cyan-400"
@@ -57,10 +64,10 @@ function SourceNode({ data, selected }: SourceNodeProps) {
         )}
       </div>
 
-      {/* Output handles — one per bus, or a single default */}
-      {outputBuses && outputBuses.length > 1 ? (
-        outputBuses.map((bus, i) => {
-          const pct = ((i + 1) / (outputBuses.length + 1)) * 100;
+      {/* Output handles — one per bus (enabled + disabled), or a single default */}
+      {allBuses.length > 1 ? (
+        allBuses.map(({ bus, enabled }, i) => {
+          const pct = ((i + 1) / (allBuses.length + 1)) * 100;
           return (
             <Handle
               key={bus}
@@ -68,15 +75,29 @@ function SourceNode({ data, selected }: SourceNodeProps) {
               type="source"
               position={Position.Right}
               style={{ top: `${pct}%` }}
-              className="!w-3 !h-3 !bg-purple-500 !border-2 !border-purple-300"
+              className={
+                enabled
+                  ? "!w-3 !h-3 !bg-purple-500 !border-2 !border-purple-300"
+                  : "!w-3 !h-3 !bg-gray-600 !border-2 !border-gray-500 !opacity-50"
+              }
             />
           );
         })
+      ) : allBuses.length === 1 ? (
+        <Handle
+          type="source"
+          position={Position.Right}
+          id={`out-bus${allBuses[0].bus}`}
+          className={
+            allBuses[0].enabled
+              ? "!w-3 !h-3 !bg-purple-500 !border-2 !border-purple-300"
+              : "!w-3 !h-3 !bg-gray-600 !border-2 !border-gray-500 !opacity-50"
+          }
+        />
       ) : (
         <Handle
           type="source"
           position={Position.Right}
-          id={outputBuses?.[0] !== undefined ? `out-bus${outputBuses[0]}` : undefined}
           className="!w-3 !h-3 !bg-purple-500 !border-2 !border-purple-300"
         />
       )}

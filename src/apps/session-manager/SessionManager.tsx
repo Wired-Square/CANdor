@@ -184,6 +184,31 @@ export default function SessionManager() {
     }
   }, [sessions, fetchSessions]);
 
+  const handleEnableBusMapping = useCallback(async (
+    sessionId: string,
+    profileId: string,
+    deviceBus: number,
+    outputBus: number,
+  ) => {
+    const session = sessions.find((s) => s.sessionId === sessionId);
+    const config = session?.multiSourceConfigs?.find((c) => c.profileId === profileId);
+    if (!config) return;
+
+    // Re-enable the matching disabled mapping
+    const updatedMappings = config.busMappings.map((m) =>
+      m.deviceBus === deviceBus && m.outputBus === outputBus
+        ? { ...m, enabled: true }
+        : m
+    );
+
+    try {
+      await updateSourceBusMappings(sessionId, profileId, updatedMappings);
+      await fetchSessions();
+    } catch (error) {
+      console.error("[SessionManager] Failed to enable bus mapping:", error);
+    }
+  }, [sessions, fetchSessions]);
+
   // Available profiles for add source dialog (realtime profiles not already in the session)
   const addSourceSession = addSourceSessionId
     ? sessions.find((s) => s.sessionId === addSourceSessionId)
@@ -218,7 +243,11 @@ export default function SessionManager() {
             {/* Main canvas */}
             <div className="flex-1 min-h-0">
               <ReactFlowProvider>
-                <SessionCanvas sessions={sessions} profiles={profiles} />
+                <SessionCanvas
+                  sessions={sessions}
+                  profiles={profiles}
+                  onEnableBusMapping={handleEnableBusMapping}
+                />
               </ReactFlowProvider>
             </div>
 

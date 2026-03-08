@@ -16,6 +16,8 @@ All notable changes to WireTAP will be documented in this file.
 
 - **Bus mapping hot-update**: New `update_source_bus_mappings` Tauri command enables disabling individual bus mappings on a running session via hot-swap (remove + re-add source). The Session and Source detail panels expose per-mapping trash buttons; disabling the last mapping on a multi-source profile removes the source entirely.
 
+- **Drag-to-connect bus mappings**: Disabled bus mappings appear as muted handles on source and session nodes in the Visual tab. Dragging from a disabled source handle to a disabled session handle re-enables the mapping, allowing bus reconnection without leaving the graph view.
+
 - **Hot source and bus add/remove**: Adding or removing sources from a running multi-source session no longer stops and restarts the entire session. New sources are spawned into the running merge task; removed sources are signalled to stop individually. Virtual bus generators can also be added and removed at runtime via the Source Details panel.
 
 - **Optional loopback for virtual adapters**: Virtual adapter transmit loopback is now configurable (previously always-on). When disabled, the adapter rejects transmit requests.
@@ -33,6 +35,8 @@ All notable changes to WireTAP will be documented in this file.
 - **Local notarisation scripts**: Added `notarise:build`, `notarise:history`, and `notarise:log` npm scripts for local signed builds and notarisation status checks. Added Apple signing placeholders to `.env.example`.
 
 ### Fixed
+
+- **Bus mapping deletion on virtual adapters**: Disabling a bus mapping on a running virtual adapter session now correctly stops frame generation for that bus. Previously, the hot-swap respawned generators for all profile interfaces regardless of mapping state, so frames continued arriving on the deleted bus.
 
 - **Virtual adapter Hz stepping**: Fixed Hz number inputs stepping in fractional increments (1 → 1.1 → 2.1) in both the profile dialog and runtime controls. Changed step to 1 and min to 1 for whole-number increments.
 

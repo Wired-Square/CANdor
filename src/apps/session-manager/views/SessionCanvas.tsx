@@ -12,6 +12,8 @@ import {
   type Node,
   type NodeTypes,
   type EdgeTypes,
+  type Connection,
+  type Edge,
   BackgroundVariant,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -41,9 +43,10 @@ const edgeTypes: EdgeTypes = {
 interface SessionCanvasProps {
   sessions: ActiveSessionInfo[];
   profiles: IOProfile[];
+  onEnableBusMapping?: (sessionId: string, profileId: string, deviceBus: number, outputBus: number) => void;
 }
 
-export default function SessionCanvas({ sessions, profiles }: SessionCanvasProps) {
+export default function SessionCanvas({ sessions, profiles, onEnableBusMapping }: SessionCanvasProps) {
   const { fitView } = useReactFlow();
   const setSelectedNode = useSessionManagerStore((s) => s.setSelectedNode);
 
@@ -99,6 +102,57 @@ export default function SessionCanvas({ sessions, profiles }: SessionCanvasProps
     setSelectedNode(null);
   }, [setSelectedNode]);
 
+  // Handle drag-to-connect: re-enable a disabled bus mapping
+  const onConnect = useCallback(
+    (connection: Connection) => {
+      if (!onEnableBusMapping) return;
+      const { source, sourceHandle, target, targetHandle } = connection;
+      if (!source || !target || !sourceHandle || !targetHandle) return;
+
+      // Extract IDs: source="source-{profileId}", target="session-{sessionId}"
+      const profileId = source.replace(/^source-/, "");
+      const sessionId = target.replace(/^session-/, "");
+      // sourceHandle="out-bus{N}", targetHandle="in-bus{N}"
+      const deviceBusMatch = sourceHandle.match(/^out-bus(\d+)$/);
+      const outputBusMatch = targetHandle.match(/^in-bus(\d+)$/);
+      if (!deviceBusMatch || !outputBusMatch) return;
+
+      const deviceBus = parseInt(deviceBusMatch[1], 10);
+      const outputBus = parseInt(outputBusMatch[1], 10);
+      onEnableBusMapping(sessionId, profileId, deviceBus, outputBus);
+    },
+    [onEnableBusMapping]
+  );
+
+  // Only allow connecting source→session nodes for disabled mappings
+  const isValidConnection = useCallback(
+    (connection: Edge | Connection) => {
+      const { source, target, sourceHandle, targetHandle } = connection;
+      if (!source?.startsWith("source-") || !target?.startsWith("session-")) return false;
+      if (!sourceHandle?.startsWith("out-bus") || !targetHandle?.startsWith("in-bus")) return false;
+
+      // Check this mapping exists but is disabled
+      const profileId = source.replace(/^source-/, "");
+      const sessionId = target.replace(/^session-/, "");
+      const deviceBusMatch = sourceHandle.match(/^out-bus(\d+)$/);
+      const outputBusMatch = targetHandle.match(/^in-bus(\d+)$/);
+      if (!deviceBusMatch || !outputBusMatch) return false;
+
+      const deviceBus = parseInt(deviceBusMatch[1], 10);
+      const outputBus = parseInt(outputBusMatch[1], 10);
+
+      const session = sessions.find((s) => s.sessionId === sessionId);
+      const config = session?.multiSourceConfigs?.find((c) => c.profileId === profileId);
+      if (!config) return false;
+
+      // Allow only if there's a disabled mapping matching these buses
+      return config.busMappings.some(
+        (m) => m.deviceBus === deviceBus && m.outputBus === outputBus && !m.enabled
+      );
+    },
+    [sessions]
+  );
+
   return (
     <div className="w-full h-full">
       <ReactFlow
@@ -108,6 +162,8 @@ export default function SessionCanvas({ sessions, profiles }: SessionCanvasProps
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
         onPaneClick={onPaneClick}
+        onConnect={onConnect}
+        isValidConnection={isValidConnection}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         minZoom={0.1}
