@@ -632,6 +632,26 @@ pub trait IODevice: Send + Sync {
         Err("This device does not support virtual bus states".to_string())
     }
 
+    /// Hot-add a source to a running multi-source session.
+    fn add_source_hot(&mut self, _source: multi_source::SourceConfig) -> Result<(), String> {
+        Err("This device does not support hot source add".to_string())
+    }
+
+    /// Hot-remove a source from a running multi-source session.
+    fn remove_source_hot(&mut self, _profile_id: &str) -> Result<(), String> {
+        Err("This device does not support hot source remove".to_string())
+    }
+
+    /// Add a virtual bus generator to a running session.
+    fn add_virtual_bus(&mut self, _bus: u8, _traffic_type: String, _frame_rate_hz: f64) -> Result<(), String> {
+        Err("This device does not support virtual bus add".to_string())
+    }
+
+    /// Remove a virtual bus generator from a running session.
+    fn remove_virtual_bus(&mut self, _bus: u8) -> Result<(), String> {
+        Err("This device does not support virtual bus remove".to_string())
+    }
+
     /// For multi-source sessions, return the source configurations.
     /// Default implementation returns None.
     fn multi_source_configs(&self) -> Option<Vec<multi_source::SourceConfig>> {
@@ -2160,6 +2180,26 @@ pub async fn get_session_virtual_bus_states(session_id: &str) -> Result<Vec<Virt
     session.device.virtual_bus_states()
 }
 
+/// Add a virtual bus generator to a running session
+pub async fn add_session_virtual_bus(session_id: &str, bus: u8, traffic_type: String, frame_rate_hz: f64) -> Result<(), String> {
+    let mut sessions = IO_SESSIONS.lock().await;
+    let session = sessions
+        .get_mut(session_id)
+        .ok_or_else(|| format!("Session '{}' not found", session_id))?;
+
+    session.device.add_virtual_bus(bus, traffic_type, frame_rate_hz)
+}
+
+/// Remove a virtual bus generator from a running session
+pub async fn remove_session_virtual_bus(session_id: &str, bus: u8) -> Result<(), String> {
+    let mut sessions = IO_SESSIONS.lock().await;
+    let session = sessions
+        .get_mut(session_id)
+        .ok_or_else(|| format!("Session '{}' not found", session_id))?;
+
+    session.device.remove_virtual_bus(bus)
+}
+
 /// Update speed for a reader session
 pub async fn update_session_speed(session_id: &str, speed: f64) -> Result<(), String> {
     let mut sessions = IO_SESSIONS.lock().await;
@@ -2838,7 +2878,7 @@ pub async fn add_source_to_session(
         .ok_or_else(|| format!("Session '{}' not found", session_id))?;
 
     // Get current source configs — only multi-source sessions support this
-    let mut existing_configs = session.device.multi_source_configs()
+    let existing_configs = session.device.multi_source_configs()
         .ok_or_else(|| "Session does not support multi-source — cannot add a source".to_string())?;
 
     // Check for duplicate profile
@@ -2849,49 +2889,33 @@ pub async fn add_source_to_session(
         ));
     }
 
-    let was_running = matches!(session.device.state(), IOState::Running);
-
-    // Stop the current device
-    if was_running {
-        let previous = session.device.state();
-        session.device.stop().await?;
-        let current = session.device.state();
-        if previous != current {
-            emit_state_change(&session.app, session_id, &previous, &current);
-        }
-    }
-
-    // Orphan the current buffer so listeners keep their data
-    let orphaned = buffer_store::orphan_buffers_for_session(session_id);
-    if !orphaned.is_empty() {
-        emit_buffer_orphaned(&session.app, session_id, orphaned);
-    }
-
-    // Append the new source and update display names
     let new_display_name = new_source.display_name.clone();
-    existing_configs.push(new_source);
 
-    let source_display_names: Vec<String> = existing_configs.iter()
+    // If the session is running, hot-add the source without stopping
+    if matches!(session.device.state(), IOState::Running) {
+        session.device.add_source_hot(new_source)?;
+        session.source_names.push(new_display_name.clone());
+        let capabilities = session.device.capabilities();
+        tlog!(
+            "[reader] Hot-added source '{}' to session '{}' (sources: {:?})",
+            new_display_name, session_id, session.source_names
+        );
+        return Ok(capabilities);
+    }
+
+    // Cold path: session not running — rebuild the MultiSourceReader
+    let mut all_configs = existing_configs;
+    all_configs.push(new_source);
+
+    let source_display_names: Vec<String> = all_configs.iter()
         .map(|c| c.display_name.clone())
         .collect();
 
-    // Create a new MultiSourceReader with all sources
-    let reader = MultiSourceReader::new(app.clone(), session_id.to_string(), existing_configs)?;
+    let reader = MultiSourceReader::new(app.clone(), session_id.to_string(), all_configs)?;
     let capabilities = reader.capabilities();
 
-    // Swap the device
     session.device = Box::new(reader);
     session.source_names = source_display_names;
-
-    // Start the new device (if the session was running before)
-    if was_running {
-        let previous = session.device.state();
-        session.device.start().await?;
-        let current = session.device.state();
-        if previous != current {
-            emit_state_change(&session.app, session_id, &previous, &current);
-        }
-    }
 
     tlog!(
         "[reader] Added source '{}' to session '{}' (sources: {:?})",
@@ -2927,53 +2951,41 @@ pub async fn remove_source_from_session(
     }
 
     // Must keep at least one source
+    let remaining_count = existing_configs.iter().filter(|c| c.profile_id != profile_id).count();
+    if remaining_count == 0 {
+        return Err("Cannot remove the last source — destroy the session instead".to_string());
+    }
+
+    // If the session is running, hot-remove the source without stopping
+    if matches!(session.device.state(), IOState::Running) {
+        session.device.remove_source_hot(profile_id)?;
+        // Rebuild source_names from current configs
+        if let Some(configs) = session.device.multi_source_configs() {
+            session.source_names = configs.iter().map(|c| c.display_name.clone()).collect();
+        }
+        let capabilities = session.device.capabilities();
+        tlog!(
+            "[reader] Hot-removed source '{}' from session '{}' (remaining: {:?})",
+            profile_id, session_id, session.source_names
+        );
+        return Ok(capabilities);
+    }
+
+    // Cold path: session not running — rebuild the MultiSourceReader
     let remaining_configs: Vec<_> = existing_configs
         .into_iter()
         .filter(|c| c.profile_id != profile_id)
         .collect();
-    if remaining_configs.is_empty() {
-        return Err("Cannot remove the last source — destroy the session instead".to_string());
-    }
-
-    let was_running = matches!(session.device.state(), IOState::Running);
-
-    // Stop the current device
-    if was_running {
-        let previous = session.device.state();
-        session.device.stop().await?;
-        let current = session.device.state();
-        if previous != current {
-            emit_state_change(&session.app, session_id, &previous, &current);
-        }
-    }
-
-    // Orphan the current buffer so listeners keep their data
-    let orphaned = buffer_store::orphan_buffers_for_session(session_id);
-    if !orphaned.is_empty() {
-        emit_buffer_orphaned(&session.app, session_id, orphaned);
-    }
 
     let source_display_names: Vec<String> = remaining_configs.iter()
         .map(|c| c.display_name.clone())
         .collect();
 
-    // Create a new MultiSourceReader with remaining sources (bus mappings preserved)
     let reader = MultiSourceReader::new(app.clone(), session_id.to_string(), remaining_configs)?;
     let capabilities = reader.capabilities();
 
-    // Swap the device
     session.device = Box::new(reader);
     session.source_names = source_display_names;
-
-    // Start the new device (if the session was running before)
-    if was_running {
-        let previous = session.device.state();
-        session.device.start().await?;
-        let current = session.device.state();
-        if previous != current {
-            emit_state_change(&session.app, session_id, &previous, &current);
-        }
-    }
 
     tlog!(
         "[reader] Removed source '{}' from session '{}' (remaining sources: {:?})",

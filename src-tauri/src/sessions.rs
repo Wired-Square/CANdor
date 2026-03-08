@@ -955,6 +955,28 @@ pub async fn get_virtual_bus_states(
     get_session_virtual_bus_states(&session_id).await
 }
 
+/// Add a virtual bus generator to a running session
+#[tauri::command(rename_all = "snake_case")]
+pub async fn add_virtual_bus(
+    session_id: String,
+    bus: u8,
+    traffic_type: String,
+    frame_rate_hz: f64,
+) -> Result<(), String> {
+    use crate::io::add_session_virtual_bus;
+    add_session_virtual_bus(&session_id, bus, traffic_type, frame_rate_hz).await
+}
+
+/// Remove a virtual bus generator from a running session
+#[tauri::command(rename_all = "snake_case")]
+pub async fn remove_virtual_bus(
+    session_id: String,
+    bus: u8,
+) -> Result<(), String> {
+    use crate::io::remove_session_virtual_bus;
+    remove_session_virtual_bus(&session_id, bus).await
+}
+
 /// Update time range for a reader session (only works when stopped)
 #[tauri::command(rename_all = "snake_case")]
 pub async fn update_reader_time_range(

@@ -1025,6 +1025,8 @@ pub fn run() {
             sessions::set_virtual_bus_traffic_enabled,
             sessions::set_virtual_bus_cadence,
             sessions::get_virtual_bus_states,
+            sessions::add_virtual_bus,
+            sessions::remove_virtual_bus,
             sessions::update_reader_time_range,
             sessions::reconfigure_reader_session,
             sessions::seek_reader_session,

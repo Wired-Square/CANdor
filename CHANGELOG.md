@@ -12,6 +12,8 @@ All notable changes to WireTAP will be documented in this file.
 
 - **Runtime signal generator controls**: Per-bus signal generator toggle and cadence (Hz) controls in the Source Details panel when a virtual adapter source is selected in the Visual tab. Changes take effect immediately without restarting the session. Includes add/remove bus and save-to-profile support.
 
+- **Hot source and bus add/remove**: Adding or removing sources from a running multi-source session no longer stops and restarts the entire session. New sources are spawned into the running merge task; removed sources are signalled to stop individually. Virtual bus generators can also be added and removed at runtime via the Source Details panel.
+
 - **Optional loopback for virtual adapters**: Virtual adapter transmit loopback is now configurable (previously always-on). When disabled, the adapter rejects transmit requests.
 
 - **CAN-FD protocol badge**: New cyan "CAN-FD" badge distinguishes CAN-FD profiles from standard CAN across the Data IO settings page. Applies to all device kinds that support FD: gs_usb, slcan, SocketCAN, GVRET, and virtual adapters.

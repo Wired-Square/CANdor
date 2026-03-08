@@ -25,7 +25,7 @@ use crate::io::serial::{parse_profile_for_source, run_source as run_serial_sourc
 use crate::io::slcan::run_slcan_source;
 use crate::io::types::{SourceMessage, TransmitRequest};
 use crate::settings::IOProfile;
-use super::{VirtualBusControl, VirtualBusControls};
+use super::{VirtualBusCommand, VirtualBusControl, VirtualBusControls};
 
 #[cfg(target_os = "linux")]
 use crate::io::socketcan::run_source as run_socketcan_source;
@@ -63,6 +63,7 @@ pub(super) async fn run_source_reader(
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
     virtual_bus_controls: VirtualBusControls,
+    virtual_cmd_rx: Option<mpsc::UnboundedReceiver<VirtualBusCommand>>,
 ) {
     match profile.kind.as_str() {
         "gvret_tcp" | "gvret-tcp" => {
@@ -107,7 +108,7 @@ pub(super) async fn run_source_reader(
             .await;
         }
         "virtual" => {
-            run_virtual_reader(source_idx, &profile, bus_mappings, stop_flag, tx, virtual_bus_controls).await;
+            run_virtual_reader(source_idx, &profile, bus_mappings, stop_flag, tx, virtual_bus_controls, virtual_cmd_rx).await;
         }
         "modbus_tcp" => {
             let role = _modbus_role.unwrap_or(ModbusRole::Client);
@@ -500,8 +501,10 @@ async fn run_virtual_reader(
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
     virtual_bus_controls: VirtualBusControls,
+    virtual_cmd_rx: Option<mpsc::UnboundedReceiver<VirtualBusCommand>>,
 ) {
-    use crate::io::virtual_device::{canfd_patterns, CAN_PATTERNS, MODBUS_REGISTERS};
+    use crate::io::virtual_device::canfd_patterns;
+    use std::collections::HashMap;
 
     // Parse traffic type
     let traffic_type = match profile.connection.get("traffic_type").and_then(|v| v.as_str()) {
@@ -632,156 +635,250 @@ async fn run_virtual_reader(
 
     // Register per-bus controls in the shared map and spawn generator tasks for ALL buses
     // (even disabled ones — they check the traffic_enabled flag on each tick)
-    let mut gen_handles = Vec::new();
+    let mut gen_handles: HashMap<u8, tokio::task::JoinHandle<()>> = HashMap::new();
     for iface in &interfaces {
-        let hz = iface.frame_rate_hz;
-        let initial_interval_us = (1_000_000.0 / hz) as u64;
-        let traffic_enabled = Arc::new(AtomicBool::new(iface.signal_generator));
-        let interval_us_atomic = Arc::new(AtomicU64::new(initial_interval_us));
-
-        // Register in shared controls map so the session can modify at runtime
-        if let Ok(mut controls) = virtual_bus_controls.lock() {
-            controls.insert(iface.bus, VirtualBusControl {
-                traffic_enabled: traffic_enabled.clone(),
-                interval_us: interval_us_atomic.clone(),
-            });
-        }
-
-        let tx_clone = tx.clone();
-        let stop_clone = stop_flag.clone();
-        let bus_mappings_clone = bus_mappings.clone();
-        let canfd_pats_clone = canfd_pats.clone();
-        let bus = iface.bus;
-        let traffic = traffic_type.to_string();
-
-        let handle = tokio::spawn(async move {
-            let mut current_interval_us = initial_interval_us;
-            let mut ticker = interval(Duration::from_micros(current_interval_us));
-            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-            // Map device bus to output bus
-            let output_bus = bus_mappings_clone
-                .iter()
-                .find(|m| m.device_bus == bus)
-                .map(|m| m.output_bus)
-                .unwrap_or(bus);
-
-            let mut counter: u64 = 0;
-
-            loop {
-                ticker.tick().await;
-
-                if stop_clone.load(Ordering::Relaxed) {
-                    break;
-                }
-
-                // Check if cadence changed at runtime
-                let new_interval_us = interval_us_atomic.load(Ordering::Relaxed);
-                if new_interval_us != current_interval_us {
-                    current_interval_us = new_interval_us;
-                    ticker = interval(Duration::from_micros(current_interval_us));
-                    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                    // Consume the immediate first tick
-                    ticker.tick().await;
-                }
-
-                // Skip frame generation if signal generator is disabled for this bus
-                if !traffic_enabled.load(Ordering::Relaxed) {
-                    continue;
-                }
-
-                let ts = now_us();
-
-                let frame = match traffic.as_str() {
-                    "canfd" => {
-                        let pattern_idx = (counter as usize) % (canfd_pats_clone.len() + 1);
-                        let (frame_id, data) = if pattern_idx < canfd_pats_clone.len() {
-                            let (id, ref pat) = canfd_pats_clone[pattern_idx];
-                            (id, pat.clone())
-                        } else {
-                            // Counter frame (0x7E0) — 64 bytes
-                            let cycle = (counter / (canfd_pats_clone.len() as u64 + 1)) + 1;
-                            let c = (cycle as u16).to_be_bytes();
-                            (0x7E0, vec![c[0], c[1]].into_iter().cycle().take(64).collect())
-                        };
-                        FrameMessage {
-                            protocol: "can".to_string(),
-                            timestamp_us: ts,
-                            frame_id,
-                            bus: output_bus,
-                            dlc: data.len() as u8,
-                            bytes: data,
-                            is_extended: false,
-                            is_fd: true,
-                            source_address: None,
-                            incomplete: None,
-                            direction: Some("rx".to_string()),
-                        }
-                    }
-                    "modbus" => {
-                        let reg_idx = (counter as usize) % MODBUS_REGISTERS.len();
-                        let register = MODBUS_REGISTERS[reg_idx];
-                        let value = ((counter / MODBUS_REGISTERS.len() as u64) & 0xFFFF) as u16;
-                        let bytes = value.to_be_bytes().to_vec();
-                        FrameMessage {
-                            protocol: "modbus".to_string(),
-                            timestamp_us: ts,
-                            frame_id: register,
-                            bus: output_bus,
-                            dlc: bytes.len() as u8,
-                            bytes,
-                            is_extended: false,
-                            is_fd: false,
-                            source_address: None,
-                            incomplete: None,
-                            direction: Some("rx".to_string()),
-                        }
-                    }
-                    _ => {
-                        // Classic CAN
-                        let pattern_idx = (counter as usize) % (CAN_PATTERNS.len() + 1);
-                        let (frame_id, data) = if pattern_idx < CAN_PATTERNS.len() {
-                            let (id, pat) = CAN_PATTERNS[pattern_idx];
-                            (id, pat.to_vec())
-                        } else {
-                            let cycle = (counter / (CAN_PATTERNS.len() as u64 + 1)) + 1;
-                            let c = (cycle as u16).to_be_bytes();
-                            (0x7E0, vec![c[0], c[1], c[0], c[1], c[0], c[1], c[0], c[1]])
-                        };
-                        FrameMessage {
-                            protocol: "can".to_string(),
-                            timestamp_us: ts,
-                            frame_id,
-                            bus: output_bus,
-                            dlc: data.len() as u8,
-                            bytes: data,
-                            is_extended: false,
-                            is_fd: false,
-                            source_address: None,
-                            incomplete: None,
-                            direction: Some("rx".to_string()),
-                        }
-                    }
-                };
-
-                if tx_clone.send(SourceMessage::Frames(source_idx, vec![frame])).await.is_err() {
-                    break;
-                }
-
-                counter = counter.wrapping_add(1);
-            }
-        });
-        gen_handles.push(handle);
+        let handle = spawn_bus_generator(
+            iface.bus,
+            iface.signal_generator,
+            iface.frame_rate_hz,
+            traffic_type,
+            source_idx,
+            &bus_mappings,
+            &stop_flag,
+            &tx,
+            &virtual_bus_controls,
+            &canfd_pats,
+        );
+        gen_handles.insert(iface.bus, handle);
     }
 
-    // Wait for all generator tasks to finish
-    for handle in gen_handles {
+    // Command-driven loop: listen for add/remove bus commands until session stops
+    if let Some(mut cmd_rx) = virtual_cmd_rx {
+        loop {
+            if stop_flag.load(Ordering::Relaxed) {
+                break;
+            }
+            // Use a short timeout so we can check stop_flag periodically
+            match tokio::time::timeout(Duration::from_millis(100), cmd_rx.recv()).await {
+                Ok(Some(VirtualBusCommand::AddBus { bus, traffic_type: tt, frame_rate_hz })) => {
+                    // Don't add if already exists
+                    if gen_handles.contains_key(&bus) {
+                        tlog!("[virtual_reader] Bus {} already exists, skipping add", bus);
+                        continue;
+                    }
+                    let tt_str = match tt.as_str() {
+                        "canfd" => "canfd",
+                        "modbus" => "modbus",
+                        _ => "can",
+                    };
+                    let handle = spawn_bus_generator(
+                        bus,
+                        true,
+                        frame_rate_hz,
+                        tt_str,
+                        source_idx,
+                        &bus_mappings,
+                        &stop_flag,
+                        &tx,
+                        &virtual_bus_controls,
+                        &canfd_pats,
+                    );
+                    gen_handles.insert(bus, handle);
+                    tlog!("[virtual_reader] Added bus {} at {:.0} Hz", bus, frame_rate_hz);
+                }
+                Ok(Some(VirtualBusCommand::RemoveBus { bus })) => {
+                    // Set bus_stop flag so the generator exits on next tick
+                    if let Ok(mut controls) = virtual_bus_controls.lock() {
+                        if let Some(ctrl) = controls.get(&bus) {
+                            ctrl.bus_stop.store(true, Ordering::Relaxed);
+                        }
+                        controls.remove(&bus);
+                    }
+                    // Await the handle
+                    if let Some(handle) = gen_handles.remove(&bus) {
+                        let _ = handle.await;
+                    }
+                    tlog!("[virtual_reader] Removed bus {}", bus);
+                }
+                Ok(None) => {
+                    // Channel closed — session ending
+                    break;
+                }
+                Err(_) => {
+                    // Timeout — loop back to check stop_flag
+                }
+            }
+        }
+    } else {
+        // No command channel — just wait for stop (legacy path, shouldn't happen)
+        while !stop_flag.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    // Wait for all remaining generator tasks to finish
+    for (_bus, handle) in gen_handles {
         let _ = handle.await;
     }
 
     let _ = tx
         .send(SourceMessage::Ended(source_idx, "stopped".to_string()))
         .await;
+}
+
+/// Spawn a single bus generator task and register its controls in the shared map.
+fn spawn_bus_generator(
+    bus: u8,
+    signal_generator: bool,
+    frame_rate_hz: f64,
+    traffic_type: &str,
+    source_idx: usize,
+    bus_mappings: &[BusMapping],
+    stop_flag: &Arc<AtomicBool>,
+    tx: &mpsc::Sender<SourceMessage>,
+    virtual_bus_controls: &VirtualBusControls,
+    canfd_pats: &Arc<Vec<(u32, Vec<u8>)>>,
+) -> tokio::task::JoinHandle<()> {
+    use crate::io::virtual_device::{CAN_PATTERNS, MODBUS_REGISTERS};
+
+    let hz = frame_rate_hz.clamp(0.1, 1000.0);
+    let initial_interval_us = (1_000_000.0 / hz) as u64;
+    let traffic_enabled = Arc::new(AtomicBool::new(signal_generator));
+    let interval_us_atomic = Arc::new(AtomicU64::new(initial_interval_us));
+    let bus_stop = Arc::new(AtomicBool::new(false));
+
+    // Register in shared controls map so the session can modify at runtime
+    if let Ok(mut controls) = virtual_bus_controls.lock() {
+        controls.insert(bus, VirtualBusControl {
+            traffic_enabled: traffic_enabled.clone(),
+            interval_us: interval_us_atomic.clone(),
+            bus_stop: bus_stop.clone(),
+        });
+    }
+
+    let tx_clone = tx.clone();
+    let stop_clone = stop_flag.clone();
+    let bus_mappings_clone = bus_mappings.to_vec();
+    let canfd_pats_clone = canfd_pats.clone();
+    let traffic = traffic_type.to_string();
+
+    tokio::spawn(async move {
+        let mut current_interval_us = initial_interval_us;
+        let mut ticker = interval(Duration::from_micros(current_interval_us));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        // Map device bus to output bus
+        let output_bus = bus_mappings_clone
+            .iter()
+            .find(|m| m.device_bus == bus)
+            .map(|m| m.output_bus)
+            .unwrap_or(bus);
+
+        let mut counter: u64 = 0;
+
+        loop {
+            ticker.tick().await;
+
+            if stop_clone.load(Ordering::Relaxed) || bus_stop.load(Ordering::Relaxed) {
+                break;
+            }
+
+            // Check if cadence changed at runtime
+            let new_interval_us = interval_us_atomic.load(Ordering::Relaxed);
+            if new_interval_us != current_interval_us {
+                current_interval_us = new_interval_us;
+                ticker = interval(Duration::from_micros(current_interval_us));
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                // Consume the immediate first tick
+                ticker.tick().await;
+            }
+
+            // Skip frame generation if signal generator is disabled for this bus
+            if !traffic_enabled.load(Ordering::Relaxed) {
+                continue;
+            }
+
+            let ts = now_us();
+
+            let frame = match traffic.as_str() {
+                "canfd" => {
+                    let pattern_idx = (counter as usize) % (canfd_pats_clone.len() + 1);
+                    let (frame_id, data) = if pattern_idx < canfd_pats_clone.len() {
+                        let (id, ref pat) = canfd_pats_clone[pattern_idx];
+                        (id, pat.clone())
+                    } else {
+                        // Counter frame (0x7E0) — 64 bytes
+                        let cycle = (counter / (canfd_pats_clone.len() as u64 + 1)) + 1;
+                        let c = (cycle as u16).to_be_bytes();
+                        (0x7E0, vec![c[0], c[1]].into_iter().cycle().take(64).collect())
+                    };
+                    FrameMessage {
+                        protocol: "can".to_string(),
+                        timestamp_us: ts,
+                        frame_id,
+                        bus: output_bus,
+                        dlc: data.len() as u8,
+                        bytes: data,
+                        is_extended: false,
+                        is_fd: true,
+                        source_address: None,
+                        incomplete: None,
+                        direction: Some("rx".to_string()),
+                    }
+                }
+                "modbus" => {
+                    let reg_idx = (counter as usize) % MODBUS_REGISTERS.len();
+                    let register = MODBUS_REGISTERS[reg_idx];
+                    let value = ((counter / MODBUS_REGISTERS.len() as u64) & 0xFFFF) as u16;
+                    let bytes = value.to_be_bytes().to_vec();
+                    FrameMessage {
+                        protocol: "modbus".to_string(),
+                        timestamp_us: ts,
+                        frame_id: register,
+                        bus: output_bus,
+                        dlc: bytes.len() as u8,
+                        bytes,
+                        is_extended: false,
+                        is_fd: false,
+                        source_address: None,
+                        incomplete: None,
+                        direction: Some("rx".to_string()),
+                    }
+                }
+                _ => {
+                    // Classic CAN
+                    let pattern_idx = (counter as usize) % (CAN_PATTERNS.len() + 1);
+                    let (frame_id, data) = if pattern_idx < CAN_PATTERNS.len() {
+                        let (id, pat) = CAN_PATTERNS[pattern_idx];
+                        (id, pat.to_vec())
+                    } else {
+                        let cycle = (counter / (CAN_PATTERNS.len() as u64 + 1)) + 1;
+                        let c = (cycle as u16).to_be_bytes();
+                        (0x7E0, vec![c[0], c[1], c[0], c[1], c[0], c[1], c[0], c[1]])
+                    };
+                    FrameMessage {
+                        protocol: "can".to_string(),
+                        timestamp_us: ts,
+                        frame_id,
+                        bus: output_bus,
+                        dlc: data.len() as u8,
+                        bytes: data,
+                        is_extended: false,
+                        is_fd: false,
+                        source_address: None,
+                        incomplete: None,
+                        direction: Some("rx".to_string()),
+                    }
+                }
+            };
+
+            if tx_clone.send(SourceMessage::Frames(source_idx, vec![frame])).await.is_err() {
+                break;
+            }
+
+            counter = counter.wrapping_add(1);
+        }
+    })
 }
 
 // ============================================================================

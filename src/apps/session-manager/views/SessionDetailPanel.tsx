@@ -5,7 +5,7 @@ import { Play, Pause, Square, Trash2, UserMinus, Plus, X, Save } from "lucide-re
 import { useSessionManagerStore } from "../stores/sessionManagerStore";
 import { useSettingsStore } from "../../settings/stores/settingsStore";
 import { useSessionStore } from "../../../stores/sessionStore";
-import { getTraits, getVirtualBusStates, setVirtualBusTrafficEnabled, setVirtualBusCadence, type ActiveSessionInfo, type VirtualBusState, type IOStateType } from "../../../api/io";
+import { getTraits, getVirtualBusStates, setVirtualBusTrafficEnabled, setVirtualBusCadence, addVirtualBus, removeVirtualBus, type ActiveSessionInfo, type VirtualBusState, type IOStateType } from "../../../api/io";
 import type { IOProfile } from "../../../hooks/useSettings";
 import { iconSm } from "../../../styles/spacing";
 import { iconButtonHover, iconButtonHoverDanger } from "../../../styles/buttonStyles";
@@ -480,21 +480,39 @@ function VirtualSignalGenControls({ profile, sessionId, sessionState }: { profil
     }, 300);
   }, [sessionId]);
 
-  const handleAddBus = useCallback(() => {
-    setBusStates((prev) => {
-      const usedBuses = new Set(prev.map((s) => s.bus));
-      let nextBus = 0;
-      while (usedBuses.has(nextBus) && nextBus < 8) nextBus++;
-      if (nextBus >= 8) return prev;
-      return [...prev, { bus: nextBus, enabled: true, frame_rate_hz: 10 }];
-    });
+  const handleAddBus = useCallback(async () => {
+    const usedBuses = new Set(busStates.map((s) => s.bus));
+    let nextBus = 0;
+    while (usedBuses.has(nextBus) && nextBus < 8) nextBus++;
+    if (nextBus >= 8) return;
+    const newBus: VirtualBusState = { bus: nextBus, enabled: true, frame_rate_hz: 10 };
+    setBusStates((prev) => [...prev, newBus]);
     setDirty(true);
-  }, []);
+    // Hot-add to running session
+    if (runtimeBuses.current.size > 0) {
+      try {
+        const trafficType = (profile.connection as Record<string, unknown>)?.traffic_type as string || "can";
+        await addVirtualBus(sessionId, nextBus, trafficType, 10);
+        runtimeBuses.current.add(nextBus);
+      } catch (e) {
+        tlog.debug(`[session-manager] Failed to hot-add bus ${nextBus}: ${e}`);
+      }
+    }
+  }, [busStates, sessionId, profile]);
 
-  const handleRemoveBus = useCallback((bus: number) => {
+  const handleRemoveBus = useCallback(async (bus: number) => {
     setBusStates((prev) => prev.filter((s) => s.bus !== bus));
     setDirty(true);
-  }, []);
+    // Hot-remove from running session
+    if (runtimeBuses.current.has(bus)) {
+      try {
+        await removeVirtualBus(sessionId, bus);
+        runtimeBuses.current.delete(bus);
+      } catch (e) {
+        tlog.debug(`[session-manager] Failed to hot-remove bus ${bus}: ${e}`);
+      }
+    }
+  }, [sessionId]);
 
   const handleSaveToProfile = useCallback(() => {
     const interfaces = busStates.map((bs) => ({

@@ -461,6 +461,33 @@ export async function getVirtualBusStates(
 }
 
 /**
+ * Add a virtual bus generator to a running session.
+ */
+export async function addVirtualBus(
+  sessionId: string,
+  bus: number,
+  trafficType: string,
+  frameRateHz: number
+): Promise<void> {
+  return invoke("add_virtual_bus", {
+    session_id: sessionId,
+    bus,
+    traffic_type: trafficType,
+    frame_rate_hz: frameRateHz,
+  });
+}
+
+/**
+ * Remove a virtual bus generator from a running session.
+ */
+export async function removeVirtualBus(
+  sessionId: string,
+  bus: number
+): Promise<void> {
+  return invoke("remove_virtual_bus", { session_id: sessionId, bus });
+}
+
+/**
  * Update playback speed for a reader session.
  * Only works for readers that support speed control (e.g., PostgreSQL).
  */

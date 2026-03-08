@@ -47,10 +47,38 @@ pub struct VirtualBusControl {
     pub traffic_enabled: Arc<AtomicBool>,
     /// Generator interval in microseconds (1_000_000 / frame_rate_hz)
     pub interval_us: Arc<AtomicU64>,
+    /// Per-bus stop flag — set to true to stop this bus generator without stopping the session
+    pub bus_stop: Arc<AtomicBool>,
 }
 
 /// Shared map of bus -> control, populated by the virtual source spawner
 pub type VirtualBusControls = Arc<Mutex<HashMap<u8, VirtualBusControl>>>;
+
+// ============================================================================
+// Command Channels (for hot add/remove of sources and virtual buses)
+// ============================================================================
+
+/// Command sent to the merge task for dynamic source/bus management
+pub enum MergeCommand {
+    /// Add a new source reader to the running session
+    AddSource(SourceConfig),
+    /// Remove a source reader by profile ID
+    RemoveSource(String),
+}
+
+/// Command sent to a virtual reader task for dynamic bus management
+pub enum VirtualBusCommand {
+    /// Add a new bus generator
+    AddBus { bus: u8, traffic_type: String, frame_rate_hz: f64 },
+    /// Remove a bus generator
+    RemoveBus { bus: u8 },
+}
+
+/// Sender type for merge commands
+pub type MergeCmdTx = Arc<Mutex<Option<mpsc::UnboundedSender<MergeCommand>>>>;
+
+/// Sender type for virtual bus commands (one per virtual source)
+pub type VirtualCmdTx = mpsc::UnboundedSender<VirtualBusCommand>;
 
 // ============================================================================
 // Multi-Source Reader
@@ -79,6 +107,10 @@ pub struct MultiSourceReader {
     emits_raw_bytes: bool,
     /// Per-bus signal generator controls for virtual sources (populated on start)
     virtual_bus_controls: VirtualBusControls,
+    /// Command channel to the merge task for hot source add/remove
+    merge_cmd_tx: MergeCmdTx,
+    /// Command channels to virtual reader tasks for hot bus add/remove (source_idx -> sender)
+    virtual_cmd_txs: Arc<Mutex<HashMap<usize, VirtualCmdTx>>>,
 }
 
 impl MultiSourceReader {
@@ -182,6 +214,8 @@ impl MultiSourceReader {
             session_traits,
             emits_raw_bytes,
             virtual_bus_controls: Arc::new(Mutex::new(HashMap::new())),
+            merge_cmd_tx: Arc::new(Mutex::new(None)),
+            virtual_cmd_txs: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -471,6 +505,18 @@ impl IODevice for MultiSourceReader {
         }
         let virtual_bus_controls = self.virtual_bus_controls.clone();
 
+        // Clear previous virtual command channels
+        if let Ok(mut vtxs) = self.virtual_cmd_txs.lock() {
+            vtxs.clear();
+        }
+        let virtual_cmd_txs = self.virtual_cmd_txs.clone();
+
+        // Create command channel for hot source add/remove
+        let (merge_cmd_tx, merge_cmd_rx) = mpsc::unbounded_channel::<MergeCommand>();
+        if let Ok(mut tx_slot) = self.merge_cmd_tx.lock() {
+            *tx_slot = Some(merge_cmd_tx);
+        }
+
         // Spawn the merge task that collects frames from all sources
         let merge_handle = tokio::spawn(async move {
             run_merge_task(
@@ -484,6 +530,8 @@ impl IODevice for MultiSourceReader {
                 tx,
                 transmit_channels,
                 virtual_bus_controls,
+                merge_cmd_rx,
+                virtual_cmd_txs,
             )
             .await;
         });
@@ -501,6 +549,11 @@ impl IODevice for MultiSourceReader {
         );
 
         self.stop_flag.store(true, Ordering::SeqCst);
+
+        // Drop the merge command channel so the merge task sees it as closed
+        if let Ok(mut tx_slot) = self.merge_cmd_tx.lock() {
+            *tx_slot = None;
+        }
 
         // Wait for all tasks to finish
         for handle in self.task_handles.drain(..) {
@@ -607,6 +660,67 @@ impl IODevice for MultiSourceReader {
         }).collect();
         states.sort_by_key(|s| s.bus);
         Ok(states)
+    }
+
+    fn add_source_hot(&mut self, source: SourceConfig) -> Result<(), String> {
+        let cmd_tx = self.merge_cmd_tx.lock()
+            .map_err(|e| format!("Failed to lock merge command channel: {}", e))?;
+        let tx = cmd_tx.as_ref()
+            .ok_or_else(|| "Session not running — cannot hot-add source".to_string())?;
+        tx.send(MergeCommand::AddSource(source.clone()))
+            .map_err(|e| format!("Failed to send add-source command: {}", e))?;
+        // Update local configs so multi_source_configs() reflects the change
+        self.sources.push(source);
+        Ok(())
+    }
+
+    fn remove_source_hot(&mut self, profile_id: &str) -> Result<(), String> {
+        let cmd_tx = self.merge_cmd_tx.lock()
+            .map_err(|e| format!("Failed to lock merge command channel: {}", e))?;
+        let tx = cmd_tx.as_ref()
+            .ok_or_else(|| "Session not running — cannot hot-remove source".to_string())?;
+        tx.send(MergeCommand::RemoveSource(profile_id.to_string()))
+            .map_err(|e| format!("Failed to send remove-source command: {}", e))?;
+        // Update local configs
+        self.sources.retain(|c| c.profile_id != profile_id);
+        Ok(())
+    }
+
+    fn add_virtual_bus(&mut self, bus: u8, traffic_type: String, frame_rate_hz: f64) -> Result<(), String> {
+        // Send to all virtual source command channels
+        let vtxs = self.virtual_cmd_txs.lock()
+            .map_err(|e| format!("Failed to lock virtual command channels: {}", e))?;
+        if vtxs.is_empty() {
+            return Err("No virtual sources in this session".to_string());
+        }
+        for tx in vtxs.values() {
+            let _ = tx.send(VirtualBusCommand::AddBus {
+                bus,
+                traffic_type: traffic_type.clone(),
+                frame_rate_hz,
+            });
+        }
+        Ok(())
+    }
+
+    fn remove_virtual_bus(&mut self, bus: u8) -> Result<(), String> {
+        // Send to all virtual source command channels
+        let vtxs = self.virtual_cmd_txs.lock()
+            .map_err(|e| format!("Failed to lock virtual command channels: {}", e))?;
+        if vtxs.is_empty() {
+            return Err("No virtual sources in this session".to_string());
+        }
+        for tx in vtxs.values() {
+            let _ = tx.send(VirtualBusCommand::RemoveBus { bus });
+        }
+        // Also remove from bus controls so virtual_bus_states() reflects the change
+        if let Ok(mut controls) = self.virtual_bus_controls.lock() {
+            if let Some(ctrl) = controls.get(&bus) {
+                ctrl.bus_stop.store(true, Ordering::Relaxed);
+            }
+            controls.remove(&bus);
+        }
+        Ok(())
     }
 
     fn multi_source_configs(&self) -> Option<Vec<SourceConfig>> {
