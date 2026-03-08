@@ -1,7 +1,7 @@
 // src/apps/session-manager/views/SessionDetailPanel.tsx
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Play, Pause, Square, Trash2, UserMinus, Plus, X, Save } from "lucide-react";
+import { Play, Pause, Square, Trash2, UserMinus, Plus, X, Save, Unplug, Plug } from "lucide-react";
 import { useSessionManagerStore } from "../stores/sessionManagerStore";
 import { useSettingsStore } from "../../settings/stores/settingsStore";
 import { useSessionStore } from "../../../stores/sessionStore";
@@ -15,6 +15,7 @@ import { tlog } from "../../../api/settings";
 interface SessionDetailPanelProps {
   sessions: ActiveSessionInfo[];
   profiles: IOProfile[];
+  openPanelIds?: string[];
   onStartSession: (sessionId: string) => void;
   onStopSession: (sessionId: string) => void;
   onPauseSession: (sessionId: string) => void;
@@ -24,11 +25,13 @@ interface SessionDetailPanelProps {
   onAddSource: (sessionId: string) => void;
   onRemoveSource: (sessionId: string, profileId: string) => void;
   onDisableBusMapping: (sessionId: string, profileId: string, deviceBus: number) => void;
+  onConnectAppToSession?: (sessionId: string, appName: string) => void;
 }
 
 export default function SessionDetailPanel({
   sessions,
   profiles,
+  openPanelIds,
   onStartSession,
   onStopSession,
   onPauseSession,
@@ -38,6 +41,7 @@ export default function SessionDetailPanel({
   onAddSource,
   onRemoveSource,
   onDisableBusMapping,
+  onConnectAppToSession,
 }: SessionDetailPanelProps) {
   const selectedNode = useSessionManagerStore((s) => s.selectedNode);
   const setSelectedNode = useSessionManagerStore((s) => s.setSelectedNode);
@@ -46,7 +50,7 @@ export default function SessionDetailPanel({
     return (
       <div className="w-64 border-l border-[color:var(--border-default)] bg-[var(--bg-surface)] p-4">
         <p className={emptyStateText}>
-          Select a node to view details
+          Select a node or edge to view details
         </p>
       </div>
     );
@@ -59,7 +63,7 @@ export default function SessionDetailPanel({
       const session = sessions.find((s) => s.sessionId === sessionId);
       if (!session) return <p className="text-sm text-[color:var(--text-muted)]">Session not found</p>;
 
-      return <SessionDetails session={session} profiles={profiles} onStart={onStartSession} onStop={onStopSession} onPause={onPauseSession} onResume={onResumeSession} onDestroy={onDestroySession} onAddSource={onAddSource} onDisableBusMapping={onDisableBusMapping} />;
+      return <SessionDetails session={session} profiles={profiles} openPanelIds={openPanelIds} onStart={onStartSession} onStop={onStopSession} onPause={onPauseSession} onResume={onResumeSession} onDestroy={onDestroySession} onAddSource={onAddSource} onDisableBusMapping={onDisableBusMapping} onConnectApp={onConnectAppToSession} />;
     }
 
     if (selectedNode.type === "source") {
@@ -71,7 +75,16 @@ export default function SessionDetailPanel({
     }
 
     if (selectedNode.type === "listener") {
+      // Check if this is an unconnected app node (app::panelId)
+      if (selectedNode.id.startsWith("app::")) {
+        const appName = selectedNode.id.replace("app::", "");
+        return <UnconnectedAppDetails appName={appName} sessions={sessions} onConnectApp={onConnectAppToSession} />;
+      }
       return <ListenerDetails nodeId={selectedNode.id} sessions={sessions} onEvict={onEvictListener} />;
+    }
+
+    if (selectedNode.type === "edge") {
+      return <EdgeDetails edgeId={selectedNode.id} sessions={sessions} profiles={profiles} onDisableBusMapping={onDisableBusMapping} onEvictListener={onEvictListener} />;
     }
 
     return null;
@@ -82,7 +95,7 @@ export default function SessionDetailPanel({
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-[color:var(--border-default)]">
         <span className="text-sm font-medium text-[color:var(--text-primary)] capitalize">
-          {selectedNode.type} Details
+          {selectedNode.type === "edge" ? "Connection" : selectedNode.type} Details
         </span>
         <button
           onClick={() => setSelectedNode(null)}
@@ -130,6 +143,7 @@ function protocolBadgeStyle(protocol: string): string {
 function SessionDetails({
   session,
   profiles,
+  openPanelIds,
   onStart,
   onStop,
   onPause,
@@ -137,9 +151,11 @@ function SessionDetails({
   onDestroy,
   onAddSource,
   onDisableBusMapping,
+  onConnectApp,
 }: {
   session: ActiveSessionInfo;
   profiles: IOProfile[];
+  openPanelIds?: string[];
   onStart: (id: string) => void;
   onStop: (id: string) => void;
   onPause: (id: string) => void;
@@ -147,6 +163,7 @@ function SessionDetails({
   onDestroy: (id: string) => void;
   onAddSource: (id: string) => void;
   onDisableBusMapping: (sessionId: string, profileId: string, deviceBus: number) => void;
+  onConnectApp?: (sessionId: string, appName: string) => void;
 }) {
   const isRunning = session.state === "running";
   const isStopped = session.state === "stopped";
@@ -368,6 +385,35 @@ function SessionDetails({
           </button>
         </div>
       </div>
+
+      {/* Connect unconnected apps */}
+      {onConnectApp && openPanelIds && (() => {
+        const connectedApps = new Set(session.listeners.map((l) => (l.app_name || l.listener_id).toLowerCase()));
+        const SESSION_AWARE = ["discovery", "decoder", "transmit", "query", "graph"];
+        const unconnected = openPanelIds.filter(
+          (id) => SESSION_AWARE.includes(id) && !connectedApps.has(id)
+        );
+        if (unconnected.length === 0) return null;
+        return (
+          <div className="pt-2 border-t border-[color:var(--border-default)]">
+            <label className="text-xs text-[color:var(--text-muted)] uppercase tracking-wide mb-2 block">
+              Connect App
+            </label>
+            <div className="space-y-1">
+              {unconnected.map((appName) => (
+                <button
+                  key={appName}
+                  onClick={() => onConnectApp(session.sessionId, appName)}
+                  className={`flex items-center gap-1 px-2 py-1 rounded text-xs ${iconButtonHover} text-cyan-400 capitalize`}
+                >
+                  <Plug className={iconSm} />
+                  {appName}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -721,6 +767,229 @@ function SessionDecoderPicker({ session }: { session: ActiveSessionInfo }) {
           </option>
         ))}
       </select>
+    </div>
+  );
+}
+
+// Unconnected app details sub-component
+function UnconnectedAppDetails({
+  appName,
+  sessions,
+  onConnectApp,
+}: {
+  appName: string;
+  sessions: ActiveSessionInfo[];
+  onConnectApp?: (sessionId: string, appName: string) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <label className="text-xs text-[color:var(--text-muted)] uppercase tracking-wide">
+          App
+        </label>
+        <p className="text-sm text-[color:var(--text-primary)] capitalize">
+          {appName}
+        </p>
+      </div>
+
+      <div>
+        <label className="text-xs text-[color:var(--text-muted)] uppercase tracking-wide">
+          Status
+        </label>
+        <p className="text-sm text-[color:var(--text-muted)]">
+          Not connected to any session
+        </p>
+      </div>
+
+      {/* Connect to session */}
+      {onConnectApp && sessions.length > 0 && (
+        <div className="pt-2 border-t border-[color:var(--border-default)]">
+          <label className="text-xs text-[color:var(--text-muted)] uppercase tracking-wide mb-2 block">
+            Connect to Session
+          </label>
+          <div className="space-y-1">
+            {sessions.map((s) => (
+              <button
+                key={s.sessionId}
+                onClick={() => onConnectApp(s.sessionId, appName)}
+                className={`flex items-center gap-1 px-2 py-1 rounded text-xs ${iconButtonHover} text-cyan-400`}
+              >
+                <Plug className={iconSm} />
+                <span className="font-mono truncate">{s.sessionId}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Edge (connection) details sub-component
+function EdgeDetails({
+  edgeId,
+  sessions,
+  profiles,
+  onDisableBusMapping,
+  onEvictListener,
+}: {
+  edgeId: string;
+  sessions: ActiveSessionInfo[];
+  profiles: IOProfile[];
+  onDisableBusMapping: (sessionId: string, profileId: string, deviceBus: number) => void;
+  onEvictListener: (sessionId: string, listenerId: string) => void;
+}) {
+  // Parse edge ID to determine type
+  // Source→Session: "edge-{profileId}-{sessionId}-b{deviceBus}-b{outputBus}"
+  // Session→Listener: "edge-{sessionId}::{listenerId}"
+
+  if (edgeId.includes("::")) {
+    // Session → Listener edge
+    const match = edgeId.match(/^edge-(.+?)::(.+)$/);
+    if (!match) return <p className="text-sm text-[color:var(--text-muted)]">Edge not found</p>;
+    const [, sessionId, listenerId] = match;
+    const session = sessions.find((s) => s.sessionId === sessionId);
+    const listener = session?.listeners.find((l) => l.listener_id === listenerId);
+
+    return (
+      <div className="space-y-4">
+        <div>
+          <label className="text-xs text-[color:var(--text-muted)] uppercase tracking-wide">
+            Type
+          </label>
+          <p className="text-sm text-[color:var(--text-primary)]">
+            Session → App
+          </p>
+        </div>
+
+        <div>
+          <label className="text-xs text-[color:var(--text-muted)] uppercase tracking-wide">
+            Session
+          </label>
+          <p className="text-sm text-[color:var(--text-primary)] font-mono break-all">
+            {sessionId}
+          </p>
+        </div>
+
+        <div>
+          <label className="text-xs text-[color:var(--text-muted)] uppercase tracking-wide">
+            Listener
+          </label>
+          <p className="text-sm text-[color:var(--text-primary)] font-mono">
+            {listenerId}
+          </p>
+          {listener && (
+            <p className="text-xs text-[color:var(--text-muted)] capitalize">
+              {listener.app_name || listenerId}
+            </p>
+          )}
+        </div>
+
+        <div className="pt-2 border-t border-[color:var(--border-default)]">
+          <button
+            onClick={() => onEvictListener(sessionId, listenerId)}
+            className={`flex items-center gap-1 px-2 py-1 rounded text-xs ${iconButtonHoverDanger}`}
+          >
+            <Unplug className={iconSm} />
+            Disconnect
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Source → Session edge: "edge-{profileId}-{sessionId}-b{deviceBus}-b{outputBus}"
+  // Both profileId and sessionId may contain hyphens, so parse from the suffix.
+  const busSuffix = edgeId.match(/-b(\d+)-b(\d+)$/);
+  if (!busSuffix) {
+    return (
+      <div className="space-y-4">
+        <div>
+          <label className="text-xs text-[color:var(--text-muted)] uppercase tracking-wide">
+            Type
+          </label>
+          <p className="text-sm text-[color:var(--text-primary)]">
+            Device → Session
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const deviceBusStr = busSuffix[1];
+  const outputBusStr = busSuffix[2];
+  // Strip "edge-" prefix and "-bN-bN" suffix to get "{profileId}-{sessionId}"
+  const middle = edgeId.slice(5, edgeId.length - busSuffix[0].length);
+  // Find matching profile+session by trying known session IDs
+  let profileId = "";
+  let sessionId = "";
+  for (const s of sessions) {
+    if (middle.endsWith(`-${s.sessionId}`)) {
+      sessionId = s.sessionId;
+      profileId = middle.slice(0, middle.length - s.sessionId.length - 1);
+      break;
+    }
+  }
+  const deviceBus = parseInt(deviceBusStr, 10);
+  const outputBus = parseInt(outputBusStr, 10);
+  const profile = profiles.find((p) => p.id === profileId);
+  const session = sessions.find((s) => s.sessionId === sessionId);
+
+  // Can we disable this mapping? Only if it's not the last enabled mapping
+  const totalEnabled = session?.multiSourceConfigs?.reduce(
+    (sum, c) => sum + (c.busMappings.filter((b) => b.enabled).length), 0
+  ) ?? 0;
+  const canDisable = totalEnabled > 1;
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <label className="text-xs text-[color:var(--text-muted)] uppercase tracking-wide">
+          Type
+        </label>
+        <p className="text-sm text-[color:var(--text-primary)]">
+          Device → Session
+        </p>
+      </div>
+
+      <div>
+        <label className="text-xs text-[color:var(--text-muted)] uppercase tracking-wide">
+          Device
+        </label>
+        <p className="text-sm text-[color:var(--text-primary)]">
+          {profile?.name ?? profileId}
+        </p>
+      </div>
+
+      <div>
+        <label className="text-xs text-[color:var(--text-muted)] uppercase tracking-wide">
+          Bus Mapping
+        </label>
+        <p className="text-sm text-[color:var(--text-primary)] font-mono">
+          bus{deviceBus} → bus{outputBus}
+        </p>
+      </div>
+
+      <div>
+        <label className="text-xs text-[color:var(--text-muted)] uppercase tracking-wide">
+          Session
+        </label>
+        <p className="text-sm text-[color:var(--text-primary)] font-mono break-all">
+          {sessionId}
+        </p>
+      </div>
+
+      {canDisable && (
+        <div className="pt-2 border-t border-[color:var(--border-default)]">
+          <button
+            onClick={() => onDisableBusMapping(sessionId, profileId, deviceBus)}
+            className={`flex items-center gap-1 px-2 py-1 rounded text-xs ${iconButtonHoverDanger}`}
+          >
+            <Unplug className={iconSm} />
+            Disconnect
+          </button>
+        </div>
+      )}
     </div>
   );
 }

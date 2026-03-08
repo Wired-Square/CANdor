@@ -18,6 +18,8 @@ All notable changes to WireTAP will be documented in this file.
 
 - **Drag-to-connect bus mappings**: Disabled bus mappings appear as muted handles on source and session nodes in the Visual tab. Dragging from a disabled source handle to a disabled session handle re-enables the mapping, allowing bus reconnection without leaving the graph view.
 
+- **Visual tab rework**: Overhauled the session Visual tab with bus labels inside device and session nodes, per-listener output handles on sessions, and an extra empty handle on both input and output sides for drag-to-create connections. All open session-aware panels (Discovery, Decoder, Transmit, Query, Graph) appear as unconnected app nodes even without an active session. Edges now use smooth bezier curves instead of step paths. Clicking an edge opens a connection detail view with a disconnect button. React Flow controls (+/−/fit) are now visible on macOS dark themes. Session node data (frame count, state) updates live without resetting the viewport.
+
 - **Hot source and bus add/remove**: Adding or removing sources from a running multi-source session no longer stops and restarts the entire session. New sources are spawned into the running merge task; removed sources are signalled to stop individually. Virtual bus generators can also be added and removed at runtime via the Source Details panel.
 
 - **Optional loopback for virtual adapters**: Virtual adapter transmit loopback is now configurable (previously always-on). When disabled, the adapter rejects transmit requests.

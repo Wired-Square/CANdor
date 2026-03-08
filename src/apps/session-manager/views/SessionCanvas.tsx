@@ -43,37 +43,57 @@ const edgeTypes: EdgeTypes = {
 interface SessionCanvasProps {
   sessions: ActiveSessionInfo[];
   profiles: IOProfile[];
+  openPanelIds?: string[];
   onEnableBusMapping?: (sessionId: string, profileId: string, deviceBus: number, outputBus: number) => void;
+  onCreateBusMapping?: (sessionId: string, profileId: string, deviceBus: number, newOutputBus: number) => void;
+  onConnectAppToSession?: (sessionId: string, appName: string) => void;
 }
 
-export default function SessionCanvas({ sessions, profiles, onEnableBusMapping }: SessionCanvasProps) {
+export default function SessionCanvas({
+  sessions,
+  profiles,
+  openPanelIds,
+  onEnableBusMapping,
+  onCreateBusMapping,
+  onConnectAppToSession,
+}: SessionCanvasProps) {
   const { fitView } = useReactFlow();
   const setSelectedNode = useSessionManagerStore((s) => s.setSelectedNode);
 
   const graphData = useMemo(
-    () => buildSessionGraph(sessions, profiles),
-    [sessions, profiles]
+    () => buildSessionGraph(sessions, profiles, undefined, openPanelIds),
+    [sessions, profiles, openPanelIds]
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(graphData.nodes as Node[]);
   const [edges, setEdges, onEdgesChange] = useEdgesState(graphData.edges);
 
-  // Only replace nodes/edges when the topology changes (sessions added/removed).
-  // Returning the same reference on auto-refresh prevents ReactFlow from
-  // re-measuring nodes and resetting the viewport. Live session data is still
-  // available in the detail panel which reads directly from the sessions prop.
+  // Update nodes and edges when data changes. When topology is unchanged
+  // (same node IDs), update data in-place to preserve user-dragged positions
+  // and avoid ReactFlow re-measuring/resetting the viewport.
   useEffect(() => {
     setNodes((prev) => {
       const newIds = new Set(graphData.nodes.map((n) => n.id));
-      if (prev.length === graphData.nodes.length && prev.every((n) => newIds.has(n.id))) {
-        return prev;
+      const topologyChanged = prev.length !== graphData.nodes.length || !prev.every((n) => newIds.has(n.id));
+      if (topologyChanged) {
+        return graphData.nodes as Node[];
       }
-      return graphData.nodes as Node[];
+      // Topology same — merge updated data into existing nodes (preserves positions)
+      const newDataMap = new Map(graphData.nodes.map((n) => [n.id, n.data as Record<string, unknown>]));
+      return prev.map((n) => {
+        const newData = newDataMap.get(n.id);
+        return newData ? { ...n, data: newData } as Node : n;
+      });
     });
     setEdges((prev) => {
       const newEdgeIds = new Set(graphData.edges.map((e) => e.id));
       if (prev.length === graphData.edges.length && prev.every((e) => newEdgeIds.has(e.id))) {
-        return prev;
+        // Update edge styles (animated, stroke colour) even when topology is same
+        const newEdgeMap = new Map(graphData.edges.map((e) => [e.id, e]));
+        return prev.map((e) => {
+          const updated = newEdgeMap.get(e.id);
+          return updated ? { ...e, style: updated.style, animated: updated.animated } : e;
+        });
       }
       return graphData.edges;
     });
@@ -98,57 +118,106 @@ export default function SessionCanvas({ sessions, profiles, onEnableBusMapping }
     [setSelectedNode]
   );
 
+  const onEdgeClick = useCallback(
+    (_event: React.MouseEvent, edge: Edge) => {
+      setSelectedNode({ id: edge.id, type: "edge" });
+    },
+    [setSelectedNode]
+  );
+
   const onPaneClick = useCallback(() => {
     setSelectedNode(null);
   }, [setSelectedNode]);
 
-  // Handle drag-to-connect: re-enable a disabled bus mapping
+  // Handle drag-to-connect: re-enable a disabled bus mapping, create new mapping,
+  // or connect an app to a session
   const onConnect = useCallback(
     (connection: Connection) => {
-      if (!onEnableBusMapping) return;
       const { source, sourceHandle, target, targetHandle } = connection;
-      if (!source || !target || !sourceHandle || !targetHandle) return;
+      if (!source || !target) return;
 
-      // Extract IDs: source="source-{profileId}", target="session-{sessionId}"
-      const profileId = source.replace(/^source-/, "");
-      const sessionId = target.replace(/^session-/, "");
-      // sourceHandle="out-bus{N}", targetHandle="in-bus{N}"
-      const deviceBusMatch = sourceHandle.match(/^out-bus(\d+)$/);
-      const outputBusMatch = targetHandle.match(/^in-bus(\d+)$/);
-      if (!deviceBusMatch || !outputBusMatch) return;
+      // Case 1: Source → Session (bus mapping)
+      if (source.startsWith("source-") && target.startsWith("session-")) {
+        const profileId = source.replace(/^source-/, "");
+        const sessionId = target.replace(/^session-/, "");
+        const deviceBusMatch = sourceHandle?.match(/^out-bus(\d+)$/);
+        const outputBusMatch = targetHandle?.match(/^in-bus(\d+)$/);
+        if (!deviceBusMatch || !outputBusMatch) return;
 
-      const deviceBus = parseInt(deviceBusMatch[1], 10);
-      const outputBus = parseInt(outputBusMatch[1], 10);
-      onEnableBusMapping(sessionId, profileId, deviceBus, outputBus);
+        const deviceBus = parseInt(deviceBusMatch[1], 10);
+        const outputBus = parseInt(outputBusMatch[1], 10);
+
+        // Check if this is re-enabling an existing disabled mapping
+        const session = sessions.find((s) => s.sessionId === sessionId);
+        const config = session?.multiSourceConfigs?.find((c) => c.profileId === profileId);
+        const isDisabledMapping = config?.busMappings.some(
+          (m) => m.deviceBus === deviceBus && m.outputBus === outputBus && !m.enabled
+        );
+
+        if (isDisabledMapping && onEnableBusMapping) {
+          onEnableBusMapping(sessionId, profileId, deviceBus, outputBus);
+        } else if (onCreateBusMapping) {
+          onCreateBusMapping(sessionId, profileId, deviceBus, outputBus);
+        }
+        return;
+      }
+
+      // Case 2: Session → App (connect unconnected app to session)
+      if (source.startsWith("session-") && target.startsWith("app::")) {
+        if (!onConnectAppToSession) return;
+        const sessionId = source.replace(/^session-/, "");
+        const appName = target.replace(/^app::/, "");
+        onConnectAppToSession(sessionId, appName);
+      }
     },
-    [onEnableBusMapping]
+    [sessions, onEnableBusMapping, onCreateBusMapping, onConnectAppToSession]
   );
 
-  // Only allow connecting source→session nodes for disabled mappings
+  // Validate connections: source→session bus mappings or session→unconnected app
   const isValidConnection = useCallback(
     (connection: Edge | Connection) => {
       const { source, target, sourceHandle, targetHandle } = connection;
-      if (!source?.startsWith("source-") || !target?.startsWith("session-")) return false;
-      if (!sourceHandle?.startsWith("out-bus") || !targetHandle?.startsWith("in-bus")) return false;
 
-      // Check this mapping exists but is disabled
-      const profileId = source.replace(/^source-/, "");
-      const sessionId = target.replace(/^session-/, "");
-      const deviceBusMatch = sourceHandle.match(/^out-bus(\d+)$/);
-      const outputBusMatch = targetHandle.match(/^in-bus(\d+)$/);
-      if (!deviceBusMatch || !outputBusMatch) return false;
+      // Case 1: Source → Session
+      if (source?.startsWith("source-") && target?.startsWith("session-")) {
+        if (!sourceHandle?.startsWith("out-bus") || !targetHandle?.startsWith("in-bus")) return false;
 
-      const deviceBus = parseInt(deviceBusMatch[1], 10);
-      const outputBus = parseInt(outputBusMatch[1], 10);
+        const profileId = source.replace(/^source-/, "");
+        const sessionId = target.replace(/^session-/, "");
+        const deviceBusMatch = sourceHandle.match(/^out-bus(\d+)$/);
+        const outputBusMatch = targetHandle.match(/^in-bus(\d+)$/);
+        if (!deviceBusMatch || !outputBusMatch) return false;
 
-      const session = sessions.find((s) => s.sessionId === sessionId);
-      const config = session?.multiSourceConfigs?.find((c) => c.profileId === profileId);
-      if (!config) return false;
+        const deviceBus = parseInt(deviceBusMatch[1], 10);
+        const outputBus = parseInt(outputBusMatch[1], 10);
 
-      // Allow only if there's a disabled mapping matching these buses
-      return config.busMappings.some(
-        (m) => m.deviceBus === deviceBus && m.outputBus === outputBus && !m.enabled
-      );
+        const session = sessions.find((s) => s.sessionId === sessionId);
+        const config = session?.multiSourceConfigs?.find((c) => c.profileId === profileId);
+
+        // Allow re-enabling disabled mappings
+        if (config?.busMappings.some((m) => m.deviceBus === deviceBus && m.outputBus === outputBus && !m.enabled)) {
+          return true;
+        }
+
+        // Allow creating new mappings (bus not already mapped)
+        if (config && !config.busMappings.some((m) => m.deviceBus === deviceBus && m.outputBus === outputBus && m.enabled)) {
+          return true;
+        }
+
+        // Also allow if source is connected to this session but this specific bus combo is new
+        if (session?.sourceProfileIds.includes(profileId)) {
+          return true;
+        }
+
+        return false;
+      }
+
+      // Case 2: Session → Unconnected app
+      if (source?.startsWith("session-") && target?.startsWith("app::")) {
+        return true;
+      }
+
+      return false;
     },
     [sessions]
   );
@@ -161,6 +230,7 @@ export default function SessionCanvas({ sessions, profiles, onEnableBusMapping }
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
+        onEdgeClick={onEdgeClick}
         onPaneClick={onPaneClick}
         onConnect={onConnect}
         isValidConnection={isValidConnection}
@@ -168,7 +238,7 @@ export default function SessionCanvas({ sessions, profiles, onEnableBusMapping }
         edgeTypes={edgeTypes}
         minZoom={0.1}
         maxZoom={2}
-        defaultEdgeOptions={{ type: "smoothstep" }}
+        defaultEdgeOptions={{ type: "default" }}
         proOptions={{ hideAttribution: true }}
       >
         <Background
@@ -180,7 +250,7 @@ export default function SessionCanvas({ sessions, profiles, onEnableBusMapping }
         />
         <Controls
           showInteractive={false}
-          className="!bg-[var(--bg-surface)] !border-[color:var(--border-default)] !shadow-lg"
+          className="!bg-[var(--bg-surface)] !border-[color:var(--border-default)] !shadow-lg [&_button]:!bg-[var(--bg-surface)] [&_button]:!border-[color:var(--border-default)] [&_button]:!fill-[var(--text-primary)] [&_button:hover]:!bg-[var(--bg-hover)] [&_svg]:!fill-[var(--text-primary)]"
         />
         <MiniMap
           nodeColor={(node) => {

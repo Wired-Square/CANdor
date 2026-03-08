@@ -64,36 +64,31 @@ function SourceNode({ data, selected }: SourceNodeProps) {
         )}
       </div>
 
-      {/* Output handles — one per bus (enabled + disabled), or a single default */}
-      {allBuses.length > 1 ? (
-        allBuses.map(({ bus, enabled }, i) => {
-          const pct = ((i + 1) / (allBuses.length + 1)) * 100;
-          return (
-            <Handle
-              key={bus}
-              id={`out-bus${bus}`}
-              type="source"
-              position={Position.Right}
-              style={{ top: `${pct}%` }}
-              className={
-                enabled
-                  ? "!w-3 !h-3 !bg-purple-500 !border-2 !border-purple-300"
-                  : "!w-3 !h-3 !bg-gray-600 !border-2 !border-gray-500 !opacity-50"
-              }
-            />
-          );
-        })
-      ) : allBuses.length === 1 ? (
-        <Handle
-          type="source"
-          position={Position.Right}
-          id={`out-bus${allBuses[0].bus}`}
-          className={
-            allBuses[0].enabled
-              ? "!w-3 !h-3 !bg-purple-500 !border-2 !border-purple-300"
-              : "!w-3 !h-3 !bg-gray-600 !border-2 !border-gray-500 !opacity-50"
-          }
-        />
+      {/* Bus handles with labels inside the bubble */}
+      {allBuses.length > 0 ? (
+        <div className="mt-2 flex flex-col gap-1">
+          {allBuses.map(({ bus, enabled }) => (
+            <div key={bus} className="flex items-center justify-end gap-1.5 relative">
+              <span
+                className={`text-[10px] font-mono ${
+                  enabled ? "text-purple-400" : "text-gray-500 opacity-50"
+                }`}
+              >
+                bus{bus}
+              </span>
+              <Handle
+                id={`out-bus${bus}`}
+                type="source"
+                position={Position.Right}
+                className={
+                  enabled
+                    ? "!w-3 !h-3 !bg-purple-500 !border-2 !border-purple-300 !relative !transform-none !top-0 !right-0"
+                    : "!w-3 !h-3 !bg-gray-600 !border-2 !border-gray-500 !border-dashed !opacity-50 !relative !transform-none !top-0 !right-0"
+                }
+              />
+            </div>
+          ))}
+        </div>
       ) : (
         <Handle
           type="source"

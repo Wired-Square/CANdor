@@ -14,6 +14,9 @@ const ROW_SPACING = 120;
 const START_X = 50;
 const START_Y = 50;
 
+/** Session-aware panel IDs that should appear as app nodes */
+const SESSION_AWARE_PANELS = new Set(["discovery", "decoder", "transmit", "query", "graph"]);
+
 // Custom node type that allows our typed data
 interface FlowNode<T = unknown> {
   id: string;
@@ -30,11 +33,13 @@ export interface SessionGraphData {
 /**
  * Transform session data into React Flow nodes and edges.
  * @param bufferNames Optional map of buffer_id → display name for buffer source nodes.
+ * @param openPanelIds IDs of currently open Dockview panels (used for unconnected app nodes).
  */
 export function buildSessionGraph(
   sessions: ActiveSessionInfo[],
   profiles: IOProfile[],
   bufferNames?: Map<string, string>,
+  openPanelIds?: string[],
 ): SessionGraphData {
   const nodes: FlowNode[] = [];
   const edges: Edge[] = [];
@@ -133,33 +138,40 @@ export function buildSessionGraph(
     });
   });
 
-  // Column 2: Session nodes
+  // Track which app names already appear as connected listeners (for unconnected app nodes)
+  const connectedAppNames = new Set<string>();
+
+  // Column 2: Session nodes + Column 3: Connected listener nodes
   sessions.forEach((session, index) => {
-    // Collect all mapped input interfaces for this session (one per source mapping)
-    const inputInterfaces: string[] = [];
-    const disabledInputInterfaces: string[] = [];
+    // Collect input buses for this session
+    const inputBuses: number[] = [];
+    const disabledInputBuses: number[] = [];
     session.sourceProfileIds.forEach((profileId) => {
       const sourceConfig = session.multiSourceConfigs?.find((c) => c.profileId === profileId);
       if (!sourceConfig) return;
       const enabledOutputBuses = new Set<number>();
       for (const m of sourceConfig.busMappings) {
         if (m.enabled) {
-          inputInterfaces.push(`bus${m.outputBus}`);
+          inputBuses.push(m.outputBus);
           enabledOutputBuses.add(m.outputBus);
         }
       }
       for (const m of sourceConfig.busMappings) {
         if (!m.enabled && !enabledOutputBuses.has(m.outputBus)) {
-          disabledInputInterfaces.push(`bus${m.outputBus}`);
+          disabledInputBuses.push(m.outputBus);
         }
       }
     });
 
+    // Build ordered listener IDs for output handles
+    const connectedListenerIds = session.listeners.map((l) => l.listener_id);
+
     const nodeData: SessionNodeData = {
       session,
       label: session.sessionId,
-      inputInterfaces: inputInterfaces.length > 0 ? inputInterfaces : undefined,
-      disabledInputInterfaces: disabledInputInterfaces.length > 0 ? disabledInputInterfaces : undefined,
+      inputBuses: inputBuses.length > 0 ? inputBuses : undefined,
+      disabledInputBuses: disabledInputBuses.length > 0 ? disabledInputBuses : undefined,
+      connectedListenerIds: connectedListenerIds.length > 0 ? connectedListenerIds : undefined,
     };
 
     nodes.push({
@@ -180,7 +192,7 @@ export function buildSessionGraph(
           id: `edge-${profileId}-${session.sessionId}`,
           source: `source-${profileId}`,
           target: `session-${session.sessionId}`,
-          type: "smoothstep",
+          type: "default",
           animated: session.state === "running",
           style: {
             stroke: session.state === "running" ? "#a855f7" : "#6b7280",
@@ -210,18 +222,20 @@ export function buildSessionGraph(
         });
       }
     });
-  });
 
-  // Column 3: Individual listener nodes
-  sessions.forEach((session, sessionIndex) => {
-    const sessionBaseY = START_Y + sessionIndex * ROW_SPACING;
+    // Column 3: Connected listener nodes
+    const sessionBaseY = START_Y + index * ROW_SPACING;
 
     session.listeners.forEach((listener, listenerIndex) => {
+      const appName = listener.app_name || listener.listener_id;
+      connectedAppNames.add(appName.toLowerCase());
+
       const nodeData: ListenerNodeData = {
         listenerId: listener.listener_id,
-        appName: listener.app_name || listener.listener_id,
+        appName,
         sessionId: session.sessionId,
         isActive: listener.is_active,
+        isConnected: true,
         registeredSecondsAgo: listener.registered_seconds_ago,
       };
 
@@ -237,9 +251,11 @@ export function buildSessionGraph(
         data: nodeData,
       });
 
+      // Edge from session output handle to listener
       edges.push({
         id: `edge-${session.sessionId}::${listener.listener_id}`,
         source: `session-${session.sessionId}`,
+        sourceHandle: `out-${listenerIndex}`,
         target: nodeId,
         animated: session.state === "running" && session.isStreaming && listener.is_active,
         style: {
@@ -249,6 +265,38 @@ export function buildSessionGraph(
       });
     });
   });
+
+  // Column 3b: Unconnected app nodes for open session-aware panels
+  if (openPanelIds) {
+    const unconnectedPanels = openPanelIds.filter(
+      (id) => SESSION_AWARE_PANELS.has(id) && !connectedAppNames.has(id)
+    );
+
+    // Position below all connected listeners
+    const maxConnectedY = nodes
+      .filter((n) => n.type === "listener")
+      .reduce((max, n) => Math.max(max, n.position.y), START_Y - ROW_SPACING * 0.6);
+    const unconnectedBaseY = maxConnectedY + ROW_SPACING;
+
+    unconnectedPanels.forEach((panelId, i) => {
+      const nodeData: ListenerNodeData = {
+        listenerId: panelId,
+        appName: panelId,
+        isActive: false,
+        isConnected: false,
+      };
+
+      nodes.push({
+        id: `app::${panelId}`,
+        type: "listener",
+        position: {
+          x: START_X + COLUMN_SPACING * 2,
+          y: unconnectedBaseY + i * (ROW_SPACING * 0.6),
+        },
+        data: nodeData,
+      });
+    });
+  }
 
   return { nodes, edges };
 }

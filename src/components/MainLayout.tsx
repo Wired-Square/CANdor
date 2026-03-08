@@ -403,11 +403,13 @@ export default function MainLayout() {
     (event: DockviewReadyEvent) => {
       apiRef.current = event.api;
 
-      // Listen for panel and layout changes to trigger save
-      event.api.onDidAddPanel(() => {
+      // Listen for panel and layout changes to trigger save + track open panels
+      event.api.onDidAddPanel((panel) => {
+        useFocusStore.getState().addOpenPanel(panel.id);
         saveLayout();
       });
       event.api.onDidRemovePanel((panel) => {
+        useFocusStore.getState().removeOpenPanel(panel.id);
         // Notify backend when Settings panel is closed (singleton tracking)
         if (panel.id === "settings") {
           settingsPanelClosed();
@@ -445,6 +447,9 @@ export default function MainLayout() {
           title: panelTitles.discovery,
         });
       }
+
+      // Seed the open panels store from all currently loaded panels
+      useFocusStore.getState().setOpenPanels(event.api.panels.map((p) => p.id));
 
       // Set initial active panel in store
       useFocusStore.getState().setFocusedPanelId(event.api.activePanel?.id ?? null);

@@ -2,15 +2,16 @@
 
 import { memo } from "react";
 import { Handle, Position } from "@xyflow/react";
-import { Search, Activity, Send, FileText, Calculator, DatabaseZap, Settings } from "lucide-react";
+import { Search, Activity, Send, FileText, Calculator, DatabaseZap, Settings, BarChart3 } from "lucide-react";
 import { iconSm } from "../../../styles/spacing";
 
 export interface ListenerNodeData {
   listenerId: string;
   appName: string;
-  sessionId: string;
+  sessionId?: string;
   isActive: boolean;
-  registeredSecondsAgo: number;
+  isConnected: boolean;
+  registeredSecondsAgo?: number;
 }
 
 // Map app names to icons and colours
@@ -21,6 +22,7 @@ const appConfig: Record<string, { icon: typeof Search; colour: string }> = {
   "catalog-editor": { icon: FileText, colour: "text-blue-400" },
   "frame-calculator": { icon: Calculator, colour: "text-teal-400" },
   query: { icon: DatabaseZap, colour: "text-amber-400" },
+  graph: { icon: BarChart3, colour: "text-pink-400" },
   settings: { icon: Settings, colour: "text-orange-400" },
 };
 
@@ -40,7 +42,9 @@ function ListenerNode({ data, selected }: ListenerNodeProps) {
 
   const borderColour = selected
     ? "border-cyan-400"
-    : "border-[color:var(--border-default)]";
+    : data.isConnected
+    ? "border-[color:var(--border-default)]"
+    : "border-dashed border-[color:var(--border-default)]";
 
   const bgColour = "bg-[var(--bg-surface)]";
 
@@ -51,7 +55,7 @@ function ListenerNode({ data, selected }: ListenerNodeProps) {
 
   return (
     <div
-      className={`px-4 py-3 rounded-lg border-2 ${borderColour} ${bgColour} min-w-[120px] shadow-lg ${isActive ? "" : "opacity-50"}`}
+      className={`px-4 py-3 rounded-lg border-2 ${borderColour} ${bgColour} min-w-[120px] shadow-lg ${!data.isConnected ? "opacity-40" : isActive ? "" : "opacity-50"}`}
     >
       {/* Input handle - connects from sessions */}
       <Handle

@@ -20,7 +20,9 @@ import {
 } from "../../api/io";
 import Dialog from "../../components/Dialog";
 import { useSettingsStore } from "../settings/stores/settingsStore";
+import { useFocusStore } from "../../stores/focusStore";
 import { useSessionManagerStore } from "./stores/sessionManagerStore";
+import { openPanel } from "../../utils/windowCommunication";
 import { useSessionLogStore } from "./stores/sessionLogStore";
 import { useSessionLogSubscription } from "./hooks/useSessionLogSubscription";
 import AppLayout from "../../components/AppLayout";
@@ -44,6 +46,9 @@ export default function SessionManager() {
   // Read profiles from settingsStore (in-memory) so we see preferred_catalog
   // updates immediately, before the debounced save to backend completes.
   const profiles = useSettingsStore((s) => s.ioProfiles.profiles);
+
+  // Track which panels are currently open (for unconnected app nodes)
+  const openPanelIds = useFocusStore((s) => s.openPanelIds);
 
   // Tab definitions
   const tabs: TabDefinition[] = useMemo(
@@ -209,6 +214,38 @@ export default function SessionManager() {
     }
   }, [sessions, fetchSessions]);
 
+  // Create a new bus mapping on a running session
+  const handleCreateBusMapping = useCallback(async (
+    sessionId: string,
+    profileId: string,
+    deviceBus: number,
+    newOutputBus: number,
+  ) => {
+    const session = sessions.find((s) => s.sessionId === sessionId);
+    const config = session?.multiSourceConfigs?.find((c) => c.profileId === profileId);
+    if (!config) return;
+
+    // Add a new enabled mapping
+    const updatedMappings = [
+      ...config.busMappings,
+      { deviceBus, outputBus: newOutputBus, enabled: true },
+    ];
+
+    try {
+      await updateSourceBusMappings(sessionId, profileId, updatedMappings);
+      await fetchSessions();
+    } catch (error) {
+      console.error("[SessionManager] Failed to create bus mapping:", error);
+    }
+  }, [sessions, fetchSessions]);
+
+  // Connect an open app panel to a session
+  const handleConnectAppToSession = useCallback((_sessionId: string, appName: string) => {
+    // Ensure the panel is open and focused — the app's useIOSessionManager
+    // will handle session joining via the IO picker flow
+    openPanel(appName);
+  }, []);
+
   // Available profiles for add source dialog (realtime profiles not already in the session)
   const addSourceSession = addSourceSessionId
     ? sessions.find((s) => s.sessionId === addSourceSessionId)
@@ -246,7 +283,10 @@ export default function SessionManager() {
                 <SessionCanvas
                   sessions={sessions}
                   profiles={profiles}
+                  openPanelIds={openPanelIds}
                   onEnableBusMapping={handleEnableBusMapping}
+                  onCreateBusMapping={handleCreateBusMapping}
+                  onConnectAppToSession={handleConnectAppToSession}
                 />
               </ReactFlowProvider>
             </div>
@@ -255,6 +295,7 @@ export default function SessionManager() {
             <SessionDetailPanel
               sessions={sessions}
               profiles={profiles}
+              openPanelIds={openPanelIds}
               onStartSession={handleStartSession}
               onStopSession={handleStopSession}
               onPauseSession={handlePauseSession}
@@ -264,6 +305,7 @@ export default function SessionManager() {
               onAddSource={handleAddSource}
               onRemoveSource={handleRemoveSource}
               onDisableBusMapping={handleDisableBusMapping}
+              onConnectAppToSession={handleConnectAppToSession}
             />
           </div>
         )}
