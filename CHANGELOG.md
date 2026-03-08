@@ -12,6 +12,8 @@ All notable changes to WireTAP will be documented in this file.
 
 - **Runtime signal generator controls**: Per-bus signal generator toggle and cadence (Hz) controls in the Source Details panel when a virtual adapter source is selected in the Visual tab. Changes take effect immediately without restarting the session. Includes add/remove bus and save-to-profile support.
 
+- **Per-bus visual graph edges**: The Visual tab now renders one edge per bus mapping instead of a single combined edge per source. Each bus has its own dot on the source and session nodes, making bus routing clearly traceable. Source and session detail panels also show per-source bus mappings.
+
 - **Hot source and bus add/remove**: Adding or removing sources from a running multi-source session no longer stops and restarts the entire session. New sources are spawned into the running merge task; removed sources are signalled to stop individually. Virtual bus generators can also be added and removed at runtime via the Source Details panel.
 
 - **Optional loopback for virtual adapters**: Virtual adapter transmit loopback is now configurable (previously always-on). When disabled, the adapter rejects transmit requests.

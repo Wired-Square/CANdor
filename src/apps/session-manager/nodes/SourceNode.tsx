@@ -11,6 +11,8 @@ export interface SourceNodeData {
   deviceType: string;
   isRealtime: boolean;
   isActive: boolean;
+  /** Device bus numbers this source outputs (one handle per bus) */
+  outputBuses?: number[];
 }
 
 interface SourceNodeProps {
@@ -19,7 +21,7 @@ interface SourceNodeProps {
 }
 
 function SourceNode({ data, selected }: SourceNodeProps) {
-  const { profileName, deviceType, isRealtime, isActive } = data;
+  const { profileName, deviceType, isRealtime, isActive, outputBuses } = data;
 
   const borderColour = selected
     ? "border-cyan-400"
@@ -55,12 +57,29 @@ function SourceNode({ data, selected }: SourceNodeProps) {
         )}
       </div>
 
-      {/* Output handle - connects to sessions */}
-      <Handle
-        type="source"
-        position={Position.Right}
-        className="!w-3 !h-3 !bg-purple-500 !border-2 !border-purple-300"
-      />
+      {/* Output handles — one per bus, or a single default */}
+      {outputBuses && outputBuses.length > 1 ? (
+        outputBuses.map((bus, i) => {
+          const pct = ((i + 1) / (outputBuses.length + 1)) * 100;
+          return (
+            <Handle
+              key={bus}
+              id={`out-bus${bus}`}
+              type="source"
+              position={Position.Right}
+              style={{ top: `${pct}%` }}
+              className="!w-3 !h-3 !bg-purple-500 !border-2 !border-purple-300"
+            />
+          );
+        })
+      ) : (
+        <Handle
+          type="source"
+          position={Position.Right}
+          id={outputBuses?.[0] !== undefined ? `out-bus${outputBuses[0]}` : undefined}
+          className="!w-3 !h-3 !bg-purple-500 !border-2 !border-purple-300"
+        />
+      )}
     </div>
   );
 }

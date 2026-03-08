@@ -192,14 +192,27 @@ function SessionDetails({
           <label className="text-xs text-[color:var(--text-muted)] uppercase tracking-wide">
             Sources
           </label>
-          <div className="mt-1 space-y-0.5">
+          <div className="mt-1 space-y-1.5">
             {session.sourceProfileIds.map((id) => {
               const profile = profiles.find((p) => p.id === id);
+              const config = session.multiSourceConfigs?.find((c) => c.profileId === id);
+              const enabledMappings = config?.busMappings.filter((m) => m.enabled) ?? [];
               return (
-                <p key={id} className="text-sm text-[color:var(--text-primary)]">
-                  {profile?.name ?? id}
-                  {profile && <span className="text-[color:var(--text-muted)] ml-1">({profile.kind})</span>}
-                </p>
+                <div key={id}>
+                  <p className="text-sm text-[color:var(--text-primary)]">
+                    {profile?.name ?? id}
+                    {profile && <span className="text-[color:var(--text-muted)] ml-1">({profile.kind})</span>}
+                  </p>
+                  {enabledMappings.length > 0 && (
+                    <div className="ml-2 mt-0.5 space-y-0.5">
+                      {enabledMappings.map((m) => (
+                        <div key={`${m.deviceBus}-${m.outputBus}`} className="text-xs text-[color:var(--text-muted)] font-mono">
+                          bus{m.deviceBus} → bus{m.outputBus}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -386,6 +399,37 @@ function SourceDetails({ profile, sessions, onRemoveSource }: {
           {profile.preferred_catalog ?? "None"}
         </p>
       </div>
+
+      {/* Bus Mappings */}
+      {usingSessions.length > 0 && usingSessions.some((s) => {
+        const config = s.multiSourceConfigs?.find((c) => c.profileId === profile.id);
+        return config?.busMappings.some((m) => m.enabled);
+      }) && (
+        <div>
+          <label className="text-xs text-[color:var(--text-muted)] uppercase tracking-wide">
+            Bus Mappings
+          </label>
+          {usingSessions.map((s) => {
+            const config = s.multiSourceConfigs?.find((c) => c.profileId === profile.id);
+            const enabledMappings = config?.busMappings.filter((m) => m.enabled) ?? [];
+            if (enabledMappings.length === 0) return null;
+            return (
+              <div key={s.sessionId} className="mt-1">
+                {usingSessions.length > 1 && (
+                  <p className="text-xs text-[color:var(--text-muted)] font-mono">{s.sessionId}</p>
+                )}
+                <div className="ml-2 space-y-0.5">
+                  {enabledMappings.map((m) => (
+                    <div key={`${m.deviceBus}-${m.outputBus}`} className="text-xs text-[color:var(--text-primary)] font-mono">
+                      bus{m.deviceBus} → bus{m.outputBus}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Signal Generator controls (virtual devices only) */}
       {profile.kind === "virtual" && usingSessions.length > 0 && (

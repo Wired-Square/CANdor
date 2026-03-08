@@ -57,6 +57,18 @@ export function buildSessionGraph(
     });
   });
 
+  // Build profileId → Set<deviceBus> for output handles on source nodes
+  const profileDeviceBuses = new Map<string, Set<number>>();
+  sessions.forEach((session) => {
+    session.multiSourceConfigs?.forEach((config) => {
+      const set = profileDeviceBuses.get(config.profileId) ?? new Set();
+      for (const m of config.busMappings) {
+        if (m.enabled) set.add(m.deviceBus);
+      }
+      profileDeviceBuses.set(config.profileId, set);
+    });
+  });
+
   // Column 1: Source nodes (profiles feeding sessions)
   // Sorted by output bus so edges don't cross
   const activeProfiles = profiles
@@ -66,6 +78,8 @@ export function buildSessionGraph(
     const isRealtime = ["gvret_tcp", "gvret_usb", "slcan", "socketcan", "gs_usb", "mqtt", "modbus_tcp"].includes(
       profile.kind
     );
+    const deviceBusSet = profileDeviceBuses.get(profile.id);
+    const outputBuses = deviceBusSet ? [...deviceBusSet].sort((a, b) => a - b) : undefined;
 
     const nodeData: SourceNodeData = {
       profileId: profile.id,
@@ -73,6 +87,7 @@ export function buildSessionGraph(
       deviceType: profile.kind,
       isRealtime,
       isActive: true,
+      outputBuses,
     };
 
     nodes.push({
@@ -130,40 +145,46 @@ export function buildSessionGraph(
       data: nodeData,
     });
 
-    // Create edges from sources to session, with interface labels
+    // Create edges from sources to session — one edge per enabled bus mapping
     session.sourceProfileIds.forEach((profileId) => {
-      // Look up interface IDs from multi-source configs
       const sourceConfig = session.multiSourceConfigs?.find((c) => c.profileId === profileId);
       const enabledMappings = sourceConfig?.busMappings.filter((m) => m.enabled) ?? [];
-      // Source label: device bus (e.g., "bus0")
-      const sourceLabel = enabledMappings.length > 0
-        ? enabledMappings.map((m) => `bus${m.deviceBus}`).join(", ")
-        : undefined;
-      // Target label: mapped output bus (e.g., "bus0", "bus1")
-      const targetLabel = enabledMappings.length > 0
-        ? enabledMappings.map((m) => `bus${m.outputBus}`).join(", ")
-        : undefined;
-      // Target handle ID — connects to the matching input handle on the session node
-      const targetHandleId = enabledMappings.length > 0
-        ? `in-bus${enabledMappings[0].outputBus}`
-        : undefined;
 
-      edges.push({
-        id: `edge-${profileId}-${session.sessionId}`,
-        source: `source-${profileId}`,
-        target: `session-${session.sessionId}`,
-        targetHandle: targetHandleId,
-        type: sourceLabel ? "interface" : "smoothstep",
-        animated: session.state === "running",
-        style: {
-          stroke: session.state === "running" ? "#a855f7" : "#6b7280",
-          strokeWidth: 2,
-        },
-        data: {
-          sourceInterface: sourceLabel ?? "",
-          targetInterface: targetLabel ?? "",
-        } satisfies InterfaceEdgeData as InterfaceEdgeData & Record<string, unknown>,
-      });
+      if (enabledMappings.length === 0) {
+        // Fallback: single unlabelled edge when no mappings available
+        edges.push({
+          id: `edge-${profileId}-${session.sessionId}`,
+          source: `source-${profileId}`,
+          target: `session-${session.sessionId}`,
+          type: "smoothstep",
+          animated: session.state === "running",
+          style: {
+            stroke: session.state === "running" ? "#a855f7" : "#6b7280",
+            strokeWidth: 2,
+          },
+        });
+        return;
+      }
+
+      for (const mapping of enabledMappings) {
+        edges.push({
+          id: `edge-${profileId}-${session.sessionId}-b${mapping.deviceBus}-b${mapping.outputBus}`,
+          source: `source-${profileId}`,
+          sourceHandle: `out-bus${mapping.deviceBus}`,
+          target: `session-${session.sessionId}`,
+          targetHandle: `in-bus${mapping.outputBus}`,
+          type: "interface",
+          animated: session.state === "running",
+          style: {
+            stroke: session.state === "running" ? "#a855f7" : "#6b7280",
+            strokeWidth: 2,
+          },
+          data: {
+            sourceInterface: `bus${mapping.deviceBus}`,
+            targetInterface: `bus${mapping.outputBus}`,
+          } satisfies InterfaceEdgeData as InterfaceEdgeData & Record<string, unknown>,
+        });
+      }
     });
   });
 
