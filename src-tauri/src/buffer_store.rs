@@ -6,7 +6,7 @@
 
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
 use crate::buffer_db;
@@ -66,6 +66,10 @@ pub struct BufferMetadata {
     /// Whether this buffer survives app restart when 'clear buffers on start' is enabled.
     #[serde(default)]
     pub persistent: bool,
+    /// Distinct bus numbers seen in this buffer's data (sorted).
+    /// Enables bus mapping/wiring when a buffer is used as a source.
+    #[serde(default)]
+    pub buses: Vec<u8>,
 }
 
 // ============================================================================
@@ -75,6 +79,8 @@ pub struct BufferMetadata {
 /// A named buffer — metadata only, data lives in SQLite.
 struct NamedBuffer {
     metadata: BufferMetadata,
+    /// In-memory set for efficient bus tracking during streaming
+    seen_buses: HashSet<u8>,
 }
 
 /// Buffer registry holding multiple named buffers
@@ -152,9 +158,10 @@ fn create_buffer_internal(buffer_type: BufferType, name: String, set_streaming: 
         is_streaming: false,
         owning_session_id: None,
         persistent: false,
+        buses: Vec::new(),
     };
 
-    let buffer = NamedBuffer { metadata: metadata.clone() };
+    let buffer = NamedBuffer { metadata: metadata.clone(), seen_buses: HashSet::new() };
     registry.buffers.insert(id.clone(), buffer);
 
     if set_streaming {
@@ -412,17 +419,38 @@ pub fn hydrate_from_db() {
             continue;
         }
 
+        // Backfill buses from DB if not already populated
+        let mut buses = meta.buses.clone();
+        if buses.is_empty() {
+            let table = match meta.buffer_type {
+                BufferType::Frames => "frames",
+                BufferType::Bytes => "bytes",
+            };
+            if let Ok(db_buses) = buffer_db::get_distinct_buses(&meta.id, table) {
+                buses = db_buses;
+            }
+        }
+
         tlog!(
-            "[BufferStore] Hydrating buffer '{}' ({:?}, '{}', {} items)",
-            meta.id, meta.buffer_type, meta.name, meta.count
+            "[BufferStore] Hydrating buffer '{}' ({:?}, '{}', {} items, buses: {:?})",
+            meta.id, meta.buffer_type, meta.name, meta.count, buses
         );
 
+        let seen_buses: HashSet<u8> = buses.iter().copied().collect();
         let buffer = NamedBuffer {
             metadata: BufferMetadata {
                 is_streaming: false,
+                buses: buses.clone(),
                 ..meta
             },
+            seen_buses,
         };
+
+        // Persist backfilled buses so we don't scan again next startup
+        if !buses.is_empty() {
+            let _ = buffer_db::save_buffer_metadata(&buffer.metadata);
+        }
+
         registry.buffers.insert(buffer.metadata.id.clone(), buffer);
         hydrated += 1;
     }
@@ -584,9 +612,11 @@ pub fn copy_buffer(source_buffer_id: &str, new_name: String) -> Result<String, S
             is_streaming: false,
             owning_session_id: None,
             persistent: false,
+            buses: source_metadata.buses.clone(),
         };
 
-        let buffer = NamedBuffer { metadata: metadata.clone() };
+        let seen_buses: HashSet<u8> = source_metadata.buses.iter().copied().collect();
+        let buffer = NamedBuffer { metadata: metadata.clone(), seen_buses };
         registry.buffers.insert(id.clone(), buffer);
         (id, metadata)
     };
@@ -636,6 +666,17 @@ pub fn append_frames(new_frames: Vec<FrameMessage>) {
             }
             buffer.metadata.end_time_us = new_frames.last().map(|f| f.timestamp_us);
             buffer.metadata.count += new_frames.len();
+
+            // Track distinct buses
+            let prev_len = buffer.seen_buses.len();
+            for f in &new_frames {
+                buffer.seen_buses.insert(f.bus);
+            }
+            if buffer.seen_buses.len() != prev_len {
+                let mut sorted: Vec<u8> = buffer.seen_buses.iter().copied().collect();
+                sorted.sort();
+                buffer.metadata.buses = sorted;
+            }
         } else {
             return;
         }
@@ -671,6 +712,17 @@ pub fn append_frames_to_buffer(buffer_id: &str, new_frames: Vec<FrameMessage>) {
             }
             buffer.metadata.end_time_us = new_frames.last().map(|f| f.timestamp_us);
             buffer.metadata.count += new_frames.len();
+
+            // Track distinct buses
+            let prev_len = buffer.seen_buses.len();
+            for f in &new_frames {
+                buffer.seen_buses.insert(f.bus);
+            }
+            if buffer.seen_buses.len() != prev_len {
+                let mut sorted: Vec<u8> = buffer.seen_buses.iter().copied().collect();
+                sorted.sort();
+                buffer.metadata.buses = sorted;
+            }
         } else {
             return;
         }
@@ -698,6 +750,15 @@ pub fn clear_and_refill_buffer(buffer_id: &str, new_frames: Vec<FrameMessage>) {
             buffer.metadata.start_time_us = new_frames.first().map(|f| f.timestamp_us);
             buffer.metadata.end_time_us = new_frames.last().map(|f| f.timestamp_us);
             buffer.metadata.count = new_frames.len();
+
+            // Reset and rebuild bus tracking
+            buffer.seen_buses.clear();
+            for f in &new_frames {
+                buffer.seen_buses.insert(f.bus);
+            }
+            let mut sorted: Vec<u8> = buffer.seen_buses.iter().copied().collect();
+            sorted.sort();
+            buffer.metadata.buses = sorted;
         } else {
             return;
         }
@@ -920,6 +981,17 @@ pub fn append_raw_bytes(new_bytes: Vec<TimestampedByte>) {
             }
             buffer.metadata.end_time_us = new_bytes.last().map(|b| b.timestamp_us);
             buffer.metadata.count += new_bytes.len();
+
+            // Track distinct buses
+            let prev_len = buffer.seen_buses.len();
+            for b in &new_bytes {
+                buffer.seen_buses.insert(b.bus);
+            }
+            if buffer.seen_buses.len() != prev_len {
+                let mut sorted: Vec<u8> = buffer.seen_buses.iter().copied().collect();
+                sorted.sort();
+                buffer.metadata.buses = sorted;
+            }
         } else {
             return;
         }
@@ -951,6 +1023,17 @@ pub fn append_raw_bytes_to_buffer(buffer_id: &str, new_bytes: Vec<TimestampedByt
             }
             buffer.metadata.end_time_us = new_bytes.last().map(|b| b.timestamp_us);
             buffer.metadata.count += new_bytes.len();
+
+            // Track distinct buses
+            let prev_len = buffer.seen_buses.len();
+            for b in &new_bytes {
+                buffer.seen_buses.insert(b.bus);
+            }
+            if buffer.seen_buses.len() != prev_len {
+                let mut sorted: Vec<u8> = buffer.seen_buses.iter().copied().collect();
+                sorted.sort();
+                buffer.metadata.buses = sorted;
+            }
         } else {
             return;
         }

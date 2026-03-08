@@ -84,6 +84,12 @@ pub fn initialise(app_data_dir: &Path, clear_on_start: bool) -> Result<(), Strin
         [],
     );
 
+    // Schema migration: add buses column (idempotent — ignores duplicate column error)
+    let _ = conn.execute(
+        "ALTER TABLE buffer_metadata ADD COLUMN buses TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
+
     // Conditionally clear leftover data and reclaim disk space
     // Persistent (pinned) buffers survive the clear.
     if clear_on_start {
@@ -1202,9 +1208,11 @@ pub fn save_buffer_metadata(meta: &BufferMetadata) -> Result<(), String> {
         BufferType::Bytes => "bytes",
     };
 
+    let buses_json = serde_json::to_string(&meta.buses).unwrap_or_else(|_| "[]".to_string());
+
     conn.execute(
-        "INSERT OR REPLACE INTO buffer_metadata (buffer_id, buffer_type, name, count, start_time_us, end_time_us, created_at, owning_session_id, persistent)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT OR REPLACE INTO buffer_metadata (buffer_id, buffer_type, name, count, start_time_us, end_time_us, created_at, owning_session_id, persistent, buses)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             &meta.id,
             type_str,
@@ -1215,6 +1223,7 @@ pub fn save_buffer_metadata(meta: &BufferMetadata) -> Result<(), String> {
             meta.created_at as i64,
             &meta.owning_session_id,
             meta.persistent as i64,
+            buses_json,
         ],
     )
     .map_err(|e| format!("Failed to save buffer metadata: {}", e))?;
@@ -1228,7 +1237,7 @@ pub fn load_all_buffer_metadata() -> Result<Vec<BufferMetadata>, String> {
     let conn = guard.as_ref().ok_or("Database not initialised")?;
 
     let mut stmt = conn
-        .prepare("SELECT buffer_id, buffer_type, name, count, start_time_us, end_time_us, created_at, owning_session_id, persistent FROM buffer_metadata")
+        .prepare("SELECT buffer_id, buffer_type, name, count, start_time_us, end_time_us, created_at, owning_session_id, persistent, buses FROM buffer_metadata")
         .map_err(|e| format!("Failed to prepare: {}", e))?;
 
     let rows = stmt
@@ -1239,6 +1248,9 @@ pub fn load_all_buffer_metadata() -> Result<Vec<BufferMetadata>, String> {
             } else {
                 BufferType::Frames
             };
+
+            let buses_json: String = row.get::<_, String>("buses").unwrap_or_else(|_| "[]".to_string());
+            let buses: Vec<u8> = serde_json::from_str(&buses_json).unwrap_or_default();
 
             Ok(BufferMetadata {
                 id: row.get("buffer_id")?,
@@ -1251,6 +1263,7 @@ pub fn load_all_buffer_metadata() -> Result<Vec<BufferMetadata>, String> {
                 is_streaming: false,
                 owning_session_id: row.get("owning_session_id")?,
                 persistent: row.get::<_, i64>("persistent").unwrap_or(0) != 0,
+                buses,
             })
         })
         .map_err(|e| format!("Failed to query: {}", e))?;
@@ -1288,6 +1301,33 @@ pub fn update_buffer_persistent(buffer_id: &str, persistent: bool) -> Result<(),
     .map_err(|e| format!("Failed to update buffer persistent flag: {}", e))?;
 
     Ok(())
+}
+
+/// Get distinct bus numbers from a buffer's data.
+/// Used to backfill bus metadata for buffers created before bus tracking was added.
+/// `table` should be "frames" or "bytes".
+pub fn get_distinct_buses(buffer_id: &str, table: &str) -> Result<Vec<u8>, String> {
+    let guard = DB.lock().unwrap();
+    let conn = guard.as_ref().ok_or("Database not initialised")?;
+
+    // table is an internal constant ("frames" or "bytes"), not user input
+    let sql = format!(
+        "SELECT DISTINCT bus FROM {} WHERE buffer_id = ?1 ORDER BY bus",
+        table
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("Failed to prepare: {}", e))?;
+
+    let rows = stmt
+        .query_map(params![buffer_id], |row| row.get::<_, u8>(0))
+        .map_err(|e| format!("Failed to query: {}", e))?;
+
+    let mut buses = Vec::new();
+    for row in rows {
+        buses.push(row.map_err(|e| format!("Failed to read row: {}", e))?);
+    }
+    Ok(buses)
 }
 
 /// Delete metadata for a specific buffer.

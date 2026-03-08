@@ -6,6 +6,8 @@ All notable changes to WireTAP will be documented in this file.
 
 ### Added
 
+- **Buffer bus metadata**: Buffers now track which bus numbers are present in their data. This enables bus mapping and wiring when joining a buffer as a source, just like realtime devices. Bus metadata is persisted to SQLite and backfilled automatically for existing buffers on first startup.
+
 - **Virtual adapter traffic types**: Virtual adapters now support CAN, CAN-FD, Modbus, and Serial traffic modes via a traffic type selector in the profile dialog. CAN/CAN-FD patterns match the `canfd_test.py` reference script (C0FFEE42, walking bit, sequential, etc.). Modbus generates cycling register frames; Serial emits raw byte streams.
 
 - **Per-bus signal generator**: Each virtual adapter bus interface has its own signal generator toggle and rate (Hz). Signal generators can be toggled at runtime via a new `set_virtual_traffic_enabled` Tauri command. The profile dialog shows per-interface configuration rows with bus number, rate, and signal generator checkbox.

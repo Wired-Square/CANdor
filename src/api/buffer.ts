@@ -39,6 +39,8 @@ export interface BufferMetadata {
   owning_session_id: string | null;
   /** Whether this buffer survives app restart when 'clear buffers on start' is enabled */
   persistent: boolean;
+  /** Distinct bus numbers present in this buffer's data (sorted) */
+  buses: number[];
 }
 
 /**

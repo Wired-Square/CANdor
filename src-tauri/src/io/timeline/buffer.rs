@@ -35,6 +35,8 @@ pub struct BufferReader {
     completed_flag: Arc<AtomicBool>,
     /// Buffer ID to read from (extracted from session_id for buffer_N patterns)
     buffer_id: Option<String>,
+    /// Available buses in this buffer (from metadata)
+    buses: Vec<u8>,
 }
 
 impl BufferReader {
@@ -46,6 +48,12 @@ impl BufferReader {
             None
         };
 
+        let buses = buffer_id
+            .as_ref()
+            .and_then(|id| buffer_store::get_buffer_metadata(id))
+            .map(|m| m.buses)
+            .unwrap_or_default();
+
         Self {
             app,
             reader_state: TimelineReaderState::new(session_id, speed),
@@ -53,6 +61,7 @@ impl BufferReader {
             seek_target_frame: Arc::new(AtomicI64::new(NO_SEEK_FRAME)),
             completed_flag: Arc::new(AtomicBool::new(false)),
             buffer_id,
+            buses,
         }
     }
 
@@ -60,6 +69,10 @@ impl BufferReader {
     /// Use this when the session_id doesn't match the buffer_N pattern
     /// (e.g., for ingest sessions like "ingest_a7f3c9" that own a buffer).
     pub fn new_with_buffer(app: AppHandle, session_id: String, buffer_id: String, speed: f64) -> Self {
+        let buses = buffer_store::get_buffer_metadata(&buffer_id)
+            .map(|m| m.buses)
+            .unwrap_or_default();
+
         Self {
             app,
             reader_state: TimelineReaderState::new(session_id, speed),
@@ -67,6 +80,7 @@ impl BufferReader {
             seek_target_frame: Arc::new(AtomicI64::new(NO_SEEK_FRAME)),
             completed_flag: Arc::new(AtomicBool::new(false)),
             buffer_id: Some(buffer_id),
+            buses,
         }
     }
 }
@@ -74,7 +88,10 @@ impl BufferReader {
 #[async_trait]
 impl IODevice for BufferReader {
     fn capabilities(&self) -> IOCapabilities {
-        IOCapabilities::timeline_can().with_seek(true).with_reverse(true)
+        IOCapabilities::timeline_can()
+            .with_seek(true)
+            .with_reverse(true)
+            .with_buses(self.buses.clone())
     }
 
     async fn start(&mut self) -> Result<(), String> {
