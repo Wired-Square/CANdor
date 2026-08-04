@@ -44,6 +44,10 @@ All notable changes to WireTAP will be documented in this file.
 
 - **Dropping a source clears the view.** Destroying a session, or choosing "Continue without a source", could leave frames on screen underneath "No frames to display", with the frame count and the filter count disagreeing about what was there. Every way of leaving a source now clears the frames, the frame picker and the counts together.
 
+- **A Modbus catalogue with more than one device read every register from the wrong one.** A catalogue declaring several slaves polled all of them at the connection's own unit ID, so the registers arrived under correct-looking frame IDs and decoded to plausible but wrong values. **If you have captures taken from a multi-slave Modbus catalogue, re-check them** — those readings came from the wrong device. The bus column on a Modbus session now shows the device address rather than the session's output bus, so a bus filter or a saved selection set keyed on it will need picking again.
+
+- **Catalogue frames marked `disabled` are no longer polled.** The flag was read correctly and then ignored, so a frame you had turned off was polled anyway.
+
 ### Changed
 
 - **A database source is now a WireTAP backend, and only that.** Connecting straight to a PostgreSQL server is no longer offered — the backend owns the database and authenticates with an API key instead of database credentials. If you have a direct PostgreSQL source, it is removed when you upgrade and named in a notice; add a WireTAP backend profile under Settings → Data I/O in its place. Queries, replay and the analysis tools all behave as before against one.
@@ -69,7 +73,6 @@ All notable changes to WireTAP will be documented in this file.
 - **Stopping a FrameLink session releases the device.** The connection was held for as long as WireTAP stayed open, so nothing else could reach that device afterwards — including WireTAP itself. It is now released about thirty seconds after the last use.
 
 - **A FrameLink profile added by hand can be probed.** The Probe button appeared only once a profile already had interfaces, so one created in Settings could never be made to work. Probing fills in the form — **save the profile** to keep it. Until a profile has been probed, only the device's first CAN bus is used and traffic on any other is silently discarded.
-
 ## [0.10.1] - 2026-08-02
 
 ### Fixed

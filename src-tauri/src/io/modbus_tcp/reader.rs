@@ -23,11 +23,10 @@ use tokio::sync::Mutex;
 use tokio_modbus::client::{self, tcp};
 use tokio_modbus::prelude::*;
 
+use super::poll::{run_poll_task, FrameSink};
 use crate::capture_store::{self, CaptureKind};
-use crate::io::periodic::Cadence;
 use crate::io::{
-    emit_device_connected, emit_session_error, emit_stream_ended, now_us, signal_frames_ready,
-    FrameMessage, IOCapabilities, IOSource, IOState, Protocol, SignalThrottle,
+    emit_device_connected, emit_stream_ended, IOCapabilities, IOSource, IOState, Protocol,
 };
 
 // ============================================================================
@@ -42,6 +41,19 @@ pub enum RegisterType {
     Input,
     Coil,
     Discrete,
+}
+
+/// How a poll response becomes frames.
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum PollEmitMode {
+    /// One frame per group, bytes = the whole block. Required for catalogue
+    /// polls: their signals are bit offsets into the entire block.
+    #[default]
+    Block,
+    /// One frame per register, frame_id = the register address. Used by
+    /// discovery sweeps so per-register change analysis works.
+    PerRegister,
 }
 
 /// A single poll group - one register read operation on a timer
@@ -61,6 +73,10 @@ pub struct PollGroup {
     /// Defaults to 1 so older poll payloads without this field still load.
     #[serde(default = "default_device_address")]
     pub device_address: u8,
+    /// Defaults to `Block` so catalogue-derived poll payloads — including any
+    /// already persisted without this field — keep their existing shape.
+    #[serde(default)]
+    pub emit_mode: PollEmitMode,
 }
 
 fn default_device_address() -> u8 {
@@ -88,7 +104,6 @@ pub struct ModbusTcpConfig {
 
 /// Modbus TCP Source - polls registers from a Modbus TCP server
 pub struct ModbusTcpSource {
-    app: AppHandle,
     session_id: String,
     config: ModbusTcpConfig,
     state: IOState,
@@ -98,9 +113,10 @@ pub struct ModbusTcpSource {
 }
 
 impl ModbusTcpSource {
-    pub fn new(app: AppHandle, session_id: String, config: ModbusTcpConfig) -> Self {
+    /// `app` is unused — kept so the constructor matches every other source in
+    /// the `create_reader_session` match arm.
+    pub fn new(_app: AppHandle, session_id: String, config: ModbusTcpConfig) -> Self {
         Self {
-            app,
             session_id,
             config,
             state: IOState::Stopped,
@@ -175,15 +191,23 @@ impl IOSource for ModbusTcpSource {
 
         // Spawn one poll task per group
         for poll in &self.config.polls {
-            let handle = spawn_poll_task(
-                self.app.clone(),
-                self.session_id.clone(),
-                poll.clone(),
-                ctx.clone(),
-                self.cancel_flag.clone(),
-                self.pause_flag.clone(),
-                self.config.max_register_errors,
-            );
+            let poll = poll.clone();
+            let ctx = ctx.clone();
+            let cancel = self.cancel_flag.clone();
+            let pause = self.pause_flag.clone();
+            let max_register_errors = self.config.max_register_errors;
+            let session_id = self.session_id.clone();
+            let handle = tauri::async_runtime::spawn(async move {
+                run_poll_task(
+                    poll,
+                    ctx,
+                    max_register_errors,
+                    cancel,
+                    pause,
+                    FrameSink::SessionCapture { session_id },
+                )
+                .await;
+            });
             self.task_handles.push(handle);
         }
 
@@ -250,160 +274,6 @@ impl IOSource for ModbusTcpSource {
     fn source_type(&self) -> &'static str {
         "modbus_tcp"
     }
-}
-
-// ============================================================================
-// Poll Task
-// ============================================================================
-
-fn spawn_poll_task(
-    _app: AppHandle,
-    session_id: String,
-    poll: PollGroup,
-    ctx: Arc<Mutex<client::Context>>,
-    cancel_flag: Arc<AtomicBool>,
-    pause_flag: Arc<AtomicBool>,
-    max_register_errors: u32,
-) -> tauri::async_runtime::JoinHandle<()> {
-    tauri::async_runtime::spawn(async move {
-        let mut cadence = Cadence::new(poll.interval_ms, cancel_flag, Some(pause_flag));
-        let type_name = match poll.register_type {
-            RegisterType::Holding => "holding",
-            RegisterType::Input => "input",
-            RegisterType::Coil => "coil",
-            RegisterType::Discrete => "discrete",
-        };
-        let mut first_poll = true;
-        let mut consecutive_errors: u32 = 0;
-        let mut throttle = SignalThrottle::new();
-
-        tlog!(
-            "[ModbusTCP:{}] Poll task started: {} reg {} count {} every {}ms (frame_id={})",
-            session_id, type_name, poll.start_register, poll.count, poll.interval_ms, poll.frame_id
-        );
-
-        while cadence.next().await.is_some() {
-            let mut ctx = ctx.lock().await;
-
-            // One TCP connection multiplexes all slaves: point the shared
-            // context at this poll's device address before reading. Done inside
-            // the held lock so concurrent poll tasks can't race the slave id.
-            ctx.set_slave(Slave(poll.device_address));
-
-            // tokio-modbus read methods return Result<Result<Vec<T>, Exception>>
-            // Outer Result = IO error, Inner Result = Modbus exception
-            let result: Result<Vec<u8>, String> = match poll.register_type {
-                RegisterType::Holding => {
-                    match ctx
-                        .read_holding_registers(poll.start_register, poll.count)
-                        .await
-                    {
-                        Ok(Ok(data)) => Ok(registers_to_bytes(&data)),
-                        Ok(Err(exc)) => Err(format!("Modbus exception: {}", exc)),
-                        Err(e) => Err(format!("IO error: {}", e)),
-                    }
-                }
-                RegisterType::Input => {
-                    match ctx
-                        .read_input_registers(poll.start_register, poll.count)
-                        .await
-                    {
-                        Ok(Ok(data)) => Ok(registers_to_bytes(&data)),
-                        Ok(Err(exc)) => Err(format!("Modbus exception: {}", exc)),
-                        Err(e) => Err(format!("IO error: {}", e)),
-                    }
-                }
-                RegisterType::Coil => {
-                    match ctx
-                        .read_coils(poll.start_register, poll.count)
-                        .await
-                    {
-                        Ok(Ok(data)) => Ok(coils_to_bytes(&data)),
-                        Ok(Err(exc)) => Err(format!("Modbus exception: {}", exc)),
-                        Err(e) => Err(format!("IO error: {}", e)),
-                    }
-                }
-                RegisterType::Discrete => {
-                    match ctx
-                        .read_discrete_inputs(poll.start_register, poll.count)
-                        .await
-                    {
-                        Ok(Ok(data)) => Ok(coils_to_bytes(&data)),
-                        Ok(Err(exc)) => Err(format!("Modbus exception: {}", exc)),
-                        Err(e) => Err(format!("IO error: {}", e)),
-                    }
-                }
-            };
-
-            // Release the lock before emitting
-            drop(ctx);
-
-            match result {
-                Ok(bytes) => {
-                    consecutive_errors = 0;
-
-                    if first_poll {
-                        tlog!(
-                            "[ModbusTCP:{}] First poll OK: {} reg {} → {} bytes: {:02X?}",
-                            session_id, type_name, poll.start_register, bytes.len(), &bytes[..bytes.len().min(16)]
-                        );
-                        first_poll = false;
-                    }
-
-                    let frame = FrameMessage {
-                        protocol: "modbus".to_string(),
-                        timestamp_us: now_us(),
-                        frame_id: poll.frame_id,
-                        bus: poll.device_address,
-                        dlc: bytes.len() as u8,
-                        bytes,
-                        is_extended: false,
-                        is_fd: false,
-                        source_address: None,
-                        incomplete: None,
-                        direction: Some("rx".to_string()),
-                    };
-
-                    capture_store::append_frames_to_session(&session_id, vec![frame]);
-                    if throttle.should_signal("frames-ready") {
-                        signal_frames_ready(&session_id);
-                    }
-                }
-                Err(e) => {
-                    consecutive_errors += 1;
-
-                    tlog!(
-                        "[ModbusTCP:{}] Error reading {} registers at {}: {} ({}/{})",
-                        session_id, type_name, poll.start_register, e,
-                        consecutive_errors,
-                        if max_register_errors > 0 { max_register_errors.to_string() } else { "∞".to_string() }
-                    );
-                    emit_session_error(
-                        &session_id,
-                        format!(
-                            "Modbus read error ({} @ {}): {}",
-                            type_name, poll.start_register, e
-                        ),
-                    );
-
-                    if max_register_errors > 0 && consecutive_errors >= max_register_errors {
-                        tlog!(
-                            "[ModbusTCP:{}] Stopped polling {} reg {} after {} consecutive errors",
-                            session_id, type_name, poll.start_register, consecutive_errors
-                        );
-                        emit_session_error(
-                            &session_id,
-                            format!(
-                                "Stopped polling {} @ {} after {} consecutive errors",
-                                type_name, poll.start_register, consecutive_errors
-                            ),
-                        );
-                        break;
-                    }
-                }
-            }
-        }
-    })
 }
 
 // ============================================================================
