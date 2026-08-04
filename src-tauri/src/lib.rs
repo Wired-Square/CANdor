@@ -1271,7 +1271,6 @@ pub fn run() {
             sessions::get_session_error,
             sessions::get_session_sources,
             sessions::get_orphaned_capture_ids,
-            sessions::get_modbus_scan_state_cmd,
             // Power management API
             sessions::set_wake_settings,
             // Modbus scanning API

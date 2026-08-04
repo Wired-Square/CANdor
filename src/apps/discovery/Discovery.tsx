@@ -1,7 +1,7 @@
 // ui/src/apps/discovery/Discovery.tsx
 
 import { useEffect, useMemo, useState, useRef, useCallback } from "react";
-import { emit, listen } from "@tauri-apps/api/event";
+import { emit } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { useSettings, getSaveFrameIdFormat } from "../../hooks/useSettings";
 import { useFrameIdFormat, withFrameIdFormat } from "../../hooks/useFrameIdFormat";
@@ -17,8 +17,9 @@ import { useDiscoverySerialStore } from "../../stores/discoverySerialStore";
 import { useDiscoveryToolboxStore } from "../../stores/discoveryToolboxStore";
 import { useShallow } from "zustand/react/shallow";
 import { useDiscoveryHandlers } from "./hooks/useDiscoveryHandlers";
+import { useModbusScanSync } from "./hooks/useModbusScanSync";
 import type { StreamEndedInfo, PlaybackPosition, ModbusScanConfig, UnitIdScanConfig } from '../../api/io';
-import { cancelModbusScan, createModbusScanSession, getModbusScanState, startReaderSession, stopReaderSession } from '../../api/io';
+import { createModbusScanSession, startReaderSession, stopReaderSession } from '../../api/io';
 import type { ScanJob } from '../../api/io';
 import type { ModbusExportConfig } from '../../utils/frameExport';
 import { modbusConnectionOf, useModbusProfiles } from '../../utils/modbusProfiles';
@@ -94,9 +95,6 @@ function DiscoveryInner() {
   const framesViewActiveTab = useDiscoveryUIStore((s) => s.framesViewActiveTab);
   const setShowBusColumn = useDiscoveryUIStore((s) => s.setShowBusColumn);
   const setModbusExportConfig = useDiscoveryUIStore((s) => s.setModbusExportConfig);
-  // The scan runs in its own session, separate from whatever the panel was
-  // showing before — track its id so progress events can be matched to it.
-  const modbusScanSessionIdRef = useRef<string | null>(null);
   const setMaxBuffer = useDiscoveryUIStore((s) => s.setMaxBuffer);
   const setIoProfile = useDiscoveryUIStore((s) => s.setIoProfile);
   const setPlaybackSpeed = useDiscoveryUIStore((s) => s.setPlaybackSpeed);
@@ -267,13 +265,7 @@ function DiscoveryInner() {
 
   // Modbus scan state (from toolbox store)
   const startModbusScanStore = useDiscoveryToolboxStore((s) => s.startModbusScan);
-  const setModbusScanDevices = useDiscoveryToolboxStore((s) => s.setModbusScanDevices);
-  const updateModbusScanProgress = useDiscoveryToolboxStore((s) => s.updateModbusScanProgress);
   const finishModbusScan = useDiscoveryToolboxStore((s) => s.finishModbusScan);
-  const isScanning = useDiscoveryToolboxStore((s) =>
-    (s.toolbox.modbusRegisterScanResults?.isScanning ?? false) ||
-    (s.toolbox.modbusUnitIdScanResults?.isScanning ?? false)
-  );
 
   // Ref to track paused state (used by callbacks that can't access manager state directly)
   // When paused, frame emissions are from stepping - position updates, not new data
@@ -783,31 +775,7 @@ function DiscoveryInner() {
     return `${formatFilenameDate()}-${protocol}`;
   }, [exportDataMode, protocolLabel]);
 
-  // Modbus scan progress. Frames arrive over the normal session/capture path —
-  // this event only carries progress and device identification, which aren't
-  // frame data and so have no place on the frame stream.
-  useEffect(() => {
-    const scanSessionId = modbusScanSessionIdRef.current;
-    if (!isScanning || !scanSessionId) return;
-
-    let unlisten: (() => void) | null = null;
-    listen(`modbus-scan:${scanSessionId}`, async () => {
-      const state = await getModbusScanState(scanSessionId);
-      if (!state) return;
-      if (state.progress) updateModbusScanProgress(state.progress, state.notes);
-      setModbusScanDevices(state.device_info);
-      // The sweep publishes a terminal status on its way out, which is what
-      // ends the scan for the UI — the start call returns as soon as the
-      // session is running, long before there is anything to report.
-      if (state.status !== "scanning") finishModbusScan(state.notes);
-    }).then((fn) => {
-      unlisten = fn;
-    });
-
-    return () => {
-      unlisten?.();
-    };
-  }, [isScanning, updateModbusScanProgress, setModbusScanDevices, finishModbusScan]);
+  useModbusScanSync();
 
   /**
    * Start a scan as its own session.
@@ -825,8 +793,7 @@ function DiscoveryInner() {
     errorMessage: string,
   ) => {
     const scanSessionId = `m_scan${Date.now().toString(36)}`;
-    modbusScanSessionIdRef.current = scanSessionId;
-    startModbusScanStore(scanType);
+    startModbusScanStore(scanType, scanSessionId);
     // Tell Save how to render the discovered registers as a catalogue.
     setModbusExportConfig({
       device_address: meta.unitId,
@@ -839,7 +806,6 @@ function DiscoveryInner() {
       await joinSession(scanSessionId);
       await startReaderSession(scanSessionId);
     } catch (e) {
-      modbusScanSessionIdRef.current = null;
       finishModbusScan();
       showAppError(t("errors.scanTitle"), errorMessage, String(e));
     }
@@ -867,13 +833,16 @@ function DiscoveryInner() {
   // for the sweep to unwind, and finalises the capture, so the registers found
   // before the stop are kept rather than discarded.
   const handleCancelModbusScan = useCallback(async () => {
-    const scanSessionId = modbusScanSessionIdRef.current;
+    const scanSessionId = useDiscoveryToolboxStore.getState().toolbox
+      .modbusRegisterScanResults?.sessionId
+      ?? useDiscoveryToolboxStore.getState().toolbox.modbusUnitIdScanResults?.sessionId;
+    if (!scanSessionId) return;
     try {
-      if (scanSessionId) await stopReaderSession(scanSessionId);
-      else await cancelModbusScan();
+      await stopReaderSession(scanSessionId);
     } catch (e) {
+      // Only end the scan here if the stop failed — otherwise the sweep's own
+      // terminal "cancelled" state, pushed on the session channel, ends it.
       console.warn('[Discovery] Failed to cancel scan:', e);
-    } finally {
       finishModbusScan();
     }
   }, [finishModbusScan]);

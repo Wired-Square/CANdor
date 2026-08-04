@@ -4,7 +4,7 @@
 // Uses DataView for zero-copy access to ArrayBuffer messages.
 
 import type { FrameMessage } from "../types/frame";
-import type { StreamEndedInfo } from "../api/io";
+import type { DeviceInfoEntry, ScanProgressPayload, StreamEndedInfo } from "../api/io";
 import { trackAlloc } from "./memoryDiag";
 
 // ============================================================================
@@ -39,6 +39,7 @@ export const MsgType = {
   FrameCounts: 0x16,
   OpenAppsChanged: 0x17,
   CatalogListChanged: 0x18,
+  ModbusScanState: 0x19,
   Command: 0x20,
   CommandResponse: 0x21,
   BridgeRequest: 0x30,
@@ -294,7 +295,8 @@ export interface DecodedFrameMsg {
 
 const wsJsonDecoder = new TextDecoder();
 
-/** Decode a global JSON-payload WS message (4-byte header + UTF-8 JSON) into a typed object. */
+/** Decode a JSON-payload WS message (4-byte header + UTF-8 JSON) into a typed object.
+ *  Session-scoped handlers get the same raw buffer, so this serves both. */
 export function decodeWsJson<T>(raw: ArrayBuffer): T {
   return JSON.parse(wsJsonDecoder.decode(new Uint8Array(raw, HEADER_SIZE))) as T;
 }
@@ -311,6 +313,14 @@ export function decodeDecodedSignals(payload: DataView): DecodedFrameMsg[] {
   } catch {
     return [];
   }
+}
+
+/** Progress of a Modbus discovery sweep, pushed on the scan session's channel. */
+export interface ModbusScanStateMsg {
+  status: string;
+  progress: ScanProgressPayload | null;
+  device_info: DeviceInfoEntry[];
+  notes: string[];
 }
 
 // ============================================================================

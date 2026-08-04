@@ -2625,8 +2625,3 @@ pub fn get_session_sources(session_id: String) -> Vec<io::post_session::SourceIn
 pub fn get_orphaned_capture_ids(session_id: String) -> Vec<String> {
     io::post_session::get_orphaned_capture_ids(&session_id)
 }
-
-#[tauri::command(rename_all = "snake_case")]
-pub fn get_modbus_scan_state_cmd(session_id: String) -> Option<crate::io::modbus_tcp::scanner::ModbusScanState> {
-    crate::io::modbus_tcp::scanner::get_scan_state(&session_id)
-}

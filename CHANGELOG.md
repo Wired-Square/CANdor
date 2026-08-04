@@ -22,6 +22,8 @@ All notable changes to WireTAP will be documented in this file.
 
 ### Changed
 
+- **Modbus scan progress moved onto the session's WebSocket channel**: a discovery sweep is a session and its frames already rode that channel, but its progress rode a Tauri event carrying nothing, which the frontend answered with a command round-trip to fetch the state — the only session-owned signal in the app delivered on a second transport. It is now pushed as `ModbusScanState` (0x19) on the sweep's own channel. Two faults go with it: the terminal status and `StreamEnded` were unordered, since nothing sequences two transports, and the backend clears its scan-state store the moment a sweep stops, so a fetch arriving late found nothing — the UI had been papering over that with a defensive `finally`. Both are structural now: one mpsc means FIFO, and a payload already sent cannot be cleared out from under the reader. MCP keeps reading the store, being in-process Rust rather than a socket client, but waits on a notification rather than polling every 200 ms. [src-tauri/src/ws/dispatch.rs](src-tauri/src/ws/dispatch.rs), [src/apps/discovery/hooks/useModbusScanSync.ts](src/apps/discovery/hooks/useModbusScanSync.ts).
+
 - **Modbus poll lifecycle is shared**: the roughly hundred lines of session/poll bookkeeping that lived inside the Decoder view — reconnect-on-catalogue-change, pause/resume, and the profile-id resolution the three of them had to agree on — moved into `useModbusPolling`, so Discovery gets the same behaviour for its range-derived polls. [src/hooks/useModbusPolling.ts](src/hooks/useModbusPolling.ts).
 
 ## [0.10.1] - 2026-08-02

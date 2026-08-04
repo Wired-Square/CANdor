@@ -1672,11 +1672,6 @@ export async function startModbusUnitIdScan(
   return invoke("modbus_scan_unit_ids", { config, session_id: sessionId ?? null });
 }
 
-/** Cancel a running Modbus scan operation. */
-export async function cancelModbusScan(): Promise<void> {
-  return invoke("cancel_modbus_scan");
-}
-
 // ============================================================================
 // Scan sessions
 // ============================================================================
@@ -1881,31 +1876,11 @@ export interface ReplayState {
   pass: number;
 }
 
-/** Fetch current modbus scan state. */
-export async function getModbusScanState(
-  sessionId: string
-): Promise<ModbusScanState | null> {
-  return invoke("get_modbus_scan_state_cmd", { session_id: sessionId });
-}
-
 export interface DeviceInfoEntry {
   unit_id: number;
   vendor: string | null;
   product_code: string | null;
   revision: string | null;
-}
-
-/**
- * Scan progress. Frames are deliberately absent — scan results reach the UI
- * through the session's capture like any other frames, so carrying them here
- * too would deliver every register twice.
- */
-export interface ModbusScanState {
-  status: string;
-  progress: ScanProgressPayload | null;
-  device_info: DeviceInfoEntry[];
-  /** Diagnoses worth surfacing, e.g. a silent function code. */
-  notes: string[];
 }
 
 /** Fetch the most recent bytes from a capture (tail view). */

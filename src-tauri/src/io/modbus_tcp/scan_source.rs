@@ -109,7 +109,6 @@ impl ScanJob {
 
 /// A Modbus discovery sweep, driven as a session.
 pub struct ModbusScanSource {
-    app: AppHandle,
     session_id: String,
     job: ScanJob,
     state: IOState,
@@ -118,9 +117,10 @@ pub struct ModbusScanSource {
 }
 
 impl ModbusScanSource {
-    pub fn new(app: AppHandle, session_id: String, job: ScanJob) -> Self {
+    /// `app` is unused — kept so the constructor matches every other source in
+    /// the session-creation match arms.
+    pub fn new(_app: AppHandle, session_id: String, job: ScanJob) -> Self {
         Self {
-            app,
             session_id,
             job,
             state: IOState::Stopped,
@@ -166,7 +166,6 @@ impl IOSource for ModbusScanSource {
             endpoint
         );
 
-        let app = self.app.clone();
         let session_id = self.session_id.clone();
         let job = self.job.clone();
         let cancel = self.cancel_flag.clone();
@@ -175,12 +174,10 @@ impl IOSource for ModbusScanSource {
             let sink = FrameSink::SessionCapture { session_id: session_id.clone() };
             let outcome = match job {
                 ScanJob::Registers { config } => {
-                    scan_registers(app, config, cancel.clone(), Some(session_id.clone()), &sink)
-                        .await
+                    scan_registers(config, cancel.clone(), Some(session_id.clone()), &sink).await
                 }
                 ScanJob::UnitIds { config } => {
-                    scan_unit_ids(app, config, cancel.clone(), Some(session_id.clone()), &sink)
-                        .await
+                    scan_unit_ids(config, cancel.clone(), Some(session_id.clone()), &sink).await
                 }
             };
 
