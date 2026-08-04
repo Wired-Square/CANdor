@@ -4,10 +4,11 @@
 // - Source: catalog-driven polling of known registers
 // - Scanner: one-shot discovery of registers and active unit IDs
 
+pub mod poll;
 mod reader;
 pub mod scanner;
 
-pub use reader::{ModbusTcpConfig, ModbusTcpSource, PollGroup, RegisterType};
+pub use reader::{ModbusTcpConfig, ModbusTcpSource, PollEmitMode, PollGroup, RegisterType};
 pub use scanner::{
     ModbusScanConfig, ScanCompletePayload, UnitIdScanConfig,
 };
@@ -30,6 +31,9 @@ fn map_register_type(rt: wiretap_catalog::modbus::RegisterType) -> RegisterType 
 /// for catalogue → polls, shared by the interactive editor (`catalog.polls` WS
 /// command) and the MCP/headless open flow. A catalogue with no Modbus frames
 /// yields no polls (not an error).
+///
+/// Frames marked `disabled` are skipped — the catalogue crate defines that flag
+/// as "the poll task skips this frame entirely", which WireTAP previously ignored.
 pub fn build_polls_from_catalog(catalog_toml: &str) -> Result<Vec<PollGroup>, String> {
     use wiretap_catalog::modbus::{ManifestError, ModbusManifest};
     let manifest = match ModbusManifest::parse(catalog_toml) {
@@ -40,6 +44,7 @@ pub fn build_polls_from_catalog(catalog_toml: &str) -> Result<Vec<PollGroup>, St
     Ok(manifest
         .frames
         .iter()
+        .filter(|f| !f.disabled)
         .map(|f| PollGroup {
             register_type: map_register_type(f.register_type),
             start_register: manifest.protocol_address(f),
@@ -47,6 +52,8 @@ pub fn build_polls_from_catalog(catalog_toml: &str) -> Result<Vec<PollGroup>, St
             interval_ms: f.interval_ms,
             frame_id: f.register_number as u32,
             device_address: f.device_address,
+            // Catalogue signals are bit offsets into the whole block.
+            emit_mode: PollEmitMode::Block,
         })
         .collect())
 }

@@ -17,8 +17,8 @@ use super::types::ModbusRole;
 use crate::io::gvret::{run_gvret_tcp_source, BusMapping};
 #[cfg(not(target_os = "ios"))]
 use crate::io::gvret::run_gvret_usb_source;
-use crate::io::modbus_tcp::{PollGroup, RegisterType};
-use crate::io::periodic::Cadence;
+use crate::io::modbus_tcp::poll::{run_poll_task, FrameSink};
+use crate::io::modbus_tcp::PollGroup;
 use crate::io::{now_us, FrameMessage};
 #[cfg(not(target_os = "ios"))]
 use crate::io::serial::{parse_profile_for_source, run_source as run_serial_source};
@@ -1051,15 +1051,16 @@ async fn run_modbus_tcp_client(
         let poll = poll.clone();
 
         let handle = tokio::spawn(async move {
-            run_modbus_poll_task(
-                source_idx,
-                output_bus,
+            run_poll_task(
                 poll,
                 ctx_clone,
                 max_register_errors,
                 stop_clone,
                 pause_clone,
-                tx_clone,
+                FrameSink::Broker {
+                    source_idx,
+                    tx: tx_clone,
+                },
             )
             .await;
         });
@@ -1074,135 +1075,6 @@ async fn run_modbus_tcp_client(
     let _ = tx
         .send(SourceMessage::Ended(source_idx, "stopped".to_string()))
         .await;
-}
-
-/// Run a single Modbus poll task (one register read operation on a timer)
-async fn run_modbus_poll_task(
-    source_idx: usize,
-    output_bus: u8,
-    poll: PollGroup,
-    ctx: Arc<Mutex<client::Context>>,
-    max_register_errors: u32,
-    stop_flag: Arc<AtomicBool>,
-    pause_flag: Arc<AtomicBool>,
-    tx: mpsc::Sender<SourceMessage>,
-) {
-    let mut cadence = Cadence::new(poll.interval_ms, stop_flag, Some(pause_flag));
-    let type_name = match poll.register_type {
-        RegisterType::Holding => "holding",
-        RegisterType::Input => "input",
-        RegisterType::Coil => "coil",
-        RegisterType::Discrete => "discrete",
-    };
-    let mut first_poll = true;
-    let mut consecutive_errors: u32 = 0;
-
-    tlog!(
-        "[multi_source] Modbus source {} poll task: {} reg {} count {} every {}ms (frame_id={}, bus={})",
-        source_idx, type_name, poll.start_register, poll.count, poll.interval_ms, poll.frame_id, output_bus
-    );
-
-    while cadence.next().await.is_some() {
-        let mut ctx = ctx.lock().await;
-
-        // tokio-modbus read methods return Result<Result<Vec<T>, Exception>>
-        // Outer Result = IO error, Inner Result = Modbus exception
-        let result: Result<Vec<u8>, String> = match poll.register_type {
-            RegisterType::Holding => {
-                match ctx
-                    .read_holding_registers(poll.start_register, poll.count)
-                    .await
-                {
-                    Ok(Ok(data)) => Ok(registers_to_bytes(&data)),
-                    Ok(Err(exc)) => Err(format!("Modbus exception: {}", exc)),
-                    Err(e) => Err(format!("IO error: {}", e)),
-                }
-            }
-            RegisterType::Input => {
-                match ctx
-                    .read_input_registers(poll.start_register, poll.count)
-                    .await
-                {
-                    Ok(Ok(data)) => Ok(registers_to_bytes(&data)),
-                    Ok(Err(exc)) => Err(format!("Modbus exception: {}", exc)),
-                    Err(e) => Err(format!("IO error: {}", e)),
-                }
-            }
-            RegisterType::Coil => {
-                match ctx
-                    .read_coils(poll.start_register, poll.count)
-                    .await
-                {
-                    Ok(Ok(data)) => Ok(coils_to_bytes(&data)),
-                    Ok(Err(exc)) => Err(format!("Modbus exception: {}", exc)),
-                    Err(e) => Err(format!("IO error: {}", e)),
-                }
-            }
-            RegisterType::Discrete => {
-                match ctx
-                    .read_discrete_inputs(poll.start_register, poll.count)
-                    .await
-                {
-                    Ok(Ok(data)) => Ok(coils_to_bytes(&data)),
-                    Ok(Err(exc)) => Err(format!("Modbus exception: {}", exc)),
-                    Err(e) => Err(format!("IO error: {}", e)),
-                }
-            }
-        };
-
-        // Release the lock before sending
-        drop(ctx);
-
-        match result {
-            Ok(bytes) => {
-                consecutive_errors = 0;
-
-                if first_poll {
-                    tlog!(
-                        "[multi_source] Modbus source {} first poll OK: {} reg {} → {} bytes",
-                        source_idx, type_name, poll.start_register, bytes.len()
-                    );
-                    first_poll = false;
-                }
-
-                let frame = FrameMessage {
-                    protocol: "modbus".to_string(),
-                    timestamp_us: now_us(),
-                    frame_id: poll.frame_id,
-                    bus: output_bus,
-                    dlc: bytes.len() as u8,
-                    bytes,
-                    is_extended: false,
-                    is_fd: false,
-                    source_address: None,
-                    incomplete: None,
-                    direction: Some("rx".to_string()),
-                };
-
-                let _ = tx
-                    .send(SourceMessage::Frames(source_idx, vec![frame]))
-                    .await;
-            }
-            Err(e) => {
-                consecutive_errors += 1;
-
-                tlog!(
-                    "[multi_source] Modbus source {} error reading {} at {}: {} ({}/{})",
-                    source_idx, type_name, poll.start_register, e,
-                    consecutive_errors,
-                    if max_register_errors > 0 { max_register_errors.to_string() } else { "∞".to_string() }
-                );
-
-                if max_register_errors > 0 && consecutive_errors >= max_register_errors {
-                    tlog!(
-                        "[multi_source] Modbus source {} stopped polling {} reg {} after {} consecutive errors",
-                        source_idx, type_name, poll.start_register, consecutive_errors
-                    );
-                    break;
-                }
-            }
-        }
-    }
 }
 
 // ============================================================================
@@ -1385,30 +1257,4 @@ async fn handle_modbus_server_connection(
             }
         }
     }
-}
-
-// ============================================================================
-// Data Conversion Helpers (shared with modbus_tcp/reader.rs)
-// ============================================================================
-
-/// Convert Modbus register values (u16) to bytes in big-endian order.
-fn registers_to_bytes(registers: &[u16]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(registers.len() * 2);
-    for &reg in registers {
-        bytes.push((reg >> 8) as u8);
-        bytes.push((reg & 0xFF) as u8);
-    }
-    bytes
-}
-
-/// Convert coil/discrete input values (bool) to packed bytes.
-fn coils_to_bytes(coils: &[bool]) -> Vec<u8> {
-    let byte_count = (coils.len() + 7) / 8;
-    let mut bytes = vec![0u8; byte_count];
-    for (i, &coil) in coils.iter().enumerate() {
-        if coil {
-            bytes[i / 8] |= 1 << (i % 8);
-        }
-    }
-    bytes
 }

@@ -2,6 +2,14 @@
 
 All notable changes to WireTAP will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Multi-slave Modbus catalogues read the wrong slave**: the broker's poll loop never pointed the shared connection at each poll group's device address, so every register in a catalogue with more than one `[node.*]` was read from the connection's `unit_id` — under correct-looking frame ids, which means the data looked fine and decoded to the wrong values. The standalone reader had always done this correctly; the two had drifted into near-duplicate copies of the same loop. They are now one engine. **If you have captures from a multi-slave Modbus catalogue, re-check them** — their signal values were taken from the wrong device. Relatedly, `frame.bus` on broker Modbus sessions now reports the device address rather than the session's output bus, which changes the Discovery bus column and any bus filter or selection set keyed on it. [src-tauri/src/io/modbus_tcp/poll.rs](src-tauri/src/io/modbus_tcp/poll.rs), [src-tauri/src/io/broker/spawner.rs](src-tauri/src/io/broker/spawner.rs).
+
+- **Catalogue frames marked `disabled` are no longer polled**: the catalogue format documents the flag as "the poll task skips this frame entirely" and WireTAP parsed it, then polled the frame anyway. [src-tauri/src/io/modbus_tcp/mod.rs](src-tauri/src/io/modbus_tcp/mod.rs).
+
 ## [0.10.1] - 2026-08-02
 
 ### Fixed
