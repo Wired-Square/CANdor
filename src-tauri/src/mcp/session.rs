@@ -52,15 +52,28 @@ pub struct Window {
     pub limit: Option<i64>,
 }
 
+/// Everything the caller can vary about an open beyond the profile itself.
+#[derive(Debug, Default)]
+pub struct OpenOptions {
+    pub window: Window,
+    /// Modbus only: poll these ranges rather than a catalogue's registers.
+    pub modbus_ranges: Option<crate::io::ModbusRangeSpec>,
+}
+
 /// Open (create + start) a reader session for a profile, binding the profile's
-/// preferred catalogue so the stream decodes. For Modbus profiles the same
-/// catalogue also supplies the poll groups.
+/// preferred catalogue so the stream decodes. For Modbus profiles the poll groups
+/// come from that catalogue, or from an explicit range spec when the device has
+/// no decoder yet.
 pub async fn open(
     app: tauri::AppHandle,
     profile_id: String,
     session_id: Option<String>,
-    window: Window,
+    opts: OpenOptions,
 ) -> Result<Value, String> {
+    let OpenOptions {
+        window,
+        modbus_ranges,
+    } = opts;
     let settings = crate::settings::load_settings_sync(&app)?;
     let profile = settings
         .io_profiles
@@ -82,15 +95,35 @@ pub async fn open(
     };
 
     let modbus_polls = if profile.kind.starts_with("modbus") {
-        let (_, toml) = catalog_toml.as_ref().ok_or_else(|| {
-            "Modbus profile has no preferred_catalog — set one so poll groups can be built".to_string()
-        })?;
-        let polls = crate::io::build_polls_from_catalog(toml)?;
-        if polls.is_empty() {
-            return Err("Preferred catalog has no [frame.modbus.*] poll definitions".to_string());
-        }
+        let polls = match (&modbus_ranges, catalog_toml.as_ref()) {
+            // An explicit range spec wins over a catalogue: that is how you
+            // re-sweep a device whose catalogue you already know is incomplete.
+            (Some(spec), _) => crate::io::build_polls_from_ranges(spec)?,
+            (None, Some((_, toml))) => {
+                let polls = crate::io::build_polls_from_catalog(toml)?;
+                if polls.is_empty() {
+                    return Err(
+                        "Preferred catalog has no [frame.modbus.*] poll definitions".to_string()
+                    );
+                }
+                polls
+            }
+            // Deliberately not a default sweep. Silently probing an unknown
+            // industrial bus on an agent's behalf is not a safe default; make
+            // the caller say what to poll.
+            (None, None) => {
+                return Err(format!(
+                    "Modbus profile '{profile_id}' has no preferred_catalog and no register_ranges \
+                     — pass register_ranges to poll an address range, or bind a catalogue with \
+                     set_profile_catalog"
+                ))
+            }
+        };
         Some(serde_json::to_string(&polls).map_err(|e| e.to_string())?)
     } else {
+        if modbus_ranges.is_some() {
+            return Err("register_ranges only applies to Modbus profiles".to_string());
+        }
         None
     };
 

@@ -2,33 +2,46 @@
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Play, Info } from "lucide-react";
-import { iconMd, iconSm } from "../../../../styles/spacing";
-import { bgSurface, textMuted } from "../../../../styles";
+import { Info } from "lucide-react";
+import { iconSm } from "../../../../styles/spacing";
+import { borderDefault, textMuted } from "../../../../styles";
+import ModbusConnectionFields, {
+  type ModbusConnection,
+} from "../../../../components/modbus/ModbusConnectionFields";
+import { FieldRow, NumberField, RunButton, SelectField } from "../../../../components/modbus/ModbusFields";
+import {
+  MODBUS_SCAN_BOUNDS,
+  MODBUS_SCAN_DEFAULTS,
+} from "../../../../components/modbus/modbusScanDefaults";
+import { useModbusTarget } from "../../../../components/modbus/useModbusTarget";
 import type { UnitIdScanConfig, ModbusRegisterType } from "../../../../api/io";
 
 type Props = {
-  connection: { host: string; port: number; unit_id: number };
+  connection?: ModbusConnection | null;
   onStartScan: (config: UnitIdScanConfig) => void;
 };
 
 export default function ModbusUnitIdScanPanel({ connection, onStartScan }: Props) {
   const { t } = useTranslation("discovery");
+  const target = useModbusTarget(connection);
+
   const [startUnitId, setStartUnitId] = useState(1);
   const [endUnitId, setEndUnitId] = useState(247);
   const [testRegister, setTestRegister] = useState(0);
   const [registerType, setRegisterType] = useState<ModbusRegisterType>("holding");
-  const [delayMs, setDelayMs] = useState(50);
+  const [delayMs, setDelayMs] = useState(MODBUS_SCAN_DEFAULTS.interRequestDelayMs);
+  const [timeoutMs, setTimeoutMs] = useState(MODBUS_SCAN_DEFAULTS.timeoutMs);
 
   const handleStart = () => {
     onStartScan({
-      host: connection.host,
-      port: connection.port,
+      host: target.connection.host,
+      port: target.connection.port,
       start_unit_id: startUnitId,
       end_unit_id: endUnitId,
       test_register: testRegister,
       register_type: registerType,
       inter_request_delay_ms: delayMs,
+      timeout_ms: timeoutMs,
     });
   };
 
@@ -36,88 +49,92 @@ export default function ModbusUnitIdScanPanel({ connection, onStartScan }: Props
 
   return (
     <div className="space-y-3 text-xs">
-      <div className="flex gap-3">
-        <div className="flex-1 space-y-1">
-          <label className="text-[color:var(--text-muted)]">{t("modbusUnitId.startUnitId")}</label>
-          <input
-            type="number"
-            min={1}
-            max={247}
-            value={startUnitId}
-            onChange={(e) => setStartUnitId(Math.max(1, Math.min(247, Number(e.target.value) || 1)))}
-            className={`w-full px-2 py-1 rounded border border-[color:var(--border-default)] ${bgSurface} text-[color:var(--text-primary)]`}
-          />
-        </div>
-        <div className="flex-1 space-y-1">
-          <label className="text-[color:var(--text-muted)]">{t("modbusUnitId.endUnitId")}</label>
-          <input
-            type="number"
-            min={1}
-            max={247}
-            value={endUnitId}
-            onChange={(e) => setEndUnitId(Math.max(1, Math.min(247, Number(e.target.value) || 1)))}
-            className={`w-full px-2 py-1 rounded border border-[color:var(--border-default)] ${bgSurface} text-[color:var(--text-primary)]`}
-          />
-        </div>
-      </div>
+      {/* The sweep supplies its own unit ids, so the target only needs an address. */}
+      <ModbusConnectionFields
+        value={target.connection}
+        onChange={target.setConnection}
+        profileId={target.profileId}
+        onProfileChange={target.selectProfile}
+        showUnitId={false}
+      />
+
+      <FieldRow>
+        <NumberField
+          label={t("modbusUnitId.startUnitId")}
+          value={startUnitId}
+          onChange={setStartUnitId}
+          min={1}
+          max={247}
+        />
+        <NumberField
+          label={t("modbusUnitId.endUnitId")}
+          value={endUnitId}
+          onChange={setEndUnitId}
+          min={1}
+          max={247}
+        />
+      </FieldRow>
 
       {/* FC43 info */}
       <div className="flex items-start gap-2 px-2 py-1.5 rounded bg-[var(--bg-surface)] border border-[color:var(--border-default)]">
         <Info className={`${iconSm} shrink-0 mt-0.5 text-purple-400`} />
-        <span className={`${textMuted}`}>
+        <span className={textMuted}>
           {t("modbusUnitId.fc43DescriptionPrefix")}
-          <strong className="text-[color:var(--text-secondary)]">{t("modbusUnitId.fc43Title")}</strong>
+          <strong className="text-[color:var(--text-secondary)]">
+            {t("modbusUnitId.fc43Title")}
+          </strong>
           {t("modbusUnitId.fc43DescriptionSuffix")}
         </span>
       </div>
 
       {/* Fallback register config */}
       <div className="space-y-2 pt-1">
-        <label className="text-[color:var(--text-muted)] text-[10px] uppercase tracking-wider">{t("modbusUnitId.fallbackProbe")}</label>
-        <div className="flex gap-3">
-          <div className="flex-1 space-y-1">
-            <label className="text-[color:var(--text-muted)]">{t("modbusUnitId.register")}</label>
-            <input
-              type="number"
-              min={0}
-              max={65535}
-              value={testRegister}
-              onChange={(e) => setTestRegister(Math.max(0, Math.min(65535, Number(e.target.value) || 0)))}
-              className={`w-full px-2 py-1 rounded border border-[color:var(--border-default)] ${bgSurface} text-[color:var(--text-primary)]`}
-            />
-          </div>
-          <div className="flex-1 space-y-1">
-            <label className="text-[color:var(--text-muted)]">{t("modbusUnitId.type")}</label>
-            <select
-              value={registerType}
-              onChange={(e) => setRegisterType(e.target.value as ModbusRegisterType)}
-              className={`w-full px-2 py-1 rounded border border-[color:var(--border-default)] ${bgSurface} text-[color:var(--text-primary)]`}
-            >
-              <option value="holding">{t("modbusUnitId.holdingFc")}</option>
-              <option value="input">{t("modbusUnitId.inputFc")}</option>
-              <option value="coil">{t("modbusUnitId.coilFc")}</option>
-              <option value="discrete">{t("modbusUnitId.discreteFc")}</option>
-            </select>
-          </div>
-        </div>
+        <label className={`${textMuted} text-[10px] uppercase tracking-wider`}>
+          {t("modbusUnitId.fallbackProbe")}
+        </label>
+        <FieldRow>
+          <NumberField
+            label={t("modbusUnitId.register")}
+            value={testRegister}
+            onChange={setTestRegister}
+            min={MODBUS_SCAN_BOUNDS.register.min}
+            max={MODBUS_SCAN_BOUNDS.register.max}
+          />
+          <SelectField
+            label={t("modbusUnitId.type")}
+            value={registerType}
+            onChange={setRegisterType}
+            options={[
+              { value: "holding", label: t("modbusUnitId.holdingFc") },
+              { value: "input", label: t("modbusUnitId.inputFc") },
+              { value: "coil", label: t("modbusUnitId.coilFc") },
+              { value: "discrete", label: t("modbusUnitId.discreteFc") },
+            ]}
+          />
+        </FieldRow>
       </div>
 
-      <div className="space-y-1">
-        <label className="text-[color:var(--text-muted)]">{t("modbusUnitId.delayMs")}</label>
-        <input
-          type="number"
-          min={0}
-          max={5000}
+      <FieldRow>
+        <NumberField
+          label={t("modbusUnitId.delayMs")}
           value={delayMs}
-          onChange={(e) => setDelayMs(Math.max(0, Math.min(5000, Number(e.target.value) || 0)))}
-          className={`w-20 px-2 py-1 rounded border border-[color:var(--border-default)] ${bgSurface} text-[color:var(--text-primary)]`}
+          onChange={setDelayMs}
+          min={MODBUS_SCAN_BOUNDS.delayMs.min}
+          max={MODBUS_SCAN_BOUNDS.delayMs.max}
         />
-      </div>
+        <NumberField
+          label={t("modbusRegister.timeoutMs")}
+          value={timeoutMs}
+          onChange={setTimeoutMs}
+          min={MODBUS_SCAN_BOUNDS.timeoutMs.min}
+          max={MODBUS_SCAN_BOUNDS.timeoutMs.max}
+        />
+      </FieldRow>
 
-      <p className="text-[color:var(--text-muted)] pt-2 border-t border-[color:var(--border-default)]">
+      <p className={`${textMuted} pt-2 border-t ${borderDefault}`}>
         {t("modbusUnitId.scanDescription", {
-          host: connection.host,
-          port: connection.port,
+          host: target.connection.host,
+          port: target.connection.port,
           start: startUnitId,
           end: endUnitId,
           type: registerType,
@@ -125,19 +142,7 @@ export default function ModbusUnitIdScanPanel({ connection, onStartScan }: Props
         })}
       </p>
 
-      <button
-        type="button"
-        onClick={handleStart}
-        disabled={!isValid}
-        className={`flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-          !isValid
-            ? "bg-[var(--bg-surface)] text-[color:var(--text-muted)] cursor-not-allowed"
-            : "bg-purple-600 hover:bg-purple-700 text-white"
-        }`}
-      >
-        <Play className={iconMd} />
-        {t("modbusUnitId.runScan")}
-      </button>
+      <RunButton label={t("modbusUnitId.runScan")} onClick={handleStart} disabled={!isValid} />
     </div>
   );
 }

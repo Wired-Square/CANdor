@@ -1275,9 +1275,9 @@ pub fn run() {
             // Power management API
             sessions::set_wake_settings,
             // Modbus scanning API
-            sessions::modbus_scan_registers,
-            sessions::modbus_scan_unit_ids,
-            sessions::cancel_modbus_scan,
+            sessions::modbus_polls_from_ranges,
+            sessions::modbus_probe_function_codes,
+            sessions::create_modbus_scan_session,
             io::webview_health_pong,
             io::check_recovery_occurred,
             // Capture / CSV Import API

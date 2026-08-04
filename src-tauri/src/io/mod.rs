@@ -63,8 +63,10 @@ pub use codec::{SocketCanCodec, SocketCanEncodedFrame};
 pub use gs_usb::GsUsbConfig;
 pub use gvret::{BusMapping, GvretDeviceInfo, probe_gvret_tcp};
 pub use modbus_tcp::{
-    build_polls_from_catalog, ModbusTcpConfig, ModbusTcpSource, PollGroup,
+    build_polls_from_catalog, build_polls_from_ranges, modbus_endpoint, ModbusRange, ModbusRangeSpec,
+    ModbusTcpConfig, ModbusTcpSource, PollGroup, RegisterType,
     ModbusScanConfig, ScanCompletePayload, UnitIdScanConfig,
+    FcProbeConfig, FcProbeEntry, ModbusScanSource, ScanJob,
 };
 #[cfg(not(target_os = "ios"))]
 pub use gvret::probe_gvret_usb;

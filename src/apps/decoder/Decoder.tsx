@@ -22,7 +22,7 @@ import { tlog } from "../../api/settings";
 import { useCatalogList } from "../../hooks/useCatalogList";
 import { UI_UPDATE_INTERVAL_MS, COPY_FEEDBACK_TIMEOUT_MS, REALTIME_CLOCK_INTERVAL_MS } from "../../constants";
 import type { StreamEndedInfo, PlaybackPosition } from '../../api/io';
-import { setFraming, pauseSourcePolling, resumeSourcePolling } from '../../api/io';
+import { setFraming } from '../../api/io';
 import AppLayout from "../../components/AppLayout";
 import DecoderTopBar from "./views/DecoderTopBar";
 import DecoderFramesView from "./views/DecoderFramesView";
@@ -40,15 +40,11 @@ import { useSelectionSets } from "../../hooks/useSelectionSets";
 import { WINDOW_EVENTS, type CatalogSavedPayload, type CaptureChangedPayload } from "../../events/registry";
 import { useDialogManager } from "../../hooks/useDialogManager";
 import { useDecoderHandlers } from "./hooks/useDecoderHandlers";
+import { useModbusPolling } from "../../hooks/useModbusPolling";
+import { anyModbusProfile } from "../../utils/modbusProfiles";
 import type { PlaybackSpeed, PlaybackState } from "../../components/TimeController";
 import type { FrameMessage } from "../../types/frame";
 import type { DecodedFrameMsg } from "../../services/wsProtocol";
-
-/** True if any of these profiles is a Modbus source — the only kind polls apply to. */
-function anyModbusProfile(profileIds: string[]): boolean {
-  const profiles = useSettingsStore.getState().ioProfiles.profiles;
-  return profileIds.some((id) => profiles.find((p) => p.id === id)?.kind === "modbus_tcp");
-}
 
 /** The loaded catalogue's poll groups, but only for sources they actually apply to.
  *  A Modbus catalogue left loaded from an earlier session would otherwise carry its
@@ -65,8 +61,6 @@ function DecoderInner() {
   const catalogs = useCatalogList();
   const [activeBookmarkId, setActiveBookmarkId] = useState<string | null>(null);
   const [showTimeRange, setShowTimeRange] = useState(false);
-  // Modbus polling state — whether the source is actively polling (vs paused).
-  const [isPolling, setIsPolling] = useState(true);
 
   // Track if this panel is focused (for scroll position restoration)
   const isFocused = useFocusStore((s) => s.focusedPanelId === "decoder");
@@ -1009,94 +1003,25 @@ function DecoderInner() {
   }, [serialConfig, isStreaming, isRealtime, session.sessionId, ioProfiles, sourceProfileId, watchSource, playbackSpeed, clearFrames, clearUnmatchedFrames]);
 
   // ── Modbus polling control ──
-  // Track last-used source profile IDs so polling can reconnect after a stop.
-  const lastProfileIdsRef = useRef<string[]>([]);
-  useEffect(() => {
-    if (ioProfiles.length > 0) lastProfileIdsRef.current = ioProfiles;
-    else if (sourceProfileId) lastProfileIdsRef.current = [sourceProfileId];
-  }, [ioProfiles, sourceProfileId]);
-
-  // The source profile used for per-source polling pause/resume.
-  const sourceProfileForPolling = ioProfiles.length > 0
-    ? ioProfiles[0]
-    : sourceProfileId ?? lastProfileIdsRef.current[0] ?? null;
-
-  // Reset to "polling" whenever a stream (re)starts.
-  useEffect(() => {
-    if (isStreaming) setIsPolling(true);
-  }, [isStreaming]);
-
-  // The sources polling would target — same resolution `reconnectWithPolls` uses.
-  const pollProfileIds = ioProfiles.length > 0
-    ? ioProfiles
-    : sourceProfileId ? [sourceProfileId] : lastProfileIdsRef.current;
-  // The Modbus toolbar is driven by the loaded *catalogue*'s protocol, which lags a
-  // catalogue swap: switching a Modbus decoder to a CAN source leaves `protocol` on
-  // 'modbus' until the new catalogue finishes parsing, so the poll badge and the
-  // Pause/Resume/Start controls render over a CAN session and their handlers address
-  // a source that has no polls. Suppress them once we know the running source is not
-  // Modbus — but only while streaming, so "load a Modbus catalogue, then start a
-  // Modbus source" still offers Start polling from a stopped state.
-  const pollsApplyToSession = !(isStreaming && !anyModbusProfile(pollProfileIds));
-  const canStartPolling = modbusPollsFor(pollProfileIds) !== null;
-
-  // Re-issue watchSource with the current poll groups — used to start polling
-  // from a stopped state and to reconnect after a catalogue change.
-  const reconnectWithPolls = useCallback(async () => {
-    const { playbackSpeed: speed } = useDecoderStore.getState();
-    const profileIds = ioProfiles.length > 0
-      ? ioProfiles
-      : sourceProfileId ? [sourceProfileId] : lastProfileIdsRef.current;
-    if (profileIds.length === 0) return;
-    // Same gate as mergeOptions — re-watching destroys and recreates the session, so
-    // a non-Modbus source must never be re-watched just because a Modbus catalogue
-    // happens to still be loaded.
-    const json = modbusPollsFor(profileIds);
-    if (!json) return;
-    try {
-      // Reuse the current session id so the backend reinitialises THIS modbus
-      // session with the poll groups (its "catalog reinitialise" path —
-      // create_multi_source_session destroys+recreates the same id) instead of
-      // opening a second, competing connection to the device. Without this, a
-      // catalogue loaded after the (pollless) session starts spawns a rival
-      // session and the device's single connection slot breaks both.
-      await watchSource(profileIds, { modbusPollsJson: json, speed, sessionIdOverride: sessionId ?? undefined });
-    } catch (err) {
-      tlog.info(`[Decoder] Modbus reconnect failed: ${err}`);
-    }
-  }, [ioProfiles, sourceProfileId, watchSource, sessionId]);
-
-  const handlePausePolling = useCallback(() => {
-    if (!sessionId || !sourceProfileForPolling) return;
-    pauseSourcePolling(sessionId, sourceProfileForPolling)
-      .then(() => setIsPolling(false))
-      .catch((e: unknown) => tlog.info(`[Decoder] Pause polling failed: ${e}`));
-  }, [sessionId, sourceProfileForPolling]);
-
-  const handleResumePolling = useCallback(() => {
-    if (!sessionId || !sourceProfileForPolling) return;
-    resumeSourcePolling(sessionId, sourceProfileForPolling)
-      .then(() => setIsPolling(true))
-      .catch((e: unknown) => tlog.info(`[Decoder] Resume polling failed: ${e}`));
-  }, [sessionId, sourceProfileForPolling]);
-
-  // Reconnect with new poll groups when the Modbus catalogue changes mid-stream.
-  const prevModbusPollsJsonRef = useRef(modbusPollsJson);
-  useEffect(() => {
-    const prev = prevModbusPollsJsonRef.current;
-    prevModbusPollsJsonRef.current = modbusPollsJson;
-    if (!isModbus || !isStreaming) return;
-    if (modbusPollsJson && modbusPollsJson !== prev) {
-      tlog.debug('[Decoder] Modbus poll groups changed while streaming; reconnecting');
-      reconnectWithPolls();
-    }
-  }, [modbusPollsJson, isModbus, isStreaming, reconnectWithPolls]);
-
-  // Total registers across all poll groups (topbar badge).
-  const totalRegisters = useMemo(
-    () => pollGroups.reduce((sum, pg) => sum + pg.count, 0),
-    [pollGroups]
-  );
+  // The lifecycle lives in a shared hook; the Decoder only decides where the
+  // poll groups come from (its loaded catalogue).
+  const {
+    isPolling,
+    pollsApplyToSession,
+    canStartPolling,
+    totalRegisters,
+    reconnectWithPolls,
+    pausePolling: handlePausePolling,
+    resumePolling: handleResumePolling,
+  } = useModbusPolling({
+    sessionId,
+    isStreaming,
+    ioProfiles,
+    sourceProfileId,
+    pollsJson: modbusPollsJson ?? null,
+    playbackSpeed,
+    watchSource,
+  });
 
   // Window close is handled by Rust (lib.rs on_window_event) to prevent crashes
   // on macOS 26.2+ (Tahoe). The Rust handler stops the session and waits for

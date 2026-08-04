@@ -185,6 +185,19 @@ where
     }
 }
 
+fn modbus_endpoint_of(
+    app: &tauri::AppHandle,
+    profile_id: &str,
+) -> Result<(String, u16, u8), McpError> {
+    let settings = crate::settings::load_settings_sync(app).map_err(err)?;
+    let profile = settings
+        .io_profiles
+        .iter()
+        .find(|p| p.id == profile_id)
+        .ok_or_else(|| err(format!("Profile '{profile_id}' not found")))?;
+    Ok(crate::io::modbus_endpoint(profile))
+}
+
 /// Open a transient Modbus TCP connection to the device behind a session's
 /// source profile. NB: opens a second connection alongside the running poller —
 /// single-connection devices may contend.
@@ -196,29 +209,145 @@ async fn connect_session_modbus(
         .into_iter()
         .next()
         .ok_or_else(|| err(format!("Session '{session_id}' has no source profile")))?;
-    let settings = crate::settings::load_settings_sync(app).map_err(err)?;
-    let profile = settings
-        .io_profiles
-        .iter()
-        .find(|p| p.id == profile_id)
-        .ok_or_else(|| err(format!("Profile '{profile_id}' not found")))?;
-    let conn = &profile.connection;
-    let host = conn.get("host").and_then(|v| v.as_str()).unwrap_or("127.0.0.1");
-    let port = conn
-        .get("port")
-        .and_then(|v| v.as_str().and_then(|s| s.parse().ok()).or_else(|| v.as_i64().map(|n| n as u16)))
-        .unwrap_or(502);
-    let unit_id = conn
-        .get("unit_id")
-        .and_then(|v| v.as_str().and_then(|s| s.parse().ok()).or_else(|| v.as_i64().map(|n| n as u8)))
-        .unwrap_or(1);
-    let addr = crate::io::net::resolve_host_port(host, port)
+    let (host, port, unit_id) = modbus_endpoint_of(app, &profile_id)?;
+    let addr = crate::io::net::resolve_host_port(&host, port)
         .await
         .map_err(|e| err(e.user_message()))?;
     tcp::connect_slave(addr, Slave(unit_id))
         .await
         .map_err(|e| err(format!("Connect to {addr} (unit {unit_id}) failed: {e}")))
 }
+
+// ── Modbus discovery helpers ─────────────────────────────────────────────────
+
+impl WireTapTools {
+    /// Resolve a scan target from either a profile or explicit address fields.
+    /// Explicit values win, so a profile can be used as a starting point and
+    /// then overridden — useful when probing a second slave behind one gateway.
+    fn resolve_modbus_target(
+        &self,
+        t: &ModbusTargetParams,
+    ) -> Result<(String, u16, u8), McpError> {
+        let base = match &t.profile_id {
+            Some(id) => modbus_endpoint_of(&self.app, id)?,
+            None => ("127.0.0.1".to_string(), 502, 1),
+        };
+        if t.profile_id.is_none() && t.host.is_none() {
+            return Err(err(
+                "Give either profile_id or host — there is nothing to connect to",
+            ));
+        }
+        Ok((
+            t.host.clone().unwrap_or(base.0),
+            t.port.unwrap_or(base.1),
+            t.unit_id.unwrap_or(base.2),
+        ))
+    }
+
+    /// Create, start and (optionally) await a scan session, then summarise it.
+    ///
+    /// The session is created stopped and started here deliberately: headless
+    /// there is no subscriber to race, whereas the UI must subscribe first (see
+    /// `create_modbus_scan_session`).
+    async fn run_scan_session(
+        &self,
+        job: crate::io::ScanJob,
+        session_id: Option<String>,
+        wait: bool,
+        max_wait_ms: u64,
+    ) -> Result<CallToolResult, McpError> {
+        let sid = session_id.unwrap_or_else(|| {
+            format!("m_scan{}", SCAN_COUNTER.fetch_add(1, AtomicOrdering::Relaxed))
+        });
+
+        crate::sessions::create_modbus_scan_session(
+            self.app.clone(),
+            sid.clone(),
+            job,
+            None,
+            Some("mcp".to_string()),
+            Some("mcp".to_string()),
+        )
+        .await
+        .map_err(err)?;
+
+        if let Err(e) = crate::io::start_session(&sid).await {
+            let _ = crate::io::destroy_session(&sid, false).await;
+            return Err(err(e));
+        }
+
+        let capture_id = || async {
+            crate::io::list_sessions()
+                .await
+                .into_iter()
+                .find(|s| s.session_id == sid)
+                .and_then(|s| s.capture_id)
+        };
+
+        if !wait {
+            return ok_json(json!({
+                "session_id": sid,
+                "capture_id": capture_id().await,
+                "status": "scanning",
+                "next": "poll get_modbus_scan_progress, then read rows with get_capture_frames",
+            }));
+        }
+
+        // Poll for the terminal summary. The sweep parks it on completion, so
+        // its presence is the completion signal.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(max_wait_ms);
+        let result = loop {
+            if let Some(payload) = crate::io::modbus_tcp::scanner::get_scan_result(&sid) {
+                break Some(payload);
+            }
+            if std::time::Instant::now() >= deadline {
+                break None;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        };
+
+        let capture_id = capture_id().await;
+
+        let Some(r) = result else {
+            return ok_json(json!({
+                "session_id": sid,
+                "capture_id": capture_id,
+                "status": "scanning",
+                "note": format!("still running after {max_wait_ms}ms — poll get_modbus_scan_progress"),
+            }));
+        };
+
+        // Blocks are already a run-length summary, but a pathologically sparse
+        // device could still produce a lot of them. Cap and say so rather than
+        // returning an unbounded response.
+        const MAX_BLOCKS: usize = 256;
+        let blocks_truncated = r.blocks.len() > MAX_BLOCKS;
+        let blocks: Vec<_> = r.blocks.iter().take(MAX_BLOCKS).collect();
+        let gaps: Vec<_> = r.gaps.iter().take(MAX_BLOCKS).collect();
+
+        ok_json(json!({
+            "session_id": sid,
+            "capture_id": capture_id,
+            "status": if r.truncated { "stopped" } else { "complete" },
+            "duration_ms": r.duration_ms,
+            "scanned": r.total_scanned,
+            "found": r.found_count,
+            "requests": r.requests,
+            "blocks": blocks,
+            "blocks_truncated": blocks_truncated,
+            "gaps": gaps,
+            "devices": r.devices,
+            "notes": r.notes,
+            "next_page": capture_id.as_ref().map(|c| format!(
+                "get_capture_frames(capture_id='{c}', offset=0, count=200)"
+            )),
+        }))
+    }
+}
+
+/// Names generated scan sessions. Only ever incremented.
+static SCAN_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+use std::sync::atomic::Ordering as AtomicOrdering;
 
 /// Forward a Tier 2 request to the frontend over the bridge and wrap the result.
 async fn bridge_call(method: &str, params: impl serde::Serialize) -> Result<CallToolResult, McpError> {
@@ -828,20 +957,29 @@ impl WireTapTools {
 #[tool_router(router = session_control_router)]
 impl WireTapTools {
     #[tool(
-        description = "Open (create + start) a session for an IO profile, binding the profile's preferred catalog so the stream decodes (Modbus also gets its poll groups from it). A recorded source replays its whole archive from the head unless bounded — pass start_time/end_time, and speed to pace it. Returns { session_id, state, catalog_path, capabilities }.",
+        description = "Open (create + start) a session for an IO profile, binding the profile's preferred catalog so the stream decodes (Modbus also gets its poll groups from it). A Modbus profile with no catalog can still be opened by passing register_ranges, which polls an address range directly — use that to watch a device you have no decoder for. A recorded source replays its whole archive from the head unless bounded — pass start_time/end_time, and speed to pace it. Returns { session_id, state, catalog_path, capabilities }.",
         annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
     )]
     async fn open_session(
         &self,
         Parameters(p): Parameters<OpenSessionParams>,
     ) -> Result<CallToolResult, McpError> {
-        let window = super::session::Window {
-            start: p.start_time,
-            end: p.end_time,
-            speed: p.speed,
-            limit: p.limit,
+        let modbus_ranges = p
+            .register_ranges
+            .as_ref()
+            .map(|r| r.to_spec())
+            .transpose()
+            .map_err(err)?;
+        let opts = super::session::OpenOptions {
+            window: super::session::Window {
+                start: p.start_time,
+                end: p.end_time,
+                speed: p.speed,
+                limit: p.limit,
+            },
+            modbus_ranges,
         };
-        let result = super::session::open(self.app.clone(), p.profile_id, p.session_id, window)
+        let result = super::session::open(self.app.clone(), p.profile_id, p.session_id, opts)
             .await
             .map_err(err)?;
         ok_json(result)
@@ -880,6 +1018,134 @@ impl WireTapTools {
         crate::ws::dispatch::send_attach_to_panel(&p.panel, &p.session_id);
         ok_json(json!({ "attached": p.session_id, "panel": p.panel }))
     }
+
+    #[tool(
+        description = "Ask a Modbus device which read function codes it actually answers, before sweeping anything. Reads one address on each of FC03 (holding), FC04 (input), FC01 (coil) and FC02 (discrete), for each unit id. The distinction that matters is exception vs silence: an exception proves the device implements that function code and you asked for the wrong address, whereas silence usually means it isn't implemented at all and sweeping it would burn the whole timeout budget. At most 4 requests per unit. Returns { units: [{ unit_id, responded, supported_types, holding, input, coil, discrete }] }.",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true)
+    )]
+    async fn modbus_probe_function_codes(
+        &self,
+        Parameters(p): Parameters<ModbusProbeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let (host, port, _) = self.resolve_modbus_target(&p.target)?;
+        let config = crate::io::FcProbeConfig {
+            host,
+            port,
+            unit_ids: p.unit_ids.unwrap_or_else(|| vec![1, 0, 255, 2, 3]),
+            test_register: p.test_register,
+            timeout_ms: p.timeout_ms.unwrap_or(2000),
+            connect_settle_ms: p.connect_settle_ms.unwrap_or(0),
+        };
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let units = crate::io::modbus_tcp::scanner::probe_function_codes(config, cancel)
+            .await
+            .map_err(err)?;
+        ok_json(json!({ "units": units }))
+    }
+
+    #[tool(
+        description = "Sweep a Modbus address range to discover which registers exist, without needing a catalog. Runs as its own session writing into a frame capture, so results survive, can be paged with get_capture_frames, analysed with the Discovery tools, and exported as a catalog. The response is summarised as contiguous blocks rather than one row per register, so a 1000-register sweep stays small. Chunks that return a Modbus exception are bisected to localise the gap; chunks that return silence are not (silence says nothing about which address was at fault) and the sweep abandons that register type after max_consecutive_timeouts. Set repeat=2 to sample every register twice so the Changes tool can tell live telemetry from static config. Returns { session_id, capture_id, status, found, requests, blocks, gaps, notes }.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
+    )]
+    async fn modbus_scan_registers(
+        &self,
+        Parameters(p): Parameters<ModbusScanParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let (host, port, unit_id) = self.resolve_modbus_target(&p.target)?;
+        let register_type = super::types::parse_register_type(&p.register_type).map_err(err)?;
+        let coil_like = matches!(
+            register_type,
+            crate::io::RegisterType::Coil | crate::io::RegisterType::Discrete
+        );
+
+        let config = crate::io::ModbusScanConfig {
+            host,
+            port,
+            unit_id,
+            register_type,
+            start_register: p.start,
+            end_register: p.end,
+            chunk_size: p.chunk_size.unwrap_or(if coil_like { 2000 } else { 125 }),
+            inter_request_delay_ms: p.inter_request_delay_ms.unwrap_or(50),
+            timeout_ms: p.timeout_ms.unwrap_or(2000),
+            connect_settle_ms: p.connect_settle_ms.unwrap_or(0),
+            reconnect_per_request: p.reconnect_per_request.unwrap_or(false),
+            max_consecutive_timeouts: p.max_consecutive_timeouts.unwrap_or(3),
+            max_registers: p.max_registers.unwrap_or(4096),
+            max_requests: p.max_requests.unwrap_or(2000),
+            repeat: p.repeat.unwrap_or(1),
+            repeat_delay_ms: p.repeat_delay_ms.unwrap_or(6000),
+        };
+
+        self.run_scan_session(
+            crate::io::ScanJob::Registers { config },
+            p.session_id,
+            p.wait,
+            p.max_wait_ms,
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Sweep Modbus unit (slave) ids to find which devices answer on a gateway, identifying each via FC43 (Read Device Identification) where supported and falling back to a single register read. Runs as its own session writing into a frame capture. Returns { session_id, capture_id, status, found, devices }.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
+    )]
+    async fn modbus_scan_unit_ids(
+        &self,
+        Parameters(p): Parameters<ModbusUnitScanParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let (host, port, _) = self.resolve_modbus_target(&p.target)?;
+        let config = crate::io::UnitIdScanConfig {
+            host,
+            port,
+            start_unit_id: p.start_unit_id,
+            end_unit_id: p.end_unit_id,
+            test_register: p.test_register,
+            register_type: super::types::parse_register_type(&p.register_type).map_err(err)?,
+            inter_request_delay_ms: p.inter_request_delay_ms.unwrap_or(50),
+            timeout_ms: p.timeout_ms.unwrap_or(2000),
+            connect_settle_ms: 0,
+        };
+        self.run_scan_session(
+            crate::io::ScanJob::UnitIds { config },
+            p.session_id,
+            p.wait,
+            p.max_wait_ms,
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Check on a Modbus scan session started with wait=false. Returns { status, current, total, found_count, pass, capture_id, frames, notes }.",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true)
+    )]
+    async fn get_modbus_scan_progress(
+        &self,
+        Parameters(p): Parameters<SessionIdParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = crate::io::modbus_tcp::scanner::get_scan_state(&p.session_id);
+        let sessions = crate::io::list_sessions().await;
+        let session = sessions.iter().find(|s| s.session_id == p.session_id);
+        let progress = state.as_ref().and_then(|s| s.progress.clone());
+        // No scan state and no session means the sweep finished and cleaned up.
+        let status = state
+            .as_ref()
+            .map(|s| s.status.clone())
+            .unwrap_or_else(|| if session.is_some() { "complete" } else { "unknown" }.to_string());
+        ok_json(json!({
+            "session_id": p.session_id,
+            "status": status,
+            "current": progress.as_ref().map(|p| p.current),
+            "total": progress.as_ref().map(|p| p.total),
+            "found_count": progress.as_ref().map(|p| p.found_count),
+            "pass": progress.as_ref().map(|p| p.pass),
+            "total_passes": progress.as_ref().map(|p| p.total_passes),
+            "capture_id": session.and_then(|s| s.capture_id.clone()),
+            "frames": session.and_then(|s| s.capture_frame_count),
+            "device_info": state.as_ref().map(|s| s.device_info.clone()).unwrap_or_default(),
+            "notes": state.map(|s| s.notes).unwrap_or_default(),
+        }))
+    }
 }
 
 // ── Catalog write tools (registered when mcp_allow_catalog_write is on) ───────
@@ -906,6 +1172,54 @@ impl WireTapTools {
             .await
             .map_err(err)?;
         ok_json(json!({ "created": true, "path": path.to_string_lossy() }))
+    }
+
+    #[tool(
+        description = "Bind a decoder catalog to an IO profile as its preferred_catalog, so open_session decodes that profile's stream (and, for Modbus, builds its poll groups) without further setup. This is the last step of authoring a catalog for a device you just reverse-engineered. Pass catalog: null to unbind. NOTE: this writes to the app's persisted settings, not just a catalog file. Requires the catalog-write MCP permission.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
+    )]
+    async fn set_profile_catalog(
+        &self,
+        Parameters(p): Parameters<SetProfileCatalogParams>,
+    ) -> Result<CallToolResult, McpError> {
+        // Resolve the catalogue first: binding a name that doesn't resolve would
+        // leave the profile in a state where every open fails.
+        let resolved = match p.catalog.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(want) => {
+                let catalogs = crate::catalog::list_catalogs(self.app.clone()).await.map_err(err)?;
+                let cat = catalogs
+                    .iter()
+                    .find(|c| {
+                        c.filename == want || c.name == want || c.filename == format!("{want}.toml")
+                    })
+                    .ok_or_else(|| {
+                        err(format!(
+                            "Catalog '{want}' not found — create it first with create_catalog"
+                        ))
+                    })?;
+                Some(cat.filename.clone())
+            }
+            None => None,
+        };
+
+        let mut settings = crate::settings::load_settings_sync(&self.app).map_err(err)?;
+        let profile = settings
+            .io_profiles
+            .iter_mut()
+            .find(|prof| prof.id == p.profile_id)
+            .ok_or_else(|| err(format!("Profile '{}' not found", p.profile_id)))?;
+        profile.preferred_catalog = resolved.clone();
+        let name = profile.name.clone();
+
+        crate::settings::save_settings(self.app.clone(), settings)
+            .await
+            .map_err(err)?;
+
+        ok_json(json!({
+            "profile_id": p.profile_id,
+            "profile_name": name,
+            "preferred_catalog": resolved,
+        }))
     }
 }
 

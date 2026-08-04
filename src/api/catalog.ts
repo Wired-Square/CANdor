@@ -174,6 +174,12 @@ export interface ModbusPollGroup {
   frame_id: number;
   /** Device (slave) address to poll — resolved from the register's slave node. */
   device_address: number;
+  /**
+   * How the response becomes frames. Catalogue polls are always `block` (their
+   * signals are bit offsets into the whole block); range-derived discovery polls
+   * default to `per_register` so change analysis works per register.
+   */
+  emit_mode?: "block" | "per_register";
 }
 
 /**

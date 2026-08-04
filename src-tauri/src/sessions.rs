@@ -19,7 +19,7 @@ use crate::{
         BusMapping, InterfaceTraits, Protocol, TemporalMode,
         GvretDeviceInfo, probe_gvret_tcp,
         ModbusTcpConfig, ModbusTcpSource,
-        ModbusScanConfig, ScanCompletePayload, UnitIdScanConfig,
+        ModbusRangeSpec, PollGroup,
         MqttConfig, MqttSource,
         VirtualDeviceConfig, VirtualSource, VirtualInterfaceConfig, VirtualTrafficType,
         ModbusRole, IOBroker, SourceConfig,
@@ -37,7 +37,7 @@ use crate::io::probe_gvret_usb;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::AtomicBool,
     Arc, Mutex,
 };
 
@@ -698,32 +698,7 @@ pub async fn create_reader_session(
             ))
         }
         "modbus_tcp" => {
-            let host = profile
-                .connection
-                .get("host")
-                .and_then(|v| v.as_str())
-                .unwrap_or("127.0.0.1")
-                .to_string();
-
-            let port = profile
-                .connection
-                .get("port")
-                .and_then(|v| {
-                    v.as_str()
-                        .and_then(|s| s.parse().ok())
-                        .or_else(|| v.as_i64().map(|n| n as u16))
-                })
-                .unwrap_or(502);
-
-            let unit_id = profile
-                .connection
-                .get("unit_id")
-                .and_then(|v| {
-                    v.as_str()
-                        .and_then(|s| s.parse().ok())
-                        .or_else(|| v.as_i64().map(|n| n as u8))
-                })
-                .unwrap_or(1);
+            let (host, port, unit_id) = crate::io::modbus_endpoint(&profile);
 
             // Parse poll groups from frontend (catalog-derived JSON)
             tlog!("[create_reader_session] modbus_polls JSON: {:?}", modbus_polls.as_deref().unwrap_or("None"));
@@ -2551,52 +2526,74 @@ pub fn set_wake_settings(prevent_idle_sleep: bool, keep_display_awake: bool) {
 // Modbus Scanning
 // ============================================================================
 
-/// Shared cancel flag for Modbus scan operations.
-/// Only one scan can run at a time.
-static MODBUS_SCAN_CANCEL: Lazy<Arc<AtomicBool>> =
-    Lazy::new(|| Arc::new(AtomicBool::new(false)));
-
-/// Scan a range of Modbus registers to discover which ones exist.
-/// Uses chunked reads with binary subdivision for efficiency.
+/// Probe which read function codes a device answers, before sweeping anything.
 #[tauri::command(rename_all = "snake_case")]
-pub async fn modbus_scan_registers(
-    app: tauri::AppHandle,
-    config: ModbusScanConfig,
-    session_id: Option<String>,
-) -> Result<ScanCompletePayload, String> {
-    MODBUS_SCAN_CANCEL.store(false, Ordering::Relaxed);
-    crate::io::modbus_tcp::scanner::modbus_scan_registers(
-        app,
-        config,
-        MODBUS_SCAN_CANCEL.clone(),
-        session_id,
-    )
-    .await
+pub async fn modbus_probe_function_codes(
+    config: crate::io::FcProbeConfig,
+) -> Result<Vec<crate::io::FcProbeEntry>, String> {
+    // At most four requests per unit, so there is nothing worth cancelling.
+    let cancel = Arc::new(AtomicBool::new(false));
+    crate::io::modbus_tcp::scanner::probe_function_codes(config, cancel).await
 }
 
-/// Scan for active Modbus unit IDs on the network.
-/// Probes a single register on each unit ID in the range.
+/// Create a session that runs a Modbus discovery sweep.
+///
+/// Needs neither an existing session nor a catalogue — that is the whole point.
+/// Results land in the session's frame capture, so the Discovery analysis tools,
+/// TOML export and `get_capture_frames` paging all work on them.
+///
+/// **The session is created stopped.** `ws::dispatch::reset_frame_offset`
+/// snapshots the capture's *current* frame count when a subscriber attaches, so
+/// anything appended before the frontend subscribes is never pushed over the
+/// WebSocket. Callers must subscribe, then call `start_reader_session`. Starting
+/// here would look like an intermittent "some registers missing" bug.
 #[tauri::command(rename_all = "snake_case")]
-pub async fn modbus_scan_unit_ids(
+pub async fn create_modbus_scan_session(
     app: tauri::AppHandle,
-    config: UnitIdScanConfig,
-    session_id: Option<String>,
-) -> Result<ScanCompletePayload, String> {
-    MODBUS_SCAN_CANCEL.store(false, Ordering::Relaxed);
-    crate::io::modbus_tcp::scanner::modbus_scan_unit_ids(
+    session_id: String,
+    job: crate::io::ScanJob,
+    profile_id: Option<String>,
+    subscriber_id: Option<String>,
+    app_name: Option<String>,
+) -> Result<IOCapabilities, String> {
+    // A sweep opens its own connection. Devices that serve one Modbus
+    // conversation at a time — the cheap stacks this feature exists for — break
+    // when a second one arrives, and pausing a poller doesn't help because it
+    // keeps its socket. Name the conflict rather than producing junk data.
+    let endpoint = job.endpoint();
+    if let Some(holder) = crate::io::modbus_tcp::scan_source::scan_holding(&endpoint) {
+        if holder != session_id {
+            return Err(format!(
+                "A Modbus scan of {} is already running as session '{}' — stop it first.",
+                endpoint, holder
+            ));
+        }
+    }
+
+    if let Some(pid) = &profile_id {
+        register_session_profile(&session_id, pid);
+    }
+
+    let source = crate::io::ModbusScanSource::new(app.clone(), session_id.clone(), job);
+    let result = create_session(
         app,
-        config,
-        MODBUS_SCAN_CANCEL.clone(),
         session_id,
+        Box::new(source),
+        subscriber_id,
+        app_name,
+        None,
+        vec![],
     )
-    .await
+    .await;
+    Ok(result.capabilities)
 }
 
-/// Cancel a running Modbus scan operation.
+/// Build Modbus poll groups from an address range instead of a catalogue, so a
+/// session can poll a device you have no decoder for. The result goes straight
+/// into `watchSource`'s `modbusPollsJson`, exactly as catalogue-derived polls do.
 #[tauri::command(rename_all = "snake_case")]
-pub fn cancel_modbus_scan() {
-    MODBUS_SCAN_CANCEL.store(true, Ordering::Relaxed);
-    tlog!("[ModbusScan] Cancel requested");
+pub fn modbus_polls_from_ranges(spec: ModbusRangeSpec) -> Result<Vec<PollGroup>, String> {
+    crate::io::build_polls_from_ranges(&spec)
 }
 
 // ============================================================================
