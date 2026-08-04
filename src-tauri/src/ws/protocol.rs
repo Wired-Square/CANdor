@@ -42,6 +42,10 @@ pub enum MsgType {
     // Live byte total for a session's byte capture, plus that capture's id. Raw serial
     // bytes are read from the capture, not streamed, so this is the whole byte signal.
     ByteCounts       = 0x19,
+    // Modbus discovery sweep progress, on the scan session's own channel — the
+    // frames it finds ride the same channel, so the terminal state is ordered
+    // against StreamEnded rather than racing it on a separate transport.
+    ModbusScanState  = 0x1A,
     Command          = 0x20,
     CommandResponse  = 0x21,
     // Reverse RPC: server (Rust/MCP) → frontend request, frontend → server reply.
@@ -81,6 +85,7 @@ impl TryFrom<u8> for MsgType {
             0x17 => Ok(MsgType::OpenAppsChanged),
             0x18 => Ok(MsgType::CatalogListChanged),
             0x19 => Ok(MsgType::ByteCounts),
+            0x1A => Ok(MsgType::ModbusScanState),
             0x20 => Ok(MsgType::Command),
             0x21 => Ok(MsgType::CommandResponse),
             0x30 => Ok(MsgType::BridgeRequest),
@@ -1458,6 +1463,12 @@ mod tests {
     #[test]
     fn subscribe_nack_empty_error() {
         assert!(encode_subscribe_nack("").is_empty());
+    }
+
+    #[test]
+    fn modbus_scan_state_msg_type_round_trips() {
+        assert_eq!(MsgType::try_from(0x1Au8), Ok(MsgType::ModbusScanState));
+        assert_eq!(MsgType::ModbusScanState as u8, 0x1A);
     }
 
     #[test]

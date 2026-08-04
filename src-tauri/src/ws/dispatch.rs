@@ -736,6 +736,22 @@ pub fn send_io_test_state(test_id: &str) {
     server.send_global(msg);
 }
 
+/// Send a JSON-payload message on a session's own channel.
+///
+/// Silently drops when the server is down or nobody is subscribed, like every
+/// other session sender here. The payload is only serialised once a subscriber
+/// is known to exist, so a headless session never pays for it.
+pub fn send_session_json<T: serde::Serialize>(
+    session_id: &str,
+    msg_type: MsgType,
+    value: &T,
+) {
+    let Some(server) = ws_server() else { return };
+    let Some(channel) = server.channel_for_session(session_id) else { return };
+    let Ok(payload) = serde_json::to_vec(value) else { return };
+    server.send_to_channel(channel, protocol::encode_message(msg_type, channel, &payload));
+}
+
 /// Send session lifecycle event (global, channel 0).
 pub fn send_session_lifecycle(payload: &crate::io::SessionLifecyclePayload) {
     let server = match ws_server() {

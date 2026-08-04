@@ -95,6 +95,8 @@ export type ModbusScanResults = {
   deviceInfo: Map<number, DeviceInfo>;
   /** Diagnoses from the sweep, e.g. a function code that never answered. */
   notes: string[];
+  /** The scan's own session — what its progress subscription is keyed on. */
+  sessionId: string | null;
 };
 
 type ModbusScanKey = 'modbusRegisterScanResults' | 'modbusUnitIdScanResults';
@@ -139,7 +141,7 @@ interface DiscoveryToolboxState {
   setSerialFramingResults: (results: SerialFramingResult | null) => void;
   setSerialPayloadResults: (results: SerialPayloadResult | null) => void;
   setChecksumDiscoveryResults: (results: ChecksumDiscoveryResult | null) => void;
-  startModbusScan: (scanType: 'register' | 'unit-id') => void;
+  startModbusScan: (scanType: 'register' | 'unit-id', sessionId: string) => void;
   setModbusScanDevices: (devices: Array<{ unit_id: number; vendor?: string | null; product_code?: string | null; revision?: string | null }>) => void;
   updateModbusScanProgress: (
     progress: { current: number; total: number; found_count: number; pass: number; total_passes: number },
@@ -289,7 +291,7 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
     }));
   },
 
-  startModbusScan: (scanType) => {
+  startModbusScan: (scanType, sessionId) => {
     const tabKey = scanType === 'register' ? 'modbus-register-scan' : 'modbus-unit-scan';
     set((state) => ({
       toolbox: {
@@ -300,6 +302,7 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
           progress: null,
           deviceInfo: new Map(),
           notes: [],
+          sessionId,
         },
       },
     }));
@@ -342,6 +345,7 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
         ...scan,
         isScanning: false,
         notes: notes ?? scan.notes,
+        sessionId: null,
       }))
     );
   },

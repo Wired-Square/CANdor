@@ -420,6 +420,20 @@ silent, because bisecting silence turns a single sweep into thousands of
 full-timeout requests. After `max_consecutive_timeouts` silences it abandons that
 register type and records why.
 
+**Progress rides the session channel.** A sweep's progress is pushed as
+`ModbusScanState` (0x1A) on the scan session's own channel — the same one its
+frames use — throttled to 2 Hz by the caller-side `SignalThrottle`. That
+placement is load-bearing rather than tidiness: the terminal status and
+`StreamEnded` now share one mpsc, so they are ordered rather than racing across
+two transports, and because the whole state is *pushed*, `ModbusScanSource::stop`
+clearing the scan-state store can no longer strand a reader that arrived late.
+It was previously a Tauri event carrying nothing, answered by a command
+round-trip.
+
+MCP is the exception, and deliberately: it is in-process Rust rather than a
+WebSocket client, so it reads the same state from the store and waits for a
+sweep's summary through `await_scan_result`.
+
 **Connection contention.** A sweep opens its own connection. Pausing a running
 poller does *not* free the device — pause stops requests but keeps the socket —
 so on a device that serves one conversation per socket the polling session must
@@ -690,6 +704,7 @@ Per-session (channel 1..254):
 | `DecodedSignals`    | 0x14 | JSON batch of decoded signals, pushed alongside `FrameData` when a catalogue is attached (see [§ Decoded-signal stream](#decoded-signal-stream)) |
 | `FrameCounts`       | 0x16 | Live total + distinct-(bus,frame_id) unique counts, pushed on the frame cadence (see [§ Frame counts](#frame-counts)) |
 | `ByteCounts`        | 0x19 | Live raw-byte total + the session's byte-capture id, pushed on the byte cadence (see [§ Raw serial bytes](#raw-serial-bytes--counted-not-streamed)) |
+| `ModbusScanState`   | 0x1A | Discovery sweep progress + device identification, throttled to 2 Hz (see [§ Modbus discovery](#modbus-discovery)) |
 
 Global (channel 0):
 
@@ -1048,7 +1063,6 @@ Not everything is on WS. These remain Tauri-emitted:
 - `subscriber-evicted` — when the watchdog kicks a stale subscriber.
 - `store:changed` — settings changes.
 - `menu-*` — native menu actions.
-- `modbus-scan:*` — scanner progress.
 
 ### post_session cache
 

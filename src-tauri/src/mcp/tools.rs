@@ -293,18 +293,12 @@ impl WireTapTools {
             }));
         }
 
-        // Poll for the terminal summary. The sweep parks it on completion, so
-        // its presence is the completion signal.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(max_wait_ms);
-        let result = loop {
-            if let Some(payload) = crate::io::modbus_tcp::scanner::get_scan_result(&sid) {
-                break Some(payload);
-            }
-            if std::time::Instant::now() >= deadline {
-                break None;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        };
+        // Wait for the terminal summary, which the sweep parks on completion.
+        let result = crate::io::modbus_tcp::scanner::await_scan_result(
+            &sid,
+            Duration::from_millis(max_wait_ms),
+        )
+        .await;
 
         let capture_id = capture_id().await;
 

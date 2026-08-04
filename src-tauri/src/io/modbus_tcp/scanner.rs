@@ -18,7 +18,6 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, RwLock,
 };
-use tauri::{AppHandle, Emitter};
 use tokio::time::{sleep, Duration};
 
 use super::conn::{ReadOutcome, ScanConn};
@@ -36,12 +35,13 @@ pub struct DeviceInfoPayload {
 }
 
 // ============================================================================
-// Scan State (signal-then-fetch)
+// Scan state
 // ============================================================================
 
-/// Snapshot of a scan's progress, polled by the frontend via
-/// `get_modbus_scan_state_cmd`. Frames are not carried here — they reach the UI
-/// through the session's capture like any other frames.
+/// A sweep's progress, pushed on the scan session's WebSocket channel and kept
+/// here for MCP, which is in-process Rust and cannot subscribe to that channel.
+/// Frames are not carried here — they reach the UI through the session's
+/// capture like any other frames.
 #[derive(Clone, Debug, Serialize)]
 pub struct ModbusScanState {
     pub status: String,
@@ -59,7 +59,7 @@ static SCAN_STATES: Lazy<RwLock<HashMap<String, ModbusScanState>>> =
 static SCAN_RESULTS: Lazy<RwLock<HashMap<String, ScanCompletePayload>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
-pub fn store_scan_state(session_id: &str, state: ModbusScanState) {
+fn store_scan_state(session_id: &str, state: ModbusScanState) {
     if let Ok(mut states) = SCAN_STATES.write() {
         states.insert(session_id.to_string(), state);
     }
@@ -69,14 +69,51 @@ pub fn get_scan_state(session_id: &str) -> Option<ModbusScanState> {
     SCAN_STATES.read().ok().and_then(|s| s.get(session_id).cloned())
 }
 
+/// Wakes anything waiting on a sweep to finish. Broadcast rather than
+/// per-session: each waiter re-checks its own id, and the number of concurrent
+/// sweeps is tiny.
+static SCAN_RESULT_READY: Lazy<tokio::sync::Notify> = Lazy::new(tokio::sync::Notify::new);
+
 pub fn store_scan_result(session_id: &str, payload: ScanCompletePayload) {
     if let Ok(mut results) = SCAN_RESULTS.write() {
         results.insert(session_id.to_string(), payload);
     }
+    SCAN_RESULT_READY.notify_waiters();
 }
 
 pub fn get_scan_result(session_id: &str) -> Option<ScanCompletePayload> {
     SCAN_RESULTS.read().ok().and_then(|s| s.get(session_id).cloned())
+}
+
+/// Wait for a sweep's summary, or `None` if it doesn't arrive within `timeout`.
+///
+/// For callers that can't subscribe to the session's WebSocket channel — MCP is
+/// in-process Rust, so the transport migration doesn't reach it.
+pub async fn await_scan_result(
+    session_id: &str,
+    timeout: Duration,
+) -> Option<ScanCompletePayload> {
+    // The loop is needed because the notification is a broadcast: a wakeup may
+    // belong to another sweep, so this one re-checks its own key and re-parks.
+    tokio::time::timeout(timeout, async {
+        loop {
+            // Register interest *before* reading the store. `Notified` only
+            // enrols the waiter when first polled, so without `enable()` a
+            // result stored between the read and the await is a lost wakeup —
+            // which would hang until the timeout, strictly worse than the poll
+            // this replaces.
+            let notified = SCAN_RESULT_READY.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
+            if let Some(payload) = get_scan_result(session_id) {
+                return payload;
+            }
+            notified.await;
+        }
+    })
+    .await
+    .ok()
 }
 
 /// Drop both the progress state and the summary for a session. Called when the
@@ -88,6 +125,9 @@ pub fn clear_scan_state(session_id: &str) {
     if let Ok(mut results) = SCAN_RESULTS.write() {
         results.remove(session_id);
     }
+    // Wake anyone waiting: a sweep that errored or was destroyed without storing
+    // a result would otherwise hold its waiter until the timeout.
+    SCAN_RESULT_READY.notify_waiters();
 }
 
 // ============================================================================
@@ -310,9 +350,9 @@ pub struct FcProbeEntry {
     pub supported_types: Vec<String>,
 }
 
-/// Publishes progress for the frontend to fetch. `None` for headless callers.
+/// Publishes progress on the scan session's WebSocket channel. `None` for
+/// headless callers, which read the summary from the store instead.
 struct ProgressReporter {
-    app: AppHandle,
     session_id: Option<String>,
     throttle: SignalThrottle,
     device_info: Vec<DeviceInfoPayload>,
@@ -321,9 +361,8 @@ struct ProgressReporter {
 }
 
 impl ProgressReporter {
-    fn new(app: AppHandle, session_id: Option<String>) -> Self {
+    fn new(session_id: Option<String>) -> Self {
         Self {
-            app,
             session_id,
             throttle: SignalThrottle::new(),
             device_info: Vec::new(),
@@ -346,23 +385,22 @@ impl ProgressReporter {
 
     fn publish(&self, status: &str) {
         let Some(sid) = &self.session_id else { return };
-        store_scan_state(
-            sid,
-            ModbusScanState {
-                status: status.to_string(),
-                progress: self.last.clone(),
-                device_info: self.device_info.clone(),
-                notes: self.notes.clone(),
-            },
-        );
-        let _ = self.app.emit(&format!("modbus-scan:{}", sid), ());
+        let state = ModbusScanState {
+            status: status.to_string(),
+            progress: self.last.clone(),
+            device_info: self.device_info.clone(),
+            notes: self.notes.clone(),
+        };
+        // Push the state on the session channel, and keep it in the store for
+        // MCP, which is in-process Rust and cannot subscribe to the socket.
+        crate::ws::dispatch::send_session_json(sid, crate::ws::protocol::MsgType::ModbusScanState, &state);
+        store_scan_state(sid, state);
     }
 
-    /// Publish the terminal state and leave it in place. The state is cleared by
-    /// `ModbusScanSource::stop`, so a caller that polls progress after the sweep
-    /// ends still sees "complete" rather than an empty slot it has to guess about.
+    /// Publish the terminal state and leave it in the store. `ModbusScanSource::stop`
+    /// clears it, but the pushed copy has already gone out — which is what stops the
+    /// UI racing that clear, as it did when progress was signal-then-fetch.
     fn finish(&mut self, status: &str) {
-        self.throttle.flush();
         self.publish(status);
     }
 }
@@ -439,14 +477,13 @@ fn gaps_between(blocks: &[RegisterBlock], start: u16, end: u16) -> Vec<RegisterB
 ///    full-timeout requests. Instead, give up on this register type after
 ///    `max_consecutive_timeouts` and record why.
 pub async fn scan_registers(
-    app: AppHandle,
     config: ModbusScanConfig,
     cancel_flag: Arc<AtomicBool>,
     session_id: Option<String>,
     sink: &FrameSink,
 ) -> Result<ScanCompletePayload, String> {
     let start_time = std::time::Instant::now();
-    let mut reporter = ProgressReporter::new(app, session_id);
+    let mut reporter = ProgressReporter::new(session_id);
     let mut frame_throttle = SignalThrottle::new();
 
     if config.start_register > config.end_register {
@@ -658,7 +695,6 @@ pub async fn scan_registers(
 /// Scan for active Modbus unit IDs using FC43 (Read Device Identification),
 /// falling back to a single register read where FC43 isn't supported.
 pub async fn scan_unit_ids(
-    app: AppHandle,
     config: UnitIdScanConfig,
     cancel_flag: Arc<AtomicBool>,
     session_id: Option<String>,
@@ -667,7 +703,7 @@ pub async fn scan_unit_ids(
     use tokio_modbus::prelude::*;
 
     let start_time = std::time::Instant::now();
-    let mut reporter = ProgressReporter::new(app, session_id);
+    let mut reporter = ProgressReporter::new(session_id);
     let mut frame_throttle = SignalThrottle::new();
 
     if config.start_unit_id > config.end_unit_id {
@@ -1073,6 +1109,64 @@ mod tests {
         let blocks = to_blocks(vec![5, 5, 6, 6, 7]);
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].count, 3);
+    }
+
+    fn payload() -> ScanCompletePayload {
+        ScanCompletePayload {
+            found_count: 1,
+            total_scanned: 1,
+            duration_ms: 0,
+            requests: 1,
+            blocks: Vec::new(),
+            gaps: Vec::new(),
+            notes: Vec::new(),
+            truncated: false,
+            devices: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_result_already_stored_returns_without_waiting() {
+        clear_scan_state("await-ready");
+        store_scan_result("await-ready", payload());
+        let got = await_scan_result("await-ready", Duration::from_millis(50)).await;
+        assert!(got.is_some());
+        clear_scan_state("await-ready");
+    }
+
+    #[tokio::test]
+    async fn a_result_stored_while_waiting_wakes_the_waiter() {
+        clear_scan_state("await-later");
+        let waiter = tokio::spawn(async {
+            await_scan_result("await-later", Duration::from_secs(5)).await
+        });
+        // Give the waiter time to park, so this exercises the wakeup rather
+        // than the already-stored fast path.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        store_scan_result("await-later", payload());
+        assert!(waiter.await.unwrap().is_some(), "waiter missed the notification");
+        clear_scan_state("await-later");
+    }
+
+    #[tokio::test]
+    async fn a_result_that_never_arrives_times_out() {
+        clear_scan_state("await-never");
+        let got = await_scan_result("await-never", Duration::from_millis(30)).await;
+        assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn another_session_s_result_does_not_satisfy_the_wait() {
+        clear_scan_state("await-mine");
+        clear_scan_state("await-theirs");
+        let waiter = tokio::spawn(async {
+            await_scan_result("await-mine", Duration::from_millis(120)).await
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        // Wakes every waiter; ours must re-check, find nothing, and park again.
+        store_scan_result("await-theirs", payload());
+        assert!(waiter.await.unwrap().is_none());
+        clear_scan_state("await-theirs");
     }
 
     #[test]

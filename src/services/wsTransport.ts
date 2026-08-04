@@ -203,24 +203,28 @@ class WsTransport {
       if (!this.pendingHandlers.has(sessionId))
         this.pendingHandlers.set(sessionId, []);
       this.pendingHandlers.get(sessionId)!.push({ msgType, handler });
-
-      return () => {
-        const pending = this.pendingHandlers.get(sessionId);
-        if (pending) {
-          const idx = pending.findIndex((p) => p.handler === handler);
-          if (idx >= 0) pending.splice(idx, 1);
-        }
-      };
+    } else {
+      if (!this.handlers.has(channel)) this.handlers.set(channel, new Map());
+      const channelHandlers = this.handlers.get(channel)!;
+      if (!channelHandlers.has(msgType)) channelHandlers.set(msgType, []);
+      channelHandlers.get(msgType)!.push(handler);
     }
 
-    if (!this.handlers.has(channel))
-      this.handlers.set(channel, new Map());
-    const channelHandlers = this.handlers.get(channel)!;
-    if (!channelHandlers.has(msgType)) channelHandlers.set(msgType, []);
-    channelHandlers.get(msgType)!.push(handler);
-
+    // A handler moves between maps over its life: registered as pending, migrated
+    // into the channel map on SubscribeAck, then re-staged into a fresh map on
+    // reconnect. So look it up on removal rather than capturing whichever map it
+    // happened to start in — a captured map makes the unlisten a silent no-op the
+    // moment the handler is migrated, which is the common case for a subscriber
+    // that registers before its session is joined.
     return () => {
-      const arr = channelHandlers.get(msgType);
+      const pending = this.pendingHandlers.get(sessionId);
+      if (pending) {
+        const idx = pending.findIndex((p) => p.handler === handler);
+        if (idx >= 0) pending.splice(idx, 1);
+      }
+      const current = this.sessionToChannel.get(sessionId);
+      if (current === undefined) return;
+      const arr = this.handlers.get(current)?.get(msgType);
       if (arr) {
         const idx = arr.indexOf(handler);
         if (idx >= 0) arr.splice(idx, 1);
