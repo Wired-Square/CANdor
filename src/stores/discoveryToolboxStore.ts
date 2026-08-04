@@ -26,7 +26,7 @@ import { useDiscoveryUIStore } from './discoveryUIStore';
 import { ANALYSIS_YIELD_MS } from '../constants';
 
 // Toolbox types
-export type ToolboxView = 'frames' | 'message-order' | 'changes' | 'serial-framing' | 'serial-payload' | 'checksum-discovery' | 'modbus-register-scan' | 'modbus-unit-scan';
+export type ToolboxView = 'frames' | 'message-order' | 'changes' | 'serial-framing' | 'serial-payload' | 'checksum-discovery' | 'modbus-register-scan' | 'modbus-unit-scan' | 'modbus-function-codes';
 
 /**
  * Where a checksum scan reads its payloads: a capture Rust can read itself, or
@@ -79,14 +79,29 @@ export type DeviceInfo = {
   revision?: string;
 };
 
+/**
+ * A Modbus scan's identity and progress.
+ *
+ * Deliberately holds no frames: a scan owns a session and writes into its
+ * capture like any other source, so the results arrive through the normal frame
+ * path. Duplicating them here would deliver every register twice and put them
+ * beyond the reach of the analysis tools and the TOML export.
+ */
 export type ModbusScanResults = {
-  frames: FrameMessage[];
   scanType: 'register' | 'unit-id';
   isScanning: boolean;
-  progress: { current: number; total: number; found_count: number } | null;
+  progress: { current: number; total: number; found_count: number; pass: number; total_passes: number } | null;
   /** Device identification info keyed by unit ID (from FC43) */
   deviceInfo: Map<number, DeviceInfo>;
+  /** Diagnoses from the sweep, e.g. a function code that never answered. */
+  notes: string[];
 };
+
+type ModbusScanKey = 'modbusRegisterScanResults' | 'modbusUnitIdScanResults';
+
+function resultKeyFor(scanType: 'register' | 'unit-id'): ModbusScanKey {
+  return scanType === 'register' ? 'modbusRegisterScanResults' : 'modbusUnitIdScanResults';
+}
 
 export type ToolboxState = {
   isExpanded: boolean;
@@ -125,10 +140,12 @@ interface DiscoveryToolboxState {
   setSerialPayloadResults: (results: SerialPayloadResult | null) => void;
   setChecksumDiscoveryResults: (results: ChecksumDiscoveryResult | null) => void;
   startModbusScan: (scanType: 'register' | 'unit-id') => void;
-  addModbusScanFrames: (frames: FrameMessage[]) => void;
-  addModbusScanDeviceInfo: (info: { unit_id: number; vendor?: string; product_code?: string; revision?: string }) => void;
-  updateModbusScanProgress: (progress: { current: number; total: number; found_count: number }) => void;
-  finishModbusScan: () => void;
+  setModbusScanDevices: (devices: Array<{ unit_id: number; vendor?: string | null; product_code?: string | null; revision?: string | null }>) => void;
+  updateModbusScanProgress: (
+    progress: { current: number; total: number; found_count: number; pass: number; total_passes: number },
+    notes?: string[]
+  ) => void;
+  finishModbusScan: (notes?: string[]) => void;
   clearAnalysisResults: () => void;
   clearToolResult: (toolTabId: string) => void;
 
@@ -160,6 +177,25 @@ interface DiscoveryToolboxState {
   runChecksumDiscoveryAnalysis: (
     source: ChecksumScanSource
   ) => Promise<ChecksumDiscoveryResult>;
+}
+
+/**
+ * Apply `fn` to whichever scan is currently running.
+ *
+ * Only one scan runs at a time in the UI, but which of the two result slots it
+ * occupies depends on its type — so every progress update had been repeating the
+ * same "check both slots, pick the scanning one, write it back" dance.
+ */
+function updateActiveScan(
+  state: DiscoveryToolboxState,
+  fn: (scan: ModbusScanResults) => ModbusScanResults
+): Partial<DiscoveryToolboxState> | DiscoveryToolboxState {
+  const { modbusRegisterScanResults: reg, modbusUnitIdScanResults: uid } = state.toolbox;
+  const scan = reg?.isScanning ? reg : uid?.isScanning ? uid : null;
+  if (!scan) return state;
+  return {
+    toolbox: { ...state.toolbox, [resultKeyFor(scan.scanType)]: fn(scan) },
+  };
 }
 
 export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get) => ({
@@ -254,84 +290,60 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
   },
 
   startModbusScan: (scanType) => {
-    const key = scanType === 'register' ? 'modbusRegisterScanResults' : 'modbusUnitIdScanResults';
     const tabKey = scanType === 'register' ? 'modbus-register-scan' : 'modbus-unit-scan';
     set((state) => ({
       toolbox: {
         ...state.toolbox,
-        [key]: { frames: [], scanType, isScanning: true, progress: null, deviceInfo: new Map() },
+        [resultKeyFor(scanType)]: {
+          scanType,
+          isScanning: true,
+          progress: null,
+          deviceInfo: new Map(),
+          notes: [],
+        },
       },
     }));
     useDiscoveryUIStore.getState().setFramesViewActiveTab(TOOL_TAB_CONFIG[tabKey].tabId);
   },
 
-  addModbusScanFrames: (frames) => {
+  // The backend republishes its whole device list on every progress tick, so
+  // replace the map in one update rather than folding in an entry at a time —
+  // the latter cost a store notification and a full Map copy per device, per tick.
+  setModbusScanDevices: (devices) => {
     set((state) => {
-      // Find the actively scanning result
-      const reg = state.toolbox.modbusRegisterScanResults;
-      const uid = state.toolbox.modbusUnitIdScanResults;
-      const scan = reg?.isScanning ? reg : uid?.isScanning ? uid : null;
-      if (!scan) return state;
-      const key = scan.scanType === 'register' ? 'modbusRegisterScanResults' : 'modbusUnitIdScanResults';
-      return {
-        toolbox: {
-          ...state.toolbox,
-          [key]: { ...scan, frames: [...scan.frames, ...frames] },
-        },
-      };
-    });
-  },
-
-  addModbusScanDeviceInfo: (info) => {
-    set((state) => {
-      // Device info is only relevant for unit ID scans
+      // Device identification only comes from unit ID scans.
       const scan = state.toolbox.modbusUnitIdScanResults;
-      if (!scan) return state;
-      const newDeviceInfo = new Map(scan.deviceInfo);
-      newDeviceInfo.set(info.unit_id, {
-        vendor: info.vendor,
-        product_code: info.product_code,
-        revision: info.revision,
-      });
+      if (!scan || devices.length === scan.deviceInfo.size) return state;
+      const deviceInfo = new Map(
+        devices.map((d) => [
+          d.unit_id,
+          {
+            vendor: d.vendor ?? undefined,
+            product_code: d.product_code ?? undefined,
+            revision: d.revision ?? undefined,
+          },
+        ])
+      );
       return {
-        toolbox: {
-          ...state.toolbox,
-          modbusUnitIdScanResults: { ...scan, deviceInfo: newDeviceInfo },
-        },
+        toolbox: { ...state.toolbox, modbusUnitIdScanResults: { ...scan, deviceInfo } },
       };
     });
   },
 
-  updateModbusScanProgress: (progress) => {
-    set((state) => {
-      const reg = state.toolbox.modbusRegisterScanResults;
-      const uid = state.toolbox.modbusUnitIdScanResults;
-      const scan = reg?.isScanning ? reg : uid?.isScanning ? uid : null;
-      if (!scan) return state;
-      const key = scan.scanType === 'register' ? 'modbusRegisterScanResults' : 'modbusUnitIdScanResults';
-      return {
-        toolbox: {
-          ...state.toolbox,
-          [key]: { ...scan, progress },
-        },
-      };
-    });
+  updateModbusScanProgress: (progress, notes) => {
+    set((state) =>
+      updateActiveScan(state, (scan) => ({ ...scan, progress, notes: notes ?? scan.notes }))
+    );
   },
 
-  finishModbusScan: () => {
-    set((state) => {
-      const reg = state.toolbox.modbusRegisterScanResults;
-      const uid = state.toolbox.modbusUnitIdScanResults;
-      const scan = reg?.isScanning ? reg : uid?.isScanning ? uid : null;
-      if (!scan) return state;
-      const key = scan.scanType === 'register' ? 'modbusRegisterScanResults' : 'modbusUnitIdScanResults';
-      return {
-        toolbox: {
-          ...state.toolbox,
-          [key]: { ...scan, isScanning: false },
-        },
-      };
-    });
+  finishModbusScan: (notes) => {
+    set((state) =>
+      updateActiveScan(state, (scan) => ({
+        ...scan,
+        isScanning: false,
+        notes: notes ?? scan.notes,
+      }))
+    );
   },
 
   clearAnalysisResults: () => {

@@ -67,12 +67,16 @@ with `multi_source: false` cannot be combined with others.
 | MQTT              | [io/mqtt/](../src-tauri/src/io/mqtt/)    | realtime  | can           | ✗         | ✗        | ✓     |
 | Modbus TCP        | [io/modbus_tcp/](../src-tauri/src/io/modbus_tcp/) | realtime | modbus | ✗         | ✗        | ✓     |
 | Modbus RTU        | [io/modbus_rtu/](../src-tauri/src/io/modbus_rtu/) | realtime | modbus | ✓         | ✗        | ✓     |
+| Modbus scan²      | [io/modbus_tcp/scan_source.rs](../src-tauri/src/io/modbus_tcp/scan_source.rs) | realtime | modbus | ✗ | ✗ | ✗ |
 | FrameLink         | [io/framelink/](../src-tauri/src/io/framelink/) | realtime | (per rule) | ✓ | ✗        | ✓     |
 | Virtual device    | [io/virtual_device/](../src-tauri/src/io/virtual_device/) | realtime | can\|serial | loopback | loopback | ✓ |
 | WireTAP backend   | [io/recorded/backend_api.rs](../src-tauri/src/io/recorded/backend_api.rs) | recorded | can | ✗ | ✗ | ✗ |
 | Capture replay    | [io/recorded/capture.rs](../src-tauri/src/io/recorded/capture.rs) | capture | (inherited) | ✗ | ✗ | ✗ |
 
 ¹ Framed serial (SLIP, Modbus RTU, delimiter) emits frames, not raw bytes.
+² A discovery sweep, not a device you configure — see *Modbus discovery* below.
+  It cannot be paused (there is no coherent half-way state to pause into) and it
+  ends itself when the sweep finishes.
 
 **FrameLink bus mappings are still built from the profile, and that is a known
 gap.** `create_default_bus_mapping` runs before a connection exists, so it can
@@ -377,8 +381,50 @@ done:
   a long-term store is rarely what an agent wants; `speed` defaults to `0` (as fast
   as the source allows).
 
+- **Builds Modbus poll groups.** A Modbus session reads nothing until it is told
+  what to poll, and that normally comes from the profile's catalogue. When the
+  device has no catalogue yet — the whole point of discovery — `register_ranges`
+  supplies an address range instead, via
+  [`build_polls_from_ranges`](../src-tauri/src/io/modbus_tcp/ranges.rs). An
+  explicit range **wins over** a present `preferred_catalog`, which is how you
+  re-sweep a device whose catalogue you already know is incomplete. With neither,
+  the open fails naming both remedies: silently sweeping an unknown industrial bus
+  on an agent's behalf is not a safe default.
+
 A keepalive task then touches the MCP subscriber every 10 s so the heartbeat
 watchdog doesn't reap a session with no window attached.
+
+### Modbus discovery
+
+Three operations, in the order you'd use them against an unknown device:
+
+| Step | Entry point | What it answers |
+|------|-------------|-----------------|
+| Probe | `modbus_probe_function_codes` | Which of FC01–FC04 does this device answer? |
+| Sweep | `create_modbus_scan_session` → `ScanJob::Registers` | Which addresses exist? |
+| Poll  | `open_session` with `register_ranges` | Which of them change? |
+
+The probe is a plain call — at most four requests per unit, no frames, no
+capture. The sweeps are sessions (`ModbusScanSource`), because owning a session
+is what gets them a capture, the analysis tools, capture paging and
+cancel-as-`stop_session`. The session id *is* the scan id, so sweeps against
+different devices run concurrently; what cannot overlap is two sweeps of the same
+`host:port`, which `create_modbus_scan_session` refuses by name.
+
+The distinction the probe draws is the load-bearing one. A Modbus **exception**
+proves the device implements that function code and the address was simply wrong;
+**silence** carries no information at all and usually means the function code is
+unimplemented. The sweep treats them differently for the same reason: it bisects
+a chunk that excepted (the reply localised the fault) but not one that went
+silent, because bisecting silence turns a single sweep into thousands of
+full-timeout requests. After `max_consecutive_timeouts` silences it abandons that
+register type and records why.
+
+**Connection contention.** A sweep opens its own connection. Pausing a running
+poller does *not* free the device — pause stops requests but keeps the socket —
+so on a device that serves one conversation per socket the polling session must
+be stopped for the duration. Routing a sweep through a running source's
+connection would avoid this and is not implemented.
 
 ---
 

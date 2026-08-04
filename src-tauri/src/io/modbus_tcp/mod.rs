@@ -4,14 +4,35 @@
 // - Source: catalog-driven polling of known registers
 // - Scanner: one-shot discovery of registers and active unit IDs
 
+mod conn;
 pub mod poll;
+pub mod ranges;
 mod reader;
+pub mod scan_source;
 pub mod scanner;
 
+pub use ranges::{build_polls_from_ranges, ModbusRange, ModbusRangeSpec};
+pub use scan_source::{ModbusScanSource, ScanJob};
 pub use reader::{ModbusTcpConfig, ModbusTcpSource, PollEmitMode, PollGroup, RegisterType};
 pub use scanner::{
-    ModbusScanConfig, ScanCompletePayload, UnitIdScanConfig,
+    FcProbeConfig, FcProbeEntry, ModbusScanConfig, ScanCompletePayload, UnitIdScanConfig,
 };
+
+/// Read `host`/`port`/`unit_id` off a Modbus profile's connection map, tolerating
+/// both the string and number spellings the settings file allows. The Rust twin
+/// of `modbusConnectionOf` in `src/utils/modbusProfiles.ts`.
+pub fn modbus_endpoint(profile: &crate::settings::IOProfile) -> (String, u16, u8) {
+    let conn = &profile.connection;
+    let num = |key: &str| -> Option<i64> {
+        conn.get(key)
+            .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+    };
+    (
+        conn.get("host").and_then(|v| v.as_str()).unwrap_or("127.0.0.1").to_string(),
+        num("port").unwrap_or(502) as u16,
+        num("unit_id").unwrap_or(1) as u8,
+    )
+}
 
 /// Map the catalogue crate's register type onto the IO layer's enum.
 fn map_register_type(rt: wiretap_catalog::modbus::RegisterType) -> RegisterType {

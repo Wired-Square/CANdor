@@ -2,154 +2,245 @@
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Play } from "lucide-react";
-import { iconMd } from "../../../../styles/spacing";
-import { bgSurface } from "../../../../styles";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import { iconSm } from "../../../../styles/spacing";
+import { borderDefault, textMuted } from "../../../../styles";
+import ModbusConnectionFields, {
+  type ModbusConnection,
+} from "../../../../components/modbus/ModbusConnectionFields";
+import {
+  CheckboxRow,
+  FieldRow,
+  NumberField,
+  RunButton,
+  SelectField,
+} from "../../../../components/modbus/ModbusFields";
+import {
+  MODBUS_SCAN_BOUNDS,
+  MODBUS_SCAN_DEFAULTS,
+  maxChunkFor,
+} from "../../../../components/modbus/modbusScanDefaults";
+import { useModbusTarget } from "../../../../components/modbus/useModbusTarget";
 import type { ModbusScanConfig, ModbusRegisterType } from "../../../../api/io";
 
 type Props = {
-  connection: { host: string; port: number; unit_id: number };
+  /** The live session's Modbus device, when there is one. */
+  connection?: ModbusConnection | null;
   onStartScan: (config: ModbusScanConfig) => void;
 };
 
 export default function ModbusRegisterScanPanel({ connection, onStartScan }: Props) {
   const { t } = useTranslation("discovery");
-  const [registerType, setRegisterType] = useState<ModbusRegisterType>("holding");
-  const [unitId, setUnitId] = useState(connection.unit_id);
-  const [startRegister, setStartRegister] = useState(0);
-  const [endRegister, setEndRegister] = useState(999);
-  const [chunkSize, setChunkSize] = useState(125);
-  const [delayMs, setDelayMs] = useState(50);
+  const target = useModbusTarget(connection);
 
-  // Auto-adjust chunk size when register type changes
+  const [registerType, setRegisterType] = useState<ModbusRegisterType>(
+    MODBUS_SCAN_DEFAULTS.registerType
+  );
+  const [startRegister, setStartRegister] = useState(MODBUS_SCAN_DEFAULTS.startRegister);
+  const [endRegister, setEndRegister] = useState(MODBUS_SCAN_DEFAULTS.endRegister);
+  const [chunkSize, setChunkSize] = useState(maxChunkFor(MODBUS_SCAN_DEFAULTS.registerType));
+  const [delayMs, setDelayMs] = useState(MODBUS_SCAN_DEFAULTS.interRequestDelayMs);
+  const [repeat, setRepeat] = useState(MODBUS_SCAN_DEFAULTS.repeat);
+  const [repeatDelayMs, setRepeatDelayMs] = useState(MODBUS_SCAN_DEFAULTS.repeatDelayMs);
+
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [timeoutMs, setTimeoutMs] = useState(MODBUS_SCAN_DEFAULTS.timeoutMs);
+  const [reconnectPerRequest, setReconnectPerRequest] = useState(
+    MODBUS_SCAN_DEFAULTS.reconnectPerRequest
+  );
+  const [connectSettleMs, setConnectSettleMs] = useState(MODBUS_SCAN_DEFAULTS.connectSettleMs);
+  const [maxConsecutiveTimeouts, setMaxConsecutiveTimeouts] = useState(
+    MODBUS_SCAN_DEFAULTS.maxConsecutiveTimeouts
+  );
+  const [maxRequests, setMaxRequests] = useState(MODBUS_SCAN_DEFAULTS.maxRequests);
+
+  const maxChunk = maxChunkFor(registerType);
+
   const handleRegisterTypeChange = (type: ModbusRegisterType) => {
     setRegisterType(type);
-    if (type === "coil" || type === "discrete") {
-      setChunkSize(2000);
-    } else {
-      setChunkSize(125);
+    setChunkSize(maxChunkFor(type));
+  };
+
+  // Per-request reconnect and a settle delay go together: both exist for cheap
+  // stacks that serve one conversation per socket, and such a device usually
+  // needs a moment after connecting before its first reply is readable.
+  const handleReconnectChange = (on: boolean) => {
+    setReconnectPerRequest(on);
+    if (on && connectSettleMs === 0) {
+      setConnectSettleMs(MODBUS_SCAN_DEFAULTS.connectSettleWithReconnectMs);
     }
   };
 
-  const maxChunk = registerType === "coil" || registerType === "discrete" ? 2000 : 125;
+  const registerCount = Math.max(0, endRegister - startRegister + 1);
+  const overRegisterCap = registerCount > MODBUS_SCAN_DEFAULTS.maxRegisters;
+  const isValid = startRegister <= endRegister && chunkSize > 0 && !overRegisterCap;
 
   const handleStart = () => {
     onStartScan({
-      host: connection.host,
-      port: connection.port,
-      unit_id: unitId,
+      host: target.connection.host,
+      port: target.connection.port,
+      unit_id: target.connection.unit_id,
       register_type: registerType,
       start_register: startRegister,
       end_register: endRegister,
       chunk_size: Math.min(chunkSize, maxChunk),
       inter_request_delay_ms: delayMs,
+      timeout_ms: timeoutMs,
+      connect_settle_ms: connectSettleMs,
+      reconnect_per_request: reconnectPerRequest,
+      max_consecutive_timeouts: maxConsecutiveTimeouts,
+      max_requests: maxRequests,
+      repeat,
+      repeat_delay_ms: repeatDelayMs,
     });
   };
 
-  const isValid = startRegister <= endRegister && chunkSize > 0;
-
   return (
     <div className="space-y-3 text-xs">
-      <div className="flex gap-3">
-        <div className="flex-1 space-y-1">
-          <label className="text-[color:var(--text-muted)]">{t("modbusRegister.registerType")}</label>
-          <select
-            value={registerType}
-            onChange={(e) => handleRegisterTypeChange(e.target.value as ModbusRegisterType)}
-            className={`w-full px-2 py-1 rounded border border-[color:var(--border-default)] ${bgSurface} text-[color:var(--text-primary)]`}
-          >
-            <option value="holding">{t("modbusRegister.holdingFc")}</option>
-            <option value="input">{t("modbusRegister.inputFc")}</option>
-            <option value="coil">{t("modbusRegister.coilFc")}</option>
-            <option value="discrete">{t("modbusRegister.discreteFc")}</option>
-          </select>
-        </div>
-        <div className="flex-1 space-y-1">
-          <label className="text-[color:var(--text-muted)]">{t("modbusRegister.unitId")}</label>
-          <input
-            type="number"
-            min={1}
-            max={247}
-            value={unitId}
-            onChange={(e) => setUnitId(Math.max(1, Math.min(247, Number(e.target.value) || 1)))}
-            className={`w-full px-2 py-1 rounded border border-[color:var(--border-default)] ${bgSurface} text-[color:var(--text-primary)]`}
-          />
-        </div>
-      </div>
+      <ModbusConnectionFields
+        value={target.connection}
+        onChange={target.setConnection}
+        profileId={target.profileId}
+        onProfileChange={target.selectProfile}
+      />
 
-      <div className="flex gap-3">
-        <div className="flex-1 space-y-1">
-          <label className="text-[color:var(--text-muted)]">{t("modbusRegister.startRegister")}</label>
-          <input
-            type="number"
-            min={0}
-            max={65535}
-            value={startRegister}
-            onChange={(e) => setStartRegister(Math.max(0, Math.min(65535, Number(e.target.value) || 0)))}
-            className={`w-full px-2 py-1 rounded border border-[color:var(--border-default)] ${bgSurface} text-[color:var(--text-primary)]`}
-          />
-        </div>
-        <div className="flex-1 space-y-1">
-          <label className="text-[color:var(--text-muted)]">{t("modbusRegister.endRegister")}</label>
-          <input
-            type="number"
-            min={0}
-            max={65535}
-            value={endRegister}
-            onChange={(e) => setEndRegister(Math.max(0, Math.min(65535, Number(e.target.value) || 0)))}
-            className={`w-full px-2 py-1 rounded border border-[color:var(--border-default)] ${bgSurface} text-[color:var(--text-primary)]`}
-          />
-        </div>
-      </div>
+      <FieldRow>
+        <SelectField
+          label={t("modbusRegister.registerType")}
+          value={registerType}
+          onChange={handleRegisterTypeChange}
+          options={[
+            { value: "holding", label: t("modbusRegister.holdingFc") },
+            { value: "input", label: t("modbusRegister.inputFc") },
+            { value: "coil", label: t("modbusRegister.coilFc") },
+            { value: "discrete", label: t("modbusRegister.discreteFc") },
+          ]}
+        />
+        <NumberField
+          label={t("modbusRegister.startRegister")}
+          value={startRegister}
+          onChange={setStartRegister}
+          min={MODBUS_SCAN_BOUNDS.register.min}
+          max={MODBUS_SCAN_BOUNDS.register.max}
+        />
+        <NumberField
+          label={t("modbusRegister.endRegister")}
+          value={endRegister}
+          onChange={setEndRegister}
+          min={MODBUS_SCAN_BOUNDS.register.min}
+          max={MODBUS_SCAN_BOUNDS.register.max}
+        />
+      </FieldRow>
 
-      <div className="flex gap-3">
-        <div className="flex-1 space-y-1">
-          <label className="text-[color:var(--text-muted)]">{t("modbusRegister.chunkSize")}</label>
-          <input
-            type="number"
-            min={1}
-            max={maxChunk}
-            value={chunkSize}
-            onChange={(e) => setChunkSize(Math.max(1, Math.min(maxChunk, Number(e.target.value) || 1)))}
-            className={`w-full px-2 py-1 rounded border border-[color:var(--border-default)] ${bgSurface} text-[color:var(--text-primary)]`}
-          />
-        </div>
-        <div className="flex-1 space-y-1">
-          <label className="text-[color:var(--text-muted)]">{t("modbusRegister.delayMs")}</label>
-          <input
-            type="number"
-            min={0}
-            max={5000}
-            value={delayMs}
-            onChange={(e) => setDelayMs(Math.max(0, Math.min(5000, Number(e.target.value) || 0)))}
-            className={`w-full px-2 py-1 rounded border border-[color:var(--border-default)] ${bgSurface} text-[color:var(--text-primary)]`}
-          />
-        </div>
-      </div>
+      <FieldRow>
+        <NumberField
+          label={t("modbusRegister.chunkSize")}
+          value={chunkSize}
+          onChange={setChunkSize}
+          min={1}
+          max={maxChunk}
+        />
+        <NumberField
+          label={t("modbusRegister.delayMs")}
+          value={delayMs}
+          onChange={setDelayMs}
+          min={MODBUS_SCAN_BOUNDS.delayMs.min}
+          max={MODBUS_SCAN_BOUNDS.delayMs.max}
+        />
+      </FieldRow>
 
-      <p className="text-[color:var(--text-muted)] pt-2 border-t border-[color:var(--border-default)]">
+      <FieldRow>
+        <NumberField
+          label={t("modbusRegister.passes")}
+          value={repeat}
+          onChange={setRepeat}
+          min={MODBUS_SCAN_BOUNDS.repeat.min}
+          max={MODBUS_SCAN_BOUNDS.repeat.max}
+        />
+        <NumberField
+          label={t("modbusRegister.passGapMs")}
+          value={repeatDelayMs}
+          onChange={setRepeatDelayMs}
+          min={MODBUS_SCAN_BOUNDS.repeatDelayMs.min}
+          max={MODBUS_SCAN_BOUNDS.repeatDelayMs.max}
+          disabled={repeat < 2}
+        />
+      </FieldRow>
+      {repeat > 1 && <p className={textMuted}>{t("modbusRegister.passesHint")}</p>}
+
+      <button
+        type="button"
+        onClick={() => setShowAdvanced((v) => !v)}
+        className={`flex items-center gap-1 ${textMuted} hover:text-[color:var(--text-primary)]`}
+      >
+        {showAdvanced ? <ChevronDown className={iconSm} /> : <ChevronRight className={iconSm} />}
+        {t("modbusRegister.advanced")}
+      </button>
+
+      {showAdvanced && (
+        <div className={`space-y-3 pl-2 border-l ${borderDefault}`}>
+          <FieldRow>
+            <NumberField
+              label={t("modbusRegister.timeoutMs")}
+              value={timeoutMs}
+              onChange={setTimeoutMs}
+              min={MODBUS_SCAN_BOUNDS.timeoutMs.min}
+              max={MODBUS_SCAN_BOUNDS.timeoutMs.max}
+            />
+            <NumberField
+              label={t("modbusRegister.maxConsecutiveTimeouts")}
+              value={maxConsecutiveTimeouts}
+              onChange={setMaxConsecutiveTimeouts}
+              min={MODBUS_SCAN_BOUNDS.consecutiveTimeouts.min}
+              max={MODBUS_SCAN_BOUNDS.consecutiveTimeouts.max}
+            />
+          </FieldRow>
+          <FieldRow>
+            <NumberField
+              label={t("modbusRegister.maxRequests")}
+              value={maxRequests}
+              onChange={setMaxRequests}
+              min={MODBUS_SCAN_BOUNDS.maxRequests.min}
+              max={MODBUS_SCAN_BOUNDS.maxRequests.max}
+            />
+            <NumberField
+              label={t("modbusRegister.connectSettleMs")}
+              value={connectSettleMs}
+              onChange={setConnectSettleMs}
+              min={MODBUS_SCAN_BOUNDS.settleMs.min}
+              max={MODBUS_SCAN_BOUNDS.settleMs.max}
+            />
+          </FieldRow>
+          <FieldRow>
+            <CheckboxRow
+              label={t("modbusRegister.reconnectPerRequest")}
+              checked={reconnectPerRequest}
+              onChange={handleReconnectChange}
+            />
+          </FieldRow>
+          <p className={textMuted}>{t("modbusRegister.advancedHint")}</p>
+        </div>
+      )}
+
+      <p className={`${textMuted} pt-2 border-t ${borderDefault}`}>
         {t("modbusRegister.scanDescription", {
-          host: connection.host,
-          port: connection.port,
+          host: target.connection.host,
+          port: target.connection.port,
           type: registerType,
           start: startRegister,
           end: endRegister,
         })}
       </p>
+      {overRegisterCap && (
+        <p className="text-amber-500">
+          {t("modbusRegister.tooManyRegisters", {
+            count: registerCount,
+            max: MODBUS_SCAN_DEFAULTS.maxRegisters,
+          })}
+        </p>
+      )}
 
-      <button
-        type="button"
-        onClick={handleStart}
-        disabled={!isValid}
-        className={`flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-          !isValid
-            ? "bg-[var(--bg-surface)] text-[color:var(--text-muted)] cursor-not-allowed"
-            : "bg-purple-600 hover:bg-purple-700 text-white"
-        }`}
-      >
-        <Play className={iconMd} />
-        {t("modbusRegister.runScan")}
-      </button>
+      <RunButton label={t("modbusRegister.runScan")} onClick={handleStart} disabled={!isValid} />
     </div>
   );
 }

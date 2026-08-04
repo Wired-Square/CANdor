@@ -7,6 +7,11 @@ All notable changes to WireTAP will be documented in this file.
 ### Added
 
 - **Rows per page now defaults to "Auto", filling the panel.** Every table that offers a rows-per-page choice — Discovery frames and its Filtered tab, serial framed data, Transmit history, Query results — sizes its page to the space available instead of showing a fixed 20 and leaving the rest of a tall panel empty. Resize the panel and the row count follows, keeping the top row you were looking at in place. Pick a fixed 20/50/100 to override it; that choice now also survives a stream start, which previously reset it.
+- **Modbus registers can be discovered with no decoder.** Reverse-engineering a device whose register table nobody published used to mean leaving WireTAP, because every route to a Modbus session ran through a catalogue you did not yet have. Three things now work without one. A **function code probe** reads a single address on each of FC01–FC04 and reports which ones the device answers, separating an exception (the function code works, the address was wrong) from silence (it is not implemented at all). A **register sweep** walks an address range and records what responded, writing into a capture, so the results page like any other, feed the analysis tools, and export as a catalogue through the usual Save. And a **range spec** can stand in for a catalogue when opening a session, so a device with no decoder can still be polled live. Set the sweep to two passes and the Payload Changes tool will separate live telemetry from static configuration.
+
+- **Modbus discovery is available to agents.** Function code probing, register sweeps, unit ID scans and scan progress are all exposed over MCP behind the session-control permission, and a session can be opened with a range spec in place of a catalogue. Results come back summarised as contiguous blocks and gaps rather than one row per register, so a thousand-register sweep is a few hundred bytes. An agent can also bind a catalogue to a profile, so it can probe a device, sweep it, write a catalogue and attach it without anyone opening Settings midway.
+
+- **Scan results show what the registers actually hold.** The register table displays hex, u16, s16 and ASCII side by side, with optional u32/s32/f32 across adjacent register pairs and a word-order toggle. A column of raw hex on its own makes a register map very hard to read.
 
 ### Fixed
 
@@ -48,6 +53,8 @@ All notable changes to WireTAP will be documented in this file.
 
 - **Catalogue frames marked `disabled` are no longer polled.** The flag was read correctly and then ignored, so a frame you had turned off was polled anyway.
 
+- **A silent device no longer kills a register scan.** An IO error or a timeout aborted the whole sweep, so a device that answers an unimplemented function code with silence rather than an exception ended the scan instead of narrowing it. Silence is now recorded as "this block did not respond", and after three in a row the sweep gives up on that register type and says so. Scans also gained a per-request timeout, a request budget that bounds how long one can run, repeat passes, and an optional reconnect between requests for devices that serve one conversation per socket.
+
 ### Changed
 
 - **A database source is now a WireTAP backend, and only that.** Connecting straight to a PostgreSQL server is no longer offered — the backend owns the database and authenticates with an API key instead of database credentials. If you have a direct PostgreSQL source, it is removed when you upgrade and named in a notice; add a WireTAP backend profile under Settings → Data I/O in its place. Queries, replay and the analysis tools all behave as before against one.
@@ -59,6 +66,8 @@ All notable changes to WireTAP will be documented in this file.
 - **Closeable tabs have a close button.** The Serial Payload and Serial Framing tool tabs could only be closed from a right-click menu, with nothing on screen to say so. They now carry an ×; right-click still works.
 
 - **The Frames tab reads its rows from the capture.** Live tail, a stopped page and capture playback now all come from one place, so the row count, the tab label and the toolbar counter always agree. The Source column moved to the column menu alongside # / Bus / ASCII rather than appearing and disappearing on its own.
+
+- **The Decoder and Discovery drive Modbus polling the same way.** The session and poll bookkeeping that lived inside the Decoder — reconnecting when the catalogue changes, pause and resume, and working out which profile is being polled — is now shared, so Discovery's range-derived polls behave identically.
 
 ## [0.10.2] - 2026-08-14
 

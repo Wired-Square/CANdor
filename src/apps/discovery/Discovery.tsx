@@ -19,7 +19,10 @@ import { useDiscoveryToolboxStore } from "../../stores/discoveryToolboxStore";
 import { useShallow } from "zustand/react/shallow";
 import { useDiscoveryHandlers } from "./hooks/useDiscoveryHandlers";
 import type { StreamEndedInfo, PlaybackPosition, ModbusScanConfig, UnitIdScanConfig } from '../../api/io';
-import { startModbusScan, startModbusUnitIdScan, cancelModbusScan, getModbusScanState } from '../../api/io';
+import { cancelModbusScan, createModbusScanSession, getModbusScanState, startReaderSession, stopReaderSession } from '../../api/io';
+import type { ScanJob } from '../../api/io';
+import type { ModbusExportConfig } from '../../utils/frameExport';
+import { modbusConnectionOf, useModbusProfiles } from '../../utils/modbusProfiles';
 import { REALTIME_CLOCK_INTERVAL_MS } from "../../constants";
 import AppLayout from "../../components/AppLayout";
 import DiscoveryTopBar from "./views/DiscoveryTopBar";
@@ -100,6 +103,9 @@ function DiscoveryInner() {
   const framesViewActiveTab = useDiscoveryUIStore((s) => s.framesViewActiveTab);
   const setShowBusColumn = useDiscoveryUIStore((s) => s.setShowBusColumn);
   const setModbusExportConfig = useDiscoveryUIStore((s) => s.setModbusExportConfig);
+  // The scan runs in its own session, separate from whatever the panel was
+  // showing before — track its id so progress events can be matched to it.
+  const modbusScanSessionIdRef = useRef<string | null>(null);
   const setMaxBuffer = useDiscoveryUIStore((s) => s.setMaxBuffer);
   const setIoProfile = useDiscoveryUIStore((s) => s.setIoProfile);
   const setPlaybackSpeed = useDiscoveryUIStore((s) => s.setPlaybackSpeed);
@@ -258,8 +264,7 @@ function DiscoveryInner() {
 
   // Modbus scan state (from toolbox store)
   const startModbusScanStore = useDiscoveryToolboxStore((s) => s.startModbusScan);
-  const addModbusScanFrames = useDiscoveryToolboxStore((s) => s.addModbusScanFrames);
-  const addModbusScanDeviceInfo = useDiscoveryToolboxStore((s) => s.addModbusScanDeviceInfo);
+  const setModbusScanDevices = useDiscoveryToolboxStore((s) => s.setModbusScanDevices);
   const updateModbusScanProgress = useDiscoveryToolboxStore((s) => s.updateModbusScanProgress);
   const finishModbusScan = useDiscoveryToolboxStore((s) => s.finishModbusScan);
   const isScanning = useDiscoveryToolboxStore((s) =>
@@ -493,6 +498,7 @@ function DiscoveryInner() {
     resumeWithNewCapture,
     selectProfile,
     watchSource,
+    joinSession,
     // Bookmark methods
     jumpToBookmark,
   } = manager;
@@ -516,26 +522,26 @@ function DiscoveryInner() {
     reinitialize,
   } = session;
 
-  // Detect if active profile is modbus_tcp and extract connection details.
-  // Note: ioProfile holds the session ID (e.g. "m_abc123"), not the profile ID.
-  // Use ioProfiles (multiBusProfiles) which contains the actual profile IDs.
+  // The live session's Modbus device, when there is one. Note: ioProfile holds
+  // the session ID (e.g. "m_abc123"), not the profile ID — ioProfiles
+  // (multiBusProfiles) has the actual profile IDs.
   const modbusProfile = useMemo(() => {
     if (!settings?.io_profiles || ioProfiles.length === 0) return null;
-    // Find first modbus_tcp profile among the active source profiles
     for (const profileId of ioProfiles) {
       const profile = settings.io_profiles.find((p: import("../../types/common").IOProfile) => p.id === profileId);
-      if (profile?.kind === 'modbus_tcp') {
-        return {
-          host: String(profile.connection?.host ?? '127.0.0.1'),
-          port: Number(profile.connection?.port) || 502,
-          unit_id: Number(profile.connection?.unit_id) || 1,
-        };
-      }
+      if (profile?.kind === 'modbus_tcp') return modbusConnectionOf(profile);
     }
     return null;
   }, [ioProfiles, settings?.io_profiles]);
 
-  const isModbusProfile = modbusProfile !== null;
+  // The Modbus tools used to be gated on a live Modbus session, which made them
+  // unreachable in the case they exist for: opening a Modbus session needs a
+  // catalogue, and discovering a device is how you get one. They only need a
+  // device address, so offer them whenever there is any Modbus profile to seed
+  // from — the panels let you edit or replace the address anyway. Read the same
+  // store the panels' picker does, so the two can't disagree.
+  const configuredModbusProfiles = useModbusProfiles();
+  const modbusToolsAvailable = modbusProfile !== null || configuredModbusProfiles.length > 0;
 
   // Note: isStreaming, isPaused, isStopped, isRealtime are now provided by useIOSessionManager
 
@@ -761,91 +767,100 @@ function DiscoveryInner() {
     return `${formatFilenameDate()}-${protocol}`;
   }, [exportDataMode, protocolLabel]);
 
-  // Modbus scan: listen for session-scoped signal and fetch accumulated state
+  // Modbus scan progress. Frames arrive over the normal session/capture path —
+  // this event only carries progress and device identification, which aren't
+  // frame data and so have no place on the frame stream.
   useEffect(() => {
-    if (!isScanning || !sessionId) return;
+    const scanSessionId = modbusScanSessionIdRef.current;
+    if (!isScanning || !scanSessionId) return;
 
     let unlisten: (() => void) | null = null;
-    // Track delivered frame count to avoid re-adding frames from the full snapshot
-    let deliveredFrameCount = 0;
-
-    const setup = async () => {
-      unlisten = await listen(`modbus-scan:${sessionId}`, async () => {
-        const state = await getModbusScanState(sessionId);
-        if (state) {
-          const newFrames = state.frames.slice(deliveredFrameCount);
-          if (newFrames.length > 0) {
-            addModbusScanFrames(newFrames);
-            deliveredFrameCount = state.frames.length;
-          }
-          if (state.progress) {
-            updateModbusScanProgress(state.progress);
-          }
-          for (const info of state.device_info) {
-            addModbusScanDeviceInfo({
-              unit_id: info.unit_id,
-              vendor: info.vendor ?? undefined,
-              product_code: info.product_code ?? undefined,
-              revision: info.revision ?? undefined,
-            });
-          }
-        }
-      });
-    };
-
-    setup();
+    listen(`modbus-scan:${scanSessionId}`, async () => {
+      const state = await getModbusScanState(scanSessionId);
+      if (!state) return;
+      if (state.progress) updateModbusScanProgress(state.progress, state.notes);
+      setModbusScanDevices(state.device_info);
+      // The sweep publishes a terminal status on its way out, which is what
+      // ends the scan for the UI — the start call returns as soon as the
+      // session is running, long before there is anything to report.
+      if (state.status !== "scanning") finishModbusScan(state.notes);
+    }).then((fn) => {
+      unlisten = fn;
+    });
 
     return () => {
       unlisten?.();
     };
-  }, [isScanning, sessionId, addModbusScanFrames, updateModbusScanProgress, addModbusScanDeviceInfo]);
+  }, [isScanning, updateModbusScanProgress, setModbusScanDevices, finishModbusScan]);
 
-  // Modbus scan handlers
-  const handleStartModbusScan = useCallback(async (config: ModbusScanConfig) => {
-    startModbusScanStore('register');
-    // Set modbus export config so Save knows how to generate TOML
+  /**
+   * Start a scan as its own session.
+   *
+   * Order matters: the session is created *stopped*, joined, and only then
+   * started. The backend snapshots a capture's frame count when a subscriber
+   * attaches, so anything appended before the join is never pushed over the
+   * WebSocket — starting first would silently drop the opening registers and
+   * look like an intermittent "some registers missing" bug.
+   */
+  const runModbusScan = useCallback(async (
+    scanType: 'register' | 'unit-id',
+    job: ScanJob,
+    meta: { registerType: string; unitId: number },
+    errorMessage: string,
+  ) => {
+    const scanSessionId = `m_scan${Date.now().toString(36)}`;
+    modbusScanSessionIdRef.current = scanSessionId;
+    startModbusScanStore(scanType);
+    // Tell Save how to render the discovered registers as a catalogue.
     setModbusExportConfig({
-      device_address: config.unit_id,
+      device_address: meta.unitId,
       register_base: 0,
-      register_type: config.register_type,
+      register_type: meta.registerType as ModbusExportConfig["register_type"],
       default_interval: 1000,
     });
     try {
-      const result = await startModbusScan(config, sessionId ?? undefined);
-      console.log(`[Discovery] Modbus register scan complete: found ${result.found_count} of ${result.total_scanned} in ${result.duration_ms}ms`);
+      await createModbusScanSession(scanSessionId, job, { appName: "discovery" });
+      await joinSession(scanSessionId);
+      await startReaderSession(scanSessionId);
     } catch (e) {
-      showAppError(t("errors.scanTitle"), t("errors.modbusRegisterScanMessage"), String(e));
-    } finally {
+      modbusScanSessionIdRef.current = null;
       finishModbusScan();
+      showAppError(t("errors.scanTitle"), errorMessage, String(e));
     }
-  }, [startModbusScanStore, finishModbusScan, showAppError, setModbusExportConfig, sessionId]);
+  }, [startModbusScanStore, finishModbusScan, showAppError, setModbusExportConfig, joinSession, t]);
 
-  const handleStartModbusUnitIdScan = useCallback(async (config: UnitIdScanConfig) => {
-    startModbusScanStore('unit-id');
-    // Set modbus export config for unit ID scan results
-    setModbusExportConfig({
-      device_address: config.start_unit_id,
-      register_base: 0,
-      register_type: config.register_type,
-      default_interval: 1000,
-    });
-    try {
-      const result = await startModbusUnitIdScan(config, sessionId ?? undefined);
-      console.log(`[Discovery] Modbus unit ID scan complete: found ${result.found_count} of ${result.total_scanned} in ${result.duration_ms}ms`);
-    } catch (e) {
-      showAppError(t("errors.scanTitle"), t("errors.modbusUnitScanMessage"), String(e));
-    } finally {
-      finishModbusScan();
-    }
-  }, [startModbusScanStore, finishModbusScan, showAppError, setModbusExportConfig, sessionId]);
+  const handleStartModbusScan = useCallback((config: ModbusScanConfig) => {
+    void runModbusScan(
+      'register',
+      { kind: "registers", config },
+      { registerType: config.register_type, unitId: config.unit_id },
+      t("errors.modbusRegisterScanMessage"),
+    );
+  }, [runModbusScan, t]);
 
+  const handleStartModbusUnitIdScan = useCallback((config: UnitIdScanConfig) => {
+    void runModbusScan(
+      'unit-id',
+      { kind: "unit_ids", config },
+      { registerType: config.register_type, unitId: config.start_unit_id },
+      t("errors.modbusUnitScanMessage"),
+    );
+  }, [runModbusScan, t]);
+
+  // Cancelling is stopping the scan's session: that sets its cancel flag, waits
+  // for the sweep to unwind, and finalises the capture, so the registers found
+  // before the stop are kept rather than discarded.
   const handleCancelModbusScan = useCallback(async () => {
+    const scanSessionId = modbusScanSessionIdRef.current;
     try {
-      await cancelModbusScan();
+      if (scanSessionId) await stopReaderSession(scanSessionId);
+      else await cancelModbusScan();
     } catch (e) {
       console.warn('[Discovery] Failed to cancel scan:', e);
+    } finally {
+      finishModbusScan();
     }
-  }, []);
+  }, [finishModbusScan]);
 
   // Use the handlers hook
   const handlers = useDiscoveryHandlers({
@@ -1057,7 +1072,7 @@ function DiscoveryInner() {
           framingAccepted={framingAccepted}
           serialActiveTab={serialActiveTab}
           onUndoFraming={undoAcceptFraming}
-          isModbusProfile={isModbusProfile}
+          isModbusProfile={modbusToolsAvailable}
           isCaptureMode={isCaptureMode}
           capturePersistent={session.capturePersistent}
           onToggleCapturePin={() => {
@@ -1262,7 +1277,7 @@ function DiscoveryInner() {
         isFilteredView={framesViewActiveTab === 'filtered'}
         serialFrameCount={backendFrameCount > 0 ? backendFrameCount : (framedData.length + frames.length)}
         serialBytesCount={backendByteCount}
-        isModbusProfile={isModbusProfile}
+        isModbusProfile={modbusToolsAvailable}
         modbusConnection={modbusProfile}
         onStartModbusScan={handleStartModbusScan}
         onStartModbusUnitIdScan={handleStartModbusUnitIdScan}

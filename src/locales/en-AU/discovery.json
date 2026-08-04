@@ -240,7 +240,6 @@
   },
   "modbusRegister": {
     "registerType": "Register Type",
-    "unitId": "Unit ID",
     "startRegister": "Start Register",
     "endRegister": "End Register",
     "chunkSize": "Chunk Size",
@@ -250,7 +249,18 @@
     "holdingFc": "Holding (FC 3)",
     "inputFc": "Input (FC 4)",
     "coilFc": "Coil (FC 1)",
-    "discreteFc": "Discrete (FC 2)"
+    "discreteFc": "Discrete (FC 2)",
+    "passes": "Passes",
+    "passGapMs": "Gap between passes (ms)",
+    "passesHint": "Each register is read once per pass. Run the Payload Changes tool afterwards to see which ones moved — those are live telemetry rather than static configuration.",
+    "advanced": "Timing and reliability",
+    "advancedHint": "Raise the timeout for a slow gateway. Turn on per-request reconnect for cheap devices that only serve one Modbus conversation per connection; a short settle delay usually goes with it.",
+    "timeoutMs": "Timeout (ms)",
+    "connectSettleMs": "Settle after connect (ms)",
+    "reconnectPerRequest": "Reconnect for every request",
+    "maxConsecutiveTimeouts": "Give up after N silences",
+    "maxRequests": "Request budget",
+    "tooManyRegisters": "{{count}} registers is over the {{max}} limit — narrow the range."
   },
   "modbusScan": {
     "registerScanTitle": "Register Scan",
@@ -265,15 +275,25 @@
     "noResults": "No results found",
     "cancel": "Cancel",
     "close": "Close",
-    "tableNumber": "#",
     "tableUnitId": "Unit ID",
     "tableVendor": "Vendor",
     "tableProduct": "Product",
     "tableRevision": "Revision",
     "tableData": "Data",
     "tableRegister": "Register",
-    "tableLength": "Length",
-    "noValue": "—"
+    "noValue": "—",
+    "passOf": "(pass {{pass}} of {{total}})",
+    "show32Bit": "32-bit",
+    "wordOrder": "Word order for 32-bit values",
+    "wordOrderBig": "High word first",
+    "wordOrderLittle": "Low word first",
+    "tableHex": "Hex",
+    "tableU16": "u16",
+    "tableS16": "s16",
+    "tableAscii": "ASCII",
+    "tableU32": "u32",
+    "tableS32": "s32",
+    "tableF32": "f32"
   },
   "serialAnalysis": {
     "runPrompt": "Run Serial Analysis tools to see results",
@@ -424,5 +444,29 @@
       "shortRange": "Calculation covers fewer than 2 bytes",
       "startsAfterHeader": "Calculation starts after a declared header field (byte {{byte}})"
     }
+  },
+  "modbusConnection": {
+    "profile": "Device",
+    "manualEntry": "Enter an address…",
+    "host": "Host",
+    "port": "Port",
+    "unitId": "Unit ID"
+  },
+  "modbusFc": {
+    "unitIds": "Unit IDs",
+    "testRegister": "Test address",
+    "description": "Reads one address on each of the four read function codes, for {{count}} unit(s) — {{requests}} requests in total.",
+    "runProbe": "Run Probe",
+    "probing": "Probing…",
+    "unit": "Unit",
+    "holding": "Holding",
+    "input": "Input",
+    "coil": "Coil",
+    "discrete": "Discrete",
+    "ok": "OK",
+    "exception": "Exception",
+    "silent": "Silent",
+    "hintFound": "An exception means the device serves that function code and the address was simply wrong — worth sweeping. Silent usually means the function code isn't implemented at all.",
+    "hintNothing": "Nothing answered. Check the host, port and unit ID, or raise the timeout."
   }
 }

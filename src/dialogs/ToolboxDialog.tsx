@@ -1,6 +1,6 @@
 // ui/src/dialogs/ToolboxDialog.tsx
 
-import { X, ListOrdered, GitCompare, Play, Loader2, Radio, Binary, ShieldCheck, Radar, Network } from "lucide-react";
+import { X, ListOrdered, GitCompare, Play, Loader2, Radio, Binary, ShieldCheck, Radar, Network, ScanSearch } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { iconMd, iconLg } from "../styles/spacing";
@@ -23,6 +23,7 @@ import SerialPayloadToolPanel from "../apps/discovery/views/tools/SerialPayloadT
 import ChecksumDiscoveryToolPanel from "../apps/discovery/views/tools/ChecksumDiscoveryToolPanel";
 import ModbusRegisterScanPanel from "../apps/discovery/views/tools/ModbusRegisterScanPanel";
 import ModbusUnitIdScanPanel from "../apps/discovery/views/tools/ModbusUnitIdScanPanel";
+import ModbusFunctionCodePanel from "../apps/discovery/views/tools/ModbusFunctionCodePanel";
 import type { ModbusScanConfig, UnitIdScanConfig } from "../api/io";
 import {
   toolNeeds,
@@ -49,13 +50,15 @@ const tools: ToolConfig[] = [
   { id: "checksum-discovery", i18nKey: "checksumDiscovery", icon: ShieldCheck },
   { id: "serial-framing", i18nKey: "serialFraming", icon: Binary, serialRequires: 'bytes' },
   { id: "serial-payload", i18nKey: "serialPayload", icon: Radio, serialRequires: 'frames' },
+  { id: "modbus-function-codes", i18nKey: "modbusFunctionCodes", icon: ScanSearch, modbusRequires: true },
   { id: "modbus-register-scan", i18nKey: "modbusRegisterScan", icon: Radar, modbusRequires: true },
   { id: "modbus-unit-scan", i18nKey: "modbusUnitScan", icon: Network, modbusRequires: true },
 ];
 
-/** Check if a tool is a modbus scan tool (these produce data, not analyse it) */
+/** Modbus tools produce data (or answer a question) rather than analysing a
+ *  selection, so they don't get the "run on N selected frames" footer. */
 function isModbusScanTool(id: ToolboxView): boolean {
-  return id === 'modbus-register-scan' || id === 'modbus-unit-scan';
+  return id === 'modbus-register-scan' || id === 'modbus-unit-scan' || id === 'modbus-function-codes';
 }
 
 type Props = {
@@ -258,13 +261,16 @@ export default function ToolboxDialog({
               {activeTool === "checksum-discovery" && <ChecksumDiscoveryToolPanel />}
               {activeTool === "serial-framing" && <SerialFramingToolPanel bytesCount={serialBytesCount} />}
               {activeTool === "serial-payload" && <SerialPayloadToolPanel framesCount={serialFrameCount} />}
-              {activeTool === "modbus-register-scan" && modbusConnection && (
+              {activeTool === "modbus-function-codes" && (
+                <ModbusFunctionCodePanel connection={modbusConnection} />
+              )}
+              {activeTool === "modbus-register-scan" && (
                 <ModbusRegisterScanPanel
                   connection={modbusConnection}
                   onStartScan={handleStartModbusScan}
                 />
               )}
-              {activeTool === "modbus-unit-scan" && modbusConnection && (
+              {activeTool === "modbus-unit-scan" && (
                 <ModbusUnitIdScanPanel
                   connection={modbusConnection}
                   onStartScan={handleStartModbusUnitIdScan}

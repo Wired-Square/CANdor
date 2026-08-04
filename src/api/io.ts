@@ -6,6 +6,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { FrameMessage } from "../types/frame";
 import type { ProtocolFrames } from "../utils/frameKey";
+import type { ModbusPollGroup } from "./catalog";
 import type { SerialFrameConfig } from "../utils/frameExport";
 
 // ============================================================================
@@ -1569,7 +1570,12 @@ export async function checkRecoveryOccurred(): Promise<boolean> {
 /** Register type for Modbus scanning. */
 export type ModbusRegisterType = 'holding' | 'input' | 'coil' | 'discrete';
 
-/** Configuration for register range scanning. */
+/**
+ * Configuration for register range scanning.
+ *
+ * Everything below `inter_request_delay_ms` is optional and defaulted in Rust —
+ * see `modbusScanDefaults.ts` for the values and the reasoning behind them.
+ */
 export interface ModbusScanConfig {
   host: string;
   port: number;
@@ -1579,6 +1585,23 @@ export interface ModbusScanConfig {
   end_register: number;
   chunk_size: number;
   inter_request_delay_ms: number;
+
+  /** Per-request timeout; the only bound on a device that answers with silence. */
+  timeout_ms?: number;
+  /** Pause after connecting before the first request on that socket. */
+  connect_settle_ms?: number;
+  /** Open a fresh connection per request, for one-conversation-per-socket stacks. */
+  reconnect_per_request?: boolean;
+  /** Abandon this register type after this many silent requests in a row. */
+  max_consecutive_timeouts?: number;
+  /** Refuse a sweep wider than this many registers. */
+  max_registers?: number;
+  /** Hard ceiling on requests issued — what actually bounds the sweep's duration. */
+  max_requests?: number;
+  /** Passes over the range. 2+ lets the Changes tool separate live from static. */
+  repeat?: number;
+  /** Gap between passes. */
+  repeat_delay_ms?: number;
 }
 
 /** Configuration for unit ID scanning. */
@@ -1590,6 +1613,8 @@ export interface UnitIdScanConfig {
   test_register: number;
   register_type: ModbusRegisterType;
   inter_request_delay_ms: number;
+  timeout_ms?: number;
+  connect_settle_ms?: number;
 }
 
 /** Progress update emitted during scanning. */
@@ -1597,6 +1622,16 @@ export interface ScanProgressPayload {
   current: number;
   total: number;
   found_count: number;
+  /** 1-based pass number, for a repeated scan. */
+  pass: number;
+  total_passes: number;
+}
+
+/** A contiguous run of addresses that answered, or didn't. */
+export interface RegisterBlock {
+  start: number;
+  end: number;
+  count: number;
 }
 
 /** Completion summary returned when scan finishes. */
@@ -1604,6 +1639,17 @@ export interface ScanCompletePayload {
   found_count: number;
   total_scanned: number;
   duration_ms: number;
+  requests: number;
+  /** Contiguous runs of responding addresses. */
+  blocks: RegisterBlock[];
+  /** Contiguous runs that did not respond. */
+  gaps: RegisterBlock[];
+  /** Diagnoses, e.g. a function code that never answered. */
+  notes: string[];
+  /** True when the sweep stopped early (cancelled or out of budget). */
+  truncated: boolean;
+  /** Unit-ID scans only. */
+  devices: DeviceInfoEntry[];
 }
 
 /** Scan a range of Modbus registers to discover which ones exist. */
@@ -1625,6 +1671,138 @@ export async function startModbusUnitIdScan(
 /** Cancel a running Modbus scan operation. */
 export async function cancelModbusScan(): Promise<void> {
   return invoke("cancel_modbus_scan");
+}
+
+// ============================================================================
+// Scan sessions
+// ============================================================================
+
+/** Which sweep a scan session runs. */
+export type ScanJob =
+  | { kind: "registers"; config: ModbusScanConfig }
+  | { kind: "unit_ids"; config: UnitIdScanConfig };
+
+/**
+ * Create a session that runs a Modbus discovery sweep. Needs neither an existing
+ * session nor a catalogue — results land in the session's frame capture, so the
+ * analysis tools, TOML export and capture paging all work on them.
+ *
+ * **The session is created stopped.** The backend snapshots a capture's current
+ * frame count when a subscriber attaches, so anything appended before the
+ * frontend subscribes is never pushed over the WebSocket. Subscribe first, then
+ * call `startReaderSession`.
+ */
+export async function createModbusScanSession(
+  sessionId: string,
+  job: ScanJob,
+  options?: { profileId?: string; subscriberId?: string; appName?: string }
+): Promise<IOCapabilities> {
+  return invoke("create_modbus_scan_session", {
+    session_id: sessionId,
+    job,
+    profile_id: options?.profileId ?? null,
+    subscriber_id: options?.subscriberId ?? null,
+    app_name: options?.appName ?? null,
+  });
+}
+
+// ============================================================================
+// Function code probe
+// ============================================================================
+
+/** What one function code did when asked. */
+export type FcVerdict =
+  | { verdict: "values"; values: number[] }
+  | { verdict: "bits"; values: boolean[] }
+  | { verdict: "exception"; message: string }
+  | { verdict: "silent" };
+
+/** One slave's answers across all four read function codes. */
+export interface FcProbeEntry {
+  unit_id: number;
+  /** FC03 */
+  holding: FcVerdict;
+  /** FC04 */
+  input: FcVerdict;
+  /** FC01 */
+  coil: FcVerdict;
+  /** FC02 */
+  discrete: FcVerdict;
+  responded: boolean;
+  /** The register types worth sweeping on this unit. */
+  supported_types: ModbusRegisterType[];
+}
+
+export interface FcProbeConfig {
+  host: string;
+  port: number;
+  /** Slave addresses to try. Defaults to [1, 0, 255, 2, 3] in Rust. */
+  unit_ids?: number[];
+  /** Address read on each function code (default 0). */
+  test_register?: number;
+  timeout_ms?: number;
+  connect_settle_ms?: number;
+}
+
+/**
+ * Ask a device which read function codes it answers, before sweeping anything.
+ *
+ * The distinction that matters is exception vs silence: an exception proves the
+ * device implements that function code and the address was simply wrong, whereas
+ * silence usually means it isn't implemented and sweeping it would burn the
+ * whole timeout budget for nothing.
+ */
+export async function probeModbusFunctionCodes(
+  config: FcProbeConfig
+): Promise<FcProbeEntry[]> {
+  return invoke("modbus_probe_function_codes", { config });
+}
+
+// ============================================================================
+// Catalogue-free poll plans
+// ============================================================================
+
+/** How a poll response becomes frames (mirrors the backend `PollEmitMode`). */
+export type ModbusPollEmitMode = 'block' | 'per_register';
+
+/** One contiguous span of registers to poll. */
+export interface ModbusRange {
+  register_type: ModbusRegisterType;
+  /** Protocol-level start address (0-based). */
+  start: number;
+  /** Last address, inclusive. */
+  end: number;
+  /** Overrides the spec-level interval for this range. */
+  interval_ms?: number;
+  /** Overrides the spec-level slave address for this range. */
+  device_address?: number;
+}
+
+/**
+ * A catalogue-free poll plan — the discovery answer to "I have no decoder for
+ * this device". Every field but `ranges` has a backend default.
+ */
+export interface ModbusRangeSpec {
+  ranges: ModbusRange[];
+  device_address?: number;
+  interval_ms?: number;
+  /** Registers per request; clamped to the protocol max for the type. */
+  block_size?: number;
+  /** Defaults to `per_register`, so per-register change analysis works. */
+  emit_mode?: ModbusPollEmitMode;
+  max_registers?: number;
+  max_groups?: number;
+}
+
+/**
+ * Build Modbus poll groups from an address range instead of a catalogue. The
+ * result is stringified into `watchSource`'s `modbusPollsJson`, exactly as
+ * catalogue-derived polls are — a range spec is just another way to author them.
+ */
+export async function buildModbusPollsFromRanges(
+  spec: ModbusRangeSpec
+): Promise<ModbusPollGroup[]> {
+  return invoke("modbus_polls_from_ranges", { spec });
 }
 
 // ============================================================================
@@ -1713,11 +1891,17 @@ export interface DeviceInfoEntry {
   revision: string | null;
 }
 
+/**
+ * Scan progress. Frames are deliberately absent — scan results reach the UI
+ * through the session's capture like any other frames, so carrying them here
+ * too would deliver every register twice.
+ */
 export interface ModbusScanState {
   status: string;
-  frames: FrameMessage[];
   progress: ScanProgressPayload | null;
   device_info: DeviceInfoEntry[];
+  /** Diagnoses worth surfacing, e.g. a silent function code. */
+  notes: string[];
 }
 
 /** Fetch the most recent bytes from a capture (tail view). */

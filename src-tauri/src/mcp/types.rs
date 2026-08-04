@@ -183,6 +183,92 @@ pub struct ReplayIdParams {
     pub replay_id: String,
 }
 
+/// One contiguous span of Modbus registers to poll.
+///
+/// Mirrors `crate::io::ModbusRange`. Kept separate so the IO layer doesn't grow
+/// a `schemars` dependency just to be describable over MCP.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ModbusRangeParam {
+    /// `holding`, `input`, `coil`, or `discrete`.
+    #[serde(default = "default_register_type")]
+    pub register_type: String,
+    /// Protocol-level start address (0-based).
+    pub start: u16,
+    /// Last address, inclusive.
+    pub end: u16,
+    /// Poll interval for this range, overriding the spec-level one.
+    #[serde(default)]
+    pub interval_ms: Option<u64>,
+    /// Slave address for this range, overriding the spec-level one.
+    #[serde(default)]
+    pub device_address: Option<u8>,
+}
+
+/// A catalogue-free poll plan — what to poll on a device you have no decoder for.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ModbusRangeSpecParam {
+    /// The spans to poll. At least one is required.
+    pub ranges: Vec<ModbusRangeParam>,
+    /// Default slave address (default 1).
+    #[serde(default)]
+    pub device_address: Option<u8>,
+    /// Default poll interval in ms (default 1000).
+    #[serde(default)]
+    pub interval_ms: Option<u64>,
+    /// Registers per request; clamped to 125 (holding/input) or 2000 (coils).
+    #[serde(default)]
+    pub block_size: Option<u16>,
+    /// Refuse a plan wider than this many registers (default 4096).
+    #[serde(default)]
+    pub max_registers: Option<u32>,
+}
+
+impl ModbusRangeSpecParam {
+    /// Convert to the IO layer's spec, defaulting anything the caller omitted.
+    pub fn to_spec(&self) -> Result<crate::io::ModbusRangeSpec, String> {
+        let mut spec = crate::io::ModbusRangeSpec {
+            ranges: Vec::with_capacity(self.ranges.len()),
+            ..Default::default()
+        };
+        for r in &self.ranges {
+            spec.ranges.push(crate::io::ModbusRange {
+                register_type: parse_register_type(&r.register_type)?,
+                start: r.start,
+                end: r.end,
+                interval_ms: r.interval_ms,
+                device_address: r.device_address,
+            });
+        }
+        if let Some(v) = self.device_address {
+            spec.device_address = v;
+        }
+        if let Some(v) = self.interval_ms {
+            spec.interval_ms = v;
+        }
+        if let Some(v) = self.block_size {
+            spec.block_size = v;
+        }
+        if let Some(v) = self.max_registers {
+            spec.max_registers = v;
+        }
+        Ok(spec)
+    }
+}
+
+/// Parse a register-type string into the IO layer's enum.
+pub fn parse_register_type(s: &str) -> Result<crate::io::RegisterType, String> {
+    use crate::io::RegisterType;
+    match s.to_ascii_lowercase().as_str() {
+        "holding" => Ok(RegisterType::Holding),
+        "input" => Ok(RegisterType::Input),
+        "coil" => Ok(RegisterType::Coil),
+        "discrete" => Ok(RegisterType::Discrete),
+        other => Err(format!(
+            "Unknown register type '{other}' — use holding, input, coil, or discrete"
+        )),
+    }
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct OpenSessionParams {
     /// IO profile id to open a session for (as listed by `list_io_profiles`).
@@ -205,6 +291,12 @@ pub struct OpenSessionParams {
     /// Recorded sources only: stop after this many frames.
     #[serde(default)]
     pub limit: Option<i64>,
+    /// Modbus profiles only: poll these register ranges instead of a catalogue's,
+    /// so a device with no decoder can still be opened. Takes precedence over the
+    /// profile's `preferred_catalog` when both are present, which is how you
+    /// re-sweep a device you already have a partial catalogue for.
+    #[serde(default)]
+    pub register_ranges: Option<ModbusRangeSpecParam>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -219,6 +311,147 @@ pub struct ModbusReadParams {
     /// Number of registers/coils to read (default 1).
     #[serde(default = "default_one")]
     pub count: u16,
+}
+
+/// Where to reach a Modbus device — either a saved profile, or an address.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ModbusTargetParams {
+    /// Modbus profile to take host/port/unit from (as listed by `list_io_profiles`).
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    /// Explicit hostname or IP, if not using a profile.
+    #[serde(default)]
+    pub host: Option<String>,
+    /// Explicit port (default 502).
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// Explicit unit/slave id (default 1).
+    #[serde(default)]
+    pub unit_id: Option<u8>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ModbusScanParams {
+    #[serde(flatten)]
+    pub target: ModbusTargetParams,
+    /// `holding`, `input`, `coil`, or `discrete` (default holding). Run
+    /// `modbus_probe_function_codes` first if you don't know which the device serves.
+    #[serde(default = "default_register_type")]
+    pub register_type: String,
+    /// First address to sweep (protocol-level, 0-based).
+    pub start: u16,
+    /// Last address to sweep, inclusive.
+    pub end: u16,
+    /// Registers per request (default 125 / 2000 for coils).
+    #[serde(default)]
+    pub chunk_size: Option<u16>,
+    /// Per-request timeout in ms (default 2000).
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    /// Pause after connecting before the first request (default 0; try 150 for
+    /// cheap single-connection devices).
+    #[serde(default)]
+    pub connect_settle_ms: Option<u64>,
+    /// Delay between requests in ms (default 50).
+    #[serde(default)]
+    pub inter_request_delay_ms: Option<u64>,
+    /// Open a fresh connection per request, for stacks that serve one
+    /// conversation per socket (default false).
+    #[serde(default)]
+    pub reconnect_per_request: Option<bool>,
+    /// Abandon this register type after this many silent requests (default 3).
+    #[serde(default)]
+    pub max_consecutive_timeouts: Option<u32>,
+    /// Refuse a sweep wider than this (default 4096).
+    #[serde(default)]
+    pub max_registers: Option<u32>,
+    /// Hard ceiling on requests issued (default 2000). This, not max_registers,
+    /// is what bounds how long the sweep can take.
+    #[serde(default)]
+    pub max_requests: Option<u32>,
+    /// Number of passes (default 1). Use 2 to sample each register twice so the
+    /// Changes tool can separate live telemetry from static configuration.
+    #[serde(default)]
+    pub repeat: Option<u32>,
+    /// Gap between passes in ms (default 6000).
+    #[serde(default)]
+    pub repeat_delay_ms: Option<u64>,
+    /// Wait for the sweep to finish before returning (default true).
+    #[serde(default = "default_true")]
+    pub wait: bool,
+    /// How long to wait before returning early with status "scanning" (default 60000).
+    #[serde(default = "default_max_wait_ms")]
+    pub max_wait_ms: u64,
+    /// Explicit session id for the scan; generated if omitted.
+    #[serde(default)]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ModbusUnitScanParams {
+    #[serde(flatten)]
+    pub target: ModbusTargetParams,
+    /// First unit id to probe (default 1).
+    #[serde(default = "default_first_unit")]
+    pub start_unit_id: u8,
+    /// Last unit id to probe (default 247).
+    #[serde(default = "default_last_unit")]
+    pub end_unit_id: u8,
+    /// Address read as the liveness probe when FC43 isn't served (default 0).
+    #[serde(default)]
+    pub test_register: u16,
+    /// Register type for that fallback probe (default holding).
+    #[serde(default = "default_register_type")]
+    pub register_type: String,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub inter_request_delay_ms: Option<u64>,
+    #[serde(default = "default_true")]
+    pub wait: bool,
+    #[serde(default = "default_max_wait_ms")]
+    pub max_wait_ms: u64,
+    #[serde(default)]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ModbusProbeParams {
+    #[serde(flatten)]
+    pub target: ModbusTargetParams,
+    /// Slave addresses to try (default [1, 0, 255, 2, 3]).
+    #[serde(default)]
+    pub unit_ids: Option<Vec<u8>>,
+    /// Address read on each function code (default 0).
+    #[serde(default)]
+    pub test_register: u16,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub connect_settle_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetProfileCatalogParams {
+    /// Profile to bind the catalogue to (as listed by `list_io_profiles`).
+    pub profile_id: String,
+    /// Catalogue filename or display name; must already exist in the decoder
+    /// directory. Pass null to unbind.
+    #[serde(default)]
+    pub catalog: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_max_wait_ms() -> u64 {
+    60_000
+}
+fn default_first_unit() -> u8 {
+    1
+}
+fn default_last_unit() -> u8 {
+    247
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

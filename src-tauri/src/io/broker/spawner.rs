@@ -950,30 +950,7 @@ async fn run_modbus_tcp_client(
     pause_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
 ) {
-    let host = profile
-        .connection
-        .get("host")
-        .and_then(|v| v.as_str())
-        .unwrap_or("127.0.0.1")
-        .to_string();
-    let port = profile
-        .connection
-        .get("port")
-        .and_then(|v| {
-            v.as_str()
-                .and_then(|s| s.parse().ok())
-                .or_else(|| v.as_i64().map(|n| n as u16))
-        })
-        .unwrap_or(502);
-    let unit_id = profile
-        .connection
-        .get("unit_id")
-        .and_then(|v| {
-            v.as_str()
-                .and_then(|s| s.parse().ok())
-                .or_else(|| v.as_i64().map(|n| n as u8))
-        })
-        .unwrap_or(1);
+    let (host, port, unit_id) = crate::io::modbus_endpoint(profile);
 
     let output_bus = bus_mappings
         .first()

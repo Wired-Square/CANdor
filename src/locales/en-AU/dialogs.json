@@ -323,9 +323,13 @@
         "label": "Serial Payload Analysis",
         "description": "Identify ID bytes and checksum positions in framed data"
       },
+      "modbusFunctionCodes": {
+        "label": "Function Code Probe",
+        "description": "Find which read function codes a device answers, before sweeping"
+      },
       "modbusRegisterScan": {
         "label": "Register Scan",
-        "description": "Discover registers on a Modbus TCP device"
+        "description": "Sweep an address range to discover registers — no decoder needed"
       },
       "modbusUnitScan": {
         "label": "Unit ID Scan",

@@ -478,24 +478,17 @@ function DiscoveryFramesView({
     if (toolboxResults.checksumDiscoveryResults) {
       result.push({ id: TOOL_TAB_CONFIG['checksum-discovery'].tabId, label: TOOL_TAB_CONFIG['checksum-discovery'].label, closeable: true });
     }
-    if (toolboxResults.modbusRegisterScanResults) {
-      const scan = toolboxResults.modbusRegisterScanResults;
-      const count = scan.isScanning ? undefined : scan.frames.length;
+    // Scan tabs count what the sweep found, which the progress payload reports —
+    // the frames themselves live in the scan session's capture, not here.
+    for (const key of ['modbus-register-scan', 'modbus-unit-scan'] as const) {
+      const scan = key === 'modbus-register-scan'
+        ? toolboxResults.modbusRegisterScanResults
+        : toolboxResults.modbusUnitIdScanResults;
+      if (!scan) continue;
       result.push({
-        id: TOOL_TAB_CONFIG['modbus-register-scan'].tabId,
-        label: TOOL_TAB_CONFIG['modbus-register-scan'].label,
-        count,
-        countColor: 'purple' as const,
-        closeable: !scan.isScanning,
-      });
-    }
-    if (toolboxResults.modbusUnitIdScanResults) {
-      const scan = toolboxResults.modbusUnitIdScanResults;
-      const count = scan.isScanning ? undefined : scan.frames.length;
-      result.push({
-        id: TOOL_TAB_CONFIG['modbus-unit-scan'].tabId,
-        label: TOOL_TAB_CONFIG['modbus-unit-scan'].label,
-        count,
+        id: TOOL_TAB_CONFIG[key].tabId,
+        label: TOOL_TAB_CONFIG[key].label,
+        count: scan.isScanning ? undefined : scan.progress?.found_count,
         countColor: 'purple' as const,
         closeable: !scan.isScanning,
       });

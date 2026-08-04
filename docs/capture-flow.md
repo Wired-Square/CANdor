@@ -232,6 +232,36 @@ Orphaned captures may still be in `active_ids` (an app is still rendering the
 historical data) — that is correct and intended. The user can keep reading
 the capture after the session is gone.
 
+### Modbus scan capture
+
+A discovery sweep owns a Frames capture like any other source, which is what
+makes its results analysable, exportable and pageable rather than a throwaway
+list in a panel.
+
+```
+create_modbus_scan_session(session_id, job)   // creates the session STOPPED
+  └─ (frontend subscribes / joins)
+       └─ start_reader_session(session_id)
+            ├─ create_capture(Frames, session_id) + set_capture_owner
+            ├─ sweep → append_frames_to_session + throttled signal_frames_ready
+            └─ emit_stream_ended(session_id, "complete"|"cancelled"|"stopped")
+                 └─ finalize_session_captures
+```
+
+**The session must be created stopped.** `ws::dispatch::reset_frame_offset`
+snapshots a capture's *current* frame count when a subscriber attaches, so
+anything appended before the frontend subscribes is never pushed over the
+WebSocket. Starting the sweep at creation time would silently drop its opening
+registers and present as an intermittent "some registers missing" bug. The
+headless MCP path starts immediately because it has no subscriber to race and
+reads its results back through `get_capture_frames`.
+
+One register becomes one frame, keyed by its address (`frame_id` = register
+number, `dlc` 2). That granularity is what lets the Payload Changes tool answer
+"which *register* moved" across a repeated sweep. Catalogue-driven polling keeps
+the opposite shape — one frame per poll group — because a catalogue's signals are
+bit offsets into the whole block and would decode to nonsense if split.
+
 ### Import flows
 
 Imports are session-scoped end-to-end. The Tauri command accepts a

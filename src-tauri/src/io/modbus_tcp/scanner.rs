@@ -1,12 +1,15 @@
 // io/modbus_tcp/scanner.rs
 //
-// Modbus TCP Scanner - discovers registers and active unit IDs.
+// Modbus TCP discovery — find registers, unit IDs, and which function codes a
+// device actually implements.
 //
 // Architecture:
-//   - Standalone scanning (not a session) — one-shot discovery operations
-//   - Register scan: chunked reads with binary subdivision for efficiency
-//   - Unit ID scan: sequential probe of slave addresses 1–247
-//   - Results accumulated into ModbusScanState; frontend fetches via get_modbus_scan_state_cmd
+//   - Standalone: opens its own connection, needs no session and no catalogue
+//   - Register scan: chunked reads, subdividing on exception to localise gaps
+//   - Unit ID scan: FC43 device identification with a register-read fallback
+//   - Function code probe: one read per (unit, type) — "who answers what?"
+//   - Frames go through the shared `FrameSink` (see `poll.rs`), so a sweep's
+//     results reach a session capture by the same path a poll's do
 
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -16,15 +19,15 @@ use std::sync::{
     Arc, RwLock,
 };
 use tauri::{AppHandle, Emitter};
-use tokio::time::{Duration, sleep};
-use tokio_modbus::client::tcp;
-use tokio_modbus::prelude::*;
+use tokio::time::{sleep, Duration};
 
+use super::conn::{ReadOutcome, ScanConn};
+use super::poll::{modbus_frame, per_register_frames, register_type_name, FrameSink, ReadData};
 use super::reader::{coils_to_bytes, registers_to_bytes, RegisterType};
-use crate::io::{now_us, FrameMessage, SignalThrottle};
+use crate::io::SignalThrottle;
 
 /// Device identification info discovered via FC43 (Read Device Identification)
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeviceInfoPayload {
     pub unit_id: u8,
     pub vendor: Option<String>,
@@ -36,16 +39,24 @@ pub struct DeviceInfoPayload {
 // Scan State (signal-then-fetch)
 // ============================================================================
 
-/// Snapshot of a scan's accumulated results, polled by the frontend via get_modbus_scan_state_cmd.
+/// Snapshot of a scan's progress, polled by the frontend via
+/// `get_modbus_scan_state_cmd`. Frames are not carried here — they reach the UI
+/// through the session's capture like any other frames.
 #[derive(Clone, Debug, Serialize)]
 pub struct ModbusScanState {
     pub status: String,
-    pub frames: Vec<FrameMessage>,
     pub progress: Option<ScanProgressPayload>,
     pub device_info: Vec<DeviceInfoPayload>,
+    /// Diagnoses worth surfacing, e.g. a function code that never answered.
+    pub notes: Vec<String>,
 }
 
 static SCAN_STATES: Lazy<RwLock<HashMap<String, ModbusScanState>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
+/// Terminal summaries, kept so a caller that didn't await the sweep can still
+/// collect its result. Cleared with the scan state when the session stops.
+static SCAN_RESULTS: Lazy<RwLock<HashMap<String, ScanCompletePayload>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
 pub fn store_scan_state(session_id: &str, state: ModbusScanState) {
@@ -58,9 +69,24 @@ pub fn get_scan_state(session_id: &str) -> Option<ModbusScanState> {
     SCAN_STATES.read().ok().and_then(|s| s.get(session_id).cloned())
 }
 
+pub fn store_scan_result(session_id: &str, payload: ScanCompletePayload) {
+    if let Ok(mut results) = SCAN_RESULTS.write() {
+        results.insert(session_id.to_string(), payload);
+    }
+}
+
+pub fn get_scan_result(session_id: &str) -> Option<ScanCompletePayload> {
+    SCAN_RESULTS.read().ok().and_then(|s| s.get(session_id).cloned())
+}
+
+/// Drop both the progress state and the summary for a session. Called when the
+/// scan session stops, so the state lives exactly as long as the session does.
 pub fn clear_scan_state(session_id: &str) {
     if let Ok(mut states) = SCAN_STATES.write() {
         states.remove(session_id);
+    }
+    if let Ok(mut results) = SCAN_RESULTS.write() {
+        results.remove(session_id);
     }
 }
 
@@ -68,7 +94,32 @@ pub fn clear_scan_state(session_id: &str) {
 // Configuration
 // ============================================================================
 
-/// Configuration for register range scanning
+fn default_timeout_ms() -> u64 {
+    2000
+}
+fn default_settle_ms() -> u64 {
+    0
+}
+fn default_max_consecutive_timeouts() -> u32 {
+    3
+}
+fn default_max_registers() -> u32 {
+    4096
+}
+fn default_max_requests() -> u32 {
+    2000
+}
+fn default_repeat() -> u32 {
+    1
+}
+fn default_repeat_delay_ms() -> u64 {
+    6000
+}
+
+/// Configuration for register range scanning.
+///
+/// Everything past `inter_request_delay_ms` has a serde default, so a caller
+/// that only knows the original fields still deserialises.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModbusScanConfig {
     /// Server hostname or IP
@@ -87,6 +138,35 @@ pub struct ModbusScanConfig {
     pub chunk_size: u16,
     /// Delay between scan requests in milliseconds
     pub inter_request_delay_ms: u64,
+
+    /// Per-request timeout. The only thing bounding a device that answers a
+    /// function code with silence rather than an exception.
+    #[serde(default = "default_timeout_ms")]
+    pub timeout_ms: u64,
+    /// Pause after connecting before the first request on that socket.
+    #[serde(default = "default_settle_ms")]
+    pub connect_settle_ms: u64,
+    /// Open a fresh connection per request, for stacks that serve one
+    /// conversation per socket.
+    #[serde(default)]
+    pub reconnect_per_request: bool,
+    /// Give up on this register type after this many silent requests in a row.
+    #[serde(default = "default_max_consecutive_timeouts")]
+    pub max_consecutive_timeouts: u32,
+    /// Refuse a sweep wider than this.
+    #[serde(default = "default_max_registers")]
+    pub max_registers: u32,
+    /// Hard ceiling on requests issued. This, not `max_registers`, is what
+    /// actually bounds how long a scan can take.
+    #[serde(default = "default_max_requests")]
+    pub max_requests: u32,
+    /// Number of passes. Two or more samples the same registers repeatedly, so
+    /// the Changes tool can separate live telemetry from static configuration.
+    #[serde(default = "default_repeat")]
+    pub repeat: u32,
+    /// Gap between passes when `repeat > 1`.
+    #[serde(default = "default_repeat_delay_ms")]
+    pub repeat_delay_ms: u64,
 }
 
 /// Configuration for unit ID scanning
@@ -106,6 +186,31 @@ pub struct UnitIdScanConfig {
     pub register_type: RegisterType,
     /// Delay between scan requests in milliseconds
     pub inter_request_delay_ms: u64,
+    #[serde(default = "default_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_settle_ms")]
+    pub connect_settle_ms: u64,
+}
+
+/// Configuration for the function-code probe.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FcProbeConfig {
+    pub host: String,
+    pub port: u16,
+    /// Slave addresses to try. Defaults to the common suspects.
+    #[serde(default = "default_probe_units")]
+    pub unit_ids: Vec<u8>,
+    /// Address read on each function code. 0 is almost always safe.
+    #[serde(default)]
+    pub test_register: u16,
+    #[serde(default = "default_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_settle_ms")]
+    pub connect_settle_ms: u64,
+}
+
+fn default_probe_units() -> Vec<u8> {
+    vec![1, 0, 255, 2, 3]
 }
 
 // ============================================================================
@@ -121,6 +226,18 @@ pub struct ScanProgressPayload {
     pub total: u32,
     /// Number of responding items found so far
     pub found_count: u32,
+    /// Which pass this is, when `repeat > 1` (1-based)
+    pub pass: u32,
+    /// Total passes
+    pub total_passes: u32,
+}
+
+/// A contiguous run of addresses that answered, or didn't.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RegisterBlock {
+    pub start: u16,
+    pub end: u16,
+    pub count: u32,
 }
 
 /// Completion summary returned when scan finishes
@@ -132,31 +249,206 @@ pub struct ScanCompletePayload {
     pub total_scanned: u32,
     /// Scan duration in milliseconds
     pub duration_ms: u64,
+    /// Requests actually issued — the honest cost of the sweep.
+    #[serde(default)]
+    pub requests: u32,
+    /// Contiguous runs of responding addresses. A wide sweep of a real device
+    /// collapses to a handful of these, which is what makes the result
+    /// summarisable instead of one row per register.
+    #[serde(default)]
+    pub blocks: Vec<RegisterBlock>,
+    /// Contiguous runs that did not respond.
+    #[serde(default)]
+    pub gaps: Vec<RegisterBlock>,
+    /// Diagnoses, e.g. "input: no response after 3 consecutive timeouts".
+    #[serde(default)]
+    pub notes: Vec<String>,
+    /// True when the scan stopped early (cancelled or out of request budget).
+    #[serde(default)]
+    pub truncated: bool,
+    /// Unit-ID scans only: what each responding slave said about itself.
+    /// Naturally small — at most one entry per unit id.
+    #[serde(default)]
+    pub devices: Vec<DeviceInfoPayload>,
+}
+
+/// What one function code did when asked.
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "verdict", rename_all = "snake_case")]
+pub enum FcVerdict {
+    /// Values came back — the device implements this function code.
+    Values { values: Vec<u16> },
+    /// Bits came back (coils / discrete inputs).
+    Bits { values: Vec<bool> },
+    /// The device refused, which still proves it implements the function code.
+    Exception { message: String },
+    /// Nothing came back — most often an unimplemented function code.
+    Silent,
+}
+
+impl FcVerdict {
+    fn supported(&self) -> bool {
+        !matches!(self, FcVerdict::Silent)
+    }
+}
+
+/// One slave's answers across all four read function codes.
+#[derive(Clone, Debug, Serialize)]
+pub struct FcProbeEntry {
+    pub unit_id: u8,
+    /// FC03
+    pub holding: FcVerdict,
+    /// FC04
+    pub input: FcVerdict,
+    /// FC01
+    pub coil: FcVerdict,
+    /// FC02
+    pub discrete: FcVerdict,
+    /// True if any function code produced a reply.
+    pub responded: bool,
+    /// The register types worth sweeping on this unit.
+    pub supported_types: Vec<String>,
+}
+
+/// Publishes progress for the frontend to fetch. `None` for headless callers.
+struct ProgressReporter {
+    app: AppHandle,
+    session_id: Option<String>,
+    throttle: SignalThrottle,
+    device_info: Vec<DeviceInfoPayload>,
+    notes: Vec<String>,
+    last: Option<ScanProgressPayload>,
+}
+
+impl ProgressReporter {
+    fn new(app: AppHandle, session_id: Option<String>) -> Self {
+        Self {
+            app,
+            session_id,
+            throttle: SignalThrottle::new(),
+            device_info: Vec::new(),
+            notes: Vec::new(),
+            last: None,
+        }
+    }
+
+    fn note(&mut self, note: String) {
+        tlog!("[ModbusScan] {}", note);
+        self.notes.push(note);
+    }
+
+    fn update(&mut self, progress: ScanProgressPayload) {
+        self.last = Some(progress);
+        if self.throttle.should_signal("modbus-scan") {
+            self.publish("scanning");
+        }
+    }
+
+    fn publish(&self, status: &str) {
+        let Some(sid) = &self.session_id else { return };
+        store_scan_state(
+            sid,
+            ModbusScanState {
+                status: status.to_string(),
+                progress: self.last.clone(),
+                device_info: self.device_info.clone(),
+                notes: self.notes.clone(),
+            },
+        );
+        let _ = self.app.emit(&format!("modbus-scan:{}", sid), ());
+    }
+
+    /// Publish the terminal state and leave it in place. The state is cleared by
+    /// `ModbusScanSource::stop`, so a caller that polls progress after the sweep
+    /// ends still sees "complete" rather than an empty slot it has to guess about.
+    fn finish(&mut self, status: &str) {
+        self.throttle.flush();
+        self.publish(status);
+    }
 }
 
 // ============================================================================
 // Register Scanner
 // ============================================================================
 
-/// Scan a range of Modbus registers using chunked reads with binary subdivision.
+/// Turn a sorted list of addresses into contiguous runs.
+fn to_blocks(mut addrs: Vec<u16>) -> Vec<RegisterBlock> {
+    addrs.sort_unstable();
+    addrs.dedup();
+    let mut blocks: Vec<RegisterBlock> = Vec::new();
+    for a in addrs {
+        match blocks.last_mut() {
+            Some(b) if a == b.end + 1 => {
+                b.end = a;
+                b.count += 1;
+            }
+            _ => blocks.push(RegisterBlock {
+                start: a,
+                end: a,
+                count: 1,
+            }),
+        }
+    }
+    blocks
+}
+
+/// The complement of `blocks` within `start..=end`, as contiguous runs.
+///
+/// Derived from the blocks rather than by walking the address space, so a wide
+/// sweep costs one pass over a handful of runs instead of 65k set lookups.
+fn gaps_between(blocks: &[RegisterBlock], start: u16, end: u16) -> Vec<RegisterBlock> {
+    let mut gaps = Vec::new();
+    let mut push = |from: u16, to: u16| {
+        if from <= to {
+            gaps.push(RegisterBlock {
+                start: from,
+                end: to,
+                count: (to as u32) - (from as u32) + 1,
+            });
+        }
+    };
+    let mut cursor = start;
+    for b in blocks {
+        // `checked_sub`, not `saturating_sub`: a block starting at address 0 has
+        // nothing before it, and saturating would report a phantom gap at 0.
+        if let Some(before) = b.start.checked_sub(1) {
+            push(cursor, before);
+        }
+        // `end + 1` can overflow at the top of the address space; there is no
+        // gap beyond the last block in that case anyway.
+        match b.end.checked_add(1) {
+            Some(next) => cursor = next,
+            None => return gaps,
+        }
+    }
+    push(cursor, end);
+    gaps
+}
+
+/// Scan a range of Modbus registers.
 ///
 /// Strategy:
-/// 1. Coarse sweep: read in chunk_size blocks
-/// 2. Successful chunks: emit one FrameMessage per register
-/// 3. Failed chunks: binary-subdivide and retry each half
-/// 4. Base case: single register read failure = register doesn't exist
-pub async fn modbus_scan_registers(
+/// 1. Read in `chunk_size` blocks.
+/// 2. Success → one frame per register.
+/// 3. **Exception** → subdivide and retry each half; a single register that
+///    excepts does not exist. The reply told us the address was the problem,
+///    so bisecting it is worth the requests.
+/// 4. **Silence** → mark the whole chunk absent and move on. Do *not* subdivide:
+///    a timeout says nothing about which address was at fault, and a device that
+///    silently ignores a function code would turn one sweep into thousands of
+///    full-timeout requests. Instead, give up on this register type after
+///    `max_consecutive_timeouts` and record why.
+pub async fn scan_registers(
     app: AppHandle,
     config: ModbusScanConfig,
     cancel_flag: Arc<AtomicBool>,
     session_id: Option<String>,
+    sink: &FrameSink,
 ) -> Result<ScanCompletePayload, String> {
     let start_time = std::time::Instant::now();
-    let mut throttle = SignalThrottle::new();
-    let mut scan_frames: Vec<FrameMessage> = Vec::new();
-    let mut scan_progress: Option<ScanProgressPayload> = None;
+    let mut reporter = ProgressReporter::new(app, session_id);
+    let mut frame_throttle = SignalThrottle::new();
 
-    // Validate
     if config.start_register > config.end_register {
         return Err("Start register must be <= end register".to_string());
     }
@@ -164,190 +456,198 @@ pub async fn modbus_scan_registers(
         return Err("Chunk size must be > 0".to_string());
     }
 
-    let total_registers = (config.end_register - config.start_register + 1) as u32;
+    let total_registers = (config.end_register as u32) - (config.start_register as u32) + 1;
+    if total_registers > config.max_registers {
+        return Err(format!(
+            "Range covers {} registers, over the {} limit — narrow the range or raise max_registers",
+            total_registers, config.max_registers
+        ));
+    }
+
     let type_name = register_type_name(&config.register_type);
+    let passes = config.repeat.max(1);
 
     tlog!(
-        "[ModbusScan] Starting register scan: {} {} regs {}-{} (chunk={}, delay={}ms)",
+        "[ModbusScan] Register scan: {} {}-{} ({} regs, chunk={}, delay={}ms, timeout={}ms, \
+         passes={}, budget={} requests)",
         type_name,
-        total_registers,
         config.start_register,
         config.end_register,
+        total_registers,
         config.chunk_size,
-        config.inter_request_delay_ms
+        config.inter_request_delay_ms,
+        config.timeout_ms,
+        passes,
+        config.max_requests
     );
 
-    // Connect to the Modbus TCP server
-    let addr = crate::io::net::resolve_host_port(&config.host, config.port)
-        .await
-        .map_err(|e| e.user_message())?;
-
-    let slave = Slave(config.unit_id);
-    let mut ctx = tcp::connect_slave(addr, slave)
-        .await
-        .map_err(|e| format!("Failed to connect to Modbus TCP server at {}: {}", addr, e))?;
+    let mut conn = ScanConn::connect(
+        &config.host,
+        config.port,
+        config.unit_id,
+        config.timeout_ms,
+        config.connect_settle_ms,
+        config.reconnect_per_request,
+    )
+    .await?;
 
     tlog!(
-        "[ModbusScan] Connected to {}:{} (unit {})",
-        config.host,
-        config.port,
+        "[ModbusScan] Connected to {} (unit {})",
+        conn.addr(),
         config.unit_id
     );
 
+    let mut found_addrs: Vec<u16> = Vec::with_capacity(total_registers as usize);
     let mut found_count: u32 = 0;
-    let mut scanned_count: u32 = 0;
+    let mut requests: u32 = 0;
+    let mut truncated = false;
 
-    // Build list of chunks to scan
-    let mut chunks: Vec<(u16, u16)> = Vec::new(); // (start, count)
-    let mut pos = config.start_register;
-    while pos <= config.end_register {
-        let remaining = config.end_register - pos + 1;
-        let count = remaining.min(config.chunk_size);
-        chunks.push((pos, count));
-        pos = pos.saturating_add(count);
-    }
-
-    // Process chunks with binary subdivision
-    let mut work_queue: Vec<(u16, u16)> = chunks;
-
-    while let Some((start, count)) = work_queue.pop() {
-        if cancel_flag.load(Ordering::Relaxed) {
-            tlog!("[ModbusScan] Cancelled by user");
-            break;
+    'passes: for pass in 1..=passes {
+        if pass > 1 {
+            if config.repeat_delay_ms > 0 {
+                sleep(Duration::from_millis(config.repeat_delay_ms)).await;
+            }
+            if cancel_flag.load(Ordering::Relaxed) {
+                truncated = true;
+                break;
+            }
+            tlog!("[ModbusScan] Pass {}/{}", pass, passes);
         }
 
-        // Read the chunk
-        let result = read_registers(&mut ctx, &config.register_type, start, count).await;
+        let mut scanned_count: u32 = 0;
+        let mut consecutive_timeouts: u32 = 0;
 
-        match result {
-            Ok(ReadResult::Registers(data)) => {
-                // Success — accumulate one FrameMessage per register
-                let bytes = registers_to_bytes(&data);
-                for i in 0..data.len() {
-                    let reg_addr = start + i as u16;
-                    let reg_bytes = vec![bytes[i * 2], bytes[i * 2 + 1]];
-                    scan_frames.push(FrameMessage {
-                        protocol: "modbus".to_string(),
-                        timestamp_us: now_us(),
-                        frame_id: reg_addr as u32,
-                        bus: config.unit_id,
-                        dlc: 2,
-                        bytes: reg_bytes,
-                        is_extended: false,
-                        is_fd: false,
-                        source_address: None,
-                        incomplete: None,
-                        direction: Some("rx".to_string()),
-                    });
-                }
-                found_count += data.len() as u32;
+        // Chunk the range, then treat it as a stack so a subdivided chunk's halves
+        // are processed before moving on — hence the reverse, which is the only
+        // thing separating this from the identical walk in `ranges.rs`.
+        let mut work_queue: Vec<(u16, u16)> = Vec::new();
+        let mut pos = config.start_register;
+        loop {
+            let count = (config.end_register - pos + 1).min(config.chunk_size);
+            work_queue.push((pos, count));
+            match pos.checked_add(count) {
+                Some(next) if next <= config.end_register => pos = next,
+                _ => break,
             }
-            Ok(ReadResult::Coils(data)) => {
-                // Success — accumulate one FrameMessage per coil (1 byte each with 0/1)
-                for (i, &coil) in data.iter().enumerate() {
-                    let reg_addr = start + i as u16;
-                    scan_frames.push(FrameMessage {
-                        protocol: "modbus".to_string(),
-                        timestamp_us: now_us(),
-                        frame_id: reg_addr as u32,
-                        bus: config.unit_id,
-                        dlc: 1,
-                        bytes: vec![if coil { 1 } else { 0 }],
-                        is_extended: false,
-                        is_fd: false,
-                        source_address: None,
-                        incomplete: None,
-                        direction: Some("rx".to_string()),
-                    });
-                }
-                found_count += data.len() as u32;
+        }
+        work_queue.reverse();
+
+        while let Some((start, count)) = work_queue.pop() {
+            if cancel_flag.load(Ordering::Relaxed) {
+                tlog!("[ModbusScan] Cancelled by user");
+                truncated = true;
+                break 'passes;
             }
-            Ok(ReadResult::ModbusException) => {
-                // Modbus exception — some or all registers in this chunk don't exist
-                if count > 1 {
-                    // Subdivide: split into two halves and push back
-                    let half = count / 2;
-                    let remainder = count - half;
-                    // Push second half first so first half is processed next (stack order)
-                    work_queue.push((start + half, remainder));
-                    work_queue.push((start, half));
-                    // Don't count as scanned yet — sub-chunks will be counted
-                    continue;
-                }
-                // Single register failed — it doesn't exist, skip silently
-            }
-            Err(e) => {
-                // IO/connection error — abort scan
-                tlog!("[ModbusScan] IO error at register {}: {}", start, e);
-                return Err(format!(
-                    "Connection error scanning register {}: {}",
-                    start, e
+            if requests >= config.max_requests {
+                reporter.note(format!(
+                    "{}: stopped at the {}-request budget with {} of {} registers swept",
+                    type_name, config.max_requests, scanned_count, total_registers
                 ));
+                truncated = true;
+                break 'passes;
             }
-        }
 
-        // Count scanned registers (only for leaf-level reads, not subdivided chunks)
-        scanned_count += count as u32;
+            let outcome = conn
+                .read(&config.register_type, start, count)
+                .await;
+            requests += 1;
 
-        // Accumulate progress and emit throttled signal
-        let progress = ScanProgressPayload {
-            current: scanned_count,
-            total: total_registers,
-            found_count,
-        };
-        scan_progress = Some(progress);
-
-        if let Some(sid) = &session_id {
-            if throttle.should_signal("modbus-scan") {
-                store_scan_state(
-                    sid,
-                    ModbusScanState {
-                        status: "scanning".to_string(),
-                        frames: scan_frames.clone(),
-                        progress: scan_progress.clone(),
-                        device_info: vec![],
-                    },
-                );
-                let _ = app.emit(&format!("modbus-scan:{}", sid), ());
+            if outcome.device_replied() {
+                consecutive_timeouts = 0;
             }
-        }
 
-        // Inter-request delay
-        if config.inter_request_delay_ms > 0 {
-            sleep(Duration::from_millis(config.inter_request_delay_ms)).await;
+            match outcome {
+                ReadOutcome::Registers(_) | ReadOutcome::Coils(_) => {
+                    let data = match outcome {
+                        ReadOutcome::Registers(d) => ReadData::Registers(d),
+                        ReadOutcome::Coils(d) => ReadData::Coils(d),
+                        _ => unreachable!("matched a success arm"),
+                    };
+                    let frames = per_register_frames(start, config.unit_id, data);
+                    if pass == 1 {
+                        found_addrs.extend(frames.iter().map(|f| f.frame_id as u16));
+                    }
+                    found_count += frames.len() as u32;
+                    sink.frames(frames, &mut frame_throttle).await;
+                }
+                ReadOutcome::Exception(_) => {
+                    // The device answered, so the address is the problem —
+                    // bisect to find exactly which ones are illegal.
+                    if count > 1 {
+                        let half = count / 2;
+                        work_queue.push((start + half, count - half));
+                        work_queue.push((start, half));
+                        continue;
+                    }
+                    // A single register that excepts simply doesn't exist.
+                }
+                ReadOutcome::Silent(reason) => {
+                    consecutive_timeouts += 1;
+                    tlog!(
+                        "[ModbusScan] {} {}..{} silent: {} ({}/{})",
+                        type_name,
+                        start,
+                        start + count - 1,
+                        reason,
+                        consecutive_timeouts,
+                        config.max_consecutive_timeouts
+                    );
+                    if config.max_consecutive_timeouts > 0
+                        && consecutive_timeouts >= config.max_consecutive_timeouts
+                    {
+                        reporter.note(format!(
+                            "{}: no response after {} consecutive timeouts ({}) — the device likely \
+                             does not implement this function code",
+                            type_name, consecutive_timeouts, reason
+                        ));
+                        truncated = true;
+                        break 'passes;
+                    }
+                }
+            }
+
+            scanned_count += count as u32;
+            reporter.update(ScanProgressPayload {
+                current: scanned_count,
+                total: total_registers,
+                found_count,
+                pass,
+                total_passes: passes,
+            });
+
+            if config.inter_request_delay_ms > 0 {
+                sleep(Duration::from_millis(config.inter_request_delay_ms)).await;
+            }
         }
     }
 
     let duration_ms = start_time.elapsed().as_millis() as u64;
+    let blocks = to_blocks(found_addrs);
+    let gaps = gaps_between(&blocks, config.start_register, config.end_register);
 
     tlog!(
-        "[ModbusScan] Register scan complete: found {} of {} {} registers in {}ms",
+        "[ModbusScan] Register scan complete: {} of {} {} registers in {} block(s), {} requests, {}ms",
         found_count,
-        total_registers,
+        total_registers * passes,
         type_name,
+        blocks.len(),
+        requests,
         duration_ms
     );
 
-    // Final flush: emit complete state and clear
-    if let Some(sid) = &session_id {
-        throttle.flush();
-        store_scan_state(
-            sid,
-            ModbusScanState {
-                status: "complete".to_string(),
-                frames: scan_frames.clone(),
-                progress: scan_progress.clone(),
-                device_info: vec![],
-            },
-        );
-        let _ = app.emit(&format!("modbus-scan:{}", sid), ());
-        clear_scan_state(sid);
-    }
+    sink.flush(&mut frame_throttle);
+    reporter.finish(if truncated { "stopped" } else { "complete" });
 
     Ok(ScanCompletePayload {
         found_count,
         total_scanned: total_registers,
         duration_ms,
+        requests,
+        blocks,
+        gaps,
+        notes: reporter.notes.clone(),
+        truncated,
+        devices: Vec::new(),
     })
 }
 
@@ -355,33 +655,30 @@ pub async fn modbus_scan_registers(
 // Unit ID Scanner
 // ============================================================================
 
-/// Scan for active Modbus unit IDs using FC43 (Read Device Identification).
-///
-/// For each unit ID, attempts FC43 first to get vendor/product/revision info.
-/// Falls back to a single register read if FC43 is not supported.
-/// Accumulates results into `ModbusScanState` and emits a throttled `modbus-scan`
-/// session-scoped signal for the frontend to fetch via `get_modbus_scan_state_cmd`.
-pub async fn modbus_scan_unit_ids(
+/// Scan for active Modbus unit IDs using FC43 (Read Device Identification),
+/// falling back to a single register read where FC43 isn't supported.
+pub async fn scan_unit_ids(
     app: AppHandle,
     config: UnitIdScanConfig,
     cancel_flag: Arc<AtomicBool>,
     session_id: Option<String>,
+    sink: &FrameSink,
 ) -> Result<ScanCompletePayload, String> {
+    use tokio_modbus::prelude::*;
+
     let start_time = std::time::Instant::now();
-    let mut throttle = SignalThrottle::new();
-    let mut scan_frames: Vec<FrameMessage> = Vec::new();
-    let mut scan_device_info: Vec<DeviceInfoPayload> = Vec::new();
-    let mut scan_progress: Option<ScanProgressPayload> = None;
+    let mut reporter = ProgressReporter::new(app, session_id);
+    let mut frame_throttle = SignalThrottle::new();
 
     if config.start_unit_id > config.end_unit_id {
         return Err("Start unit ID must be <= end unit ID".to_string());
     }
 
-    let total = (config.end_unit_id - config.start_unit_id + 1) as u32;
+    let total = (config.end_unit_id as u32) - (config.start_unit_id as u32) + 1;
     let type_name = register_type_name(&config.register_type);
 
     tlog!(
-        "[ModbusScan] Starting unit ID scan: IDs {}-{}, FC43 + fallback {} reg {} (delay={}ms)",
+        "[ModbusScan] Unit ID scan: {}-{}, FC43 + {} reg {} fallback (delay={}ms)",
         config.start_unit_id,
         config.end_unit_id,
         type_name,
@@ -389,68 +686,51 @@ pub async fn modbus_scan_unit_ids(
         config.inter_request_delay_ms
     );
 
-    // Resolve server address
     let addr = crate::io::net::resolve_host_port(&config.host, config.port)
         .await
         .map_err(|e| e.user_message())?;
 
     let mut found_count: u32 = 0;
-    // Track whether the first unit supports FC43 to skip it for subsequent units
-    // (if the gateway/server doesn't support it, no unit will)
+    let mut requests: u32 = 0;
+    let mut truncated = false;
+    // If the gateway doesn't support FC43 at all, stop paying for it per unit.
     let mut fc43_supported = true;
     let mut fc43_tested = false;
 
     for unit_id in config.start_unit_id..=config.end_unit_id {
         if cancel_flag.load(Ordering::Relaxed) {
             tlog!("[ModbusScan] Unit ID scan cancelled by user");
+            truncated = true;
             break;
         }
 
-        // Connect with the target unit ID
-        let slave = Slave(unit_id);
-        let connect_result = tcp::connect_slave(addr, slave).await;
-
-        let mut ctx = match connect_result {
-            Ok(ctx) => ctx,
-            Err(_) => {
-                // Connection failed — update progress and emit throttled signal
-                let scanned = (unit_id - config.start_unit_id + 1) as u32;
-                let progress = ScanProgressPayload { current: scanned, total, found_count };
-                scan_progress = Some(progress);
-                if let Some(sid) = &session_id {
-                    if throttle.should_signal("modbus-scan") {
-                        store_scan_state(
-                            sid,
-                            ModbusScanState {
-                                status: "scanning".to_string(),
-                                frames: scan_frames.clone(),
-                                progress: scan_progress.clone(),
-                                device_info: scan_device_info.clone(),
-                            },
-                        );
-                        let _ = app.emit(&format!("modbus-scan:{}", sid), ());
-                    }
-                }
-                if config.inter_request_delay_ms > 0 {
-                    sleep(Duration::from_millis(config.inter_request_delay_ms)).await;
-                }
-                continue;
-            }
-        };
-
-        // Try FC43 (Read Device Identification) first
         let mut unit_found = false;
+
         if fc43_supported {
-            match ctx.read_device_identification(ReadCode::Basic, 0x00).await {
-                Ok(Ok(response)) => {
+            // FC43 has no wrapper on ScanConn — it's the one request the sweep
+            // makes that isn't a register read.
+            let ident = tokio::time::timeout(
+                Duration::from_millis(config.timeout_ms),
+                async {
+                    tcp::connect_slave(addr, Slave(unit_id))
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .read_device_identification(ReadCode::Basic, 0x00)
+                        .await
+                        .map_err(|e| e.to_string())
+                },
+            )
+            .await;
+            requests += 1;
+
+            match ident {
+                Ok(Ok(Ok(response))) => {
                     fc43_tested = true;
                     unit_found = true;
 
-                    // Extract standard identification objects
-                    let mut vendor: Option<String> = None;
-                    let mut product_code: Option<String> = None;
-                    let mut revision: Option<String> = None;
-
+                    let mut vendor = None;
+                    let mut product_code = None;
+                    let mut revision = None;
                     for obj in &response.device_id_objects {
                         let text = obj.value_as_str().map(String::from);
                         match obj.id {
@@ -461,7 +741,6 @@ pub async fn modbus_scan_unit_ids(
                         }
                     }
 
-                    // Build a summary string for the bytes field
                     let summary = [
                         vendor.as_deref().unwrap_or(""),
                         product_code.as_deref().unwrap_or(""),
@@ -473,275 +752,333 @@ pub async fn modbus_scan_unit_ids(
                     .collect::<Vec<&str>>()
                     .join(" | ");
 
-                    let summary_bytes = summary.as_bytes().to_vec();
-
-                    let frame = FrameMessage {
-                        protocol: "modbus".to_string(),
-                        timestamp_us: now_us(),
-                        frame_id: 0x2B, // FC43
-                        bus: unit_id,
-                        dlc: summary_bytes.len() as u8,
-                        bytes: summary_bytes,
-                        is_extended: false,
-                        is_fd: false,
-                        source_address: None,
-                        incomplete: None,
-                        direction: Some("rx".to_string()),
-                    };
                     found_count += 1;
-                    scan_frames.push(frame);
-                    scan_device_info.push(DeviceInfoPayload {
+                    // frame_id 0x2B = FC43, so the result table can tell an
+                    // identification reply from a register probe.
+                    sink.frames(
+                        vec![modbus_frame(0x2B, unit_id, summary.as_bytes().to_vec())],
+                        &mut frame_throttle,
+                    )
+                    .await;
+                    reporter.device_info.push(DeviceInfoPayload {
                         unit_id,
                         vendor,
                         product_code,
                         revision,
                     });
 
-                    tlog!(
-                        "[ModbusScan] Unit ID {} identified via FC43: {}",
-                        unit_id,
-                        summary
-                    );
+                    tlog!("[ModbusScan] Unit {} identified via FC43: {}", unit_id, summary);
                 }
-                Ok(Err(_exc)) => {
-                    // Modbus exception — unit is alive but doesn't support FC43
+                Ok(Ok(Err(_exc))) => {
+                    // Alive, but doesn't serve FC43 — fall through to the probe.
                     fc43_tested = true;
-                    // Unit responded, so it's alive — fall through to register probe
-                    // to get some data, but we already know it exists
-                    tlog!(
-                        "[ModbusScan] Unit ID {} responded with FC43 exception, trying register fallback",
-                        unit_id
-                    );
                 }
-                Err(_) => {
-                    // IO error on FC43 — could be unsupported or unit doesn't exist
+                _ => {
                     if !fc43_tested {
-                        // First attempt — FC43 might not be supported by the gateway
                         fc43_tested = true;
                         fc43_supported = false;
-                        tlog!(
-                            "[ModbusScan] FC43 not supported by gateway, falling back to register probe"
+                        reporter.note(
+                            "FC43 (device identification) not supported — falling back to a \
+                             register probe for every unit"
+                                .to_string(),
                         );
-                        // Reconnect for register probe (connection may be in bad state)
-                        if let Ok(new_ctx) = tcp::connect_slave(addr, slave).await {
-                            ctx = new_ctx;
-                        } else {
-                            let scanned = (unit_id - config.start_unit_id + 1) as u32;
-                            let progress =
-                                ScanProgressPayload { current: scanned, total, found_count };
-                            scan_progress = Some(progress);
-                            if let Some(sid) = &session_id {
-                                if throttle.should_signal("modbus-scan") {
-                                    store_scan_state(
-                                        sid,
-                                        ModbusScanState {
-                                            status: "scanning".to_string(),
-                                            frames: scan_frames.clone(),
-                                            progress: scan_progress.clone(),
-                                            device_info: scan_device_info.clone(),
-                                        },
-                                    );
-                                    let _ = app.emit(&format!("modbus-scan:{}", sid), ());
-                                }
-                            }
-                            continue;
-                        }
                     }
-                    // Fall through to register probe
                 }
             }
         }
 
-        // If FC43 didn't find the unit, try a register read as fallback
         if !unit_found {
-            let result =
-                read_registers(&mut ctx, &config.register_type, config.test_register, 1).await;
+            let Ok(mut conn) = ScanConn::connect(
+                &config.host,
+                config.port,
+                unit_id,
+                config.timeout_ms,
+                config.connect_settle_ms,
+                false,
+            )
+            .await
+            else {
+                reporter.update(ScanProgressPayload {
+                    current: (unit_id - config.start_unit_id + 1) as u32,
+                    total,
+                    found_count,
+                    pass: 1,
+                    total_passes: 1,
+                });
+                if config.inter_request_delay_ms > 0 {
+                    sleep(Duration::from_millis(config.inter_request_delay_ms)).await;
+                }
+                continue;
+            };
+            let outcome = conn
+                .read(&config.register_type, config.test_register, 1)
+                .await;
+            requests += 1;
 
-            match result {
-                Ok(ReadResult::Registers(data)) => {
-                    let bytes = registers_to_bytes(&data);
-                    scan_frames.push(FrameMessage {
-                        protocol: "modbus".to_string(),
-                        timestamp_us: now_us(),
-                        frame_id: config.test_register as u32,
-                        bus: unit_id,
-                        dlc: bytes.len() as u8,
-                        bytes,
-                        is_extended: false,
-                        is_fd: false,
-                        source_address: None,
-                        incomplete: None,
-                        direction: Some("rx".to_string()),
-                    });
+            match outcome {
+                ReadOutcome::Registers(data) => {
                     found_count += 1;
-                    tlog!(
-                        "[ModbusScan] Unit ID {} responded ({} reg {})",
-                        unit_id,
-                        type_name,
-                        config.test_register
-                    );
+                    sink.frames(
+                        vec![modbus_frame(
+                            config.test_register as u32,
+                            unit_id,
+                            registers_to_bytes(&data),
+                        )],
+                        &mut frame_throttle,
+                    )
+                    .await;
+                    tlog!("[ModbusScan] Unit {} responded ({} reg {})", unit_id, type_name, config.test_register);
                 }
-                Ok(ReadResult::Coils(data)) => {
-                    let bytes = coils_to_bytes(&data);
-                    scan_frames.push(FrameMessage {
-                        protocol: "modbus".to_string(),
-                        timestamp_us: now_us(),
-                        frame_id: config.test_register as u32,
-                        bus: unit_id,
-                        dlc: bytes.len() as u8,
-                        bytes,
-                        is_extended: false,
-                        is_fd: false,
-                        source_address: None,
-                        incomplete: None,
-                        direction: Some("rx".to_string()),
-                    });
+                ReadOutcome::Coils(data) => {
                     found_count += 1;
-                    tlog!(
-                        "[ModbusScan] Unit ID {} responded ({} reg {})",
-                        unit_id,
-                        type_name,
-                        config.test_register
-                    );
+                    sink.frames(
+                        vec![modbus_frame(
+                            config.test_register as u32,
+                            unit_id,
+                            coils_to_bytes(&data),
+                        )],
+                        &mut frame_throttle,
+                    )
+                    .await;
+                    tlog!("[ModbusScan] Unit {} responded ({} reg {})", unit_id, type_name, config.test_register);
                 }
-                Ok(ReadResult::ModbusException) => {
-                    // Unit is alive but doesn't have this register
-                    scan_frames.push(FrameMessage {
-                        protocol: "modbus".to_string(),
-                        timestamp_us: now_us(),
-                        frame_id: config.test_register as u32,
-                        bus: unit_id,
-                        dlc: 0,
-                        bytes: vec![],
-                        is_extended: false,
-                        is_fd: false,
-                        source_address: None,
-                        incomplete: None,
-                        direction: Some("rx".to_string()),
-                    });
+                ReadOutcome::Exception(_) => {
+                    // An exception still proves the unit is there — emit an
+                    // empty frame so it shows up as present but unreadable.
                     found_count += 1;
-                    tlog!(
-                        "[ModbusScan] Unit ID {} alive (exception on reg {})",
-                        unit_id,
-                        config.test_register
-                    );
+                    sink.frames(
+                        vec![modbus_frame(config.test_register as u32, unit_id, vec![])],
+                        &mut frame_throttle,
+                    )
+                    .await;
+                    tlog!("[ModbusScan] Unit {} alive (exception on reg {})", unit_id, config.test_register);
                 }
-                Err(_) => {
-                    // No response — unit doesn't exist
-                }
+                ReadOutcome::Silent(_) => {}
             }
         }
 
-        // Accumulate progress and emit throttled signal
-        let scanned = (unit_id - config.start_unit_id + 1) as u32;
-        let progress = ScanProgressPayload { current: scanned, total, found_count };
-        scan_progress = Some(progress);
+        reporter.update(ScanProgressPayload {
+            current: (unit_id - config.start_unit_id + 1) as u32,
+            total,
+            found_count,
+            pass: 1,
+            total_passes: 1,
+        });
 
-        if let Some(sid) = &session_id {
-            if throttle.should_signal("modbus-scan") {
-                store_scan_state(
-                    sid,
-                    ModbusScanState {
-                        status: "scanning".to_string(),
-                        frames: scan_frames.clone(),
-                        progress: scan_progress.clone(),
-                        device_info: scan_device_info.clone(),
-                    },
-                );
-                let _ = app.emit(&format!("modbus-scan:{}", sid), ());
-            }
-        }
-
-        // Inter-request delay
         if config.inter_request_delay_ms > 0 {
             sleep(Duration::from_millis(config.inter_request_delay_ms)).await;
         }
     }
 
     let duration_ms = start_time.elapsed().as_millis() as u64;
-
     tlog!(
-        "[ModbusScan] Unit ID scan complete: found {} of {} unit IDs in {}ms (FC43={})",
+        "[ModbusScan] Unit ID scan complete: {} of {} in {}ms (FC43={})",
         found_count,
         total,
         duration_ms,
         if fc43_supported { "yes" } else { "no" }
     );
 
-    // Final flush: emit complete state and clear
-    if let Some(sid) = &session_id {
-        throttle.flush();
-        store_scan_state(
-            sid,
-            ModbusScanState {
-                status: "complete".to_string(),
-                frames: scan_frames.clone(),
-                progress: scan_progress.clone(),
-                device_info: scan_device_info.clone(),
-            },
-        );
-        let _ = app.emit(&format!("modbus-scan:{}", sid), ());
-        clear_scan_state(sid);
-    }
+    sink.flush(&mut frame_throttle);
+    reporter.finish(if truncated { "stopped" } else { "complete" });
 
     Ok(ScanCompletePayload {
         found_count,
         total_scanned: total,
         duration_ms,
+        requests,
+        blocks: Vec::new(),
+        gaps: Vec::new(),
+        notes: reporter.notes.clone(),
+        truncated,
+        devices: reporter.device_info.clone(),
     })
 }
 
 // ============================================================================
-// Internal Helpers
+// Function Code Probe
 // ============================================================================
 
-/// Result of a single Modbus read operation
-enum ReadResult {
-    /// Holding/input register values
-    Registers(Vec<u16>),
-    /// Coil/discrete input values
-    Coils(Vec<bool>),
-    /// Modbus exception (register doesn't exist, etc.)
-    ModbusException,
-}
-
-/// Read registers of the appropriate type. Returns Ok(ReadResult) for both
-/// successful reads and Modbus exceptions, Err for IO/connection errors.
-async fn read_registers(
-    ctx: &mut tokio_modbus::client::Context,
-    register_type: &RegisterType,
-    start: u16,
-    count: u16,
-) -> Result<ReadResult, String> {
-    match register_type {
-        RegisterType::Holding => match ctx.read_holding_registers(start, count).await {
-            Ok(Ok(data)) => Ok(ReadResult::Registers(data)),
-            Ok(Err(_)) => Ok(ReadResult::ModbusException),
-            Err(e) => Err(format!("IO error: {}", e)),
-        },
-        RegisterType::Input => match ctx.read_input_registers(start, count).await {
-            Ok(Ok(data)) => Ok(ReadResult::Registers(data)),
-            Ok(Err(_)) => Ok(ReadResult::ModbusException),
-            Err(e) => Err(format!("IO error: {}", e)),
-        },
-        RegisterType::Coil => match ctx.read_coils(start, count).await {
-            Ok(Ok(data)) => Ok(ReadResult::Coils(data)),
-            Ok(Err(_)) => Ok(ReadResult::ModbusException),
-            Err(e) => Err(format!("IO error: {}", e)),
-        },
-        RegisterType::Discrete => match ctx.read_discrete_inputs(start, count).await {
-            Ok(Ok(data)) => Ok(ReadResult::Coils(data)),
-            Ok(Err(_)) => Ok(ReadResult::ModbusException),
-            Err(e) => Err(format!("IO error: {}", e)),
-        },
+fn verdict_for(outcome: ReadOutcome) -> FcVerdict {
+    match outcome {
+        ReadOutcome::Registers(values) => FcVerdict::Values { values },
+        ReadOutcome::Coils(values) => FcVerdict::Bits { values },
+        ReadOutcome::Exception(message) => FcVerdict::Exception { message },
+        ReadOutcome::Silent(_) => FcVerdict::Silent,
     }
 }
 
-fn register_type_name(rt: &RegisterType) -> &'static str {
-    match rt {
-        RegisterType::Holding => "holding",
-        RegisterType::Input => "input",
-        RegisterType::Coil => "coil",
-        RegisterType::Discrete => "discrete",
+/// Ask each slave one question per function code: do you answer at all?
+///
+/// This is the cheapest possible first step against an unknown device — at most
+/// four requests per unit — and it decides what a sweep should even look for.
+/// The distinction that matters is exception vs silence: a device that returns
+/// IllegalDataAddress on FC03 implements holding registers and you're just
+/// asking for the wrong one, whereas silence on FC04 means input registers
+/// aren't there at all and sweeping them would waste the whole timeout budget.
+pub async fn probe_function_codes(
+    config: FcProbeConfig,
+    cancel_flag: Arc<AtomicBool>,
+) -> Result<Vec<FcProbeEntry>, String> {
+    if config.unit_ids.is_empty() {
+        return Err("No unit IDs to probe".to_string());
+    }
+
+    let mut results = Vec::new();
+
+    for unit_id in config.unit_ids {
+        if cancel_flag.load(Ordering::Relaxed) {
+            break;
+        }
+
+        // A fresh connection per unit: a device that rejects an unknown slave
+        // may drop the socket, and we don't want that to taint the next unit.
+        let mut conn = match ScanConn::connect(
+            &config.host,
+            config.port,
+            unit_id,
+            config.timeout_ms,
+            config.connect_settle_ms,
+            false,
+        )
+        .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                tlog!("[ModbusScan] Probe unit {}: connect failed: {}", unit_id, e);
+                results.push(FcProbeEntry {
+                    unit_id,
+                    holding: FcVerdict::Silent,
+                    input: FcVerdict::Silent,
+                    coil: FcVerdict::Silent,
+                    discrete: FcVerdict::Silent,
+                    responded: false,
+                    supported_types: Vec::new(),
+                });
+                continue;
+            }
+        };
+        let mut verdicts = Vec::new();
+        for rt in [
+            RegisterType::Holding,
+            RegisterType::Input,
+            RegisterType::Coil,
+            RegisterType::Discrete,
+        ] {
+            let outcome = conn.read(&rt, config.test_register, 1).await;
+            verdicts.push((rt, verdict_for(outcome)));
+        }
+
+        let supported_types: Vec<String> = verdicts
+            .iter()
+            .filter(|(_, v)| v.supported())
+            .map(|(rt, _)| register_type_name(rt).to_string())
+            .collect();
+        let responded = !supported_types.is_empty();
+
+        let mut it = verdicts.into_iter().map(|(_, v)| v);
+        let entry = FcProbeEntry {
+            unit_id,
+            holding: it.next().unwrap(),
+            input: it.next().unwrap(),
+            coil: it.next().unwrap(),
+            discrete: it.next().unwrap(),
+            responded,
+            supported_types,
+        };
+
+        tlog!(
+            "[ModbusScan] Probe unit {}: {}",
+            unit_id,
+            if entry.responded {
+                entry.supported_types.join(", ")
+            } else {
+                "no response".to_string()
+            }
+        );
+        results.push(entry);
+    }
+
+    Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contiguous_addresses_collapse_into_one_block() {
+        let blocks = to_blocks(vec![0, 1, 2, 3]);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!((blocks[0].start, blocks[0].end, blocks[0].count), (0, 3, 4));
+    }
+
+    #[test]
+    fn a_hole_splits_the_run() {
+        let blocks = to_blocks(vec![0, 1, 5, 6, 7]);
+        assert_eq!(
+            blocks.iter().map(|b| (b.start, b.end)).collect::<Vec<_>>(),
+            vec![(0, 1), (5, 7)]
+        );
+    }
+
+    #[test]
+    fn a_wide_sparse_sweep_still_summarises_small() {
+        // 0..24 and 40..62 present, as the Megatec's telemetry block looked.
+        let addrs: Vec<u16> = (0..=24).chain(40..=62).collect();
+        assert_eq!(to_blocks(addrs).len(), 2);
+    }
+
+    #[test]
+    fn gaps_are_the_inverse_of_the_found_set() {
+        let gaps = gaps_between(&to_blocks(vec![0, 1, 2, 6, 7]), 0, 7);
+        assert_eq!(
+            gaps.iter().map(|b| (b.start, b.end)).collect::<Vec<_>>(),
+            vec![(3, 5)]
+        );
+    }
+
+    #[test]
+    fn nothing_found_is_one_gap_spanning_the_range() {
+        let gaps = gaps_between(&[], 10, 19);
+        assert_eq!(gaps.len(), 1);
+        assert_eq!((gaps[0].start, gaps[0].end, gaps[0].count), (10, 19, 10));
+    }
+
+    #[test]
+    fn gaps_at_both_ends_are_reported() {
+        let gaps = gaps_between(&to_blocks(vec![4, 5]), 0, 9);
+        assert_eq!(
+            gaps.iter().map(|b| (b.start, b.end)).collect::<Vec<_>>(),
+            vec![(0, 3), (6, 9)]
+        );
+    }
+
+    #[test]
+    fn a_fully_covered_range_has_no_gaps() {
+        assert!(gaps_between(&to_blocks(vec![0, 1, 2]), 0, 2).is_empty());
+    }
+
+    #[test]
+    fn a_block_ending_at_the_top_of_the_address_space_terminates() {
+        let gaps = gaps_between(&to_blocks(vec![65534, 65535]), 65530, 65535);
+        assert_eq!(
+            gaps.iter().map(|b| (b.start, b.end)).collect::<Vec<_>>(),
+            vec![(65530, 65533)]
+        );
+    }
+
+    #[test]
+    fn duplicate_addresses_from_repeat_passes_do_not_inflate_blocks() {
+        let blocks = to_blocks(vec![5, 5, 6, 6, 7]);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].count, 3);
+    }
+
+    #[test]
+    fn a_silent_read_is_not_evidence_the_device_replied() {
+        assert!(!ReadOutcome::Silent("timeout".into()).device_replied());
+        assert!(ReadOutcome::Exception("illegal".into()).device_replied());
+        assert!(ReadOutcome::Registers(vec![1]).device_replied());
     }
 }

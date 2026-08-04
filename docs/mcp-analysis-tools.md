@@ -140,6 +140,38 @@ The Query app's analytical engines, dispatched to the backend or a capture by so
 Params and result shapes match the Query app (see
 [capture-database-schema.md](capture-database-schema.md) for the underlying tables).
 
+### Modbus discovery
+Gated by **session control** (Settings → MCP), for a device whose register table
+nobody published. Use them in this order:
+
+- **`modbus_probe_function_codes { profile_id | host, port, unit_ids?, test_register? }`**
+  — reads one address on each of FC03/FC04/FC01/FC02 per unit. Four requests per
+  unit and no side effects, so it costs nothing to run first. Returns
+  `{ units: [{ unit_id, responded, supported_types, holding, input, coil, discrete }] }`
+  where each verdict is `values` / `bits` / `exception` / `silent`. **The
+  exception-vs-silent distinction is the point**: an exception proves the device
+  serves that function code and you asked for the wrong address, silence usually
+  means it isn't implemented and sweeping it would burn the whole timeout budget.
+- **`modbus_scan_registers { …, register_type, start, end, repeat?, … }`** — sweeps
+  an address range. Runs as its own session writing into a frame capture; returns
+  `{ session_id, capture_id, status, found, requests, blocks, gaps, notes }` where
+  `blocks`/`gaps` are contiguous runs, not one row per register. Pass `repeat: 2`
+  to sample every register twice so the Payload Changes tool can separate live
+  telemetry from static configuration. `wait: false` returns immediately with a
+  session id to poll.
+- **`modbus_scan_unit_ids { …, start_unit_id, end_unit_id }`** — finds which slaves
+  answer on a gateway, identifying each via FC43 where supported.
+- **`get_modbus_scan_progress { session_id }`** — for sweeps started with `wait: false`.
+- **`set_profile_catalog { profile_id, catalog }`** — gated by **catalog write**, not
+  session control, because it is a catalogue operation and it writes persisted app
+  settings. Binds an existing catalogue to a profile so `open_session` decodes that
+  profile (and, for Modbus, builds its poll groups) without a human opening Settings.
+
+`open_session` also takes **`register_ranges`** for Modbus profiles: poll an address
+range directly instead of a catalogue's registers, so a device with no decoder can
+still be watched live. An explicit range wins over a present `preferred_catalog`.
+With neither, the open fails rather than falling back to a default sweep.
+
 ## Writing catalogs
 
 Three tools let an agent persist decode work, gated by **two catalog-specific
@@ -199,3 +231,10 @@ rows). `frame_inventory` and the per-frame samplers complete against it, but:
   care about a few;
 - leave `catalog_coverage`'s `include_byte_roles` off unless you want the per-frame
   byte breakdown — the frame/confidence diff is a single aggregation and stays cheap.
+
+Modbus sweeps answer in **run-length summary** rather than per-register rows: a
+thousand-register sweep of a real device collapses to a handful of `blocks` and
+`gaps`, a few hundred bytes rather than a few hundred kilobytes. The full detail
+is in the returned `capture_id` — page it with `get_capture_frames`. `blocks` is
+capped at 256 entries with `blocks_truncated` set, so a pathologically sparse
+device can't produce an unbounded response either.
