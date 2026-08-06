@@ -706,6 +706,11 @@ Per-session (channel 1..254):
 | `ByteCounts`        | 0x19 | Live raw-byte total + the session's byte-capture id, pushed on the byte cadence (see [§ Raw serial bytes](#raw-serial-bytes--counted-not-streamed)) |
 | `ModbusScanState`   | 0x1A | Discovery sweep progress + device identification, throttled to 2 Hz (see [§ Modbus discovery](#modbus-discovery)) |
 
+JSON-payload session messages go out through
+[`send_session_json`](../src-tauri/src/ws/dispatch.rs), which resolves the
+channel, serialises only once a subscriber is known to exist, and drops silently
+otherwise — the same contract as every other session sender.
+
 Global (channel 0):
 
 | MsgType | Value | Purpose |
@@ -1029,11 +1034,24 @@ old numeric "N frames" readout was dropped in favour of it.
    records `sessionId → channel` in a shared `CHANNEL_MAP` for non-blocking
    lookup from `dispatch.rs`.
 3. Server sends `SubscribeAck{channel}`; frontend wires pending handlers.
+   A handler registered before the ack is queued in `pendingHandlers` and
+   *migrated* into the channel's map here — and re-staged into a fresh map on
+   reconnect. So `onSessionMessage`'s unlisten looks the handler up on removal
+   rather than closing over the map it was first put in; capturing that map
+   makes the unlisten a silent no-op for any subscriber that registers before
+   its session is joined, which is the normal case.
 4. [`reset_frame_offset`](../src-tauri/src/ws/dispatch.rs#L74) is called so
    the client only receives frames that arrive after subscription.
 5. On `Unsubscribe` (or disconnect), the channel refcount drops; if it hits
    zero the channel is released, the frame offset cleared, and any attached
    catalogue detached.
+
+`sessionStore` owns the subscription for the built-in session message types and
+tears them down wholesale via `wsTransport.unsubscribe`. A feature that owns its
+own session-scoped subscription — `useModbusScanSync` is the one so far — relies
+on the per-handler unlisten above, so its lifetime must be bounded by something
+that actually changes: keying the effect on a session id the store clears when
+the work ends, rather than on a value only written at the start.
 
 ### Reconnect resync
 
