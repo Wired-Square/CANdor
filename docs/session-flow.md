@@ -79,8 +79,15 @@ with `multi_source: false` cannot be combined with others.
 gap.** `create_default_bus_mapping` runs before a connection exists, so it can
 only read the profile's `interfaces[]` — an array the frontend writes after a
 successful probe. When that probe never ran the array is absent and the mapping
-falls back to a single hardcoded `can0`, so a two-interface device streams one
-bus. The obvious fix — reconciling against the `CAPABILITIES_RESP` the reader
+falls back to a single hardcoded `can0`. That is a **silent drop, not a
+mislabel**: the device does send `iface_index 1` frames and `reader.rs` discards
+them at `if !my_interfaces.contains(&sf.iface_index)`, with nothing logged and no
+bus dimension in the view to suggest anything is missing. Measured against the
+Home Assistant add-on, which serves the same interfaces on both its endpoints, an
+unprobed FrameLink profile saw 20 of the 26 ids GVRET saw — the 6 it lost were
+all on bus 1. Probing the profile takes it to `available_buses: [0, 1]` and 90
+unique ids, i.e. parity with GVRET, which is why the always-visible Probe button
+is the answer until the gap below is closed. The obvious fix — reconciling against the `CAPABILITIES_RESP` the reader
 already has — was tried and reverted, because it only fixes half the problem:
 `IOBroker::combined_capabilities` builds `available_buses` from
 `self.sources[..].bus_mappings` and `transmit_routes` is built once in
