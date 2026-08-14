@@ -512,7 +512,10 @@ impl IOSource for IOBroker {
     }
 
     async fn start(&mut self) -> Result<(), String> {
-        if matches!(self.state, IOState::Running | IOState::Starting) {
+        // Ask through `state()`, not the raw field: after every source failed,
+        // `self.state` is still whatever `start` last set it to, so gating on it
+        // told a user staring at a failed session that it was already running.
+        if matches!(self.state(), IOState::Running | IOState::Starting) {
             return Err("Session already running".to_string());
         }
 

@@ -1,6 +1,6 @@
 // Copyright 2026 Wired Square Pty Ltd
 
-import { useEffect, useMemo, useCallback, useState } from "react";
+import { useEffect, useMemo, useCallback, useRef, useState } from "react";
 import { Workflow, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useShallow } from "zustand/react/shallow";
@@ -129,18 +129,31 @@ export default function Rules() {
   );
 
   const [persistState, setPersistState] = useState<PersistState>("idle");
+  // Owned so a rapid second save cannot have an older timer reset it to idle,
+  // and so an unmounted panel is not updated by a timer still in flight.
+  const persistResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (persistResetRef.current) clearTimeout(persistResetRef.current);
+    },
+    [],
+  );
+  const resetPersistStateAfter = useCallback((ms: number) => {
+    if (persistResetRef.current) clearTimeout(persistResetRef.current);
+    persistResetRef.current = setTimeout(() => setPersistState("idle"), ms);
+  }, []);
   const handlePersist = useCallback(async () => {
     setPersistState("saving");
     try {
       await persistSave();
       setPersistState("saved");
-      setTimeout(() => setPersistState("idle"), 2000);
+      resetPersistStateAfter(2000);
     } catch {
       // statusBar carries the detail; the button flags the failure.
       setPersistState("error");
-      setTimeout(() => setPersistState("idle"), 3000);
+      resetPersistStateAfter(3000);
     }
-  }, [persistSave]);
+  }, [persistSave, resetPersistStateAfter]);
 
   const [confirmClear, setConfirmClear] = useState(false);
   const handleClearConfig = useCallback(async () => {

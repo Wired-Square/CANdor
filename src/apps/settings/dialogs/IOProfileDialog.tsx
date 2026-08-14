@@ -199,6 +199,19 @@ export default function IOProfileDialog({
     [profileForm, flPersist],
   );
 
+  // Interfaces the profile knows about, if it has been probed. Hoisted because
+  // both the probe row and the interfaces panel below key off it.
+  const flInterfaces = (isProfileKind(profileForm, "framelink")
+  && Array.isArray(profileForm.connection.interfaces)
+    ? profileForm.connection.interfaces
+    : []) as Array<{
+    index: number;
+    iface_type: number;
+    name: string;
+    type_name?: string;
+  }>;
+  const hasFlInterfaces = flInterfaces.length > 0;
+
   // Re-probe FrameLink device to update interfaces list
   const [flReprobing, setFlReprobing] = useState(false);
   const handleFlReprobe = useCallback(async () => {
@@ -1181,52 +1194,39 @@ export default function IOProfileDialog({
                 />
               </FormField>
 
-              {/* Nothing probed yet. The Re-probe button lives inside the
-                  interfaces panel below, so without this a hand-made profile
-                  had no way to populate interfaces at all — unlike GVRET,
-                  whose Probe button is always on screen. */}
-              {!(Array.isArray(profileForm.connection.interfaces) && profileForm.connection.interfaces.length > 0) && (
-                <div className={`border-t ${borderDefault} pt-4 mt-4`}>
-                  <div className="flex items-center justify-between">
-                    <p className={`text-sm ${textMuted}`}>
-                      {t("ioProfileDialog.framelink.notProbed")}
-                    </p>
-                    <SecondaryButton onClick={handleFlReprobe} disabled={flReprobing}>
-                      {flReprobing ? (
-                        <>
-                          <RefreshCw className={`${iconXs} animate-spin`} />
-                          {t("ioProfileDialog.framelink.reprobing")}
-                        </>
-                      ) : (
-                        <>
-                          <RefreshCw className={iconXs} />
-                          {t("ioProfileDialog.framelink.probe")}
-                        </>
-                      )}
-                    </SecondaryButton>
-                  </div>
-                  {flError && (
-                    <div className={`${alertWarning} mt-3`}>
-                      <p className="text-sm text-[color:var(--text-warning)]">{flError}</p>
-                    </div>
-                  )}
+              {/* Probe is always on screen, as GVRET's is. It used to live
+                  inside the interfaces panel below, which renders only once
+                  interfaces exist — so a hand-made profile had no way to
+                  populate them and could never be made to work. */}
+              <div className={`border-t ${borderDefault} pt-4 mt-4`}>
+                <div className="flex items-center justify-between">
+                  <p className={`text-sm ${textMuted}`}>
+                    {hasFlInterfaces
+                      ? t("ioProfileDialog.framelink.interfacesTitle", { count: flInterfaces.length })
+                      : t("ioProfileDialog.framelink.notProbed")}
+                  </p>
+                  <SecondaryButton onClick={handleFlReprobe} disabled={flReprobing}>
+                    <RefreshCw className={`${iconXs} ${flReprobing ? "animate-spin" : ""}`} />
+                    {flReprobing
+                      ? t("ioProfileDialog.framelink.reprobing")
+                      : t("ioProfileDialog.framelink.reprobe")}
+                  </SecondaryButton>
                 </div>
-              )}
+                {flError && (
+                  <div className={`${alertWarning} mt-3`}>
+                    <p className={`text-sm ${textWarning}`}>{flError}</p>
+                  </div>
+                )}
+              </div>
 
               {/* Interfaces — each row is collapsible and contains its own device configuration */}
-              {Array.isArray(profileForm.connection.interfaces) && profileForm.connection.interfaces.length > 0 && (() => {
-                const interfaces = profileForm.connection.interfaces as Array<{
-                  index: number;
-                  iface_type: number;
-                  name: string;
-                  type_name?: string;
-                }>;
+              {hasFlInterfaces && (() => {
+                const interfaces = flInterfaces;
                 const totalSignalsLoaded = Object.values(flSignalsByIface).reduce((n, sigs) => n + sigs.length, 0);
                 const anyPersistable = Object.values(flSignalsByIface).some((sigs) => sigs.some((s) => s.persistable));
                 return (
                   <div className={`border-t ${borderDefault} pt-4 mt-4`}>
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className={h3}>{t("ioProfileDialog.framelink.interfacesTitle", { count: interfaces.length })}</h3>
+                    <div className="flex items-center justify-end mb-3">
                       <div className="flex items-center gap-2">
                         <SecondaryButton onClick={loadFlSignals} disabled={flLoading}>
                           {flLoading ? (
@@ -1241,27 +1241,8 @@ export default function IOProfileDialog({
                             </>
                           )}
                         </SecondaryButton>
-                        <SecondaryButton onClick={handleFlReprobe} disabled={flReprobing}>
-                          {flReprobing ? (
-                            <>
-                              <RefreshCw className={`${iconXs} animate-spin`} />
-                              {t("ioProfileDialog.framelink.reprobing")}
-                            </>
-                          ) : (
-                            <>
-                              <RefreshCw className={iconXs} />
-                              {t("ioProfileDialog.framelink.reprobe")}
-                            </>
-                          )}
-                        </SecondaryButton>
                       </div>
                     </div>
-
-                    {flError && (
-                      <div className={`${alertWarning} mb-3`}>
-                        <p className="text-sm text-[color:var(--text-warning)]">{flError}</p>
-                      </div>
-                    )}
 
                     <div className="flex flex-col gap-1.5">
                       {interfaces.map((iface) => {
@@ -1774,7 +1755,7 @@ export default function IOProfileDialog({
                     {t("ioProfileDialog.gsUsb.enableFd")}
                   </label>
                   {gsUsbProbeResult?.supports_fd === false && (
-                    <span className="text-xs text-[color:var(--text-warning)]">{t("ioProfileDialog.gsUsb.fdNotSupported")}</span>
+                    <span className={`text-xs ${textWarning}`}>{t("ioProfileDialog.gsUsb.fdNotSupported")}</span>
                   )}
                   {gsUsbProbeResult?.supports_fd === true && (
                     <span className="text-xs text-[color:var(--text-success)]">{t("ioProfileDialog.gsUsb.fdCapable")}</span>

@@ -253,22 +253,23 @@ pub async fn framelink_get_interface_signals(
             Err(_) => 0,
         };
 
+        let key = sig.key();
         let (name, group, unit, enum_values, formatted_value) = board_def
             .as_ref()
-            .and_then(|bd| bd.signal_info(&sig.key()).map(|info| (bd, info)))
-            .map(|(bd, info)| {
+            .and_then(|bd| {
+                let info = bd.signal_info(&key)?;
                 let ev: HashMap<String, String> = info
                     .enum_values
                     .iter()
                     .map(|(k, v)| (k.to_string(), v.clone()))
                     .collect();
-                (
+                Some((
                     info.name.clone(),
                     info.group.clone(),
                     info.unit.clone(),
                     ev,
-                    bd.format_value(&sig.key(), value),
-                )
+                    bd.format_value(&key, value),
+                ))
             })
             .unwrap_or_else(|| default_signal_meta(sig, value, iface_type));
 

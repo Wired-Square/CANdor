@@ -307,15 +307,18 @@ pub(super) async fn run_merge_task(
         let _ = handle.await;
     }
 
-    // Emit stream ended. A run in which every source failed is not "complete" —
-    // that reported a clean finish for a session that never carried a frame,
-    // and left the backend claiming Running while only the frontend knew.
+    // Emit stream ended. A run that lost every source to an error is not
+    // "complete" — that reported a clean finish for a session which may never
+    // have carried a frame, and left the backend claiming Running while only
+    // the frontend knew otherwise.
     let reason = stream_ended_reason(stop_flag.load(Ordering::SeqCst), last_source_error.is_some());
-    if let Some(error) = last_source_error {
-        if let Ok(mut slot) = fatal_error.lock() {
-            *slot = Some(error.clone());
+    // Only a run that *ended* in error is a failed session. A source that
+    // dropped hours ago must not turn a deliberate stop into one — it was
+    // reported at the time, via emit_session_error.
+    if reason == "error" {
+        if let (Some(error), Ok(mut slot)) = (last_source_error, fatal_error.lock()) {
+            *slot = Some(error);
         }
-        crate::ws::dispatch::send_session_state(&session_id, &crate::io::IOState::Error(error));
     }
     emit_stream_ended(&session_id, reason, "IOBroker");
 }

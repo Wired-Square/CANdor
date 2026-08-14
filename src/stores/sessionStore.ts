@@ -89,6 +89,12 @@ import {
  */
 const EXPECTED_MISSING_ENTITY = /^(Session|Capture)\b.*\bnot found$/;
 
+/** Stream-end reasons that mean something other than a plain stop. */
+const IO_STATE_FOR_STREAM_END: Partial<Record<string, IOStateType>> = {
+  paused: "paused",
+  error: "error",
+};
+
 // ============================================================================
 // Visibility: Log changes and send immediate heartbeats on wake.
 // When the display sleeps, WKWebView may throttle/suspend timers.
@@ -538,17 +544,12 @@ async function setupSessionEventSubscribers(
     eventListeners.wsUnlistenFunctions.push(
       wsTransport.onSessionMessage(sessionId, MsgType.StreamEnded, (payload) => {
         const info = decodeStreamEnded(payload);
-        // "error" must survive here. StreamEnded arrives just after the backend
-        // pushes IOState::Error, so collapsing every non-paused reason to
-        // "stopped" would overwrite the failure with a clean-looking stop.
-        const ioState =
-          info.reason === "paused"
-            ? "paused"
-            : info.reason === "error"
-              ? "error"
-              : "stopped";
+        // A run that lost every source to an error must not read as a clean
+        // stop; this is the only push that reports it, so the mapping is the
+        // whole mechanism rather than a defence against an ordering race.
+        const ioState = IO_STATE_FOR_STREAM_END[info.reason] ?? "stopped";
         updateSession(sessionId, {
-          ioState: ioState as IOStateType,
+          ioState,
           streamEndedReason: info.reason as Session["streamEndedReason"],
           capture: {
             available: info.capture_available,

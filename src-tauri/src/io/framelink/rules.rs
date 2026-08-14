@@ -1334,7 +1334,12 @@ async fn cmd_signals_selectable(params: Value) -> Result<Value, String> {
     // The embedded def has no user-signal labels; source them from the device's
     // downloaded TOML (held in the connection's editable def).
     let board_def = match shared::clone_editable_board_def(&device_id).await {
-        Some(ed) => ed.to_board_def().ok().or(shared::load_board_def(&device_id).await),
+        // `or` would evaluate its argument regardless — a pool lock plus a full
+        // TOML parse of the embedded def, thrown away on the common path.
+        Some(ed) => match ed.to_board_def() {
+            Ok(bd) => Some(bd),
+            Err(_) => shared::load_board_def(&device_id).await,
+        },
         None => shared::load_board_def(&device_id).await,
     };
     let signals =

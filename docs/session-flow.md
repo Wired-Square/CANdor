@@ -75,20 +75,24 @@ with `multi_source: false` cannot be combined with others.
 
 ¹ Framed serial (SLIP, Modbus RTU, delimiter) emits frames, not raw bytes.
 
-**FrameLink is the one source whose buses come from the device, not the
-profile.** `create_default_bus_mapping` runs before any connection exists, so it
-can only read the profile's `interfaces[]` — an array the frontend writes after
-a successful probe. When that probe never ran the array is absent and the
-mapping falls back to a single hardcoded `can0`, which is how a two-interface
-device came up with one CAN bus.
-[`framelink/reader.rs::reconcile_bus_mappings`](../src-tauri/src/io/framelink/reader.rs)
-therefore rebuilds the set from the `CAPABILITIES_RESP` the connection already
-fetched: the device is the authority on which interfaces exist, and a profile
-entry only overrides `enabled` and `output_bus`. An interface the profile has
-never heard of streams by default; one it has been told to mute stays muted; one
-the device does not have is dropped. A device that reports nothing leaves the
-profile's mapping untouched, so a failure to enumerate never silently zeroes a
-session.
+**FrameLink bus mappings are still built from the profile, and that is a known
+gap.** `create_default_bus_mapping` runs before a connection exists, so it can
+only read the profile's `interfaces[]` — an array the frontend writes after a
+successful probe. When that probe never ran the array is absent and the mapping
+falls back to a single hardcoded `can0`, so a two-interface device streams one
+bus. The obvious fix — reconciling against the `CAPABILITIES_RESP` the reader
+already has — was tried and reverted, because it only fixes half the problem:
+`IOBroker::combined_capabilities` builds `available_buses` from
+`self.sources[..].bus_mappings` and `transmit_routes` is built once in
+`IOBroker::new`, both from the *pre-connect* set. Frames from the discovered
+interface would arrive tagged `bus: 1` while transmit rejected bus 1 as having
+no source, and an RS-485 interface would stream under CAN traits. Doing this
+properly needs a session-layer mechanism — a source revising its mappings once
+connected, with the broker rebuilding `transmit_routes`/`session_traits` and
+re-emitting capabilities — which GVRET needs too (it probes `bus_count` at
+connect and discards the answer). Until then the route to a correct multi-bus
+FrameLink profile is the Probe button, which populates `interfaces[]` through
+the path that *does* feed capabilities consistently.
 
 **A FrameLink device serves exactly one TCP client**, so `io/framelink/shared.rs`
 pools one connection per device and every consumer — the reader and the ~40
@@ -97,10 +101,12 @@ starts a 30 s linger, after which one process-wide sweeper evicts the entry;
 dropping the last `Arc<FrameLinkSession>` runs its `Drop`, which aborts the IO
 task and closes the socket (there is no explicit close to call). The linger is
 what keeps a burst of short-lived rules commands on one warm connection. A
-connection created by a probe schedules its own eviction on insert, because
-nothing takes a lease on it. Before releasing, a reader calls `stop_stream` for
+connection is created already idle, because a probe connects and reads the cache
+without ever taking a lease. Before releasing, a reader calls `stop_stream` for
 its interfaces — the connection may outlive the session, and nothing would be
-reading those frames. **Do not hand out a bare `Arc<ManagedConnection>`**: the
+reading those frames — bounded by a short timeout, since `STREAM_STOP` is sent
+with no ACK flag and the library otherwise waits out its full 15 s command
+timeout for a reply that never comes, once per interface, inside session stop. **Do not hand out a bare `Arc<ManagedConnection>`**: the
 pool previously had no `remove` at all, so a stopped session held the device's
 only client slot for the life of the process.
 
