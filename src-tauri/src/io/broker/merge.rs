@@ -42,6 +42,7 @@ pub(super) async fn run_merge_task(
     virtual_bus_controls: VirtualBusControls,
     mut merge_cmd_rx: mpsc::UnboundedReceiver<MergeCommand>,
     virtual_cmd_txs: Arc<Mutex<HashMap<usize, VirtualCmdTx>>>,
+    fatal_error: Arc<Mutex<Option<String>>>,
 ) {
     // Load settings to get profile configurations
     let settings = match settings::load_settings(app.clone()).await {
@@ -96,6 +97,9 @@ pub(super) async fn run_merge_task(
 
     // Track which sources are still active
     let mut active_sources = sources.len();
+    // The last error a source reported, kept so the session can end as "error"
+    // rather than "complete" when every source has failed.
+    let mut last_source_error: Option<String> = None;
     let mut pending_frames: Vec<FrameMessage> = Vec::new();
     let mut pending_bytes: Vec<TimestampedByte> = Vec::new();
     let mut last_emit = std::time::Instant::now();
@@ -146,6 +150,7 @@ pub(super) async fn run_merge_task(
                         if let Ok(mut channels) = transmit_channels.lock() {
                             channels.remove(&source_idx);
                         }
+                        last_source_error = Some(error.clone());
                         emit_session_error(&session_id, error);
                         active_sources = active_sources.saturating_sub(1);
                     }
@@ -302,12 +307,16 @@ pub(super) async fn run_merge_task(
         let _ = handle.await;
     }
 
-    // Emit stream ended
-    let reason = if stop_flag.load(Ordering::SeqCst) {
-        "stopped"
-    } else {
-        "complete"
-    };
+    // Emit stream ended. A run in which every source failed is not "complete" —
+    // that reported a clean finish for a session that never carried a frame,
+    // and left the backend claiming Running while only the frontend knew.
+    let reason = stream_ended_reason(stop_flag.load(Ordering::SeqCst), last_source_error.is_some());
+    if let Some(error) = last_source_error {
+        if let Ok(mut slot) = fatal_error.lock() {
+            *slot = Some(error.clone());
+        }
+        crate::ws::dispatch::send_session_state(&session_id, &crate::io::IOState::Error(error));
+    }
     emit_stream_ended(&session_id, reason, "IOBroker");
 }
 
@@ -410,4 +419,34 @@ fn spawn_source(
 
         monitor.abort();
     })
+}
+
+/// Why a session's stream ended, from the two facts the merge loop knows when
+/// it exits: whether a stop was asked for, and whether any source failed.
+///
+/// A run in which every source errored used to report `complete` — a clean
+/// finish for a session that never carried a frame.
+fn stream_ended_reason(stopped: bool, had_error: bool) -> &'static str {
+    match (stopped, had_error) {
+        (true, _) => "stopped",
+        (false, true) => "error",
+        (false, false) => "complete",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stream_ended_reason;
+
+    #[test]
+    fn a_deliberate_stop_outranks_a_source_error() {
+        assert_eq!(stream_ended_reason(true, false), "stopped");
+        assert_eq!(stream_ended_reason(true, true), "stopped");
+    }
+
+    #[test]
+    fn sources_ending_in_error_is_not_a_complete_run() {
+        assert_eq!(stream_ended_reason(false, true), "error");
+        assert_eq!(stream_ended_reason(false, false), "complete");
+    }
 }

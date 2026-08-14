@@ -538,7 +538,15 @@ async function setupSessionEventSubscribers(
     eventListeners.wsUnlistenFunctions.push(
       wsTransport.onSessionMessage(sessionId, MsgType.StreamEnded, (payload) => {
         const info = decodeStreamEnded(payload);
-        const ioState = info.reason === "paused" ? "paused" : "stopped";
+        // "error" must survive here. StreamEnded arrives just after the backend
+        // pushes IOState::Error, so collapsing every non-paused reason to
+        // "stopped" would overwrite the failure with a clean-looking stop.
+        const ioState =
+          info.reason === "paused"
+            ? "paused"
+            : info.reason === "error"
+              ? "error"
+              : "stopped";
         updateSession(sessionId, {
           ioState: ioState as IOStateType,
           streamEndedReason: info.reason as Session["streamEndedReason"],

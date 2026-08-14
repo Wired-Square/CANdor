@@ -123,6 +123,11 @@ pub struct IOBroker {
     merge_cmd_tx: MergeCmdTx,
     /// Command channels to virtual reader tasks for hot bus add/remove (source_idx -> sender)
     virtual_cmd_txs: Arc<Mutex<HashMap<usize, VirtualCmdTx>>>,
+    /// Set by the merge task when every source has failed. Shared rather than
+    /// owned because the merge task is detached and cannot reach `state`, which
+    /// is why a session whose sources all failed to connect used to keep
+    /// reporting `Running` to `get_session_state` indefinitely.
+    fatal_error: Arc<Mutex<Option<String>>>,
 }
 
 impl IOBroker {
@@ -296,6 +301,7 @@ impl IOBroker {
             virtual_bus_controls: Arc::new(Mutex::new(HashMap::new())),
             merge_cmd_tx: Arc::new(Mutex::new(None)),
             virtual_cmd_txs: Arc::new(Mutex::new(HashMap::new())),
+            fatal_error: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -524,6 +530,9 @@ impl IOSource for IOBroker {
 
         self.state = IOState::Starting;
         self.stop_flag.store(false, Ordering::SeqCst);
+        if let Ok(mut slot) = self.fatal_error.lock() {
+            *slot = None;
+        }
 
         // Determine if any source produces actual frames (vs just raw bytes)
         let has_framing = self.sources.iter().any(|source| {
@@ -604,6 +613,7 @@ impl IOSource for IOBroker {
             vtxs.clear();
         }
         let virtual_cmd_txs = self.virtual_cmd_txs.clone();
+        let fatal_error = self.fatal_error.clone();
 
         // Create command channel for hot source add/remove
         let (merge_cmd_tx, merge_cmd_rx) = mpsc::unbounded_channel::<MergeCommand>();
@@ -628,6 +638,7 @@ impl IOSource for IOBroker {
                 virtual_bus_controls,
                 merge_cmd_rx,
                 virtual_cmd_txs,
+                fatal_error,
             )
             .await;
         });
@@ -663,6 +674,10 @@ impl IOSource for IOBroker {
         self.tx = tx;
         self.rx = Some(rx);
 
+        // A deliberate stop clears the error: the session is stopped, not broken.
+        if let Ok(mut slot) = self.fatal_error.lock() {
+            *slot = None;
+        }
         self.state = IOState::Stopped;
         Ok(())
     }
@@ -694,8 +709,16 @@ impl IOSource for IOBroker {
         IOBroker::set_framing(self, req)
     }
 
+    /// A fatal error outranks the last state `start`/`stop` set, because the
+    /// merge task discovers it after `start` has already recorded `Running`.
     fn state(&self) -> IOState {
-        self.state.clone()
+        match self.fatal_error.lock() {
+            Ok(slot) => match slot.as_ref() {
+                Some(msg) => IOState::Error(msg.clone()),
+                None => self.state.clone(),
+            },
+            Err(_) => self.state.clone(),
+        }
     }
 
     fn session_id(&self) -> &str {
