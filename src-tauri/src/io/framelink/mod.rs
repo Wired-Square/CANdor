@@ -359,3 +359,52 @@ fn default_signal_meta(
         framelink::board::display::format_iface_value(sig, value),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use framelink::protocol::types;
+
+    /// `src/api/framelinkAxes.ts` hand-mirrors identity-tuple codes so the
+    /// frontend can pick a control from structured values rather than sniffing
+    /// display strings. Nothing generates that file, so a value renumbered in
+    /// framelink-rs would silently mis-render a control with no compile error
+    /// on either side — the frontend would just start choosing the wrong widget.
+    /// Pin the mirror to the crate here, where the crate is always available
+    /// (a vitest would have to find the Rust source, which CI has no path to).
+    #[test]
+    fn framelink_axes_ts_mirrors_the_crate() {
+        let source = include_str!("../../../../src/api/framelinkAxes.ts");
+
+        let mirrored = |name: &str| -> u8 {
+            let decl = format!("export const {name} = ");
+            let line = source
+                .lines()
+                .find(|l| l.starts_with(&decl))
+                .unwrap_or_else(|| panic!("framelinkAxes.ts no longer exports {name}"));
+            let literal = line[decl.len()..].trim_end_matches(';').trim();
+            let parsed = literal
+                .strip_prefix("0x")
+                .map(|hex| u8::from_str_radix(hex, 16))
+                .unwrap_or_else(|| literal.parse());
+            parsed.unwrap_or_else(|_| panic!("{name} is not a u8 literal: {literal}"))
+        };
+
+        for (name, expected) in [
+            ("QTY_BOOL", types::QTY_BOOL),
+            ("QTY_ENUM", types::QTY_ENUM),
+            ("QTY_DATARATE", types::QTY_DATARATE),
+            ("QTY_BASE_MASK", types::QTY_BASE_MASK),
+            ("ASPECT_PARITY", types::ASPECT_PARITY),
+            ("ASPECT_STOP_BITS", types::ASPECT_STOP_BITS),
+            ("ASPECT_DATA_BITS", types::ASPECT_DATA_BITS),
+            ("IFACE_RS485", types::IFACE_RS485),
+            ("IFACE_RS232", types::IFACE_RS232),
+        ] {
+            assert_eq!(
+                mirrored(name),
+                expected,
+                "framelinkAxes.ts {name} has drifted from framelink::protocol::types"
+            );
+        }
+    }
+}
