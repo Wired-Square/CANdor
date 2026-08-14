@@ -529,6 +529,8 @@
       "interfacesTitle": "Interfaces ({{count}})",
       "reprobing": "Probing...",
       "reprobe": "Re-probe",
+      "probe": "Probe",
+      "notProbed": "No interfaces known yet — probe the device to read them.",
       "deviceConfig": "Device Configuration",
       "reading": "Reading...",
       "refresh": "Refresh",

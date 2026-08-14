@@ -1181,6 +1181,38 @@ export default function IOProfileDialog({
                 />
               </FormField>
 
+              {/* Nothing probed yet. The Re-probe button lives inside the
+                  interfaces panel below, so without this a hand-made profile
+                  had no way to populate interfaces at all — unlike GVRET,
+                  whose Probe button is always on screen. */}
+              {!(Array.isArray(profileForm.connection.interfaces) && profileForm.connection.interfaces.length > 0) && (
+                <div className={`border-t ${borderDefault} pt-4 mt-4`}>
+                  <div className="flex items-center justify-between">
+                    <p className={`text-sm ${textMuted}`}>
+                      {t("ioProfileDialog.framelink.notProbed")}
+                    </p>
+                    <SecondaryButton onClick={handleFlReprobe} disabled={flReprobing}>
+                      {flReprobing ? (
+                        <>
+                          <RefreshCw className={`${iconXs} animate-spin`} />
+                          {t("ioProfileDialog.framelink.reprobing")}
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className={iconXs} />
+                          {t("ioProfileDialog.framelink.probe")}
+                        </>
+                      )}
+                    </SecondaryButton>
+                  </div>
+                  {flError && (
+                    <div className={`${alertWarning} mt-3`}>
+                      <p className="text-sm text-[color:var(--text-warning)]">{flError}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Interfaces — each row is collapsible and contains its own device configuration */}
               {Array.isArray(profileForm.connection.interfaces) && profileForm.connection.interfaces.length > 0 && (() => {
                 const interfaces = profileForm.connection.interfaces as Array<{
