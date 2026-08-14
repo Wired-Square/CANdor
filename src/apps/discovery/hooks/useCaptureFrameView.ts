@@ -13,9 +13,7 @@ import {
   type CaptureFrame,
 } from "../../../api/capture";
 import { BUFFER_POLL_INTERVAL_MS } from "../../../constants";
-import { wsTransport } from "../../../services/wsTransport";
-import { useDiscoveryFrameStore, getDiscoveryFrameBuffer } from "../../../stores/discoveryFrameStore";
-import { trackAlloc } from "../../../services/memoryDiag";
+import { useSessionStore } from "../../../stores/sessionStore";
 import type { FrameMessage } from "../../../types/frame";
 import { parseFrameKey } from "../../../utils/frameKey";
 
@@ -25,6 +23,8 @@ export type FrameWithHex = FrameMessage & { hexBytes: string[] };
 export interface UseBufferFrameViewOptions {
   /** Buffer ID to read from (null = no buffer) */
   captureId: string | null;
+  /** Owning session, used to refetch the live tail when Rust reports new frames. */
+  sessionId?: string | null;
   /** Whether currently streaming (determines tail vs pagination mode) */
   isStreaming: boolean;
   /** Selected composite frame keys filter (empty = all) */
@@ -37,6 +37,8 @@ export interface UseBufferFrameViewOptions {
   pollIntervalMs?: number;
   /** Buffer playback mode - uses pagination even when isStreaming is true */
   isCapturePlayback?: boolean;
+  /** Hold the live tail still while frames keep arriving (the freeze toggle). */
+  frozen?: boolean;
   /** When set, the hook auto-navigates to the page containing this timestamp during pagination mode.
    *  Used for play/play backward and stepping — the hook owns the page state so it handles navigation internally. */
   followTimeUs?: number | null;
@@ -61,6 +63,8 @@ export interface UseBufferFrameViewResult {
   timeRange: { startUs: number; endUs: number } | null;
   /** Navigate to timestamp (for timeline scrub) */
   navigateToTimestamp: (timeUs: number) => Promise<void>;
+  /** Pull the tail once while frozen, without unfreezing. */
+  refreshOnce: () => void;
 }
 
 /** Convert CaptureFrame to FrameMessage with hex bytes */
@@ -91,12 +95,14 @@ export function useCaptureFrameView(
 ): UseBufferFrameViewResult {
   const {
     captureId,
+    sessionId,
     isStreaming,
     selectedFrames,
     pageSize,
     tailSize = 50,
     pollIntervalMs = BUFFER_POLL_INTERVAL_MS,
     isCapturePlayback = false,
+    frozen = false,
     followTimeUs,
   } = options;
 
@@ -109,6 +115,9 @@ export function useCaptureFrameView(
     startUs: number;
     endUs: number;
   } | null>(null);
+  // Pull the tail once without disturbing the subscription or the frozen flag.
+  const fetchTailRef = useRef<() => void>(() => {});
+  const refreshOnce = useCallback(() => fetchTailRef.current(), []);
 
   // Refs to avoid stale closures in intervals
   // Buffer API uses numeric IDs — extract from composite keys
@@ -163,52 +172,27 @@ export function useCaptureFrameView(
     fetchMetadata();
   }, [captureId]);
 
+  // Read inside the fetch loop rather than through the effect deps, so toggling freeze
+  // holds the rows that are on screen instead of tearing the subscription down and
+  // pulling a fresh tail first.
+  const frozenRef = useRef(frozen);
+  frozenRef.current = frozen;
+
   useEffect(() => {
     if (!captureId || !isStreaming || isCapturePlayback) return;
 
-    if (wsTransport.isConnected) {
-      // WS mode: read frames directly from the discovery frame buffer
-      // (populated by WS FrameData → onFrames → addFrames). Zero invoke.
-      const updateFromBuffer = () => {
-        const allFrames = getDiscoveryFrameBuffer();
-        const selectedIds = selectedIdsRef.current;
-        const filtered = selectedIds.length > 0
-          ? allFrames.filter((f) => selectedIds.includes(f.frame_id))
-          : allFrames;
-        const tail = filtered.slice(-tailSize);
-        trackAlloc("bufferView.hexFrames", tail.length * 450);
-        setFrames(
-          tail.map((f) => ({
-            ...f,
-            hexBytes: f.bytes.map((b) => b.toString(16).padStart(2, "0").toUpperCase()),
-          }))
-        );
-        setBufferIndices([]);
-        setTotalCount(filtered.length);
-      };
-
-      updateFromBuffer();
-
-      // Re-render when frameVersion bumps (new frames added to buffer)
-      const unsubscribe = useDiscoveryFrameStore.subscribe(
-        (state, prevState) => {
-          if (state.frameVersion !== prevState.frameVersion) {
-            updateFromBuffer();
-          }
-        }
-      );
-      return () => unsubscribe();
-    }
-
-    // Fallback: poll buffer store when WS is unavailable
     let isMounted = true;
+    // A tail fetch can outlast the 500ms signal interval on a large capture. Skip while
+    // one is in flight and run once more on completion, so fetches can neither queue up
+    // on the DB mutex nor land out of order and overwrite newer rows with older ones.
+    let inFlight = false;
+    let missed = false;
+
     const fetchTail = async () => {
+      if (inFlight) { missed = true; return; }
+      inFlight = true;
       try {
-        const response = await getCaptureFramesTail(
-          captureId,
-          tailSize,
-          selectedIdsRef.current
-        );
+        const response = await getCaptureFramesTail(captureId, tailSize, selectedIdsRef.current);
         if (!isMounted) return;
         setFrames(addHexBytes(response.frames));
         setBufferIndices(response.capture_indices);
@@ -218,15 +202,37 @@ export function useCaptureFrameView(
         }
       } catch (e) {
         console.error("[useCaptureFrameView] tail fetch error:", e);
+      } finally {
+        inFlight = false;
+        if (missed && isMounted) { missed = false; void fetchTail(); }
       }
     };
-    fetchTail();
-    const intervalId = setInterval(fetchTail, pollIntervalMs);
+    fetchTailRef.current = fetchTail;
+    void fetchTail();
+
+    // Rust writes frames into the capture before it signals, and it owns the frame count
+    // it pushes over WS — so refetching whenever that count moves keeps the view in step
+    // with the backend at the backend's own throttle, with no timer on this side.
+    if (sessionId) {
+      const unsubscribe = useSessionStore.subscribe((state, prevState) => {
+        if (frozenRef.current) return;
+        if (state.sessions[sessionId]?.frameCount !== prevState.sessions[sessionId]?.frameCount) {
+          void fetchTail();
+        }
+      });
+      return () => {
+        isMounted = false;
+        unsubscribe();
+      };
+    }
+
+    // No session to follow — fall back to polling.
+    const intervalId = setInterval(() => { if (!frozenRef.current) void fetchTail(); }, pollIntervalMs);
     return () => {
       isMounted = false;
       clearInterval(intervalId);
     };
-  }, [captureId, isStreaming, isCapturePlayback, tailSize, pollIntervalMs]);
+  }, [captureId, isStreaming, isCapturePlayback, tailSize, pollIntervalMs, sessionId]);
 
   // PAGINATION MODE: Fetch page when stopped or during buffer playback
   useEffect(() => {
@@ -381,5 +387,6 @@ export function useCaptureFrameView(
     totalPages,
     timeRange,
     navigateToTimestamp,
+    refreshOnce,
   };
 }

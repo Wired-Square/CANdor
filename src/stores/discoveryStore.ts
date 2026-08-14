@@ -115,8 +115,6 @@ type CombinedDiscoveryState = {
   // Combined actions
   setStreamStartTimeUs: (timeUs: number | null) => void;
   addFrames: (newFrames: FrameMessage[], skipFramePicker?: boolean) => void;
-  clearBuffer: () => void;
-  clearFramePicker: () => void;
   clearAll: () => void;
   toggleFrameSelection: (id: string) => void;
   bulkSelectBus: (bus: number | null, select: boolean) => void;
@@ -264,8 +262,6 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     addFrames: (newFrames, skipFramePicker) => {
       frameStore.addFrames(newFrames, uiStore.maxBuffer, skipFramePicker, uiStore.activeSelectionSetSelectedIds);
     },
-    clearBuffer: frameStore.clearBuffer,
-    clearFramePicker: frameStore.clearFramePicker,
     clearAll: frameStore.clearAll,
     setFrames: frameStore.setFrames,
     rebuildFramePickerFromBuffer: frameStore.rebuildFramePickerFromBuffer,

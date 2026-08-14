@@ -87,6 +87,7 @@ One row per capture. Survives `ALTER TABLE RENAME` from the legacy
 |-------|---------|---------|
 | `idx_frames_capture_ts` | `(capture_id, timestamp_us)` | Timestamp-based seeks and lookback window queries. |
 | `idx_frames_capture_fid` | `(capture_id, frame_id)` | Filtered pagination by frame ID. |
+| `idx_frames_capture_rowid` | `(capture_id, rowid)` | The live frame tail (`ORDER BY rowid DESC LIMIT n`). Without it SQLite sorts the whole capture into a temp b-tree on a query the frames view reissues twice a second. |
 | `idx_bytes_capture_ts` | `(capture_id, timestamp_us)` | Timestamp-based seeks for byte captures. |
 
 ## Query Patterns

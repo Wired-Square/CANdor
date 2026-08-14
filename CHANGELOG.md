@@ -4,9 +4,17 @@ All notable changes to WireTAP will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Discovery no longer accumulates duplicate rows as a capture runs.** Rows were piling up on screen — the same frame drawn three or four times, more copies the longer a session ran — and toggling the #, Bus or ASCII columns left rows disagreeing with the header. Frames that shared a timestamp and ID could not be told apart, so the display kept adding rows without ever removing the old ones. The frame table also holds its column widths steady now instead of resizing as you page through.
+
+- **Dropping a source clears the view.** Destroying a session, or choosing "Continue without a source", could leave frames on screen underneath "No frames to display", with the frame count and the filter count disagreeing about what was there. Every way of leaving a source now clears the frames, the frame picker and the counts together.
+
 ### Changed
 
 - **A database source is now a WireTAP backend, and only that.** Connecting straight to a PostgreSQL server is no longer offered — the backend owns the database and authenticates with an API key instead of database credentials. If you have a direct PostgreSQL source, it is removed when you upgrade and named in a notice; add a WireTAP backend profile under Settings → Data I/O in its place. Queries, replay and the analysis tools all behave as before against one.
+
+- **The Frames tab reads its rows from the capture.** Live tail, a stopped page and capture playback now all come from one place, so the row count, the tab label and the toolbar counter always agree. The Source column moved to the column menu alongside # / Bus / ASCII rather than appearing and disappearing on its own.
 
 ## [0.10.2] - 2026-08-14
 

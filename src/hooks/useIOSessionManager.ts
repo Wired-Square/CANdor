@@ -683,6 +683,11 @@ export function useIOSessionManager(
   const handleDestroy = useCallback(async () => {
     const { destroyReaderSession } = await import("../api/io");
     const sessionId = session.sessionId;
+    // Clear app state up front rather than waiting for the destroyed lifecycle event.
+    // That event only reaches us while the listener for this session id is mounted, so
+    // anything that changes the effective session id mid-teardown used to strand the
+    // view showing frames from a session that no longer exists.
+    onBeforeWatch?.();
     if (sessionId) {
       await destroyReaderSession(sessionId, true);
     }
@@ -690,8 +695,7 @@ export function useIOSessionManager(
     setMultiBusProfiles([]);
     setIsWatching(false);
     setIsDetached(false);
-    // Note: the session destruction will emit lifecycle events that update the UI
-  }, [session.sessionId, setMultiBusProfiles]);
+  }, [session.sessionId, setMultiBusProfiles, onBeforeWatch]);
 
   // Clear capture — behaviour depends on source type:
   // Real-time/recorded: clear capture data in backend (session keeps running)
@@ -1266,6 +1270,11 @@ export function useIOSessionManager(
 
   // Skip IO reader selection: clear state, leave if streaming
   const skipReader = useCallback(async () => {
+    // Unconditional — this returns the app to "No source", so any data still on screen
+    // belongs to a source the user just dismissed. leave() cannot be relied on for this:
+    // it is skipped entirely for very young sessions, and it is not reached at all when
+    // the session was never running.
+    onBeforeWatch?.();
     setMultiBusProfiles([]);
     // Leave session if currently streaming or paused
     const readerState = session.state;
@@ -1274,7 +1283,7 @@ export function useIOSessionManager(
       setIsWatching(false);
     }
     setIoProfile(null);
-  }, [setMultiBusProfiles, session, setIoProfile]);
+  }, [setMultiBusProfiles, session, setIoProfile, onBeforeWatch]);
 
   // ---- Auto-Join from Cross-App Commands ----
   // When a source app (Decoder, Discovery) requests this app to join its session,

@@ -52,8 +52,10 @@ export default function FilteredTabContent({
   const showRefColumn = useDiscoveryUIStore((s) => s.showRefColumn);
   const showAsciiColumn = useDiscoveryUIStore((s) => s.showAsciiColumn);
   const showBusColumn = useDiscoveryUIStore((s) => s.showBusColumn);
+  const showSourceColumn = useDiscoveryUIStore((s) => s.showSourceColumn);
   const toggleShowRefColumn = useDiscoveryUIStore((s) => s.toggleShowRefColumn);
   const toggleShowAsciiColumn = useDiscoveryUIStore((s) => s.toggleShowAsciiColumn);
+  const toggleShowSourceColumn = useDiscoveryUIStore((s) => s.toggleShowSourceColumn);
   const toggleShowBusColumn = useDiscoveryUIStore((s) => s.toggleShowBusColumn);
 
   const [currentPage, setCurrentPage] = useState(0);
@@ -276,7 +278,8 @@ export default function FilteredTabContent({
     { label: '# Column', checked: showRefColumn, onClick: toggleShowRefColumn },
     { label: 'Bus Column', checked: showBusColumn, onClick: toggleShowBusColumn },
     { label: 'ASCII Column', checked: showAsciiColumn, onClick: toggleShowAsciiColumn },
-  ], [showRefColumn, showBusColumn, showAsciiColumn, toggleShowRefColumn, toggleShowBusColumn, toggleShowAsciiColumn]);
+    { label: 'Source Column', checked: showSourceColumn, onClick: toggleShowSourceColumn },
+  ], [showRefColumn, showBusColumn, showAsciiColumn, showSourceColumn, toggleShowRefColumn, toggleShowBusColumn, toggleShowAsciiColumn]);
 
   if (filteredOutIds.length === 0) {
     return (
@@ -310,6 +313,7 @@ export default function FilteredTabContent({
         showRef={showRefColumn}
         showAscii={showAsciiColumn}
         showBus={showBusColumn}
+        showSourceAddress={showSourceColumn}
         emptyMessage={loading ? "Loading filtered frames..." : "No filtered frames to display"}
         onContextMenu={handleContextMenu}
         onHeaderContextMenu={handleHeaderContextMenu}

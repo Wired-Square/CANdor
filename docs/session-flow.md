@@ -401,6 +401,32 @@ live view; the three **exit controls** in the session menu each end it different
   Destroy session  the session is torn down → every connected app → No Source
 ```
 
+### App cleanup on teardown — `onBeforeWatch`
+
+`onBeforeWatch` is the app's "drop whatever is on screen" hook. Despite the
+name it fires on **acquiring and releasing** a source — every path that changes
+what the app is showing calls it, including `handleDestroy`, `skipReader`
+("Continue without a source") and the `leave()`→disconnect branch.
+
+Two rules, both learned from stale frames surviving a teardown:
+
+- **Clear locally; don't wait for the round trip.** `handleDestroy` and
+  `skipReader` invoke it directly rather than relying on the `destroyed`
+  lifecycle event. That event only arrives while the listener for *that*
+  session id is mounted, so anything changing the effective session id
+  mid-teardown used to strand the view on a dead session's data. `stopWatch` is
+  the deliberate exception — stop switches to capture replay, so the picker and
+  selection must survive.
+- **Drop callbacks before any `await`.** `useIOSession.leave()` calls
+  `clearCallbacks` first, then marks the subscriber inactive in Rust. The
+  reverse order leaves a window the width of an IPC round trip during which
+  queued WS frames still reach the app and repopulate what it is clearing.
+
+Apps should make their reset a single store write. Discovery's
+`resetDiscoveryView` calls `clearAll()` for exactly this reason: clearing
+frames and the frame picker separately produces a render in between where rows
+exist but the picker already reads 0/0.
+
 ### Leave session — per-app detach to a snapshot
 
 `handleLeave` ([useIOSessionManager.ts](../src/hooks/useIOSessionManager.ts)) calls the

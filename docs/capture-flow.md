@@ -308,6 +308,32 @@ about this session's captures"; the frontend reacts by re-querying
 `listCaptures()` or `getSessionCaptureIds` rather than trying to diff a
 payload.
 
+### The capture is the display source
+
+Because every session owns a capture from its first frame, apps read their rows
+from the capture rather than keeping their own copy — live tail, a stopped page
+and capture playback are the same query at different offsets.
+[useCaptureFrameView](../src/apps/discovery/hooks/useCaptureFrameView.ts) is the
+reference implementation: it refetches the tail when the session's
+Rust-reported `frameCount` moves (`MsgType 0x16`, the same 2 Hz signal above),
+and pages via `get_capture_frames_paginated_filtered` when stopped.
+
+Two consequences worth knowing before changing it:
+
+- **Rows carry their capture position.** `capture_indices` are SQLite rowids,
+  parallel to `frames`. They are the row's identity — the `#` column and the
+  React key both come from them, via `frameRowKey` in
+  [src/utils/frameKey.ts](../src/utils/frameKey.ts). Frames have no identity of
+  their own: `(timestamp_us, frame_id, bus)` collides whenever a source emits
+  the same ID twice in one microsecond, and duplicate keys make React orphan
+  rows it can never remove, so they accumulate on every render.
+- **Frames arrive chronological.** The merge task sorts each batch by
+  `timestamp_us` before appending, queries are `ORDER BY rowid`, and the tail
+  query reverses its `DESC` result in Rust. Views must not re-sort or reverse.
+
+Discovery still keeps `_frameBuffer` in memory, but only for analysis, replay,
+bulk-add and the MCP live frame map — not for rendering the frames table.
+
 ---
 
 ## 10. Key files

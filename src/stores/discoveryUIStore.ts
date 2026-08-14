@@ -61,6 +61,7 @@ interface DiscoveryUIState {
   showRefColumn: boolean;
   showAsciiColumn: boolean;
   showBusColumn: boolean;
+  showSourceColumn: boolean;
 
   // Actions - UI settings
   setMaxBuffer: (value: number) => void;
@@ -101,6 +102,7 @@ interface DiscoveryUIState {
   toggleShowRefColumn: () => void;
   toggleShowAsciiColumn: () => void;
   toggleShowBusColumn: () => void;
+  toggleShowSourceColumn: () => void;
   setShowBusColumn: (show: boolean) => void;
 }
 
@@ -131,6 +133,7 @@ export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
   showRefColumn: true,
   showAsciiColumn: false,
   showBusColumn: false,
+  showSourceColumn: false,
 
   // UI settings
   setMaxBuffer: (value) => {
@@ -285,5 +288,6 @@ export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
   toggleShowRefColumn: () => set((state) => ({ showRefColumn: !state.showRefColumn })),
   toggleShowAsciiColumn: () => set((state) => ({ showAsciiColumn: !state.showAsciiColumn })),
   toggleShowBusColumn: () => set((state) => ({ showBusColumn: !state.showBusColumn })),
+  toggleShowSourceColumn: () => set((state) => ({ showSourceColumn: !state.showSourceColumn })),
   setShowBusColumn: (show) => set({ showBusColumn: show }),
 }));

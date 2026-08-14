@@ -23,3 +23,19 @@ export function parseFrameKey(key: string): { protocol: string; frameId: number 
 export function keyOf(frame: { protocol: string; frame_id: number }): string {
   return `${frame.protocol}:${frame.frame_id}`;
 }
+
+/**
+ * Stable React key for a row in a frame table.
+ *
+ * Distinct from `keyOf` above: that is *frame identity* (which signal this is), this is
+ * *row identity* (which row on screen). Frames carry no identity of their own —
+ * (timestamp, id, bus) collides whenever a source emits the same ID more than once in the
+ * same microsecond, and a duplicate key makes React's reconciler orphan rows it can no
+ * longer remove, so they accumulate on every render.
+ *
+ * Prefer the backend's per-row position (a SQLite rowid); fall back to the row's position
+ * in the paged list. The two are namespaced because both are small integers.
+ */
+export function frameRowKey(captureIndex: number | undefined, position: number): string {
+  return captureIndex != null ? `cap:${captureIndex}` : `pos:${position}`;
+}

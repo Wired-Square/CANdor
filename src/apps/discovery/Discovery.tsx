@@ -65,8 +65,7 @@ function DiscoveryInner() {
   // Subscribe to frameVersion so components re-render when the mutable capture data changes
   useDiscoveryFrameStore((s) => s.frameVersion);
   const setStreamStartTimeUs = useDiscoveryFrameStore((s) => s.setStreamStartTimeUs);
-  const clearBuffer = useDiscoveryFrameStore((s) => s.clearBuffer);
-  const clearFramePicker = useDiscoveryFrameStore((s) => s.clearFramePicker);
+  const clearAll = useDiscoveryFrameStore((s) => s.clearAll);
   const enableCaptureMode = useDiscoveryFrameStore((s) => s.enableCaptureMode);
   const disableCaptureMode = useDiscoveryFrameStore((s) => s.disableCaptureMode);
   const setFrameInfoFromCapture = useDiscoveryFrameStore((s) => s.setFrameInfoFromCapture);
@@ -377,8 +376,6 @@ function DiscoveryInner() {
           console.error("Failed to load bytes from capture:", e);
         }
       } else {
-        clearBuffer();
-
         // Always enable capture mode so playback controls appear
         // (Session is now in capture replay mode after ingest)
         console.log(`[Discovery] Ingest complete (${payload.count} frames) - enabling capture mode for playback controls`);
@@ -401,12 +398,8 @@ function DiscoveryInner() {
     }
   }, [
     dialogs.ioSessionPicker,
-    clearSerialBytes,
-    resetFraming,
     addSerialBytes,
     setBytesCaptureId,
-    setBackendByteCount,
-    clearBuffer,
     enableCaptureMode,
     setFrameInfoFromCapture,
   ]);
@@ -430,10 +423,13 @@ function DiscoveryInner() {
     }
   }, [setStartTime, setEndTime, setActiveBookmarkId, setStreamStartTimeUs, updateCurrentTime, setCurrentFrameIndex]);
 
-  // Cleanup callback for before starting a new watch session
-  const clearBeforeWatch = useCallback(() => {
-    clearBuffer();
-    clearFramePicker();
+  // The single teardown entry point for Discovery. Every path that drops a source —
+  // starting a new watch, destroying, leaving, switching profile, "Continue without a
+  // source" — goes through here, so none of them can clear half the view.
+  const resetDiscoveryView = useCallback(() => {
+    // One store write, so there is no render where the rows still exist but the
+    // frame picker already reads 0/0.
+    clearAll();
     clearAnalysisResults();
     disableCaptureMode();
     setCaptureMetadata(null); // Clear stale metadata so effectiveStartTimeUs doesn't use old values
@@ -445,7 +441,7 @@ function DiscoveryInner() {
     // session (e.g., capture mode after stop) from silently dropping frames
     isPausedRef.current = false;
     inCaptureModeRef.current = false;
-  }, [clearBuffer, clearFramePicker, clearAnalysisResults, disableCaptureMode, clearSerialBytes, resetFraming, setBackendByteCount, setBackendFrameCount]);
+  }, [clearAll, clearAnalysisResults, disableCaptureMode, clearSerialBytes, resetFraming, setBackendByteCount, setBackendFrameCount]);
 
   // Handle session destroyed — switch to orphaned capture if available
   const handleSessionDestroyed = useCallback(async (orphanedCaptureIds: string[]) => {
@@ -479,8 +475,8 @@ function DiscoveryInner() {
     onSpeedChange: handleSessionSpeedChange,
     // Session switching callbacks
     setPlaybackSpeed: (speed: number) => setPlaybackSpeed(speed as PlaybackSpeed),
-    onBeforeWatch: clearBeforeWatch,
-    onBeforeMultiWatch: clearBeforeWatch,
+    onBeforeWatch: resetDiscoveryView,
+    onBeforeMultiWatch: resetDiscoveryView,
     onSessionReconfigured: handleSessionReconfigured,
     onSessionDestroyed: handleSessionDestroyed,
   });
@@ -940,15 +936,10 @@ function DiscoveryInner() {
     setMaxBuffer,
     setStartTime,
     setEndTime,
-    clearBuffer,
-    clearFramePicker,
-    clearAnalysisResults,
+    clearAll,
+    resetView: resetDiscoveryView,
     enableCaptureMode,
-    disableCaptureMode,
     setFrameInfoFromCapture,
-    clearSerialBytes,
-    resetFraming,
-    setBackendByteCount,
     setBackendFrameCount,
     addSerialBytes,
     openSaveDialog,
@@ -1115,8 +1106,12 @@ function DiscoveryInner() {
           />
         ) : (
           <DiscoveryFramesView
-            frames={frames}
-            captureId={captureMetadata?.id ?? (captureMode.enabled ? sessionCaptureId : null)}
+            // Unconditional: Rust creates and owns a frame capture for every session and
+            // writes each batch to it before signalling, so the capture is the source of
+            // truth from the first frame. Gating this on captureMode was what forced the
+            // view to keep two in-memory render paths alongside it.
+            captureId={captureMetadata?.id ?? sessionCaptureId}
+            sessionId={sessionId}
             protocol={protocolLabel}
             onCancelScan={handleCancelModbusScan}
             displayFrameIdFormat={displayFrameIdFormat}

@@ -110,15 +110,12 @@ export interface UseDiscoveryHandlersParams {
   setMaxBuffer: (count: number) => void;
   setStartTime: (time: string) => void;
   setEndTime: (time: string) => void;
-  clearBuffer: () => void;
-  clearFramePicker: () => void;
-  clearAnalysisResults: () => void;
+  /** Atomic frames + picker clear (one store write). */
+  clearAll: () => void;
+  /** Single teardown entry point — see resetDiscoveryView in Discovery.tsx. */
+  resetView: () => void;
   enableCaptureMode: (count: number) => void;
-  disableCaptureMode: () => void;
   setFrameInfoFromCapture: (frameInfo: any[]) => void;
-  clearSerialBytes: (preserveCount?: boolean) => void;
-  resetFraming: () => void;
-  setBackendByteCount: (count: number) => void;
   setBackendFrameCount: (count: number) => void;
   addSerialBytes: (entries: { byte: number; timestampUs: number }[]) => void;
   openSaveDialog: () => void;
@@ -164,16 +161,9 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     updateCurrentTime: params.updateCurrentTime,
     setCurrentFrameIndex: params.setCurrentFrameIndex,
     setMaxBuffer: params.setMaxBuffer,
-    clearBuffer: params.clearBuffer,
-    clearFramePicker: params.clearFramePicker,
-    clearAnalysisResults: params.clearAnalysisResults,
+    resetView: params.resetView,
     enableCaptureMode: params.enableCaptureMode,
-    disableCaptureMode: params.disableCaptureMode,
     setFrameInfoFromCapture: params.setFrameInfoFromCapture,
-    clearSerialBytes: params.clearSerialBytes,
-    resetFraming: params.resetFraming,
-    setBackendByteCount: params.setBackendByteCount,
-    addSerialBytes: params.addSerialBytes,
     setCaptureMetadata: params.setCaptureMetadata,
   });
 
@@ -198,8 +188,7 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     setPlaybackSpeed: params.setPlaybackSpeed,
     updateCurrentTime: params.updateCurrentTime,
     setCurrentFrameIndex: params.setCurrentFrameIndex,
-    clearBuffer: params.clearBuffer,
-    clearFramePicker: params.clearFramePicker,
+    clearAll: params.clearAll,
     resetWatchFrameCount: params.resetWatchFrameCount,
     closeSpeedChangeDialog: params.closeSpeedChangeDialog,
   });
@@ -264,23 +253,11 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     onAfterMutate: params.onAfterSelectionSetMutate,
   });
 
-  // Handle clear discovered frames — app-specific cleanup + centralised buffer clear
+  // Handle clear discovered frames — local reset + centralised capture clear
   const handleClearDiscoveredFrames = useCallback(async () => {
-    if (params.isSerialMode) {
-      params.clearSerialBytes();
-      params.resetFraming();
-    }
-    params.clearBuffer();
-    params.clearFramePicker();
+    params.resetView();
     await params.handleClearCapture();
-  }, [
-    params.isSerialMode,
-    params.clearSerialBytes,
-    params.resetFraming,
-    params.clearBuffer,
-    params.clearFramePicker,
-    params.handleClearCapture,
-  ]);
+  }, [params.resetView, params.handleClearCapture]);
 
   // Handle export click (opens dialog)
   const handleExportClick = useCallback(() => {

@@ -20,16 +20,10 @@ export interface UseDiscoverySessionHandlersParams {
   updateCurrentTime?: (timeSeconds: number) => void;
   setCurrentFrameIndex?: (index: number) => void;
   setMaxBuffer?: (count: number) => void;
-  clearBuffer: () => void;
-  clearFramePicker: () => void;
-  clearAnalysisResults: () => void;
+  /** Single teardown entry point — clears frames, picker, analysis, serial and capture state. */
+  resetView: () => void;
   enableCaptureMode: (count: number) => void;
-  disableCaptureMode: () => void;
   setFrameInfoFromCapture: (frameInfo: any[]) => void;
-  clearSerialBytes: (preserveCount?: boolean) => void;
-  resetFraming: () => void;
-  setBackendByteCount: (count: number) => void;
-  addSerialBytes: (entries: { byte: number; timestampUs: number }[]) => void;
 
   // Buffer state
   setCaptureMetadata: (meta: CaptureMetadata | null) => void;
@@ -41,35 +35,18 @@ export function useDiscoverySessionHandlers({
   updateCurrentTime,
   setCurrentFrameIndex,
   setMaxBuffer,
-  clearBuffer,
-  clearFramePicker,
-  clearAnalysisResults,
+  resetView,
   enableCaptureMode,
-  disableCaptureMode,
   setFrameInfoFromCapture,
-  clearSerialBytes,
-  resetFraming,
-  setBackendByteCount,
-  addSerialBytes: _addSerialBytes,
   setCaptureMetadata,
 }: UseDiscoverySessionHandlersParams) {
-  void _addSerialBytes; // Reserved for future bytes mode support
-
   // Centralized buffer session handler with Discovery-specific callbacks
   const { switchToCapture } = useCaptureSession({
     setCaptureMetadata,
     updateCurrentTime: updateCurrentTime ?? (() => {}),
     setCurrentFrameIndex: setCurrentFrameIndex ?? (() => {}),
     // Clear previous state before switching
-    onBeforeSwitch: () => {
-      clearBuffer();
-      clearFramePicker();
-      clearAnalysisResults();
-      disableCaptureMode();
-      clearSerialBytes();
-      resetFraming();
-      setBackendByteCount(0);
-    },
+    onBeforeSwitch: resetView,
     // Load frame info after metadata is loaded
     onAfterSwitch: async (meta) => {
       if (!meta || meta.count === 0) return;
@@ -113,25 +90,13 @@ export function useDiscoverySessionHandlers({
       // Manager handles: clear multi-bus, set profile, default speed
       selectProfile(profileId);
       // Clear state when switching to non-buffer profile
-      clearAnalysisResults();
-      clearBuffer();
-      clearFramePicker();
-      disableCaptureMode();
-      clearSerialBytes();
-      resetFraming();
-      setBackendByteCount(0);
+      resetView();
     }
   }, [
     selectProfile,
     watchSource,
     switchToCapture,
-    clearAnalysisResults,
-    clearBuffer,
-    clearFramePicker,
-    disableCaptureMode,
-    clearSerialBytes,
-    resetFraming,
-    setBackendByteCount,
+    resetView,
   ]);
 
   // Note: Dialog handlers (start/stop load, join, skip, multi-select) are now provided

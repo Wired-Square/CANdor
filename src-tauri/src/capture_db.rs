@@ -98,9 +98,10 @@ fn has_column(conn: &Connection, table: &str, col: &str) -> Result<bool, String>
 
 enum MigrationStep {
     /// Conditional logic SQL can't express. Avoid for new migrations —
-    /// plain SQL steps use `Sql(include_str!(...))`, added with the first
-    /// SQL-file migration.
+    /// prefer `Sql` so the change is reviewable as plain text.
     Rust(fn(&rusqlite::Transaction) -> Result<(), String>),
+    /// A migration file from `src-tauri/migrations/`, applied verbatim.
+    Sql(&'static str),
 }
 
 struct Migration {
@@ -111,11 +112,18 @@ struct Migration {
 
 /// All migrations, ascending and contiguous from version 1.
 /// `user_version` 0 = unstamped (any pre-versioning shape).
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "baseline_capture_schema",
-    step: MigrationStep::Rust(baseline_capture_schema),
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "baseline_capture_schema",
+        step: MigrationStep::Rust(baseline_capture_schema),
+    },
+    Migration {
+        version: 2,
+        name: "frames_capture_rowid_index",
+        step: MigrationStep::Sql(include_str!("../migrations/0002_frames_capture_rowid_index.sql")),
+    },
+];
 
 fn schema_version(conn: &Connection) -> Result<i64, String> {
     conn.query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -144,6 +152,9 @@ fn run_migrations(conn: &mut Connection) -> Result<(), String> {
 
         match m.step {
             MigrationStep::Rust(f) => f(&tx)
+                .map_err(|e| format!("Migration {} ({}) failed: {}", m.version, m.name, e))?,
+            MigrationStep::Sql(sql) => tx
+                .execute_batch(sql)
                 .map_err(|e| format!("Migration {} ({}) failed: {}", m.version, m.name, e))?,
         }
 
@@ -532,64 +543,19 @@ pub fn get_frames_paginated_filtered(
     Ok((frames, rowids, total))
 }
 
-/// Get the last N frames for a capture, optionally filtered. Returns (frames, rowids, total_filtered_count, end_time).
-/// Frames are returned in chronological order (oldest first).
-pub fn get_frames_tail(
-    capture_id: &str,
+/// Column list for every `SELECT` feeding `row_to_frame_with_rowid`. Kept in one place
+/// because the mapper reads by position — a mismatch is a runtime error, not a build one.
+const FRAME_COLUMNS: &str =
+    "rowid, protocol, timestamp_us, frame_id, bus, dlc, payload, is_extended, is_fd, source_address, incomplete, direction";
+
+/// Run a `... ORDER BY rowid DESC LIMIT n` tail query and return it chronologically.
+fn collect_tail(
+    stmt: &mut rusqlite::CachedStatement<'_>,
+    params: &[&dyn rusqlite::ToSql],
     limit: usize,
-    frame_ids: &[u32],
-) -> Result<(Vec<FrameMessage>, Vec<i64>, usize, Option<u64>), String> {
-    let guard = DB.lock().unwrap();
-    let conn = guard.as_ref().ok_or("Database not initialised")?;
-
-    let (sql_data, sql_count, sql_end_time) = if frame_ids.is_empty() {
-        (
-            "SELECT rowid, protocol, timestamp_us, frame_id, bus, dlc, payload, is_extended, is_fd, source_address, incomplete, direction
-             FROM frames WHERE capture_id = ?1 ORDER BY rowid DESC LIMIT ?2"
-                .to_string(),
-            "SELECT COUNT(*) FROM frames WHERE capture_id = ?1".to_string(),
-            "SELECT MAX(timestamp_us) FROM frames WHERE capture_id = ?1".to_string(),
-        )
-    } else {
-        let placeholders = frame_ids
-            .iter()
-            .map(|id| id.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-        (
-            format!(
-                "SELECT rowid, protocol, timestamp_us, frame_id, bus, dlc, payload, is_extended, is_fd, source_address, incomplete, direction
-                 FROM frames WHERE capture_id = ?1 AND frame_id IN ({}) ORDER BY rowid DESC LIMIT ?2",
-                placeholders
-            ),
-            format!(
-                "SELECT COUNT(*) FROM frames WHERE capture_id = ?1 AND frame_id IN ({})",
-                placeholders
-            ),
-            format!(
-                "SELECT MAX(timestamp_us) FROM frames WHERE capture_id = ?1 AND frame_id IN ({})",
-                placeholders
-            ),
-        )
-    };
-
-    let total: usize = conn
-        .query_row(&sql_count, params![capture_id], |row| row.get::<_, i64>(0))
-        .map_err(|e| format!("Failed to count: {}", e))? as usize;
-
-    let end_time_us: Option<u64> = conn
-        .query_row(&sql_end_time, params![capture_id], |row| {
-            row.get::<_, Option<i64>>(0)
-        })
-        .map_err(|e| format!("Failed to get end time: {}", e))?
-        .map(|v| v as u64);
-
-    let mut stmt = conn
-        .prepare(&sql_data)
-        .map_err(|e| format!("Failed to prepare: {}", e))?;
-
+) -> Result<(Vec<FrameMessage>, Vec<i64>), String> {
     let rows = stmt
-        .query_map(params![capture_id, limit as i64], |row| row_to_frame_with_rowid(row))
+        .query_map(params, row_to_frame_with_rowid)
         .map_err(|e| format!("Failed to query: {}", e))?;
 
     let mut frames = Vec::with_capacity(limit);
@@ -603,8 +569,69 @@ pub fn get_frames_tail(
     // Results came in DESC order, reverse to chronological
     frames.reverse();
     rowids.reverse();
+    Ok((frames, rowids))
+}
 
-    Ok((frames, rowids, total, end_time_us))
+/// Get the last N frames for a capture, unfiltered. Returns (frames, rowids) in
+/// chronological order (oldest first).
+///
+/// Rows only — the caller supplies the total and end time from the capture registry,
+/// which already tracks both. Used by the live view, which refetches on every
+/// frame-count signal, so this must not scan the capture.
+pub fn get_frames_tail_rows(
+    capture_id: &str,
+    limit: usize,
+) -> Result<(Vec<FrameMessage>, Vec<i64>), String> {
+    let guard = DB.lock().unwrap();
+    let conn = guard.as_ref().ok_or("Database not initialised")?;
+
+    let mut stmt = conn
+        .prepare_cached(&format!(
+            "SELECT {FRAME_COLUMNS} FROM frames WHERE capture_id = ?1 ORDER BY rowid DESC LIMIT ?2"
+        ))
+        .map_err(|e| format!("Failed to prepare: {}", e))?;
+
+    collect_tail(&mut stmt, params![capture_id, limit as i64], limit)
+}
+
+/// Get the last N frames for a capture, restricted to `frame_ids` (which must not be
+/// empty — use `get_frames_tail_rows` otherwise). Returns (frames, rowids, total_matching).
+/// Frames are returned in chronological order (oldest first).
+pub fn get_frames_tail_filtered(
+    capture_id: &str,
+    limit: usize,
+    frame_ids: &[u32],
+) -> Result<(Vec<FrameMessage>, Vec<i64>, usize), String> {
+    let guard = DB.lock().unwrap();
+    let conn = guard.as_ref().ok_or("Database not initialised")?;
+
+    // Sorted so the generated SQL text is stable between calls and `prepare_cached` can
+    // actually hit — the ids arrive from a HashSet, whose iteration order varies.
+    let mut sorted = frame_ids.to_vec();
+    sorted.sort_unstable();
+    let placeholders = sorted
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let total: usize = conn
+        .query_row(
+            &format!("SELECT COUNT(*) FROM frames WHERE capture_id = ?1 AND frame_id IN ({placeholders})"),
+            params![capture_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|e| format!("Failed to count: {}", e))? as usize;
+
+    let mut stmt = conn
+        .prepare_cached(&format!(
+            "SELECT {FRAME_COLUMNS} FROM frames WHERE capture_id = ?1 AND frame_id IN ({placeholders}) \
+             ORDER BY rowid DESC LIMIT ?2"
+        ))
+        .map_err(|e| format!("Failed to prepare: {}", e))?;
+
+    let (frames, rowids) = collect_tail(&mut stmt, params![capture_id, limit as i64], limit)?;
+    Ok((frames, rowids, total))
 }
 
 /// Get total frame count for a capture.
@@ -1573,8 +1600,14 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         run_migrations(&mut conn).unwrap();
 
-        assert_eq!(version_of(&conn), 1);
-        assert_eq!(audit_rows(&conn), vec![(1, "baseline_capture_schema".to_string())]);
+        assert_eq!(version_of(&conn), MIGRATIONS.last().unwrap().version);
+        assert_eq!(
+            audit_rows(&conn),
+            vec![
+                (1, "baseline_capture_schema".to_string()),
+                (2, "frames_capture_rowid_index".to_string()),
+            ]
+        );
         assert!(has_column(&conn, "frames", "capture_id").unwrap());
         assert!(has_column(&conn, "capture_metadata", "persistent").unwrap());
         assert!(has_column(&conn, "capture_metadata", "buses").unwrap());
@@ -1595,7 +1628,7 @@ mod tests {
 
         run_migrations(&mut conn).unwrap();
 
-        assert_eq!(version_of(&conn), 1);
+        assert_eq!(version_of(&conn), MIGRATIONS.last().unwrap().version);
         assert!(!has_column(&conn, "frames", "buffer_id").unwrap());
         let (name, count): (String, i64) = conn
             .query_row(
@@ -1639,7 +1672,7 @@ mod tests {
 
         run_migrations(&mut conn).unwrap();
 
-        assert_eq!(version_of(&conn), 1);
+        assert_eq!(version_of(&conn), MIGRATIONS.last().unwrap().version);
         // Legacy husk gone, migrated (pinned) data untouched.
         let legacy_tables: i64 = conn
             .query_row(
@@ -1665,8 +1698,41 @@ mod tests {
         run_migrations(&mut conn).unwrap();
         run_migrations(&mut conn).unwrap();
 
-        assert_eq!(version_of(&conn), 1);
-        assert_eq!(audit_rows(&conn).len(), 1);
+        assert_eq!(version_of(&conn), MIGRATIONS.last().unwrap().version);
+        assert_eq!(audit_rows(&conn).len(), MIGRATIONS.len());
+    }
+
+    #[test]
+    fn rowid_index_serves_the_live_tail_query() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_migrations(&mut conn).unwrap();
+
+        let index_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'index' AND name = 'idx_frames_capture_rowid'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index_exists, 1);
+
+        // The point of the index: without it SQLite sorts the whole capture into a temp
+        // b-tree to return the tail, on a query Discovery reissues twice a second.
+        let plan: String = conn
+            .query_row(
+                &format!(
+                    "EXPLAIN QUERY PLAN SELECT {FRAME_COLUMNS} FROM frames
+                     WHERE capture_id = 'c1' ORDER BY rowid DESC LIMIT 50"
+                ),
+                [],
+                |row| row.get(3),
+            )
+            .unwrap();
+        assert!(
+            plan.contains("idx_frames_capture_rowid"),
+            "tail query should use the rowid index, got: {plan}"
+        );
     }
 
     #[test]

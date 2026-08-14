@@ -3,10 +3,11 @@
 // Shared frame data table component for Discovery views.
 // Optimised for streaming: SVG sprites, event delegation, stable keys.
 
-import { ReactNode, useMemo, forwardRef, useRef, useEffect, useCallback, type MouseEvent } from 'react';
+import { ReactNode, forwardRef, useRef, useEffect, useCallback, type MouseEvent } from 'react';
 import { useFrameIdFormat } from '../../../hooks/useFrameIdFormat';
 import { sendHexDataToCalculator } from '../../../utils/windowCommunication';
 import { bytesToHex, bytesToAscii } from '../../../utils/byteUtils';
+import { frameRowKey } from '../../../utils/frameKey';
 import { formatHumanUs } from '../../../utils/timeFormat';
 import {
   bgDataView,
@@ -59,8 +60,6 @@ export interface FrameDataTableProps {
   onCalculator?: (bytes: number[]) => void;
   /** Show calculator button (default: true if onCalculator not provided, uses default handler) */
   showCalculator?: boolean;
-  /** Custom row renderer for additional columns or styling */
-  renderExtraColumns?: (frame: FrameRow, index: number) => ReactNode;
   /** Empty state message */
   emptyMessage?: string;
   /** Number of source bytes for padding (serial extraction) */
@@ -87,16 +86,10 @@ export interface FrameDataTableProps {
   onHeaderContextMenu?: (position: { x: number; y: number }) => void;
   /** Starting frame index for the current page (for tooltip display) */
   pageStartIndex?: number;
-  /** Whether frames were reversed for display (affects frame index calculation) */
-  framesReversed?: boolean;
-  /** Total frames on this page (needed when reversed to calculate correct index) */
-  pageFrameCount?: number;
   /** 1-based original buffer positions for each frame. When provided, used for # column instead of computed page offset. */
   captureIndices?: number[];
   /** Optional leading status column — renders per-row status indicator with matching header */
   renderRowStatus?: (frame: FrameRow, index: number) => ReactNode;
-  /** Header label for the status column (default: empty) */
-  statusHeader?: string;
   /** Whether to use local timezone for tooltip timestamps */
   useLocalTimezone?: boolean;
 }
@@ -149,7 +142,7 @@ function rowIndexFromEvent(e: MouseEvent): number | null {
 function DefaultBytes({ frame }: { frame: FrameRow }) {
   const hexBytes = frame.hexBytes ?? frame.bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase());
   return (
-    <span className={`whitespace-nowrap ${frame.incomplete ? textDataOrange : textDataGreen}`}>
+    <span className={`break-all ${frame.incomplete ? textDataOrange : textDataGreen}`}>
       {hexBytes.join(' ')}
     </span>
   );
@@ -166,7 +159,6 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
   onBookmark,
   onCalculator,
   showCalculator = true,
-  renderExtraColumns,
   emptyMessage = 'No frames to display',
   sourceByteCount = 2,
   renderBytes,
@@ -180,11 +172,8 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
   onContextMenu,
   onHeaderContextMenu,
   pageStartIndex = 0,
-  framesReversed = false,
-  pageFrameCount = 0,
   captureIndices,
   renderRowStatus,
-  statusHeader = '',
   useLocalTimezone = false,
 }, ref) => {
   const { format: formatId } = useFrameIdFormat();
@@ -229,11 +218,6 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
       });
     }
   }, [highlightedRowIndex, frames]);
-
-  const hasSourceAddress = useMemo(() => {
-    if (showSourceAddress) return true;
-    return frames.some(frame => frame.source_address !== undefined);
-  }, [frames, showSourceAddress]);
 
   // ---- Event delegation handlers (stable — no per-row closures) ----
 
@@ -285,31 +269,50 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
       onScroll={handleScroll}
     >
       <IconSprites />
-      <table className="w-full">
+      {/*
+        `table-fixed` + <colgroup> keeps column widths independent of the rows on the
+        current page, so toggling #/Bus/ASCII (or paging to frames with wider payloads)
+        is a repaint rather than a full re-solve of every column. Data carries no width:
+        it is the sole flexible column and absorbs whatever is left over.
+      */}
+      <table className="w-full table-fixed">
+        <colgroup>
+          {renderRowStatus && <col className="w-8" />}
+          {onBookmark && <col className="w-7" />}
+          {showRef && <col className="w-16" />}
+          <col className="w-56" />
+          {showId && <col className="w-24" />}
+          {showBus && <col className="w-12" />}
+          {showSourceAddress && <col className="w-20" />}
+          <col className="w-12" />
+          {showCalculator && <col className="w-7" />}
+          <col />
+          {showAscii && <col className="w-32" />}
+        </colgroup>
         <thead className={`sticky top-0 z-10 ${bgDataView} ${textDataSecondary}`}>
           <tr onContextMenu={onHeaderContextMenu ? (e) => { e.preventDefault(); onHeaderContextMenu({ x: e.clientX, y: e.clientY }); } : undefined}>
             {renderRowStatus && (
-              <th className={`px-1 py-1.5 w-8 border-b ${borderDataView} ${textDataSecondary}`}>{statusHeader}</th>
+              <th className={`px-1 py-1.5 border-b ${borderDataView}`}></th>
             )}
             {onBookmark && (
-              <th className={`px-1 py-1.5 w-6 border-b ${borderDataView}`}></th>
+              <th className={`px-1 py-1.5 border-b ${borderDataView}`}></th>
             )}
             {showRef && (
-              <th className={`text-right px-2 py-1.5 w-14 border-b ${borderDataView} ${textDataSecondary}`}>#</th>
+              <th className={`text-right px-2 py-1.5 border-b ${borderDataView} ${textDataSecondary}`}>#</th>
             )}
             <th className={`text-left px-2 py-1.5 border-b ${borderDataView}`}>Time</th>
             {showId && (
               <th className={`text-right px-2 py-1.5 border-b ${borderDataView}`}>ID</th>
             )}
             {showBus && (
-              <th className={`text-center px-2 py-1.5 w-10 border-b ${borderDataView} ${textDataCyan}`}>Bus</th>
+              <th className={`text-center px-2 py-1.5 border-b ${borderDataView} ${textDataCyan}`}>Bus</th>
             )}
-            {hasSourceAddress && (
+            {showSourceAddress && (
               <th className={`text-right px-2 py-1.5 border-b ${borderDataView} ${textDataPurple}`}>Source</th>
             )}
-            <th className={`text-left px-2 py-1.5 w-10 border-b ${borderDataView}`}>Len</th>
+            <th className={`text-left px-2 py-1.5 border-b ${borderDataView}`}>Len</th>
             {showCalculator && (
-              <th className={`px-1 py-1.5 w-6 border-b ${borderDataView}`}></th>
+              <th className={`px-1 py-1.5 border-b ${borderDataView}`}></th>
             )}
             <th className={`text-left px-2 py-1.5 border-b ${borderDataView}`}>Data</th>
             {showAscii && (
@@ -321,16 +324,15 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
           {frames.map((frame, idx, arr) => {
             const prevFrame = idx > 0 ? arr[idx - 1] : null;
             const isCurrentFrame = highlightedRowIndex != null && idx === highlightedRowIndex;
-            const frameIndex = framesReversed
-              ? pageStartIndex + pageFrameCount - 1 - idx
-              : pageStartIndex + idx;
-            const displayIndex = captureIndices?.[idx] ?? (frameIndex + 1);
+            // Rust supplies the row's capture position; the page offset is only a
+            // fallback for callers that don't pass indices.
+            const displayIndex = captureIndices?.[idx] ?? (pageStartIndex + idx + 1);
             const cellHighlight = isCurrentFrame ? bgCyan : '';
 
             return (
               <tr
                 ref={isCurrentFrame ? highlightedRowRef : undefined}
-                key={`${frame.timestamp_us}-${frame.frame_id}-${frame.bus ?? 0}`}
+                key={frameRowKey(captureIndices?.[idx], pageStartIndex + idx)}
                 data-idx={idx}
                 className={`${isCurrentFrame ? '' : hoverDataRow} ${frame.incomplete ? 'opacity-60' : ''} ${isCurrentFrame ? 'ring-1 ring-[color:var(--status-cyan-border)]' : ''} ${onRowClick ? 'cursor-pointer' : ''}`}
                 title={`Frame ${displayIndex}${frame.incomplete ? ' - Incomplete (no delimiter found)' : ''}`}
@@ -369,7 +371,7 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
                     {frame.bus ?? 0}
                   </td>
                 )}
-                {hasSourceAddress && (
+                {showSourceAddress && (
                   <td className={`px-2 py-0.5 text-right ${textDataPurple} ${cellHighlight}`}>
                     {frame.source_address !== undefined
                       ? `0x${frame.source_address.toString(16).toUpperCase().padStart(srcPadding, '0')}`
@@ -389,11 +391,10 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
                   {renderBytes ? renderBytes(frame) : <DefaultBytes frame={frame} />}
                 </td>
                 {showAscii && (
-                  <td className={`px-2 py-0.5 ${textDataYellow} whitespace-nowrap ${cellHighlight}`}>
+                  <td className={`px-2 py-0.5 ${textDataYellow} break-all ${cellHighlight}`}>
                     |{bytesToAscii(frame.bytes)}|
                   </td>
                 )}
-                {renderExtraColumns?.(frame, idx)}
               </tr>
             );
           })}

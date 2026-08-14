@@ -18,11 +18,11 @@ let flushTimeout: ReturnType<typeof setTimeout> | null = null;
 const FLUSH_INTERVAL_MS = 500;
 // Allow the frame buffer to temporarily overshoot maxBuffer by this many frames
 // before compacting. This avoids O(100k) splice every flush — compaction happens
-// once every few minutes instead of 25x/sec, dramatically reducing GC pressure.
+// once every few minutes instead of on every flush, reducing GC pressure.
 const COMPACT_THRESHOLD = 10_000;
 
 // Mutable frame buffer — avoids creating a new 100k-element array on every
-// 40ms flush, which caused JSC GC pressure that froze the main thread after
+// flush, which caused JSC GC pressure that froze the main thread after
 // ~30 min of streaming. Components subscribe to `frameVersion` for reactivity
 // and read from this buffer via `getDiscoveryFrameBuffer()`.
 let _frameBuffer: FrameMessage[] = [];
@@ -47,6 +47,39 @@ let _lastFrameDataMap: Map<string, LastFrameData> = new Map();
 /** Direct access to the last-seen frame data map (keyed by composite frame key). Read-only. */
 export function getLastFrameDataMap(): Map<string, LastFrameData> {
   return _lastFrameDataMap;
+}
+
+/**
+ * Drop every frame held outside Zustand and cancel any pending flush.
+ *
+ * All three module-level caches are reset together — clearing the buffer while leaving
+ * `_lastFrameDataMap` behind leaves bulk-add and the MCP live frame map reporting
+ * frames from a session that is already gone.
+ *
+ * Callers own the accompanying `set()`; nothing here touches store state.
+ */
+function resetBuffers(): void {
+  pendingFrames = [];
+  _frameBuffer = [];
+  _lastFrameDataMap = new Map();
+  if (flushTimeout !== null) {
+    clearTimeout(flushTimeout);
+    flushTimeout = null;
+  }
+}
+
+/**
+ * Picker state for "nothing discovered yet".
+ *
+ * A factory, not a shared const — these collections are stored in Zustand and compared
+ * by reference, so every clear needs its own instances.
+ */
+function emptyPicker() {
+  return {
+    frameInfoMap: new Map<string, FrameInfo>(),
+    selectedFrames: new Set<string>(),
+    seenIds: new Set<string>(),
+  };
 }
 
 export type FrameInfo = {
@@ -80,8 +113,6 @@ interface DiscoveryFrameState {
 
   // Actions - Data management
   addFrames: (newFrames: FrameMessage[], maxBuffer: number, skipFramePicker?: boolean, activeSelectionSetSelectedIds?: Set<string> | null) => void;
-  clearBuffer: () => void;
-  clearFramePicker: () => void;
   clearAll: () => void;
   setFrames: (frames: FrameMessage[]) => void;
   rebuildFramePickerFromBuffer: (activeSelectionSetSelectedIds?: Set<string> | null) => void;
@@ -113,9 +144,7 @@ interface DiscoveryFrameState {
 export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => ({
   // Initial state
   frameVersion: 0,
-  frameInfoMap: new Map(),
-  selectedFrames: new Set(),
-  seenIds: new Set(),
+  ...emptyPicker(),
   streamStartTimeUs: null,
   captureMode: { enabled: false, totalFrames: 0 },
   renderFrozen: false,
@@ -152,7 +181,7 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
 
         // Mutate buffer in place — avoids creating a new 100k array every flush.
         // Only compact when overshooting by COMPACT_THRESHOLD instead of splicing
-        // every flush. This avoids O(100k) element shifts 25x/sec.
+        // every flush, which would mean O(100k) element shifts twice a second.
         _frameBuffer.push(...framesToProcess);
         trackAlloc("frameBuffer.push", framesToProcess.length * 300);
         trackAlloc("frameBuffer.size", _frameBuffer.length * 300);
@@ -257,38 +286,18 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
     }
   },
 
-  clearBuffer: () => {
-    pendingFrames = [];
-    _frameBuffer = [];
-    _lastFrameDataMap = new Map();
-    if (flushTimeout !== null) {
-      clearTimeout(flushTimeout);
-      flushTimeout = null;
-    }
-    set({ frameVersion: get().frameVersion + 1, streamStartTimeUs: null });
-  },
-
-  clearFramePicker: () => {
-    set({
-      frameInfoMap: new Map(),
-      selectedFrames: new Set(),
-      seenIds: new Set(),
-    });
-  },
-
+  /**
+   * Clear frames and picker in a single store write.
+   *
+   * The single clear. It was previously two actions, and every teardown called both —
+   * two store writes mean a render in between where the rows still exist but the picker
+   * already reads 0/0.
+   */
   clearAll: () => {
-    pendingFrames = [];
-    _frameBuffer = [];
-    _lastFrameDataMap = new Map();
-    if (flushTimeout !== null) {
-      clearTimeout(flushTimeout);
-      flushTimeout = null;
-    }
+    resetBuffers();
     set({
+      ...emptyPicker(),
       frameVersion: get().frameVersion + 1,
-      frameInfoMap: new Map(),
-      selectedFrames: new Set(),
-      seenIds: new Set(),
       streamStartTimeUs: null,
     });
   },
@@ -458,18 +467,24 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
     }
   },
 
+  /**
+   * One-shot repaint for everything gated on `frameVersion` while frozen — the frame
+   * picker, the Filtered tab, the serial views. The frames table is fed by the capture
+   * query instead, so the Refresh button drives both.
+   */
   refreshFrozenView: () => {
-    // One-shot render: bump frameVersion without changing renderFrozen
     set({ frameVersion: get().frameVersion + 1 });
   },
 
   // Capture mode actions
   enableCaptureMode: (totalFrames) => {
     tlog.debug(`[discoveryFrameStore] Enabling capture mode with ${totalFrames} frames`);
-    _frameBuffer = [];
+    resetBuffers();
     set({
       captureMode: { enabled: true, totalFrames },
       frameVersion: get().frameVersion + 1,
+      // Entering capture mode starts a new display clock; the old stream's start is stale.
+      streamStartTimeUs: null,
     });
   },
 

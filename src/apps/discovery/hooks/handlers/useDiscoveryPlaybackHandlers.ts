@@ -43,8 +43,8 @@ export interface UseDiscoveryPlaybackHandlersParams {
   setPlaybackSpeed: (speed: PlaybackSpeed) => void;
   updateCurrentTime: (time: number) => void;
   setCurrentFrameIndex?: (index: number) => void;
-  clearBuffer: () => void;
-  clearFramePicker: () => void;
+  /** Atomic frames + picker clear (one store write). */
+  clearAll: () => void;
 
   // Discovery-specific: reset frame count before starting
   resetWatchFrameCount: () => void;
@@ -73,8 +73,7 @@ export function useDiscoveryPlaybackHandlers({
   setPlaybackSpeed,
   updateCurrentTime,
   setCurrentFrameIndex,
-  clearBuffer,
-  clearFramePicker,
+  clearAll,
   resetWatchFrameCount,
   closeSpeedChangeDialog,
 }: UseDiscoveryPlaybackHandlersParams) {
@@ -110,14 +109,13 @@ export function useDiscoveryPlaybackHandlers({
   // Confirm speed change (clears frames)
   const confirmSpeedChange = useCallback(async () => {
     if (pendingSpeed !== null) {
-      clearBuffer();
-      clearFramePicker();
+      clearAll();
       setPlaybackSpeed(pendingSpeed);
       await setSpeed(pendingSpeed);
       setPendingSpeed(null);
     }
     closeSpeedChangeDialog();
-  }, [pendingSpeed, clearBuffer, clearFramePicker, setPlaybackSpeed, setSpeed, setPendingSpeed, closeSpeedChangeDialog]);
+  }, [pendingSpeed, clearAll, setPlaybackSpeed, setSpeed, setPendingSpeed, closeSpeedChangeDialog]);
 
   // Cancel speed change
   const cancelSpeedChange = useCallback(() => {

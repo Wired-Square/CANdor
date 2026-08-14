@@ -903,16 +903,18 @@ export function useIOSession(
     }
     isLeavingRef.current = true;
     try {
-      // First, mark subscriber as inactive in Rust so it stops receiving frames immediately
-      // This is done before clearing callbacks to prevent race conditions
+      // Drop callbacks first. This is synchronous and needs no backend round-trip,
+      // whereas marking the subscriber inactive does — and for the whole of that await
+      // any WS frames already queued would still be delivered to the app, repopulating
+      // a buffer the caller is in the middle of tearing down.
+      tlog.debug(`[useIOSession:${appName}] leave() - clearing callbacks...`);
+      clearCallbacks(effectiveSessionId, subscriberIdRef.current);
       try {
         tlog.debug(`[useIOSession:${appName}] leave() - marking subscriber inactive...`);
         await setSessionSubscriberActive(effectiveSessionId, subscriberIdRef.current, false);
       } catch {
         // Ignore - session may not exist
       }
-      tlog.debug(`[useIOSession:${appName}] leave() - clearing callbacks...`);
-      clearCallbacks(effectiveSessionId, subscriberIdRef.current);
       tlog.debug(`[useIOSession:${appName}] leave() - calling leaveSession...`);
       await leaveSession(effectiveSessionId, subscriberIdRef.current);
       tlog.debug(`[useIOSession:${appName}] leave() - complete`);

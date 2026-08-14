@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { iconSm, iconXs, flexRowGap2 } from "../../../styles/spacing";
 import { formatIsoUs, formatHumanUs, renderDeltaNode } from "../../../utils/timeFormat";
 import { TOOL_TAB_CONFIG } from "../../../stores/discoveryStore";
-import { useDiscoveryFrameStore, getDiscoveryFrameBuffer } from "../../../stores/discoveryFrameStore";
+import { useDiscoveryFrameStore } from "../../../stores/discoveryFrameStore";
 import { useDiscoveryUIStore } from "../../../stores/discoveryUIStore";
 import { useDiscoveryToolboxStore } from "../../../stores/discoveryToolboxStore";
 import { type CaptureMetadata, searchCaptureFrames } from "../../../api/capture";
@@ -32,7 +32,6 @@ import { sendHexDataToCalculator, openPanel } from "../../../utils/windowCommuni
 import { useTransmitStore } from "../../../stores/transmitStore";
 import { useDashboardStore } from "../../../stores/dashboardStore";
 import { useSessionStore } from "../../../stores/sessionStore";
-import { trackAlloc } from "../../../services/memoryDiag";
 import type { FrameRow } from "../components/FrameDataTable";
 import BulkAddToTransmitDialog from "../../../dialogs/BulkAddToTransmitDialog";
 import ReplayDialog from "../../../dialogs/ReplayDialog";
@@ -40,10 +39,10 @@ import ReplayDialog from "../../../dialogs/ReplayDialog";
 const DEFAULT_SPEED_OPTIONS: PlaybackSpeed[] = [0.125, 0.25, 0.5, 1, 2, 10, 30, 60];
 
 type Props = {
-  /** @deprecated Use captureId prop instead for capture-first mode */
-  frames?: FrameMessage[];
-  /** Capture ID for capture-first mode (recommended) */
+  /** Capture the rows come from. Rust owns a capture for every session. */
   captureId?: string | null;
+  /** Owning session — lets the frame view refetch its live tail when Rust reports new frames. */
+  sessionId?: string | null;
   protocol: string;
   displayFrameIdFormat: "hex" | "decimal";
   displayTimeFormat: "delta-last" | "delta-start" | "timestamp" | "human";
@@ -109,8 +108,8 @@ type Props = {
 };
 
 function DiscoveryFramesView({
-  frames = [],
   captureId,
+  sessionId,
   protocol,
   displayFrameIdFormat,
   displayTimeFormat,
@@ -157,8 +156,6 @@ function DiscoveryFramesView({
 
   // ── Frame store ──
   const selectedFrames = useDiscoveryFrameStore((s) => s.selectedFrames);
-  // frameVersion triggers re-renders when the mutable frame buffer changes
-  const frameVersion = useDiscoveryFrameStore((s) => s.frameVersion);
   const seenIds = useDiscoveryFrameStore((s) => s.seenIds);
   const captureMode = useDiscoveryFrameStore((s) => s.captureMode);
   const renderFrozen = useDiscoveryFrameStore((s) => s.renderFrozen);
@@ -218,23 +215,29 @@ function DiscoveryFramesView({
     setHeaderContextMenu(null);
   }, []);
 
-  // Use capture-first hook when captureId is available
-  // This provides a unified interface for streaming (tail poll) and stopped (pagination)
+  // The capture backing this view. One hook serves the live tail, a stopped page and
+  // capture playback alike.
   // Use || to treat empty string IDs as absent (stale effectiveCaptureMetadata can produce id: "")
   const effectiveBufferId = captureId || captureMetadata?.id || null;
-  const useCaptureFirstMode = effectiveBufferId !== null;
 
   // Capture playback = pagination mode (not tail-follow). True for: recorded source, paused stream, or store-level capture mode (after ingest)
   const isCapturePlayback = isRecorded || isStreamPaused || captureMode.enabled;
 
+  // Rows per page. "All" (-1) is not one of the offered sizes, but the pagination maths
+  // still needs a concrete number, and every site must use the same one — they used to
+  // disagree, so a row click and the playback highlight resolved different frame indices.
+  const pageSize = renderBuffer === -1 ? 1000 : renderBuffer;
+
   const captureFrameView = useCaptureFrameView({
     captureId: effectiveBufferId,
+    sessionId,
     isStreaming,
     selectedFrames,
-    pageSize: renderBuffer === -1 ? 1000 : renderBuffer,
+    pageSize,
     tailSize: renderBuffer === -1 ? 100 : renderBuffer,
     pollIntervalMs: BUFFER_POLL_INTERVAL_MS,
     isCapturePlayback,
+    frozen: renderFrozen,
     // During capture playback, the hook follows the playback position and auto-navigates pages
     followTimeUs: isCapturePlayback ? currentTimeUs : null,
   });
@@ -255,14 +258,15 @@ function DiscoveryFramesView({
   const showBusColumn = useDiscoveryUIStore((s) => s.showBusColumn);
   const toggleShowBusColumn = useDiscoveryUIStore((s) => s.toggleShowBusColumn);
 
-  // Pagination state (only used when not streaming)
-  const [currentPage, setCurrentPage] = useState(0);
+  // Source address column toggle (J1939 and similar embed a sender ID in the frame)
+  const showSourceColumn = useDiscoveryUIStore((s) => s.showSourceColumn);
+  const toggleShowSourceColumn = useDiscoveryUIStore((s) => s.toggleShowSourceColumn);
 
-  // Reset to minimum value and page 0 when streaming starts
+  // Reset page size when streaming starts. Page position itself belongs to
+  // useCaptureFrameView, which resets it whenever the capture changes.
   React.useEffect(() => {
     if (isStreaming) {
       setRenderBuffer(20);
-      setCurrentPage(0);
     }
   }, [isStreaming, setRenderBuffer]);
 
@@ -274,54 +278,18 @@ function DiscoveryFramesView({
   }, [isStreaming, renderFrozen, setRenderFrozen]);
 
   // Keep stable references for scrub handler to avoid callback identity changes
-  const selectedFramesRef = useRef(selectedFrames);
   const renderBufferRef = useRef(renderBuffer);
   const effectiveTotalFramesRef = useRef<number | undefined>(undefined);
   const currentFrameIndexRef = useRef<number | null>(currentFrameIndex ?? null);
 
   useEffect(() => {
-    selectedFramesRef.current = selectedFrames;
     renderBufferRef.current = renderBuffer;
-  }, [selectedFrames, renderBuffer]);
+  }, [renderBuffer]);
 
   useEffect(() => {
     currentFrameIndexRef.current = currentFrameIndex ?? null;
   }, [currentFrameIndex]);
 
-  // Keep ref to frames for normal mode scrubbing
-  const framesRef = useRef(frames);
-  useEffect(() => {
-    framesRef.current = frames;
-  }, [frameVersion]);
-
-  // Handle timeline scrub in normal mode (frontend frames) - navigate to the page containing the target timestamp
-  const handleNormalScrub = useCallback((timeUs: number) => {
-    const targetTimeUs = Math.round(timeUs);
-    const pageSize = renderBufferRef.current === -1 ? 1000 : renderBufferRef.current;
-    const selectedIds = selectedFramesRef.current;
-    const allFrames = framesRef.current;
-
-    // Find offset in filtered frames - binary search since frames are time-ordered
-    let offset = 0;
-    for (let i = 0; i < allFrames.length; i++) {
-      const frame = allFrames[i];
-      // Only count frames that match the selection
-      if (selectedIds.has(keyOf(frame))) {
-        if (frame.timestamp_us >= targetTimeUs) {
-          break;
-        }
-        offset++;
-      }
-    }
-
-    const targetPage = Math.floor(offset / pageSize);
-    setCurrentPage(targetPage);
-
-    // Also call the parent's onScrub to update the clock
-    if (onScrub) {
-      onScrub(timeUs);
-    }
-  }, [onScrub]); // Only depends on onScrub
 
   // Determine the effective start time for delta calculations
   // In capture mode, use capture metadata; otherwise use streamStartTimeUs from props
@@ -356,225 +324,51 @@ function DiscoveryFramesView({
     return renderDeltaNode(deltaUs);
   };
 
-  // State for deferred filtering when stopped (to avoid blocking UI with 3M+ frames)
-  const [deferredResult, setDeferredResult] = useState<{
-    visibleFrames: (FrameMessage & { hexBytes: string[] })[];
-    filteredCount: number;
-  } | null>(null);
-  const [isFiltering, setIsFiltering] = useState(false);
+  // ── The rows on screen ───────────────────────────────────────────────────────
+  //
+  // One source. Rust owns a frame capture for every session and writes each batch to it
+  // before signalling, so the capture is authoritative from the first frame — for the
+  // live tail, for a stopped page, and for capture playback alike. This view used to
+  // carry two more paths beside it (a synchronous backwards scan of the in-memory buffer
+  // while streaming, and a chunked setTimeout filter over the same buffer when stopped),
+  // which is how the rows, the tab label and the toolbar counter could each disagree.
+  const visibleFrames = captureFrameView.frames;
+  const filteredCount = captureFrameView.totalCount;
+  const effectiveCurrentPage = captureFrameView.currentPage;
+  const totalPages = captureFrameView.totalPages;
+  const isCaptureFirstLoading = captureFrameView.isLoading;
 
-  // During streaming: synchronous O(k) computation (fast)
-  const streamingResult = useMemo(() => {
-    if (!isStreaming) return null;
+  const effectivePageStartIndex = effectiveCurrentPage * pageSize;
 
-    // During streaming: iterate backwards, collect up to renderBuffer matching frames
-    const limit = renderBuffer === -1 ? frames.length : renderBuffer;
-    const result: FrameMessage[] = [];
-    const indices: number[] = [];
+  // Frames arrive chronological from Rust (ORDER BY rowid, and the tail query reverses
+  // its DESC result), so this view no longer sorts, reverses or index-maps them.
 
-    for (let i = frames.length - 1; i >= 0 && result.length < limit; i--) {
-      const frame = frames[i];
-      if (selectedFrames.has(keyOf(frame))) {
-        result.push(frame);
-        indices.push(i + 1); // 1-based position in the in-memory buffer
-      }
-    }
+  // The hook owns page state — there is no second copy to keep in sync any more, and the
+  // useState setter it returns is already stable across renders.
+  const setCurrentPageStable = captureFrameView.setCurrentPage;
 
-    // Reverse to get chronological order
-    result.reverse();
-    indices.reverse();
-
-    // Pre-compute hex bytes for visible frames only
-    const withHex = result.map(frame => ({
-      ...frame,
-      hexBytes: frame.bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase()),
-    }));
-
-    trackAlloc("streaming.hexFrames", withHex.length * 450);
-    return { visibleFrames: withHex, filteredCount: -1, indices };
-  }, [frameVersion, selectedFrames, renderBuffer, isStreaming]);
-
-  // When stopped: defer heavy filtering to avoid blocking UI
-  useEffect(() => {
-    if (isStreaming) {
-      // Clear deferred result when streaming starts
-      setDeferredResult(null);
-      setIsFiltering(false);
-      return;
-    }
-
-    // When streaming stops, defer the heavy computation
-    setIsFiltering(true);
-
-    // Use setTimeout to allow UI to update first (show loading state).
-    // isCancelled prevents orphaned recursive setTimeout chains from
-    // accumulating when the effect re-triggers before processing completes.
-    let isCancelled = false;
-    const timeoutId = setTimeout(() => {
-      // Do the filtering in chunks to avoid blocking UI completely
-      const CHUNK_SIZE = 100000;
-      let filtered: FrameMessage[] = [];
-      let currentIndex = 0;
-
-      const processChunk = () => {
-        if (isCancelled) return;
-
-        const endIndex = Math.min(currentIndex + CHUNK_SIZE, frames.length);
-
-        for (let i = currentIndex; i < endIndex; i++) {
-          const frame = frames[i];
-          if (selectedFrames.has(keyOf(frame))) {
-            filtered.push(frame);
-          }
-        }
-
-        currentIndex = endIndex;
-
-        if (currentIndex < frames.length) {
-          // More chunks to process - yield to UI
-          if (!isCancelled) setTimeout(processChunk, 0);
-        } else {
-          if (isCancelled) return;
-          // Done filtering, compute final result
-          let slice: FrameMessage[];
-          if (renderBuffer === -1) {
-            slice = filtered;
-          } else {
-            const start = currentPage * renderBuffer;
-            const end = start + renderBuffer;
-            slice = filtered.slice(start, end);
-          }
-
-          const withHex = slice.map(frame => ({
-            ...frame,
-            hexBytes: frame.bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase()),
-          }));
-
-          setDeferredResult({ visibleFrames: withHex, filteredCount: filtered.length });
-          setIsFiltering(false);
-        }
-      };
-
-      processChunk();
-    }, 50); // Small delay to let React render the loading state
-
-    return () => {
-      isCancelled = true;
-      clearTimeout(timeoutId);
-    };
-  }, [isStreaming, frameVersion, selectedFrames, renderBuffer, currentPage]);
-
-  // Determine which result to use based on mode
-  let visibleFrames: (FrameMessage & { hexBytes: string[] })[];
-  let filteredCount: number;
-  let effectiveCurrentPage: number;
-  let effectiveTotalPages: number;
-  let isCaptureFirstLoading = false;
-  let streamingIndices: number[] | undefined;
-
-  // Keep stable reference to hook's setCurrentPage
-  const hookSetCurrentPageRef = useRef(captureFrameView.setCurrentPage);
-  useEffect(() => {
-    hookSetCurrentPageRef.current = captureFrameView.setCurrentPage;
-  }, [captureFrameView.setCurrentPage]);
-
-  // Use stable callbacks for page changes to avoid infinite loops in useEffect dependencies
-  const setCurrentPageStable = useCallback((page: number) => {
-    if (useCaptureFirstMode) {
-      hookSetCurrentPageRef.current(page);
-    } else {
-      setCurrentPage(page);
-    }
-  }, [useCaptureFirstMode]);
-
-  // Handle frame-index-based scrubbing from the timeline scrubber
-  // Navigates to the correct page and optionally seeks the backend session
+  // Timeline scrub / stepping by frame index: seek the backend when it can, and move to
+  // the page holding that frame either way.
   const handleFrameScrub = useCallback((frameIndex: number) => {
-    // Clamp to valid range to avoid out-of-bounds seeks from stale totals
+    // Clamp to avoid out-of-bounds seeks from stale totals
     const maxIdx = Math.max(0, (effectiveTotalFramesRef.current ?? 1) - 1);
     const clampedIndex = Math.max(0, Math.min(frameIndex, maxIdx));
-    // If in capture playback mode with an active session, seek via backend
     if (onFrameChange) {
       onFrameChange(clampedIndex);
     }
-    // Navigate to the page containing this frame index
     const pageSize = renderBufferRef.current === -1 ? 1000 : renderBufferRef.current;
-    const targetPage = Math.floor(clampedIndex / pageSize);
-    setCurrentPageStable(targetPage);
+    setCurrentPageStable(Math.floor(clampedIndex / pageSize));
   }, [onFrameChange, setCurrentPageStable]);
 
-  // Local step handlers that work in pagination mode without requiring a backend session.
-  // Falls back to the backend handler when available, but always does frontend page navigation.
   const handleStepForwardLocal = useCallback(() => {
     const maxIdx = (effectiveTotalFramesRef.current ?? 1) - 1;
-    const newIdx = Math.min((currentFrameIndexRef.current ?? -1) + 1, maxIdx);
-    handleFrameScrub(newIdx);
+    handleFrameScrub(Math.min((currentFrameIndexRef.current ?? -1) + 1, maxIdx));
   }, [handleFrameScrub]);
 
   const handleStepBackwardLocal = useCallback(() => {
-    const newIdx = Math.max((currentFrameIndexRef.current ?? 1) - 1, 0);
-    handleFrameScrub(newIdx);
+    handleFrameScrub(Math.max((currentFrameIndexRef.current ?? 1) - 1, 0));
   }, [handleFrameScrub]);
 
-  if (useCaptureFirstMode) {
-    // Capture-first mode: useCaptureFrameView provides everything
-    // Covers: CSV import, capture replay, paused stream, recorded sources
-    visibleFrames = captureFrameView.frames;
-    filteredCount = captureFrameView.totalCount;
-    effectiveCurrentPage = captureFrameView.currentPage;
-    effectiveTotalPages = captureFrameView.totalPages;
-    isCaptureFirstLoading = captureFrameView.isLoading;
-  } else if (isStreaming) {
-    // Active streaming (no capture) - show tail of in-memory frames
-    const result = streamingResult ?? { visibleFrames: [], filteredCount: -1, indices: [] };
-    visibleFrames = result.visibleFrames;
-    filteredCount = result.filteredCount;
-    effectiveCurrentPage = currentPage;
-    effectiveTotalPages = 1;
-    streamingIndices = result.indices;
-  } else {
-    // Stopped without capture - deferred filtered in-memory frames
-    const result = deferredResult ?? { visibleFrames: [], filteredCount: 0 };
-    visibleFrames = result.visibleFrames;
-    filteredCount = result.filteredCount;
-    effectiveCurrentPage = currentPage;
-    const pageSize = renderBuffer === -1 ? Math.max(1, filteredCount) : renderBuffer;
-    effectiveTotalPages = filteredCount > 0 && pageSize > 0 ? Math.ceil(filteredCount / pageSize) : 1;
-  }
-
-  // Calculate the actual start index for frame tooltips
-  // Now all modes use proper pagination, so this is always effectiveCurrentPage * pageSize
-  const effectivePageSize = renderBuffer === -1 ? 1000 : renderBuffer;
-  const effectivePageStartIndex = effectiveCurrentPage * effectivePageSize;
-
-
-
-
-  // Ensure frames are always sorted by timestamp ascending (oldest at top)
-  // regardless of playback direction. Track if we reversed for index mapping.
-  let framesWereReversed = false;
-  if (visibleFrames.length > 1) {
-    const firstTs = visibleFrames[0].timestamp_us;
-    const lastTs = visibleFrames[visibleFrames.length - 1].timestamp_us;
-    if (firstTs > lastTs) {
-      // Frames are in descending order, reverse to get ascending
-      visibleFrames = [...visibleFrames].reverse();
-      if (streamingIndices) streamingIndices = [...streamingIndices].reverse();
-      framesWereReversed = true;
-    }
-  }
-
-  // Calculate pagination values (only meaningful when not streaming)
-  const pageSize = renderBuffer === -1 ? Math.max(1, filteredCount) : renderBuffer;
-  const totalPages = useCaptureFirstMode ? effectiveTotalPages : (filteredCount > 0 && pageSize > 0 ? Math.ceil(filteredCount / pageSize) : 1);
-
-  // Clamp current page to valid range when frames change
-  const validPage = Math.min(currentPage, Math.max(0, totalPages - 1));
-  React.useEffect(() => {
-    if (validPage !== currentPage && !isStreaming) {
-      setCurrentPage(validPage);
-    }
-  }, [validPage, currentPage, isStreaming]);
 
   // Close context menu when page or visible frames change
   useEffect(() => {
@@ -670,7 +464,8 @@ function DiscoveryFramesView({
     { label: '# Column', checked: showRefColumn, onClick: toggleShowRefColumn },
     { label: 'Bus Column', checked: showBusColumn, onClick: toggleShowBusColumn },
     { label: 'ASCII Column', checked: showAsciiColumn, onClick: toggleShowAsciiColumn },
-  ], [showRefColumn, showBusColumn, showAsciiColumn, toggleShowRefColumn, toggleShowBusColumn, toggleShowAsciiColumn]);
+    { label: 'Source Column', checked: showSourceColumn, onClick: toggleShowSourceColumn },
+  ], [showRefColumn, showBusColumn, showAsciiColumn, showSourceColumn, toggleShowRefColumn, toggleShowBusColumn, toggleShowAsciiColumn, toggleShowSourceColumn]);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const scrollPending = useRef(false);
@@ -689,7 +484,7 @@ function DiscoveryFramesView({
         el.scrollTop = el.scrollHeight;
       }
     });
-  }, [frameVersion]);
+  }, [visibleFrames]);
 
   // Compute count of filtered-out frame IDs (seen but not selected)
   const filteredOutCount = useMemo(() => {
@@ -701,7 +496,9 @@ function DiscoveryFramesView({
   }, [seenIds, selectedFrames]);
 
   // Build tab definitions: static tabs + dynamic tool output tabs
-  const frameCount = filteredCount > 0 ? filteredCount : frames.length;
+  // Every count on screen resolves to the same Rust-reported total, so the tab label,
+  // the toolbar counter and the rows cannot disagree.
+  const frameCount = filteredCount;
   const tabs: TabDefinition[] = useMemo(() => {
     const result: TabDefinition[] = [
       { id: 'frames', label: 'Frames', count: frameCount, countColor: 'green' as const },
@@ -776,32 +573,21 @@ function DiscoveryFramesView({
     onScrub?.(timeUs);
   }, [onScrub]);
 
-  // Compute timeline props based on mode
+  // Timeline bounds come from the capture's own time range — Rust reports it alongside
+  // the frames, so there is no frames array to measure here.
   const timelineProps = useMemo(() => {
-    // Capture-first mode: use hook's time range, session's currentTimeUs for position
-    if (useCaptureFirstMode && captureFrameView.timeRange) {
-      return {
-        show: true,
-        minTimeUs: captureFrameView.timeRange.startUs,
-        maxTimeUs: captureFrameView.timeRange.endUs,
-        currentTimeUs: currentTimeUs ?? captureFrameView.timeRange.startUs,
-        onScrub: handleCaptureFirstScrub,
-        disabled: false,
-      };
+    if (!captureFrameView.timeRange) {
+      return { show: false, minTimeUs: 0, maxTimeUs: 0, currentTimeUs: 0, onScrub: () => {}, disabled: true };
     }
-    // Normal mode: use frames array
-    if (frames.length > 1) {
-      return {
-        show: true,
-        minTimeUs: frames[0].timestamp_us,
-        maxTimeUs: frames[frames.length - 1].timestamp_us,
-        currentTimeUs: currentTimeUs ?? frames[0].timestamp_us,
-        onScrub: handleNormalScrub,
-        disabled: isStreaming,
-      };
-    }
-    return { show: false, minTimeUs: 0, maxTimeUs: 0, currentTimeUs: 0, onScrub: () => {}, disabled: true };
-  }, [useCaptureFirstMode, captureFrameView.timeRange, isStreaming, frameVersion, currentTimeUs, handleCaptureFirstScrub, handleNormalScrub]);
+    return {
+      show: true,
+      minTimeUs: captureFrameView.timeRange.startUs,
+      maxTimeUs: captureFrameView.timeRange.endUs,
+      currentTimeUs: currentTimeUs ?? captureFrameView.timeRange.startUs,
+      onScrub: handleCaptureFirstScrub,
+      disabled: false,
+    };
+  }, [captureFrameView.timeRange, currentTimeUs, handleCaptureFirstScrub]);
 
   // Calculate which row to highlight based on current frame index or timestamp
   // Returns the index within visibleFrames, or null if current frame is not visible
@@ -810,10 +596,9 @@ function DiscoveryFramesView({
 
     // Prefer frame-index-based highlighting (exact row positioning after scrubber seeks)
     if (currentFrameIndex != null) {
-      const pageSize = renderBuffer === -1 ? 1000 : renderBuffer;
       const rowInPage = currentFrameIndex - effectiveCurrentPage * pageSize;
       if (rowInPage >= 0 && rowInPage < visibleFrames.length) {
-        return framesWereReversed ? visibleFrames.length - 1 - rowInPage : rowInPage;
+        return rowInPage;
       }
     }
 
@@ -841,7 +626,7 @@ function DiscoveryFramesView({
     }
 
     return matchIndex >= 0 ? matchIndex : null;
-  }, [currentFrameIndex, currentTimeUs, visibleFrames, renderBuffer, effectiveCurrentPage, framesWereReversed]);
+  }, [currentFrameIndex, currentTimeUs, visibleFrames, pageSize, effectiveCurrentPage]);
 
   // Find bar: search the entire capture (in-memory or via Tauri for capture-first)
   // Debounce ref for capture-first async search
@@ -863,7 +648,7 @@ function DiscoveryFramesView({
       return;
     }
 
-    if (useCaptureFirstMode && effectiveBufferId) {
+    if (effectiveBufferId) {
       // Capture-first: async Tauri search with 300ms debounce
       if (findDebounceRef.current) clearTimeout(findDebounceRef.current);
       setIsFindSearching(true);
@@ -885,37 +670,21 @@ function DiscoveryFramesView({
       return () => {
         if (findDebounceRef.current) clearTimeout(findDebounceRef.current);
       };
-    } else {
-      // In-memory: scan full _frameBuffer synchronously
-      const buffer = getDiscoveryFrameBuffer();
-      let filteredOffset = 0;
-      const matches: number[] = [];
-      for (const frame of buffer) {
-        if (selectedFrames.has(keyOf(frame))) {
-          const idStr = formatFrameId(frame.frame_id, displayFrameIdFormat, frame.is_extended)
-            .replace(/\s/g, '').toLowerCase();
-          const hexStr = frame.bytes.map(b => b.toString(16).padStart(2, '0')).join('').toLowerCase();
-          if ((findMode !== 'data' && idStr.includes(q)) ||
-              (findMode !== 'id' && hexStr.includes(q))) {
-            matches.push(filteredOffset);
-          }
-          filteredOffset++;
-        }
-      }
-      setFindResults(matches);
-      setFindCurrentIndex(matches.length > 0 ? 0 : -1);
     }
+
+    // No capture, nothing to search.
+    setFindResults([]);
+    setFindCurrentIndex(-1);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [findOpen, findQuery, findMode, frameVersion, selectedFrames, useCaptureFirstMode, effectiveBufferId, displayFrameIdFormat]);
+  }, [findOpen, findQuery, findMode, selectedFrames, effectiveBufferId]);
 
   // Navigate to match when findCurrentIndex changes (e.g. after results load)
   const navigateToMatch = useCallback((idx: number) => {
     if (findResults.length === 0 || idx < 0) return;
     const filteredOffset = findResults[idx];
-    const ps = renderBuffer === -1 ? 1000 : renderBuffer;
-    setCurrentPageStable(Math.floor(filteredOffset / ps));
+    setCurrentPageStable(Math.floor(filteredOffset / pageSize));
     setFindCurrentIndex(idx);
-  }, [findResults, renderBuffer, setCurrentPageStable]);
+  }, [findResults, pageSize, setCurrentPageStable]);
 
   // Auto-navigate when results first arrive
   useEffect(() => {
@@ -938,26 +707,21 @@ function DiscoveryFramesView({
   }, []);
 
   // Resolve highlighted row: find bar takes priority over playback highlight
-  const findPageSize = renderBuffer === -1 ? 1000 : renderBuffer;
   const currentMatchOffset = (findOpen && findCurrentIndex >= 0 && findResults.length > 0)
     ? findResults[findCurrentIndex]
     : null;
-  const currentMatchPage = currentMatchOffset != null ? Math.floor(currentMatchOffset / findPageSize) : null;
+  const currentMatchPage = currentMatchOffset != null ? Math.floor(currentMatchOffset / pageSize) : null;
   const effectiveHighlightedRow = (currentMatchPage === effectiveCurrentPage && currentMatchOffset != null)
-    ? currentMatchOffset % findPageSize
+    ? currentMatchOffset % pageSize
     : highlightedRowIndex;
 
   // Handle row click - convert row index to global frame index and get timestamp
   const handleRowClick = useCallback((rowIndex: number) => {
     if (!onFrameSelect || rowIndex >= visibleFrames.length) return;
-    const effectivePageSize = renderBuffer === -1 ? visibleFrames.length : renderBuffer;
-    // If frames were reversed for display, convert the visual row index back to the original index
-    const originalRowIndex = framesWereReversed ? visibleFrames.length - 1 - rowIndex : rowIndex;
-    // Use effectiveCurrentPage to match highlightedRowIndex calculation
-    const globalFrameIndex = effectiveCurrentPage * effectivePageSize + originalRowIndex;
+    const globalFrameIndex = effectiveCurrentPage * pageSize + rowIndex;
     const timestampUs = visibleFrames[rowIndex].timestamp_us;
     onFrameSelect(globalFrameIndex, timestampUs);
-  }, [onFrameSelect, effectiveCurrentPage, renderBuffer, visibleFrames, framesWereReversed]);
+  }, [onFrameSelect, effectiveCurrentPage, pageSize, visibleFrames]);
 
   // Time range inputs for toolbar (optional feature)
   const timeRangeInputs = showTimeRange && onStartTimeChange && onEndTimeChange ? (
@@ -1066,7 +830,7 @@ function DiscoveryFramesView({
           </button>
           {renderFrozen && (
             <button
-              onClick={refreshFrozenView}
+              onClick={() => { captureFrameView.refreshOnce(); refreshFrozenView(); }}
               className={`p-1.5 rounded transition-colors ${bgSurface} ${textSecondary} hover:brightness-95`}
               title={t("framesView.actions.refreshLatest")}
             >
@@ -1081,9 +845,7 @@ function DiscoveryFramesView({
   // Playback controls for toolbar center
   // Show playback controls for recorded sources (including captures), live streaming, or after ingest
   const showPlaybackControls = isRecorded || isLiveStreaming || (!isStreaming && captureMode.enabled);
-  // In capture-first mode, never fall back to frameCount (frames.length) which may be stale
-  // from the streaming array and differ from the actual capture count.
-  const effectiveTotalFrames = captureFrameView.totalCount || captureMetadata?.count || captureMode.totalFrames || (!useCaptureFirstMode ? frameCount : undefined) || undefined;
+  const effectiveTotalFrames = captureFrameView.totalCount || captureMetadata?.count || captureMode.totalFrames || undefined;
   effectiveTotalFramesRef.current = effectiveTotalFrames;
 
   // Wrapped play handlers: auto-seek to start/end when at boundary so playback has
@@ -1154,7 +916,7 @@ function DiscoveryFramesView({
     }
     // During live streaming: show total frame count
     if (isStreaming && !isStreamPaused) {
-      const count = useCaptureFirstMode ? captureFrameView.totalCount : frames.length;
+      const count = filteredCount;
       if (count > 0) {
         return (
           <span className={`px-1.5 text-xs font-mono tabular-nums text-center ${textDataSecondary}`}>
@@ -1201,18 +963,18 @@ function DiscoveryFramesView({
         showToolbar
           ? {
               currentPage: effectiveCurrentPage,
-              totalPages: effectiveTotalPages,
+              totalPages: totalPages,
               pageSize: renderBuffer,
               pageSizeOptions: FRAME_PAGE_SIZE_OPTIONS,
               onPageChange: setCurrentPageStable,
               onPageSizeChange: handlePageSizeChange,
-              loading: (!useCaptureFirstMode && isFiltering) || isCaptureFirstLoading,
+              loading: isCaptureFirstLoading,
               disabled: isStreaming && !isStreamPaused && !isRecorded,
               leftContent: timeRangeInputs,
               centerContent: playbackControls,
               infoContent: frameCounterInfo,
               rightContent: speedSelector,
-              hidePagination: (!useCaptureFirstMode && isFiltering) || isCaptureFirstLoading,
+              hidePagination: isCaptureFirstLoading,
             }
           : undefined
       }
@@ -1259,20 +1021,23 @@ function DiscoveryFramesView({
             formatTime={formatTime}
             onBookmark={onBookmark}
             emptyMessage={
-              isStreamPaused
-                ? (isCaptureFirstLoading ? 'Loading frames...' : 'No frames in capture')
-                : (isStreaming ? 'Waiting for frames...' : 'No frames to display')
+              // Reached only when the same fetch that produced the rows returned none,
+              // so this can no longer appear beside rows.
+              isCaptureFirstLoading
+                ? 'Loading frames...'
+                : isStreamPaused
+                  ? 'No frames in capture'
+                  : isStreaming ? 'Waiting for frames...' : 'No frames to display'
             }
             showCalculator={false}
             showRef={showRefColumn}
             showAscii={showAsciiColumn}
             showBus={showBusColumn}
+            showSourceAddress={showSourceColumn}
             highlightedRowIndex={effectiveHighlightedRow}
             onRowClick={onFrameSelect ? handleRowClick : undefined}
             pageStartIndex={effectivePageStartIndex}
-            framesReversed={framesWereReversed}
-            pageFrameCount={visibleFrames.length}
-            captureIndices={useCaptureFirstMode ? captureFrameView.captureIndices : streamingIndices}
+            captureIndices={captureFrameView.captureIndices}
             onContextMenu={handleContextMenu}
             onHeaderContextMenu={handleHeaderContextMenu}
             useLocalTimezone={useLocalTimezone}

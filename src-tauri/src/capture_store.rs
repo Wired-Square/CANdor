@@ -953,6 +953,17 @@ pub struct TailResponse {
     pub capture_end_time_us: Option<u64>,
 }
 
+impl TailResponse {
+    fn empty() -> Self {
+        TailResponse {
+            frames: Vec::new(),
+            capture_indices: Vec::new(),
+            total_filtered_count: 0,
+            capture_end_time_us: None,
+        }
+    }
+}
+
 /// Get the most recent N frames from a capture, optionally filtered by frame IDs.
 /// Returns the frames in chronological order (oldest first) for display.
 pub fn get_capture_frames_tail(
@@ -960,38 +971,44 @@ pub fn get_capture_frames_tail(
     limit: usize,
     selected_ids: &std::collections::HashSet<u32>,
 ) -> TailResponse {
-    {
+    // The registry tracks the count, the end time and the distinct frame ids for every
+    // capture. The live view refetches this on each frame-count signal, so answering from
+    // RAM keeps a COUNT(*) and a MAX() scan of the whole capture off that path.
+    let (total, end_time_us, covers_everything) = {
         let registry = CAPTURE_REGISTRY.read().unwrap();
         match registry.captures.get(id) {
-            Some(b) if b.metadata.kind == CaptureKind::Frames => {},
-            _ => return TailResponse {
-                frames: Vec::new(),
-                capture_indices: Vec::new(),
-                total_filtered_count: 0,
-                capture_end_time_us: None,
-            },
-        }
-    }
-
-    let frame_ids: Vec<u32> = selected_ids.iter().copied().collect();
-    match capture_db::get_frames_tail(id, limit, &frame_ids) {
-        Ok((frames, rowids, total, end_time_us)) => {
-            let indices = rowids.into_iter().map(|r| r as usize).collect();
-            TailResponse {
-                frames,
-                capture_indices: indices,
-                total_filtered_count: total,
-                capture_end_time_us: end_time_us,
+            Some(b) if b.metadata.kind == CaptureKind::Frames => {
+                // Discovery auto-selects every id it discovers, so the common case is a
+                // selection that excludes nothing. Recognising that takes the cheap path
+                // instead of filtering by every id in the capture. Keys are
+                // (bus << 32 | frame_id); the same id on two buses is one selection entry.
+                let covers = b
+                    .unique_frame_ids
+                    .iter()
+                    .all(|k| selected_ids.contains(&(*k as u32)));
+                (b.metadata.count, b.metadata.end_time_us, covers)
             }
+            _ => return TailResponse::empty(),
         }
+    };
+
+    let result = if selected_ids.is_empty() || covers_everything {
+        capture_db::get_frames_tail_rows(id, limit).map(|(frames, rowids)| (frames, rowids, total))
+    } else {
+        let frame_ids: Vec<u32> = selected_ids.iter().copied().collect();
+        capture_db::get_frames_tail_filtered(id, limit, &frame_ids)
+    };
+
+    match result {
+        Ok((frames, rowids, total_filtered_count)) => TailResponse {
+            frames,
+            capture_indices: rowids.into_iter().map(|r| r as usize).collect(),
+            total_filtered_count,
+            capture_end_time_us: end_time_us,
+        },
         Err(e) => {
             tlog!("[CaptureStore] Failed to get tail frames: {}", e);
-            TailResponse {
-                frames: Vec::new(),
-                capture_indices: Vec::new(),
-                total_filtered_count: 0,
-                capture_end_time_us: None,
-            }
+            TailResponse::empty()
         }
     }
 }
