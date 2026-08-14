@@ -7,6 +7,7 @@ pub mod reader;
 pub mod registry;
 pub mod rules;
 mod shared;
+mod version_probe;
 
 use std::collections::HashMap;
 

@@ -20,6 +20,7 @@ use framelink::session::FrameLinkSession;
 use once_cell::sync::Lazy;
 use tokio::sync::Mutex;
 
+use super::version_probe;
 use super::{FrameLinkProbeResult, ProbeInterface};
 
 // ============================================================================
@@ -275,9 +276,21 @@ pub(crate) async fn connect_by_address(
     .map_err(|e| IoError::connection(&display_key, e.to_string()).user_message())?;
 
     let (iface_types, probe_cache, editable_board_def) =
-        fetch_capabilities(&session, &display_key, timeout_sec)
-            .await
-            .map_err(|e| e.user_message())?;
+        match fetch_capabilities(&session, &display_key, timeout_sec).await {
+            Ok(caps) => caps,
+            Err(e) => {
+                // A device that will not describe itself is usually one that
+                // cannot read us at all — the protocol has no handshake, so a
+                // version mismatch looks exactly like a hang. Ask it directly
+                // rather than reporting a bare timeout.
+                //
+                // Dropping the session first is load-bearing: it closes the
+                // socket, and a FrameLink device serves exactly one client, so
+                // the probe cannot get in until this one is gone.
+                drop(session);
+                return Err(diagnose_failed_connect(addr, &display_key, e).await);
+            }
+        };
 
     let device_id = probe_cache
         .device_id
@@ -333,6 +346,29 @@ fn embedded_board_def_fallback(
         .as_ref()
         .map(framelink::board::editable::EditableBoardDef::from_board_def);
     (bd, ed)
+}
+
+/// Turn a failed capabilities exchange into the most specific message we can
+/// justify, by asking the device which protocol version it speaks.
+///
+/// The probe only runs on a path that has already failed, so its ~1.5s costs
+/// nothing that was not already lost — and it replaces a 15s stall reported as
+/// "timed out" with an answer naming the actual versions.
+async fn diagnose_failed_connect(addr: SocketAddr, display_key: &str, original: IoError) -> String {
+    let verdict = version_probe::probe_version(addr).await;
+    tlog!(
+        "[framelink:{}] Capabilities failed ({}); version probe says {:?}",
+        display_key,
+        original,
+        verdict
+    );
+
+    match verdict {
+        // The peer speaks our version, so the mismatch story would be a lie —
+        // report what actually went wrong.
+        version_probe::VersionVerdict::SameVersion => original.user_message(),
+        other => IoError::protocol(display_key, other.describe(display_key)).user_message(),
+    }
 }
 
 /// Fetch capabilities from a freshly connected session.
