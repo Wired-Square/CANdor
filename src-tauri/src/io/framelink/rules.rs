@@ -1019,12 +1019,11 @@ async fn cmd_dsig_read(params: Value) -> Result<Value, String> {
     let frame = conn.session.request(MSG_DSIG_READ, FLAG_ACK_REQ, &payload).await.str_err()?;
     let sv = dsig::parse_read_response(&frame.payload)
         .map_err(|e| format!("Failed to parse signal read: {e}"))?;
-    serde_json::to_value(&serde_json::json!({
+    Ok(serde_json::json!({
         "signal_id": sv.signal_id,
         "value": sv.value,
         "value_len": sv.value_len,
     }))
-    .map_err(|e| e.to_string())
 }
 
 async fn cmd_dsig_write(params: Value) -> Result<Value, String> {

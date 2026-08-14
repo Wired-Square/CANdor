@@ -57,7 +57,48 @@ pub(crate) struct ManagedConnection {
     pub iface_types: HashMap<u8, u8>,
     pub probe_cache: FrameLinkProbeResult,
     pub editable_board_def: std::sync::Mutex<Option<framelink::board::editable::EditableBoardDef>>,
-    session_refs: AtomicUsize,
+    /// Outstanding [`ConnectionLease`]s. At zero the connection is idle and the
+    /// sweeper may evict it once the linger expires.
+    leases: AtomicUsize,
+}
+
+/// A borrowed handle on a pooled connection.
+///
+/// The pool used to hand out bare `Arc`s and count session references in a
+/// field nothing read, so nothing ever removed a pool entry: a stopped session
+/// left the socket open, and since a FrameLink device serves exactly one
+/// client, that held the device's only slot for the life of the process.
+/// Holding a lease keeps the connection alive; dropping the last one starts the
+/// linger.
+pub(crate) struct ConnectionLease {
+    conn: Arc<ManagedConnection>,
+    device_id: String,
+}
+
+impl std::ops::Deref for ConnectionLease {
+    type Target = ManagedConnection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.conn
+    }
+}
+
+impl Drop for ConnectionLease {
+    fn drop(&mut self) {
+        if self.conn.leases.fetch_sub(1, Ordering::SeqCst) == 1 {
+            schedule_eviction(&self.device_id);
+        }
+    }
+}
+
+impl ConnectionLease {
+    fn take(device_id: &str, conn: Arc<ManagedConnection>) -> Self {
+        conn.leases.fetch_add(1, Ordering::SeqCst);
+        Self {
+            conn,
+            device_id: device_id.to_string(),
+        }
+    }
 }
 
 // ============================================================================
@@ -66,6 +107,84 @@ pub(crate) struct ManagedConnection {
 
 static POOL: Lazy<Mutex<HashMap<String, Arc<ManagedConnection>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// How long an unused connection is kept before the socket is closed.
+///
+/// Long enough that the ~40 short-lived rules/signal commands reuse one warm
+/// connection instead of reconnecting per command, short enough that a stopped
+/// session stops squatting on a single-client device.
+const IDLE_LINGER: Duration = Duration::from_secs(30);
+
+/// How often the sweeper looks for expired entries.
+const SWEEP_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Device ids whose last lease has gone, with the instant they may be evicted.
+static PENDING_EVICTION: Lazy<std::sync::Mutex<HashMap<String, std::time::Instant>>> =
+    Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// Mark a connection idle. Called from `Drop`, so it must not be async or block.
+fn schedule_eviction(device_id: &str) {
+    if let Ok(mut pending) = PENDING_EVICTION.lock() {
+        pending.insert(device_id.to_string(), std::time::Instant::now() + IDLE_LINGER);
+    }
+    start_sweeper();
+}
+
+/// One process-wide sweeper, started on first use — a timer per connection
+/// would be a task per device that mostly sleeps.
+fn start_sweeper() {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(SWEEP_INTERVAL);
+            loop {
+                ticker.tick().await;
+                sweep_idle_connections().await;
+            }
+        });
+    });
+}
+
+/// Evict connections whose linger has expired and that nobody has re-acquired.
+async fn sweep_idle_connections() {
+    let due: Vec<String> = {
+        let now = std::time::Instant::now();
+        let Ok(mut pending) = PENDING_EVICTION.lock() else {
+            return;
+        };
+        let due: Vec<String> = pending
+            .iter()
+            .filter(|(_, deadline)| **deadline <= now)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &due {
+            pending.remove(id);
+        }
+        due
+    };
+
+    if due.is_empty() {
+        return;
+    }
+
+    let mut pool = POOL.lock().await;
+    for device_id in due {
+        // Re-acquired inside the window, so it is live again — leave it.
+        let is_idle = pool
+            .get(&device_id)
+            .is_some_and(|conn| conn.leases.load(Ordering::SeqCst) == 0);
+        if is_idle {
+            pool.remove(&device_id);
+            tlog!(
+                "[framelink:{}] Idle {}s — connection closed",
+                device_id,
+                IDLE_LINGER.as_secs()
+            );
+        }
+    }
+    // Dropping the last Arc runs FrameLinkSession::Drop, which aborts the IO
+    // task and closes the socket. There is no explicit close to call.
+}
 
 /// Per-key connection lock — prevents duplicate TCP connections to the same
 /// device. A `std::sync::Mutex` because it is only ever held long enough to
@@ -166,7 +285,7 @@ pub(crate) async fn connect_by_address(
         iface_types,
         probe_cache,
         editable_board_def: std::sync::Mutex::new(editable_board_def),
-        session_refs: AtomicUsize::new(0),
+        leases: AtomicUsize::new(0),
     });
 
     // Insert into pool by device_id
@@ -179,6 +298,10 @@ pub(crate) async fn connect_by_address(
     }
     pool.insert(device_id.clone(), conn);
     tlog!("[framelink:{}] Created managed connection ({})", device_id, display_key);
+    // Start the clock straight away: a probe connects and reads the cache
+    // without ever taking a lease, so an unclaimed connection would otherwise
+    // hold the device's only client slot with nothing to release it.
+    schedule_eviction(&device_id);
 
     Ok(device_id)
 }
@@ -333,6 +456,15 @@ async fn fetch_capabilities(
 // Public API — Connection (by device_id)
 // ============================================================================
 
+/// Take a lease on a pooled connection, if it is there.
+fn lease_from(
+    pool: &HashMap<String, Arc<ManagedConnection>>,
+    device_id: &str,
+) -> Option<ConnectionLease> {
+    pool.get(device_id)
+        .map(|conn| ConnectionLease::take(device_id, conn.clone()))
+}
+
 /// Get or reconnect a managed connection by device_id.
 /// If the connection is dead, reconnects using the last known address.
 /// If the device is not in the pool: a Manual registry device connects
@@ -341,12 +473,12 @@ async fn fetch_capabilities(
 pub(crate) async fn get_connection(
     device_id: &str,
     timeout_sec: f64,
-) -> Result<Arc<ManagedConnection>, String> {
+) -> Result<ConnectionLease, String> {
     let pool = POOL.lock().await;
 
     if let Some(conn) = pool.get(device_id) {
         if conn.session.is_alive() {
-            return Ok(conn.clone());
+            return Ok(ConnectionLease::take(device_id, conn.clone()));
         }
         // Dead connection — reconnect using last known address
         let addr = conn.addr;
@@ -355,8 +487,7 @@ pub(crate) async fn get_connection(
         let port = addr.port();
         connect_by_address(&host, port, timeout_sec).await?;
         let pool = POOL.lock().await;
-        pool.get(device_id)
-            .cloned()
+        lease_from(&pool, device_id)
             .ok_or_else(|| format!("Reconnection to '{}' failed", device_id))
     } else {
         drop(pool);
@@ -370,9 +501,7 @@ pub(crate) async fn get_connection(
             let host = addr.ip().to_string();
             connect_by_address(&host, addr.port(), timeout_sec).await?;
             let pool = POOL.lock().await;
-            return pool
-                .get(device_id)
-                .cloned()
+            return lease_from(&pool, device_id)
                 .ok_or_else(|| format!("Manual connection to '{}' ({}) failed", device_id, addr));
         }
 
@@ -399,8 +528,7 @@ pub(crate) async fn get_connection(
         connect_by_address(&host, port, timeout_sec).await?;
 
         let pool = POOL.lock().await;
-        pool.get(device_id)
-            .cloned()
+        lease_from(&pool, device_id)
             .ok_or_else(|| format!("Connection to '{}' failed after discovery", device_id))
     }
 }
@@ -408,34 +536,6 @@ pub(crate) async fn get_connection(
 // ============================================================================
 // Public API — Session Tier
 // ============================================================================
-
-/// Acquire a managed connection for session streaming.
-/// Increments session_refs for diagnostics.
-pub(crate) async fn session_acquire(
-    device_id: &str,
-    timeout_sec: f64,
-) -> Result<Arc<ManagedConnection>, String> {
-    let conn = get_connection(device_id, timeout_sec).await?;
-    let refs = conn.session_refs.fetch_add(1, Ordering::SeqCst) + 1;
-    tlog!("[framelink:{}] Session acquired (refs={})", device_id, refs);
-    Ok(conn)
-}
-
-/// Release a session reference.
-pub(crate) async fn session_release(device_id: &str) {
-    let pool = POOL.lock().await;
-    if let Some(conn) = pool.get(device_id) {
-        let prev = conn.session_refs.load(Ordering::SeqCst);
-        if prev > 0 {
-            conn.session_refs.fetch_sub(1, Ordering::SeqCst);
-            tlog!(
-                "[framelink:{}] Session released (refs={})",
-                device_id,
-                prev - 1
-            );
-        }
-    }
-}
 
 // ============================================================================
 // Public API — Query (by device_id)
@@ -543,6 +643,82 @@ mod tests {
         );
         drop(waiter);
         assert!(!connecting_holds(&key), "last guard out clears the entry");
+    }
+
+    fn eviction_deadline(device_id: &str) -> Option<std::time::Instant> {
+        PENDING_EVICTION.lock().unwrap().get(device_id).copied()
+    }
+
+    /// A pooled connection against a throwaway local listener. `connect` only
+    /// opens the socket — there is no handshake — so this exercises the real
+    /// `ManagedConnection` rather than a stand-in for it.
+    async fn test_connection() -> Arc<ManagedConnection> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _accepted = listener.accept().await;
+            std::future::pending::<()>().await;
+        });
+        let session = FrameLinkSession::connect(addr).await.unwrap();
+        Arc::new(ManagedConnection {
+            session,
+            addr,
+            iface_types: HashMap::new(),
+            probe_cache: FrameLinkProbeResult {
+                device_id: None,
+                board_name: None,
+                board_revision: None,
+                interfaces: vec![],
+            },
+            editable_board_def: std::sync::Mutex::new(None),
+            leases: AtomicUsize::new(0),
+        })
+    }
+
+    /// A connection with a live lease is not a candidate for eviction; the last
+    /// lease going is what starts the clock.
+    #[tokio::test]
+    async fn only_the_last_lease_schedules_eviction() {
+        let device_id = "lease.test";
+        let conn = test_connection().await;
+        PENDING_EVICTION.lock().unwrap().remove(device_id);
+
+        let first = ConnectionLease::take(device_id, conn.clone());
+        let second = ConnectionLease::take(device_id, conn.clone());
+        assert_eq!(conn.leases.load(Ordering::SeqCst), 2);
+
+        drop(first);
+        assert!(
+            eviction_deadline(device_id).is_none(),
+            "a connection still in use must not be scheduled for eviction"
+        );
+
+        drop(second);
+        assert!(
+            eviction_deadline(device_id).is_some(),
+            "the last lease going must start the linger"
+        );
+        assert_eq!(conn.leases.load(Ordering::SeqCst), 0);
+        PENDING_EVICTION.lock().unwrap().remove(device_id);
+    }
+
+    /// Re-acquiring is what makes the linger worth having: the sweeper leaves a
+    /// connection alone while its lease count is non-zero.
+    #[tokio::test]
+    async fn reacquiring_within_the_linger_keeps_the_connection() {
+        let device_id = "release.test";
+        let conn = test_connection().await;
+        PENDING_EVICTION.lock().unwrap().remove(device_id);
+
+        drop(ConnectionLease::take(device_id, conn.clone()));
+        assert!(eviction_deadline(device_id).is_some());
+
+        let revived = ConnectionLease::take(device_id, conn.clone());
+        assert_eq!(conn.leases.load(Ordering::SeqCst), 1);
+        // The sweeper's own guard: a due entry whose leases came back is skipped.
+        assert!(conn.leases.load(Ordering::SeqCst) != 0);
+        drop(revived);
+        PENDING_EVICTION.lock().unwrap().remove(device_id);
     }
 }
 

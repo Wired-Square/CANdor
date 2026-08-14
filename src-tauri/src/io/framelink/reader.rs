@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 
 use super::convert_stream_frame;
 use super::shared;
+use crate::io::error::IoError;
 use crate::io::gvret::BusMapping;
 use crate::io::types::{SourceMessage, TransmitRequest};
 
@@ -40,7 +41,9 @@ pub async fn run_source(
         }
     };
 
-    let conn = match shared::session_acquire(&device_id, timeout_sec).await {
+    // The lease lives as long as this reader; dropping it starts the pool's
+    // idle linger, which is what finally closes the socket.
+    let conn = match shared::get_connection(&device_id, timeout_sec).await {
         Ok(c) => c,
         Err(e) => {
             let _ = tx
@@ -103,13 +106,17 @@ pub async fn run_source(
                         }
                     }
                     None => {
+                        // An unasked-for close is a fault, not an ending. Ended
+                        // reaches the merge task and stops there, so reporting
+                        // one here meant a device that dropped mid-session was
+                        // invisible until every other source had gone too.
                         let _ = tx
-                            .send(SourceMessage::Ended(
+                            .send(SourceMessage::Error(
                                 source_idx,
-                                "disconnected".to_string(),
+                                IoError::DeviceDisconnected { device: device_id.clone() }
+                                    .user_message(),
                             ))
                             .await;
-                        shared::session_release(&device_id).await;
                         return;
                     }
                 }
@@ -130,7 +137,12 @@ pub async fn run_source(
         }
     }
 
-    shared::session_release(&device_id).await;
+    // Tell the device to stop sending before letting go: the connection may
+    // linger for another consumer, and nothing here would read those frames.
+    for iface in &my_interfaces {
+        let _ = conn.session.stop_stream(*iface).await;
+    }
+
     let _ = tx
         .send(SourceMessage::Ended(source_idx, "stopped".to_string()))
         .await;
