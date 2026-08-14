@@ -184,6 +184,36 @@ FrameLink stream channel closing unasked-for is an `Error`, not the `Ended` it
 used to send — `Ended` stops at the merge task, so a device dropping mid-session
 was invisible until every other source had gone too.
 
+**A FrameLink timeout is diagnosed, not just reported.** The protocol has no
+handshake — `connect` writes nothing, so a successful TCP connect proves only
+that a socket opened, and a peer on a different protocol version drops our
+frames *before dispatch* without replying. A timeout is therefore ambiguous, so
+[`framelink/version_probe.rs`](../src-tauri/src/io/framelink/version_probe.rs)
+asks the device directly: one `PING` per protocol version `0..=15` in a single
+write, then one read. The device answers the single dialect it understands and
+ignores the rest, and `parse_frame` reports a foreign peer's version in
+`FrameError::UnsupportedVersion(v)` — so nothing needs hand-parsing, and only
+the outgoing header is assembled by hand (a test pins it byte-identical to
+`build_frame`, which can only stamp our own version). Four outcomes: the peer
+speaks *v* (name both versions, point at firmware upgrade — which works, since
+SMP shares nothing with this codec); it answered unintelligibly (firmware
+predating the CRC removal, which shipped without a version bump); it speaks our
+version (so the fault is elsewhere — report the original error and do **not**
+claim a mismatch); or silence, which on a device that serves exactly one client
+is `IoError::busy`.
+
+Three constraints on that path, each of which was got wrong first:
+
+- **Drop the `FrameLinkSession` before probing.** One client at a time means the
+  probe cannot connect until the failed session's socket is closed.
+- **Only probe a timeout.** A decode failure means the device already answered
+  in our version, so the verdict is necessarily "same version" and the window is
+  spent to reach an arm that discards it.
+- **One read, not a drain.** `read_to_end` returns at EOF and the device holds
+  the socket open, so waiting for it burned the whole window even when the reply
+  arrived immediately — and reading a cancelled `read_to_end`'s buffer relies on
+  behaviour tokio does not specify.
+
 ---
 
 ## 2. Source selection
