@@ -75,6 +75,35 @@ with `multi_source: false` cannot be combined with others.
 
 ¹ Framed serial (SLIP, Modbus RTU, delimiter) emits frames, not raw bytes.
 
+**FrameLink is the one source whose buses come from the device, not the
+profile.** `create_default_bus_mapping` runs before any connection exists, so it
+can only read the profile's `interfaces[]` — an array the frontend writes after
+a successful probe. When that probe never ran the array is absent and the
+mapping falls back to a single hardcoded `can0`, which is how a two-interface
+device came up with one CAN bus.
+[`framelink/reader.rs::reconcile_bus_mappings`](../src-tauri/src/io/framelink/reader.rs)
+therefore rebuilds the set from the `CAPABILITIES_RESP` the connection already
+fetched: the device is the authority on which interfaces exist, and a profile
+entry only overrides `enabled` and `output_bus`. An interface the profile has
+never heard of streams by default; one it has been told to mute stays muted; one
+the device does not have is dropped. A device that reports nothing leaves the
+profile's mapping untouched, so a failure to enumerate never silently zeroes a
+session.
+
+**A FrameLink device serves exactly one TCP client**, so `io/framelink/shared.rs`
+pools one connection per device and every consumer — the reader and the ~40
+rules/signal commands alike — holds a `ConnectionLease`. The last lease dropping
+starts a 30 s linger, after which one process-wide sweeper evicts the entry;
+dropping the last `Arc<FrameLinkSession>` runs its `Drop`, which aborts the IO
+task and closes the socket (there is no explicit close to call). The linger is
+what keeps a burst of short-lived rules commands on one warm connection. A
+connection created by a probe schedules its own eviction on insert, because
+nothing takes a lease on it. Before releasing, a reader calls `stop_stream` for
+its interfaces — the connection may outlive the session, and nothing would be
+reading those frames. **Do not hand out a bare `Arc<ManagedConnection>`**: the
+pool previously had no `remove` at all, so a stopped session held the device's
+only client slot for the life of the process.
+
 **Host resolution.** TCP-based sources accept either a hostname or a literal IP
 for their host. GVRET TCP, Modbus TCP and FrameLink resolve through
 [`io/net.rs::resolve_host_port`](../src-tauri/src/io/net.rs), a wrapper over
@@ -98,6 +127,19 @@ DNS outage, and FrameLink — which resolved *outside* its 5s timeout — hung
 indefinitely with no message at all. A hostname problem and a connectivity
 problem have different fixes, so they must read differently.
 
+**A session whose sources all failed reports failure.** `IOState::Error` was
+declared but never constructed, and the merge task emitted `stream-ended`
+`complete` regardless — so a session that never carried a frame reported a clean
+finish while `get_session_state` still said `Running`, and only the frontend
+store knew otherwise. The merge task keeps the last source error and, on exit,
+picks its reason through `stream_ended_reason(stopped, had_error)`: a deliberate
+stop outranks everything, otherwise an error beats `complete`. Because the merge
+task is detached and cannot reach the broker's `state` field, it writes to a
+shared `fatal_error` slot that `IOBroker::state()` consults *ahead of* that
+field; `start` and `stop` both clear it. On the frontend, `StreamEnded` maps
+reason `error` to `ioState: "error"` — collapsing every non-paused reason to
+`"stopped"` would overwrite the failure that arrived moments earlier.
+
 **Device errors.** The serial-family read loops (serial, slcan, gvret_usb) route
 read failures through `IoError` via one
 [`serial::utils::send_serial_read_error`](../src-tauri/src/io/serial/utils.rs)
@@ -116,6 +158,18 @@ SocketCAN's "pkexec not found", gs_usb's "Device not found" and FrameLink's
 shown. When adding an error message, check it cannot be caught by that filter by
 accident — and note the sibling `includes("Modbus read error")` clause is still an
 unanchored substring test.
+
+FrameLink joined that ladder late, and the gap was expensive. `fetch_capabilities`
+used to return an empty probe on both its error and timeout paths, so
+`connect_by_address` pooled a half-open connection, named it `host:port` and
+returned `Ok`. A Home Assistant add-on speaking FrameLink protocol v3 to a
+WireTAP built against v1 therefore presented as a **healthy session that streamed
+nothing** — no dialog, no error state, `Running` throughout. A device that cannot
+describe itself is not a device we have connected to: the failure is now an
+`IoError::Timeout`/`IoError::Protocol` and the session errors out. Likewise a
+FrameLink stream channel closing unasked-for is an `Error`, not the `Ended` it
+used to send — `Ended` stops at the merge task, so a device dropping mid-session
+was invisible until every other source had gone too.
 
 ---
 
