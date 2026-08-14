@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::io::error::IoError;
 use framelink::protocol::capabilities::decode_capabilities;
 use framelink::protocol::types::{FLAG_ACK_REQ, MSG_CAPABILITIES_REQ};
 use framelink::session::FrameLinkSession;
@@ -66,14 +67,48 @@ pub(crate) struct ManagedConnection {
 static POOL: Lazy<Mutex<HashMap<String, Arc<ManagedConnection>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-/// Per-key connection lock — prevents duplicate TCP connections to the same device.
-static CONNECTING: Lazy<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+/// Per-key connection lock — prevents duplicate TCP connections to the same
+/// device. A `std::sync::Mutex` because it is only ever held long enough to
+/// clone an `Arc`, never across an await — which is also what lets
+/// [`ConnectingGuard`]'s `Drop` clean up without being async.
+static CONNECTING: Lazy<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
-/// Remove a per-key connecting lock entry.
-async fn cleanup_connecting(race_key: &str) {
-    let mut connecting = CONNECTING.lock().await;
-    connecting.remove(race_key);
+/// Holds the per-address connect lock and drops the map entry with it.
+///
+/// Cleanup used to be two explicit calls on the success paths, so every `?`
+/// between resolving the host and inserting into the pool leaked an entry
+/// forever — and the failure paths are exactly the ones a flaky device takes
+/// repeatedly.
+struct ConnectingGuard {
+    race_key: String,
+    lock: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl ConnectingGuard {
+    fn acquire(race_key: String) -> Self {
+        let lock = CONNECTING
+            .lock()
+            .expect("CONNECTING mutex poisoned")
+            .entry(race_key.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone();
+        Self { race_key, lock }
+    }
+}
+
+impl Drop for ConnectingGuard {
+    fn drop(&mut self) {
+        let mut connecting = match CONNECTING.lock() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        // Only the map and this guard hold it, so nobody is queued behind us —
+        // dropping the entry now cannot cost another caller its exclusion.
+        if Arc::strong_count(&self.lock) <= 2 {
+            connecting.remove(&self.race_key);
+        }
+    }
 }
 
 // ============================================================================
@@ -91,17 +126,9 @@ pub(crate) async fn connect_by_address(
         .await
         .map_err(|e| e.user_message())?;
 
-    let race_key = format!("addr:{}:{}", host, port);
-
     // Per-key lock: only one connection attempt per address at a time
-    let lock = {
-        let mut connecting = CONNECTING.lock().await;
-        connecting
-            .entry(race_key.clone())
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-            .clone()
-    };
-    let _guard = lock.lock().await;
+    let connecting = ConnectingGuard::acquire(format!("addr:{}:{}", host, port));
+    let _guard = connecting.lock.clone().lock_owned().await;
 
     // Check if this address already has a live connection in the pool
     {
@@ -120,11 +147,13 @@ pub(crate) async fn connect_by_address(
         FrameLinkSession::connect(addr),
     )
     .await
-    .map_err(|_| format!("Connection to {} timed out", display_key))?
-    .map_err(|e| format!("Connection to {} failed: {}", display_key, e))?;
+    .map_err(|_| IoError::timeout(&display_key, "connect").user_message())?
+    .map_err(|e| IoError::connection(&display_key, e.to_string()).user_message())?;
 
     let (iface_types, probe_cache, editable_board_def) =
-        fetch_capabilities(&session, &display_key, timeout_sec).await;
+        fetch_capabilities(&session, &display_key, timeout_sec)
+            .await
+            .map_err(|e| e.user_message())?;
 
     let device_id = probe_cache
         .device_id
@@ -145,15 +174,12 @@ pub(crate) async fn connect_by_address(
     if let Some(existing) = pool.get(&device_id) {
         if existing.session.is_alive() {
             tlog!("[framelink:{}] Discarding duplicate connection (race)", device_id);
-            cleanup_connecting(&race_key).await;
             return Ok(device_id);
         }
     }
     pool.insert(device_id.clone(), conn);
     tlog!("[framelink:{}] Created managed connection ({})", device_id, display_key);
-    drop(pool);
 
-    cleanup_connecting(&race_key).await;
     Ok(device_id)
 }
 
@@ -181,46 +207,43 @@ fn embedded_board_def_fallback(
 }
 
 /// Fetch capabilities from a freshly connected session.
+///
+/// A device that cannot describe itself is not a device we have connected to,
+/// so every failure here is fatal to the connection. This used to return an
+/// empty probe instead, which let `connect_by_address` pool a half-open
+/// connection, name it `host:port`, and report success — so a device speaking a
+/// protocol version we do not (the whole of this bug) presented as a healthy
+/// session that silently streamed nothing.
 async fn fetch_capabilities(
     session: &Arc<FrameLinkSession>,
     key: &str,
     timeout_sec: f64,
-) -> (
-    HashMap<u8, u8>,
-    FrameLinkProbeResult,
-    Option<framelink::board::editable::EditableBoardDef>,
-) {
-    let empty_probe = || FrameLinkProbeResult {
-        device_id: None,
-        board_name: None,
-        board_revision: None,
-        interfaces: vec![],
-    };
-
-    let frame = match tokio::time::timeout(
+) -> Result<
+    (
+        HashMap<u8, u8>,
+        FrameLinkProbeResult,
+        Option<framelink::board::editable::EditableBoardDef>,
+    ),
+    IoError,
+> {
+    let frame = tokio::time::timeout(
         Duration::from_secs_f64(timeout_sec),
         session.request(MSG_CAPABILITIES_REQ, FLAG_ACK_REQ, &[]),
     )
     .await
-    {
-        Ok(Ok(f)) => f,
-        Ok(Err(e)) => {
-            tlog!("[framelink:{}] Capabilities request failed: {}", key, e);
-            return (HashMap::new(), empty_probe(), None);
-        }
-        Err(_) => {
-            tlog!("[framelink:{}] Capabilities request timed out", key);
-            return (HashMap::new(), empty_probe(), None);
-        }
-    };
+    .map_err(|_| {
+        tlog!("[framelink:{}] Capabilities request timed out", key);
+        IoError::timeout(key, "capabilities request")
+    })?
+    .map_err(|e| {
+        tlog!("[framelink:{}] Capabilities request failed: {}", key, e);
+        IoError::protocol(key, format!("capabilities request failed: {e}"))
+    })?;
 
-    let caps = match decode_capabilities(&frame.payload) {
-        Ok(c) => c,
-        Err(e) => {
-            tlog!("[framelink:{}] Failed to decode capabilities: {}", key, e);
-            return (HashMap::new(), empty_probe(), None);
-        }
-    };
+    let caps = decode_capabilities(&frame.payload).map_err(|e| {
+        tlog!("[framelink:{}] Failed to decode capabilities: {}", key, e);
+        IoError::protocol(key, format!("could not decode capabilities: {e}"))
+    })?;
 
     let iface_types: HashMap<u8, u8> = caps
         .interfaces
@@ -303,7 +326,7 @@ async fn fetch_capabilities(
         interfaces,
     };
 
-    (iface_types, probe, editable)
+    Ok((iface_types, probe, editable))
 }
 
 // ============================================================================
@@ -482,6 +505,44 @@ where
     match guard.as_mut() {
         Some(board_def) => Ok(f(board_def)),
         None => Err("No board definition available for this device".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn connecting_holds(key: &str) -> bool {
+        CONNECTING.lock().unwrap().contains_key(key)
+    }
+
+    /// The guard must clean up on the *failure* paths, which is what the two
+    /// explicit `cleanup_connecting` calls it replaced never did.
+    #[test]
+    fn connecting_entry_is_released_on_drop() {
+        let key = "addr:release.test:120".to_string();
+        {
+            let _guard = ConnectingGuard::acquire(key.clone());
+            assert!(connecting_holds(&key), "entry should exist while held");
+        }
+        assert!(!connecting_holds(&key), "entry should be gone after drop");
+    }
+
+    /// A second waiter keeps the entry alive, so the two callers go on sharing
+    /// one lock rather than the first one out removing the exclusion.
+    #[test]
+    fn connecting_entry_survives_while_another_holder_waits() {
+        let key = "addr:contended.test:120".to_string();
+        let waiter = ConnectingGuard::acquire(key.clone());
+        {
+            let _first = ConnectingGuard::acquire(key.clone());
+        }
+        assert!(
+            connecting_holds(&key),
+            "entry must outlive the first guard while a second holds it"
+        );
+        drop(waiter);
+        assert!(!connecting_holds(&key), "last guard out clears the entry");
     }
 }
 
