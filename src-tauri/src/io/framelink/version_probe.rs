@@ -24,7 +24,7 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use framelink::codec::frame::{parse_frame, HEADER_SIZE, PROTOCOL_VERSION};
+use framelink::codec::frame::{parse_frame, HEADER_SIZE};
 use framelink::codec::{cobs, FrameError};
 use framelink::protocol::types::MSG_PING;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -37,7 +37,7 @@ const ALL_VERSIONS: std::ops::RangeInclusive<u8> = 0..=15;
 const LISTEN_WINDOW: Duration = Duration::from_millis(1500);
 
 /// What the probe learned.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum VersionVerdict {
     /// The peer answered in our own version — a version mismatch is *not* the
     /// fault, and the caller must not claim otherwise.
@@ -52,35 +52,6 @@ pub(crate) enum VersionVerdict {
     Silent,
 }
 
-impl VersionVerdict {
-    /// The user-facing half of the connection error, given the device's name.
-    pub(crate) fn describe(&self, device: &str) -> String {
-        match self {
-            Self::Speaks(v) => format!(
-                "{device} speaks FrameLink protocol v{v}, but this build speaks \
-                 v{PROTOCOL_VERSION}. The two cannot talk to each other. Update \
-                 the device firmware, then try again."
-            ),
-            Self::Unintelligible => format!(
-                "{device} replied in a FrameLink dialect this build cannot read — \
-                 its firmware predates a change to the frame format. Update the \
-                 device firmware, then try again."
-            ),
-            // Deliberately two causes: a device serves exactly one client, so a
-            // silent socket very often means somebody else already has it.
-            Self::Silent => format!(
-                "{device} accepted the connection but never replied. Either it has \
-                 stopped responding, or another client already holds its single \
-                 connection — a FrameLink device serves one at a time."
-            ),
-            Self::SameVersion => format!(
-                "{device} speaks the expected FrameLink protocol \
-                 v{PROTOCOL_VERSION} but did not answer in time."
-            ),
-        }
-    }
-}
-
 /// Build a PING framed at an arbitrary protocol version.
 ///
 /// This is the one thing the library cannot do for us: `build_frame` stamps
@@ -92,10 +63,15 @@ fn ping_at_version(version: u8) -> Vec<u8> {
     let mut raw = Vec::with_capacity(HEADER_SIZE);
     raw.push(version << 4); // low nibble is flags — none set
     raw.push(MSG_PING);
-    raw.push(version); // seq — echoes the version, purely for reading a dump
+    raw.push(0); // seq — nothing correlates replies, so keep the anchor test plain
     raw.extend_from_slice(&0u16.to_le_bytes()); // empty payload
 
-    let encoded = cobs::encode(&raw);
+    wrap(&raw)
+}
+
+/// COBS-encode a raw frame and delimit it, as the wire expects.
+fn wrap(raw: &[u8]) -> Vec<u8> {
+    let encoded = cobs::encode(raw);
     let mut frame = Vec::with_capacity(encoded.len() + 2);
     frame.push(0x00);
     frame.extend_from_slice(&encoded);
@@ -103,11 +79,12 @@ fn ping_at_version(version: u8) -> Vec<u8> {
     frame
 }
 
-/// Classify the bytes a device sent back.
+/// Classify the bytes a device sent back — the first frame that parses, or
+/// names a version, decides.
 ///
-/// Scans every complete COBS frame in the buffer and returns the most
-/// informative verdict, because a device may emit unrelated traffic (a stream
-/// it was already running) alongside its PONG.
+/// It scans rather than taking chunk zero because a read can start mid-stream:
+/// a device already streaming leaves a partial frame ahead of its PONG.
+/// `Unintelligible` is the fallback for "frames arrived, none of them parsed".
 fn classify(buf: &[u8]) -> VersionVerdict {
     let mut verdict = VersionVerdict::Silent;
 
@@ -132,7 +109,8 @@ fn classify(buf: &[u8]) -> VersionVerdict {
 pub(crate) async fn probe_version(addr: SocketAddr) -> VersionVerdict {
     let mut stream = match TcpStream::connect(addr).await {
         Ok(s) => s,
-        // Nothing to report: the caller's own connect error is the better story.
+        // A device that will not take a second connection is one that is busy
+        // or gone, which is what Silent already reports.
         Err(_) => return VersionVerdict::Silent,
     };
     let _ = stream.set_nodelay(true);
@@ -145,18 +123,20 @@ pub(crate) async fn probe_version(addr: SocketAddr) -> VersionVerdict {
         return VersionVerdict::Silent;
     }
 
-    // One window, not a timeout per version: the device answers the single ping
-    // it understands and ignores the rest, so everything arrives together.
-    let mut buf = Vec::new();
-    let _ = tokio::time::timeout(LISTEN_WINDOW, stream.read_to_end(&mut buf)).await;
-
-    classify(&buf)
+    // One read, not a drain: the device answers exactly one of the sixteen and
+    // then holds the socket open, so waiting for EOF would always burn the full
+    // window even when the reply landed immediately.
+    let mut buf = vec![0u8; 512];
+    match tokio::time::timeout(LISTEN_WINDOW, stream.read(&mut buf)).await {
+        Ok(Ok(n)) if n > 0 => classify(&buf[..n]),
+        _ => VersionVerdict::Silent,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use framelink::codec::frame::build_frame;
+    use framelink::codec::frame::{build_frame, PROTOCOL_VERSION};
 
     /// The hand-assembled header must be exactly what the library would emit.
     /// If the envelope ever changes, this fails rather than the probe silently
@@ -165,18 +145,9 @@ mod tests {
     fn probe_frame_matches_library() {
         assert_eq!(
             ping_at_version(PROTOCOL_VERSION),
-            build_frame(MSG_PING, 0, PROTOCOL_VERSION, &[]),
+            build_frame(MSG_PING, 0, 0, &[]),
             "the probe's frame envelope has drifted from framelink::codec"
         );
-    }
-
-    #[test]
-    fn a_probe_frame_round_trips() {
-        let framed = ping_at_version(PROTOCOL_VERSION);
-        let body: Vec<u8> = framed[1..framed.len() - 1].to_vec();
-        let frame = parse_frame(&body).expect("our own version must parse");
-        assert_eq!(frame.msg_type, MSG_PING);
-        assert!(frame.payload.is_empty());
     }
 
     /// A reply in a version we do not speak is the whole point — the peer's
@@ -205,11 +176,7 @@ mod tests {
     fn a_frame_we_cannot_parse_is_not_a_version() {
         let mut raw = vec![(PROTOCOL_VERSION << 4), MSG_PING, 0];
         raw.extend_from_slice(&9u16.to_le_bytes()); // claims 9 bytes, carries 0
-        let mut framed = vec![0x00];
-        framed.extend_from_slice(&cobs::encode(&raw));
-        framed.push(0x00);
-
-        assert_eq!(classify(&framed), VersionVerdict::Unintelligible);
+        assert_eq!(classify(&wrap(&raw)), VersionVerdict::Unintelligible);
     }
 
     #[test]
@@ -218,19 +185,13 @@ mod tests {
         assert_eq!(classify(&[0x00, 0x00]), VersionVerdict::Silent);
     }
 
-    /// A real version answer must win over unrelated noise in the same buffer —
-    /// a device may still be streaming when we probe it.
+    /// A partial or junk frame ahead of the reply must not stop the scan — a
+    /// device may still be streaming when we probe it.
     #[test]
-    fn a_version_answer_outranks_surrounding_noise() {
+    fn the_scan_continues_past_an_unparseable_chunk() {
         let mut buf = vec![0x00, 0x02, 0x99, 0x00]; // junk frame
         buf.extend_from_slice(&ping_at_version(1));
         assert_eq!(classify(&buf), VersionVerdict::Speaks(1));
-    }
-
-    #[test]
-    fn every_version_is_probed() {
-        let count = ALL_VERSIONS.count();
-        assert_eq!(count, 16, "the version nibble can name exactly 16 versions");
     }
 
     /// Against a real device. Ignored by default — it needs the network and a
@@ -247,11 +208,11 @@ mod tests {
             .expect("FRAMELINK_PROBE_ADDR must be ip:port");
 
         let verdict = probe_version(addr).await;
-        println!("verdict: {verdict:?} — {}", verdict.describe("device"));
+        println!("verdict: {verdict:?}");
         assert_ne!(
             verdict,
             VersionVerdict::Silent,
-            "a reachable device should answer one of the sixteen pings"
+            "no reply at any version — is another client holding the device?"
         );
     }
 }

@@ -288,7 +288,9 @@ pub(crate) async fn connect_by_address(
                 // socket, and a FrameLink device serves exactly one client, so
                 // the probe cannot get in until this one is gone.
                 drop(session);
-                return Err(diagnose_failed_connect(addr, &display_key, e).await);
+                return Err(diagnose_failed_connect(addr, &display_key, e)
+                    .await
+                    .user_message());
             }
         };
 
@@ -354,7 +356,14 @@ fn embedded_board_def_fallback(
 /// The probe only runs on a path that has already failed, so its ~1.5s costs
 /// nothing that was not already lost — and it replaces a 15s stall reported as
 /// "timed out" with an answer naming the actual versions.
-async fn diagnose_failed_connect(addr: SocketAddr, display_key: &str, original: IoError) -> String {
+async fn diagnose_failed_connect(addr: SocketAddr, display_key: &str, original: IoError) -> IoError {
+    // Only a timeout is ambiguous. A decode failure means the device answered
+    // *in our version* and the reply was bad — probing would spend the window
+    // to reach the SameVersion arm and throw the answer away.
+    if !matches!(original, IoError::Timeout { .. }) {
+        return original;
+    }
+
     let verdict = version_probe::probe_version(addr).await;
     tlog!(
         "[framelink:{}] Capabilities failed ({}); version probe says {:?}",
@@ -363,11 +372,32 @@ async fn diagnose_failed_connect(addr: SocketAddr, display_key: &str, original: 
         verdict
     );
 
+    use version_probe::VersionVerdict;
     match verdict {
         // The peer speaks our version, so the mismatch story would be a lie —
         // report what actually went wrong.
-        version_probe::VersionVerdict::SameVersion => original.user_message(),
-        other => IoError::protocol(display_key, other.describe(display_key)).user_message(),
+        VersionVerdict::SameVersion => original,
+        VersionVerdict::Speaks(v) => IoError::protocol(
+            display_key,
+            format!(
+                "device speaks FrameLink protocol v{v}, but this build speaks \
+                 v{}. The two cannot talk to each other — update the device \
+                 firmware, then try again.",
+                framelink::codec::frame::PROTOCOL_VERSION
+            ),
+        ),
+        VersionVerdict::Unintelligible => IoError::protocol(
+            display_key,
+            "device replied in a FrameLink dialect this build cannot read — its \
+             firmware predates a change to the frame format. Update the device \
+             firmware, then try again."
+                .to_string(),
+        ),
+        // Connected, pinged in every dialect, heard nothing. On a device that
+        // serves exactly one client that is overwhelmingly "someone else has
+        // it" — which is what DeviceBusy already says, including the close-the-
+        // other-app instruction this used to reinvent without.
+        VersionVerdict::Silent => IoError::busy(display_key),
     }
 }
 
