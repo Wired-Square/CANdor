@@ -2226,6 +2226,11 @@ pub async fn replace_session_source(
 pub async fn stop_and_switch_to_capture(app: &AppHandle, session_id: &str, speed: f64) -> Result<IOCapabilities, String> {
     let mut sessions = IO_SESSIONS.lock().await;
 
+    // Must be read before stop(), which finalises the captures out of streaming_ids.
+    // Ownership alone would also match a capture the session never streamed into — see
+    // docs/capture-flow.md § Registry state.
+    let streaming_capture_id = capture_store::get_session_streaming_frame_capture_id(session_id);
+
     // Stop the device first — stop() triggers emit_stream_ended which calls
     // finalize_capture(), so we must stop before looking up the capture.
     // Scoped to release the mutable borrow before calling replace_session_source.
@@ -2238,12 +2243,9 @@ pub async fn stop_and_switch_to_capture(app: &AppHandle, session_id: &str, speed
         }
     }
 
-    // Look up the capture by session ownership (finalized during stop())
-    let capture_ids = capture_store::get_session_capture_ids(session_id);
-    let capture_id = capture_ids.iter()
-        .filter_map(|id| capture_store::get_capture_metadata(id))
-        .find(|m| m.kind == capture_store::CaptureKind::Frames)
-        .map(|m| m.id.clone());
+    // CaptureSource replays frames only, so a session that streamed bytes has nothing to
+    // switch to and the caller falls back to suspending it.
+    let capture_id = streaming_capture_id;
 
     // Try to switch to capture replay
     if let Some(ref bid) = capture_id {

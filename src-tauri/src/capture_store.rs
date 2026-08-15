@@ -693,6 +693,25 @@ pub fn get_session_bytes_capture_id(session_id: &str) -> Option<String> {
     session_capture_id(session_id, CaptureKind::Bytes)
 }
 
+/// The frame capture a session is actively streaming into, if any.
+///
+/// Narrower than `get_session_frame_capture_id`: a session also owns captures it never
+/// streamed into, so ownership alone is the wrong test for "this session's capture".
+/// See docs/capture-flow.md § Registry state. Only meaningful before `stop()`, which
+/// finalises the captures out of `streaming_ids`.
+pub fn get_session_streaming_frame_capture_id(session_id: &str) -> Option<String> {
+    let registry = CAPTURE_REGISTRY.read().unwrap();
+    registry
+        .captures
+        .values()
+        .find(|b| {
+            b.metadata.owning_session_id.as_deref() == Some(session_id)
+                && b.metadata.kind == CaptureKind::Frames
+                && registry.streaming_ids.contains(&b.metadata.id)
+        })
+        .map(|b| b.metadata.id.clone())
+}
+
 /// Append frames to this session's frame capture.
 /// Resolves the capture by finding the capture owned by session_id with
 /// capture kind == Frames. No-op if session has no frame capture.
@@ -1315,5 +1334,36 @@ mod tests {
         let b = FrameSelection::from_groups(groups(&[("can", &[256]), ("modbus", &[256, 257])]));
         assert_eq!(a.pairs(), b.pairs());
         assert_eq!(a.pairs(), vec![(256, "can"), (256, "modbus"), (257, "modbus")]);
+    }
+
+    /// A raw serial session streams bytes, and client-side framing derives a Frames
+    /// capture that it assigns to the same session. Picking by ownership finds that
+    /// derived capture and the session gets replayed as frames instead of suspended,
+    /// which is what dropped Discovery out of its serial view on stop.
+    #[test]
+    fn a_derived_frame_capture_is_not_the_session_stream_target() {
+        let session = "test_session_streaming_only";
+        let streamed = create_capture(CaptureKind::Bytes, "raw serial".to_string());
+        let derived = create_capture_inactive(CaptureKind::Frames, "Framed from raw".to_string());
+        set_capture_owner(&streamed, session).unwrap();
+        set_capture_owner(&derived, session).unwrap();
+
+        // Ownership finds it; streaming does not. That difference is the whole fix.
+        assert_eq!(get_session_frame_capture_id(session), Some(derived));
+        assert_eq!(get_session_streaming_frame_capture_id(session), None);
+    }
+
+    /// Once the session stops, its captures are finalised out of the streaming set, so
+    /// the lookup must be made before stopping rather than after.
+    #[test]
+    fn finalising_clears_the_streaming_frame_capture() {
+        let session = "test_session_finalise";
+        let streamed = create_capture(CaptureKind::Frames, "can".to_string());
+        set_capture_owner(&streamed, session).unwrap();
+        assert_eq!(get_session_streaming_frame_capture_id(session), Some(streamed));
+
+        finalize_session_captures(session);
+
+        assert_eq!(get_session_streaming_frame_capture_id(session), None);
     }
 }
