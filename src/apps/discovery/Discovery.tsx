@@ -47,6 +47,15 @@ import { formatFilenameDate } from "../../utils/timeFormat";
 import { useDialogManager } from "../../hooks/useDialogManager";
 import { getFavoritesForProfile } from "../../utils/favorites";
 
+/** The protocol these frames are, for labelling and export naming. Entries without a
+ *  protocol are skipped rather than counted as CAN. */
+function protocolOf(frameInfoMap: Map<string, { protocol?: string }>): string {
+  for (const info of frameInfoMap.values()) {
+    if (info.protocol) return info.protocol;
+  }
+  return 'can';
+}
+
 function DiscoveryInner() {
   const { t, i18n } = useTranslation("discovery");
   const { settings } = useSettings();
@@ -165,11 +174,7 @@ function DiscoveryInner() {
 
   const applySelectionSet = useCallback((selectionSet: SelectionSet) => {
     const uiState = useDiscoveryUIStore.getState();
-    // Detect protocol from current frameInfoMap, default to 'can'
-    let protocol = 'can';
-    for (const info of useDiscoveryFrameStore.getState().frameInfoMap.values()) {
-      if (info.protocol) { protocol = info.protocol; break; }
-    }
+    const protocol = protocolOf(useDiscoveryFrameStore.getState().frameInfoMap);
     useDiscoveryFrameStore.getState().applySelectionSet(
       selectionSet, protocol, uiState.setActiveSelectionSet, uiState.setSelectionSetDirty
     );
@@ -190,11 +195,7 @@ function DiscoveryInner() {
     const now = new Date();
     const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
     const timeStr = now.toTimeString().slice(0, 5).replace(':', '');
-    let protocol = 'can';
-    const fInfoMap = useDiscoveryFrameStore.getState().frameInfoMap;
-    for (const info of fInfoMap.values()) {
-      if (info.protocol) { protocol = info.protocol; break; }
-    }
+    let protocol = protocolOf(useDiscoveryFrameStore.getState().frameInfoMap);
     const frameBuffer = getDiscoveryFrameBuffer();
     if (protocol === 'can' && frameBuffer.length > 0) {
       protocol = frameBuffer[0].protocol || 'can';
@@ -721,7 +722,9 @@ function DiscoveryInner() {
     [frameInfoMap]
   );
 
-  const protocolLabel = frames.length > 0 ? frames[0].protocol : "can";
+  // In capture mode the in-memory buffer is empty by design — rows are read from the
+  // capture — so fall back to what the capture says it holds rather than assuming CAN.
+  const protocolLabel = frames[0]?.protocol || protocolOf(frameInfoMap);
 
   // Non-realtime sources: recorded (WireTAP backend, csv) and capture replay
   const isRecorded = capabilities?.traits.temporal_mode === "recorded"
