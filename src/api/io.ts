@@ -61,12 +61,6 @@ export interface RawByteEntry {
   bus?: number;
 }
 
-/** Payload for raw byte stream events (serial-raw-bytes) */
-export interface RawBytesPayload {
-  bytes: RawByteEntry[];
-  port: string;
-}
-
 // ============================================================================
 // IO Capabilities
 // ============================================================================

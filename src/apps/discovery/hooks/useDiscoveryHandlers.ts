@@ -57,7 +57,6 @@ export interface UseDiscoveryHandlersParams {
   isSerialMode: boolean;
   backendByteCount: number;
   backendFrameCount: number;
-  serialBytesBufferLength: number;
 
   // Time state
   startTime: string;
@@ -117,7 +116,6 @@ export interface UseDiscoveryHandlersParams {
   enableCaptureMode: (count: number) => void;
   setFrameInfoFromCapture: (frameInfo: CaptureFrameInfo[]) => void;
   setBackendFrameCount: (count: number) => void;
-  addSerialBytes: (entries: { byte: number; timestampUs: number }[]) => void;
   openSaveDialog: () => void;
   saveFrames: (decoderDir: string, format: 'hex' | 'decimal') => Promise<void>;
   setActiveSelectionSet: (id: string | null) => void;
@@ -213,7 +211,6 @@ export function useDiscoveryHandlers(params: UseDiscoveryHandlersParams): Discov
     framedCaptureId: params.framedCaptureId,
     backendByteCount: params.backendByteCount,
     backendFrameCount: params.backendFrameCount,
-    serialBytesBufferLength: params.serialBytesBufferLength,
     exportDataMode: params.exportDataMode,
     captureModeEnabled: params.captureModeEnabled,
     captureModeTotalFrames: params.captureModeTotalFrames,

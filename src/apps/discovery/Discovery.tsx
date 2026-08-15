@@ -37,7 +37,7 @@ import SaveSelectionSetDialog from "../../dialogs/SaveSelectionSetDialog";
 import IoSourcePickerDialog from "../../dialogs/IoSourcePickerDialog";
 import { useSelectionSets } from "../../hooks/useSelectionSets";
 import { useEffectiveCaptureMetadata } from "../../hooks/useEffectiveCaptureMetadata";
-import { getCaptureMetadata, getCaptureMetadataById, getCaptureFramesPaginated, getCaptureFramesPaginatedFiltered, getCaptureBytesPaginated, getCaptureFrameInfo, getCaptureBytesById, getCaptureFramesPaginatedById, type CaptureMetadata } from "../../api/capture";
+import { getCaptureMetadata, getCaptureMetadataById, getCaptureFramesPaginated, getCaptureFramesPaginatedFiltered, getCaptureBytesPaginated, getCaptureFrameInfo, getCaptureFramesPaginatedById, type CaptureMetadata } from "../../api/capture";
 import { WINDOW_EVENTS } from "../../events/registry";
 import FramePickerDialog from "../../dialogs/FramePickerDialog";
 import ToolboxDialog from "../../dialogs/ToolboxDialog";
@@ -104,25 +104,23 @@ function DiscoveryInner() {
   const setSelectionSetDirty = useDiscoveryUIStore((s) => s.setSelectionSetDirty);
 
   // ── Serial store ──
-  const { isSerialMode, framedData, framingAccepted, serialBytesBuffer,
+  const { isSerialMode, framedData, framingAccepted,
     backendByteCount, backendFrameCount, framedCaptureId } =
     useDiscoverySerialStore(useShallow((s) => ({
       isSerialMode: s.isSerialMode,
       framedData: s.framedData,
       framingAccepted: s.framingAccepted,
-      serialBytesBuffer: s.serialBytesBuffer,
       backendByteCount: s.backendByteCount,
       backendFrameCount: s.backendFrameCount,
       framedCaptureId: s.framedCaptureId,
     })));
   const serialActiveTab = useDiscoverySerialStore((s) => s.activeTab);
   const setSerialMode = useDiscoverySerialStore((s) => s.setSerialMode);
-  const addSerialBytes = useDiscoverySerialStore((s) => s.addSerialBytes);
   const clearSerialBytes = useDiscoverySerialStore((s) => s.clearSerialBytes);
   const resetFraming = useDiscoverySerialStore((s) => s.resetFraming);
   const undoAcceptFraming = useDiscoverySerialStore((s) => s.undoAcceptFraming);
-  const incrementBackendByteCount = useDiscoverySerialStore((s) => s.incrementBackendByteCount);
   const setBytesCaptureId = useDiscoverySerialStore((s) => s.setBytesCaptureId);
+  const storeBytesCaptureId = useDiscoverySerialStore((s) => s.bytesCaptureId);
   const setBackendByteCount = useDiscoverySerialStore((s) => s.setBackendByteCount);
   const incrementBackendFrameCount = useDiscoverySerialStore((s) => s.incrementBackendFrameCount);
   const setBackendFrameCount = useDiscoverySerialStore((s) => s.setBackendFrameCount);
@@ -294,16 +292,6 @@ function DiscoveryInner() {
     incrementBackendFrameCount(receivedFrames.length);
   }, [addFrames, incrementBackendFrameCount, isSerialMode, framingAccepted]);
 
-  const handleBytes = useCallback((payload: import("../../api/io").RawBytesPayload) => {
-    const entries = payload.bytes.map((b) => ({
-      byte: b.byte,
-      timestampUs: b.timestamp_us,
-      bus: b.bus,
-    }));
-    incrementBackendByteCount(entries.length);
-    addSerialBytes(entries);
-  }, [addSerialBytes, incrementBackendByteCount]);
-
   const handleError = useCallback((error: string) => {
     // Stream errors are shown centrally via sessionStore's global IO error dialog
     // (the SessionError handler), so this only logs — showing one here too would
@@ -359,21 +347,10 @@ function DiscoveryInner() {
 
       if (payload.capture_kind === "bytes" && meta) {
         console.log(`[Discovery] Loading ${payload.count} bytes from capture into serial view`);
-        try {
-          const bytes = await getCaptureBytesById(meta.id);
-          const entries = bytes.map((b) => ({
-            byte: b.byte,
-            timestampUs: b.timestamp_us,
-          }));
-          clearSerialBytes();
-          resetFraming();
-          addSerialBytes(entries);
-          setBytesCaptureId(meta.id);
-          setBackendByteCount(meta.count);
-          console.log(`[Discovery] Loaded ${bytes.length} bytes`);
-        } catch (e) {
-          console.error("Failed to load bytes from capture:", e);
-        }
+        clearSerialBytes();
+        resetFraming();
+        setBytesCaptureId(meta.id);
+        setBackendByteCount(meta.count);
       } else {
         // Always enable capture mode so playback controls appear
         // (Session is now in capture replay mode after ingest)
@@ -397,7 +374,6 @@ function DiscoveryInner() {
     }
   }, [
     dialogs.ioSessionPicker,
-    addSerialBytes,
     setBytesCaptureId,
     enableCaptureMode,
     setFrameInfoFromCapture,
@@ -467,7 +443,6 @@ function DiscoveryInner() {
     enableIngest: true,
     onIngestComplete: handleIngestComplete,
     onFrames: handleFrames,
-    onBytes: handleBytes,
     onError: handleError,
     onTimeUpdate: handleTimeUpdate,
     onSuspended: handleSessionSuspended,
@@ -508,6 +483,8 @@ function DiscoveryInner() {
     // Watch state (used by ioPickerProps hook)
     watchFrameCount,
     watchUniqueFrameCount,
+    watchByteCount,
+    bytesCaptureId: sessionBytesCaptureId,
     resetWatchFrameCount,
     // Session switching methods
     stopWatch,
@@ -560,6 +537,18 @@ function DiscoveryInner() {
   const isModbusProfile = modbusProfile !== null;
 
   // Note: isStreaming, isPaused, isStopped, isRealtime are now provided by useIOSessionManager
+
+  // Mirror the Rust-authoritative byte total and byte capture id onto the serial store,
+  // which is what the byte view, the framing trigger, the Tools gating and export all
+  // read. Rust owns both — it pushes them together (ByteCounts 0x19) as bytes land in the
+  // capture, so nothing here counts bytes itself. The ingest path writes the same two
+  // fields for a loaded file, hence the guard: don't clobber a loaded capture with a live
+  // session's zero.
+  useEffect(() => {
+    if (!sessionBytesCaptureId) return;
+    setBytesCaptureId(sessionBytesCaptureId);
+    setBackendByteCount(watchByteCount);
+  }, [sessionBytesCaptureId, watchByteCount, setBytesCaptureId, setBackendByteCount]);
 
   // Fetch capture metadata and frame info when:
   // - Joining a session already in capture mode (another app stopped)
@@ -719,9 +708,6 @@ function DiscoveryInner() {
     prevIsSerialModeRef.current = newIsSerialMode;
   }, [ioProfile, capabilities, captureMetadata, captureKind, framedCaptureId, setSerialMode, clearSerialBytes]);
 
-  // Raw bytes are now routed through sessionStore via the onBytes callback.
-  // No ad-hoc Tauri listener needed here.
-
   const frameList = useMemo(
     () =>
       Array.from(frameInfoMap.entries()).map(([fk, info]) => ({
@@ -759,13 +745,13 @@ function DiscoveryInner() {
 
   const exportItemCount = useMemo(() => {
     if (exportDataMode === "bytes") {
-      return backendByteCount > 0 ? backendByteCount : serialBytesBuffer.length;
+      return backendByteCount;
     }
     if (captureMode.enabled) return captureMode.totalFrames;
     if (isSerialMode && framedCaptureId && backendFrameCount > 0) return backendFrameCount;
     if (isSerialMode && framedData.length > 0) return framedData.length;
     return frames.length;
-  }, [exportDataMode, backendByteCount, serialBytesBuffer.length, captureMode, isSerialMode, framedCaptureId, backendFrameCount, framedData.length, frames.length]);
+  }, [exportDataMode, backendByteCount, captureMode, isSerialMode, framedCaptureId, backendFrameCount, framedData.length, frames.length]);
 
   const exportDefaultFilename = useMemo(() => {
     const protocol = exportDataMode === "bytes" ? "serial" : (protocolLabel || "can");
@@ -883,7 +869,6 @@ function DiscoveryInner() {
     isSerialMode,
     backendByteCount,
     backendFrameCount,
-    serialBytesBufferLength: serialBytesBuffer.length,
 
     // Time state
     startTime,
@@ -940,7 +925,6 @@ function DiscoveryInner() {
     enableCaptureMode,
     setFrameInfoFromCapture,
     setBackendFrameCount,
-    addSerialBytes,
     openSaveDialog,
     saveFrames,
     setActiveSelectionSet,
@@ -948,7 +932,10 @@ function DiscoveryInner() {
     applySelectionSet,
 
     // API functions (for export/other features)
-    getCaptureBytesPaginated: (offset, limit) => getCaptureBytesPaginated((captureMetadata?.id ?? sessionCaptureId)!, offset, limit),
+    // Bytes live in their own capture. Falling back to the session's frames capture (as
+    // this used to) reads a Frames capture with a byte query, which returns nothing — an
+    // export that promised N bytes and wrote none.
+    getCaptureBytesPaginated: (offset, limit) => getCaptureBytesPaginated(storeBytesCaptureId ?? '', offset, limit),
     getCaptureFramesPaginated: (offset, limit) => getCaptureFramesPaginated((captureMetadata?.id ?? sessionCaptureId)!, offset, limit),
     getCaptureFramesPaginatedById,
     captureMetadata,
@@ -1063,7 +1050,7 @@ function DiscoveryInner() {
           selectedFrameCount={selectedFrames.size}
           onOpenFramePicker={() => dialogs.framePicker.open()}
           isSerialMode={isSerialMode}
-          serialBytesCount={backendByteCount > 0 ? backendByteCount : serialBytesBuffer.length}
+          serialBytesCount={backendByteCount}
           framingAccepted={framingAccepted}
           serialActiveTab={serialActiveTab}
           onUndoFraming={undoAcceptFraming}
@@ -1087,7 +1074,7 @@ function DiscoveryInner() {
           }}
           onOpenIoSessionPicker={() => dialogs.ioSessionPicker.open()}
           onClearCapture={handlers.handleClearDiscoveredFrames}
-          hasData={frameList.length > 0 || (isSerialMode && (backendByteCount > 0 || serialBytesBuffer.length > 0))}
+          hasData={frameList.length > 0 || (isSerialMode && backendByteCount > 0)}
           onSave={openSaveDialog}
           onExport={() => dialogs.export.open()}
           onInfo={openInfoView}
@@ -1271,7 +1258,7 @@ function DiscoveryInner() {
         isSerialProtocol={capabilities?.traits?.protocols?.includes("serial") ?? false}
         isFilteredView={framesViewActiveTab === 'filtered'}
         serialFrameCount={backendFrameCount > 0 ? backendFrameCount : (framedData.length + frames.length)}
-        serialBytesCount={backendByteCount > 0 ? backendByteCount : serialBytesBuffer.length}
+        serialBytesCount={backendByteCount}
         isModbusProfile={isModbusProfile}
         modbusConnection={modbusProfile}
         onStartModbusScan={handleStartModbusScan}

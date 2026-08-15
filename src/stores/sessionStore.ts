@@ -47,7 +47,6 @@ import {
   type MultiSourceInput,
   type BusMapping,
   type PlaybackPosition,
-  type RawBytesPayload,
   type ActiveSessionInfo,
 } from "../api/io";
 import { reconcileKnownSessions } from "./sessionRoster";
@@ -71,6 +70,7 @@ import {
   decodePlaybackPosition,
   decodeSessionInfo,
   decodeFrameCounts,
+  decodeByteCounts,
   decodeScopedSessionLifecycle,
 } from "../services/wsProtocol";
 
@@ -206,6 +206,8 @@ export interface Session {
   frameCount: number;
   /** Distinct (bus, frame_id) count this session (Rust-authoritative, pushed live). */
   uniqueFrameCount: number;
+  /** Total raw bytes captured this session (Rust-authoritative, pushed live). */
+  byteCount: number;
   /** Capture info after stream ends */
   capture: {
     available: boolean;
@@ -237,7 +239,7 @@ export interface Session {
   playbackPosition: PlaybackPosition | null;
   /** Decoder catalog path for this session (frontend-only, shared across apps) */
   catalogPath: string | null;
-  /** Capture ID for raw bytes streams (set when capture-changed signal fires) */
+  /** Capture ID for raw byte streams (Rust-authoritative, arrives with the byte count) */
   bytesCaptureId: string | null;
   /** True when adopted from the backend roster (known-only, not UI-owned). */
   external?: boolean;
@@ -289,7 +291,6 @@ export interface SessionCallbacks {
   onFrames?: (frames: FrameMessage[]) => void;
   /** Decoded signals streamed from the Rust decoder (when a catalogue is attached). */
   onDecoded?: (decoded: DecodedFrameMsg[]) => void;
-  onBytes?: (payload: RawBytesPayload) => void;
   onError?: (error: string) => void;
   onTimeUpdate?: (position: PlaybackPosition) => void;
   onStreamEnded?: (payload: StreamEndedInfo) => void;
@@ -659,6 +660,16 @@ async function setupSessionEventSubscribers(
       })
     );
 
+    // ByteCounts (0x19) — live raw-byte total plus the byte capture's id, Rust-authoritative.
+    // The bytes themselves are never pushed; readers fetch rows from that capture when the
+    // count moves (see useCaptureFrameView for the same contract on frames).
+    eventListeners.wsUnlistenFunctions.push(
+      wsTransport.onSessionMessage(sessionId, MsgType.ByteCounts, (payload) => {
+        const { total, captureId } = decodeByteCounts(payload);
+        updateSession(sessionId, { byteCount: total, bytesCaptureId: captureId });
+      })
+    );
+
     // Reconfigured (0x0A) — signal-only, no payload to decode
     eventListeners.wsUnlistenFunctions.push(
       wsTransport.onSessionMessage(sessionId, MsgType.Reconfigured, () => {
@@ -686,6 +697,13 @@ async function setupSessionEventSubscribers(
         if (isNowRunning && wasStoppedOrPaused) {
           updates.stoppedExplicitly = false;
           updates.streamEndedReason = null;
+          // Restarting the same session id starts a fresh capture, so the counts and the
+          // byte capture id from the previous run are stale. Rust re-pushes both on its
+          // next signal; zero them meanwhile so nothing reads the old run's totals.
+          updates.frameCount = 0;
+          updates.uniqueFrameCount = 0;
+          updates.byteCount = 0;
+          updates.bytesCaptureId = null;
           updates.capture = {
             available: false,
             id: null,
@@ -985,6 +1003,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             profileName,
             frameCount: 0,
             uniqueFrameCount: 0,
+            byteCount: 0,
             lifecycleState: "error",
             ioState: "error",
             capabilities: null,
@@ -1132,6 +1151,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         subscriberCount: finalListenerCount,
         frameCount: 0,
         uniqueFrameCount: 0,
+        byteCount: 0,
         capture: {
           available: false,
           id: captureId,

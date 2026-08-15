@@ -34,8 +34,6 @@ export default function SerialDiscoveryView({ isStreaming = false, displayTimeFo
 
   // Use serial store directly for data that needs reliable reactivity
   // The composed useDiscoveryStore can lose reactivity when other stores trigger re-renders
-  const serialBytes = useDiscoverySerialStore((s) => s.serialBytes);
-  const serialBytesBuffer = useDiscoverySerialStore((s) => s.serialBytesBuffer);
   const framingConfig = useDiscoverySerialStore((s) => s.framingConfig);
   const framedData = useDiscoverySerialStore((s) => s.framedData);
   const framingAccepted = useDiscoverySerialStore((s) => s.framingAccepted);
@@ -105,18 +103,25 @@ export default function SerialDiscoveryView({ isStreaming = false, displayTimeFo
   const pendingFramingRef = useRef<Promise<unknown> | null>(null);
   const queuedFramingRef = useRef<boolean>(false);
 
-  // Auto-apply framing when config changes, filter changes, extraction config changes, OR when new bytes arrive (live framing)
-  // Uses backendByteCount which tracks total bytes in Rust backend (not capped like serialBytesBuffer)
+  // Re-frame when the user changes anything about the framing, and once more when the
+  // stream stops and the byte total settles.
+  //
+  // Deliberately NOT on every byte-count change while streaming: apply_framing_to_capture
+  // reads the *whole* byte capture and re-frames all of it, so running that at the 2 Hz
+  // byte cadence costs time proportional to the session so far — quadratic over a run.
+  // Framing incrementally would let this follow the stream; until then, a user-initiated
+  // change still re-frames immediately, which is what makes changing framing mid-session
+  // visible.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const configChanged = JSON.stringify(framingConfig) !== JSON.stringify(prevFramingConfigRef.current);
-    const bytesChanged = backendByteCount !== prevByteCountRef.current;
+    const bytesChanged = !isStreaming && backendByteCount !== prevByteCountRef.current;
     const filterChanged = minFrameLength !== prevMinFrameLengthRef.current;
     const frameIdConfigChanged = JSON.stringify(frameIdExtractionConfig) !== JSON.stringify(prevFrameIdConfigRef.current);
     const sourceConfigChanged = JSON.stringify(sourceExtractionConfig) !== JSON.stringify(prevSourceConfigRef.current);
 
     prevFramingConfigRef.current = framingConfig;
-    prevByteCountRef.current = backendByteCount;
+    if (bytesChanged) prevByteCountRef.current = backendByteCount;
     prevMinFrameLengthRef.current = minFrameLength;
     prevFrameIdConfigRef.current = frameIdExtractionConfig;
     prevSourceConfigRef.current = sourceExtractionConfig;
@@ -144,7 +149,7 @@ export default function SerialDiscoveryView({ isStreaming = false, displayTimeFo
 
       runFraming();
     }
-  }, [framingConfig, backendByteCount, minFrameLength, frameIdExtractionConfig, sourceExtractionConfig]); // Intentionally omit applyFraming - it's unstable
+  }, [framingConfig, backendByteCount, isStreaming, minFrameLength, frameIdExtractionConfig, sourceExtractionConfig]); // Intentionally omit applyFraming - it's unstable
 
   // Track if we've already auto-switched to framed tab
   const hasAutoSwitchedRef = useRef(false);
@@ -218,7 +223,7 @@ export default function SerialDiscoveryView({ isStreaming = false, displayTimeFo
             ? filteredStreamingFrames.length
             : (framedCaptureId ? backendFrameCount : (backendFrameCount > 0 ? backendFrameCount : completeFrames.length))
         }
-        byteCount={backendByteCount > 0 ? backendByteCount : serialBytesBuffer.length}
+        byteCount={backendByteCount}
         filteredCount={effectiveFilteredCount}
         framingConfig={framingConfig}
         minFrameLength={minFrameLength}
@@ -237,7 +242,7 @@ export default function SerialDiscoveryView({ isStreaming = false, displayTimeFo
       {/* Tab Content */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {activeTab === 'raw' && (
-          <ByteView entries={serialBytes} viewConfig={rawBytesViewConfig} displayTimeFormat={displayTimeFormat} isStreaming={isStreaming} />
+          <ByteView viewConfig={rawBytesViewConfig} displayTimeFormat={displayTimeFormat} isStreaming={isStreaming} />
         )}
         {activeTab === 'framed' && (
           <FramedDataView

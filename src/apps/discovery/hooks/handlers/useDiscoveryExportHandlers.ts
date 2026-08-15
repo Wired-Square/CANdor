@@ -16,7 +16,6 @@ export interface UseDiscoveryExportHandlersParams {
   framedCaptureId: string | null;
   backendByteCount: number;
   backendFrameCount: number;
-  serialBytesBufferLength: number;
   exportDataMode: ExportDataMode;
   captureModeEnabled: boolean;
   captureModeTotalFrames: number;
@@ -46,7 +45,6 @@ export function useDiscoveryExportHandlers({
   framedCaptureId,
   backendByteCount,
   backendFrameCount,
-  serialBytesBufferLength: _serialBytesBufferLength,
   exportDataMode,
   captureModeEnabled,
   captureModeTotalFrames,
@@ -82,18 +80,11 @@ export function useDiscoveryExportHandlers({
       if (exportDataMode === "bytes") {
         // Export bytes
         const { exportBytes } = await import("../../../../utils/frameDump");
-        let bytesToExport: { byte: number; timestampUs: number }[];
-
-        if (backendByteCount > 0) {
-          const response = await getCaptureBytesPaginated(0, backendByteCount);
-          bytesToExport = response.bytes.map((b: TimestampedByte) => ({
-            byte: b.byte,
-            timestampUs: b.timestamp_us,
-          }));
-        } else {
-          const { useDiscoverySerialStore } = await import("../../../../stores/discoverySerialStore");
-          bytesToExport = useDiscoverySerialStore.getState().serialBytes;
-        }
+        const response = await getCaptureBytesPaginated(0, backendByteCount);
+        const bytesToExport = response.bytes.map((b: TimestampedByte) => ({
+          byte: b.byte,
+          timestampUs: b.timestamp_us,
+        }));
 
         content = exportBytes(bytesToExport, format);
         extension = format === "hex" ? "hex" : format === "bin" ? "bin" : "csv";

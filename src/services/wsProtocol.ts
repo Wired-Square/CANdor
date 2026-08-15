@@ -39,6 +39,7 @@ export const MsgType = {
   FrameCounts: 0x16,
   OpenAppsChanged: 0x17,
   CatalogListChanged: 0x18,
+  ByteCounts: 0x19,
   Command: 0x20,
   CommandResponse: 0x21,
   BridgeRequest: 0x30,
@@ -465,6 +466,21 @@ export function decodeFrameCounts(payload: DataView): {
   const total = Number(payload.getBigUint64(0, true));
   const unique = payload.getUint32(8, true);
   return { total, unique };
+}
+
+/**
+ * Decode a ByteCounts payload — total u64 LE + length-prefixed byte-capture id.
+ *
+ * Raw serial bytes are read from the capture rather than streamed, so this message is
+ * the whole byte signal: the total tells the view to refetch, the id tells it where from.
+ */
+export function decodeByteCounts(payload: DataView): {
+  total: number;
+  captureId: string;
+} {
+  const total = Number(payload.getBigUint64(0, true));
+  const [captureId] = decodeLengthPrefixedStr(payload, 8);
+  return { total, captureId };
 }
 
 export function decodeSubscribeAck(payload: DataView): {

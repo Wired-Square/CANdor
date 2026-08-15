@@ -81,6 +81,9 @@ export function reconcileKnownSessions(
       subscriberCount: info.subscriberCount,
       frameCount: info.captureFrameCount ?? 0,
       uniqueFrameCount: info.captureUniqueFrameCount ?? 0,
+      // Adopted from the roster, which reports frame counts only. Rust re-pushes the byte
+      // total on its next signal if this session has a byte capture.
+      byteCount: 0,
       capture: {
         available: false,
         id: info.captureId,

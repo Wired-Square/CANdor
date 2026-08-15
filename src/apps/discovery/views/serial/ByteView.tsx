@@ -9,6 +9,7 @@ import type { SerialBytesEntry, RawBytesViewConfig } from '../../../../stores/di
 import { useDiscoverySerialStore } from '../../../../stores/discoverySerialStore';
 import { useDiscoveryUIStore } from '../../../../stores/discoveryUIStore';
 import { getCaptureBytesPaginated, getCaptureMetadataById, findCaptureBytesOffsetForTimestamp, type TimestampedByte } from '../../../../api/capture';
+import { getCaptureBytesTail } from '../../../../api/io';
 import { byteToHex, byteToAscii } from '../../../../utils/byteUtils';
 import { pageCount, pageForOffset, type PageSize } from '../../../../utils/pageSize';
 import { formatHumanUs, formatIsoUs, renderDeltaNode } from '../../../../utils/timeFormat';
@@ -25,7 +26,6 @@ import {
 } from '../../../../styles';
 
 interface ByteViewProps {
-  entries: SerialBytesEntry[];
   viewConfig: RawBytesViewConfig;
   autoScroll?: boolean;
   displayTimeFormat?: 'delta-last' | 'delta-start' | 'timestamp' | 'human';
@@ -70,7 +70,7 @@ function chunkBytesByGap(entries: SerialBytesEntry[], gapUs: number): ByteChunk[
   return chunks;
 }
 
-export default function ByteView({ entries, viewConfig, autoScroll = true, displayTimeFormat = 'human', isStreaming = false }: ByteViewProps) {
+export default function ByteView({ viewConfig, autoScroll = true, displayTimeFormat = 'human', isStreaming = false }: ByteViewProps) {
   const { t } = useTranslation("discovery");
   const containerRef = useRef<HTMLDivElement>(null);
   const wasAtBottom = useRef(true);
@@ -84,7 +84,6 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
   const bytesCaptureId = useDiscoverySerialStore((s) => s.bytesCaptureId);
   const rawBytesPageSize = useDiscoverySerialStore((s) => s.rawBytesPageSize);
   const setRawBytesPageSize = useDiscoverySerialStore((s) => s.setRawBytesPageSize);
-  const captureReadyTrigger = useDiscoverySerialStore((s) => s.captureReadyTrigger);
 
   // Local pagination state (only used when not streaming)
   const [currentPage, setCurrentPage] = useState(0);
@@ -94,23 +93,21 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
   // Time range for timeline scrubber (from buffer metadata)
   const [timeRange, setTimeRange] = useState<{ min: number; max: number } | null>(null);
 
-  // Use backend buffer when we have a byte count > 0
-  const useBackendBuffer = backendByteCount > 0;
+  // Every byte lives in the capture, so this is simply whether there is anything to show.
+  const hasBytes = backendByteCount > 0;
 
-  // Pagination calculations for backend mode
-  const totalBytes = useBackendBuffer ? backendByteCount : entries.length;
   const pageSize = rawBytesPageSize;
-  const totalPages = pageCount(totalBytes, pageSize);
+  const totalPages = pageCount(backendByteCount, pageSize);
 
   // When streaming stops, jump to the last page
   const prevIsStreamingRef = useRef(isStreaming);
   useEffect(() => {
-    if (prevIsStreamingRef.current && !isStreaming && useBackendBuffer) {
+    if (prevIsStreamingRef.current && !isStreaming && hasBytes) {
       // Streaming just stopped - jump to last page
       setCurrentPage(Math.max(0, totalPages - 1));
     }
     prevIsStreamingRef.current = isStreaming;
-  }, [isStreaming, useBackendBuffer, totalPages]);
+  }, [isStreaming, hasBytes, totalPages]);
 
   // Clamp current page when total pages decreases (but only when not streaming)
   useEffect(() => {
@@ -119,84 +116,86 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
     }
   }, [isStreaming, currentPage, totalPages]);
 
-  // Fetch buffer metadata for time range (for timeline scrubber)
+  // Fetch capture metadata for the timeline's time range. The timeline is hidden while
+  // streaming, so only refresh once the stream stops rather than on every count push.
   useEffect(() => {
-    if (!useBackendBuffer) {
-      setTimeRange(null);
-      return;
-    }
+    if (!hasBytes) { setTimeRange(null); return; }
+    if (!bytesCaptureId || isStreaming) return;
 
     const fetchMetadata = async () => {
       try {
-        const metadata = await getCaptureMetadataById(bytesCaptureId ?? '');
+        const metadata = await getCaptureMetadataById(bytesCaptureId);
         if (metadata && metadata.start_time_us !== null && metadata.end_time_us !== null) {
           setTimeRange({ min: metadata.start_time_us, max: metadata.end_time_us });
         }
       } catch (error) {
-        console.error('Failed to fetch buffer metadata:', error);
+        console.error('Failed to fetch capture metadata:', error);
       }
     };
 
     fetchMetadata();
-  }, [useBackendBuffer, backendByteCount]);
+  }, [hasBytes, bytesCaptureId, isStreaming, backendByteCount]);
 
-  // Fetch bytes from backend buffer after streaming stops.
-  // During streaming, we use frontend entries (from events) instead.
-  // Note: backendByteCount is in the dependency array to ensure refetch when stream
-  // ends and we switch from streaming to buffer mode.
+  // Rows always come from the byte capture — live tail and a stopped page are the same
+  // query at different offsets. Rust writes bytes before it signals and owns the count it
+  // pushes, so refetching whenever that count moves keeps this in step with the backend at
+  // the backend's own 2 Hz throttle, with no timer here.
+  //
+  // The count is read by subscription rather than through the dependency array on purpose:
+  // in the deps it would tear down and rebuild this effect twice a second, so the
+  // coalescing flags below would reset each time and never actually coalesce anything.
   useEffect(() => {
-    // Track whether this effect instance is still current
-    let cancelled = false;
-
-    // Don't fetch during streaming - use frontend entries instead
-    if (!useBackendBuffer || isStreaming) {
+    if (!hasBytes || !bytesCaptureId) {
       setBackendBytes([]);
       return;
     }
 
-    const fetchPage = async () => {
+    let isMounted = true;
+    // A fetch can outlast the 500ms signal interval on a large capture. Skip while one is
+    // in flight and run once more on completion, so fetches neither queue up on the DB
+    // mutex nor land out of order.
+    let inFlight = false;
+    let missed = false;
+
+    const fetchBytes = async () => {
+      if (inFlight) { missed = true; return; }
+      inFlight = true;
       setIsLoadingPage(true);
+
       try {
-        // Pagination mode: show page based on currentPage
-        const offset = currentPage * pageSize;
-        const response = await getCaptureBytesPaginated(bytesCaptureId ?? '', offset, pageSize);
+        const bytes = isStreaming
+          ? (await getCaptureBytesTail(bytesCaptureId, pageSize)).bytes
+          : (await getCaptureBytesPaginated(bytesCaptureId, currentPage * pageSize, pageSize)).bytes;
+        if (!isMounted) return;
 
-        // Only update state if this effect instance is still current
-        if (cancelled) return;
-
-        const fetchedEntries: SerialBytesEntry[] = response.bytes.map((b: TimestampedByte) => ({
+        setBackendBytes(bytes.map((b: TimestampedByte) => ({
           byte: b.byte,
           timestampUs: b.timestamp_us,
           bus: b.bus,
-        }));
-        setBackendBytes(fetchedEntries);
+        })));
       } catch (error) {
-        if (cancelled) return;
-        // Suppress "No active buffer" errors - this is expected during the brief transition
-        // between stream end (when buffer is finalized) and setActiveCapture() being called
-        const errorStr = String(error);
-        if (!errorStr.includes('No active buffer')) {
-          console.error('Failed to fetch bytes from backend:', error);
-        }
+        if (!isMounted) return;
+        console.error('Failed to fetch bytes from capture:', error);
         setBackendBytes([]);
       } finally {
-        if (!cancelled) {
-          setIsLoadingPage(false);
-        }
+        inFlight = false;
+        setIsLoadingPage(false);
+        if (missed && isMounted) { missed = false; void fetchBytes(); }
       }
     };
 
-    fetchPage();
+    void fetchBytes();
 
+    const unsubscribe = useDiscoverySerialStore.subscribe((state, prevState) => {
+      if (state.backendByteCount !== prevState.backendByteCount) void fetchBytes();
+    });
     return () => {
-      cancelled = true;
+      isMounted = false;
+      unsubscribe();
     };
-  }, [useBackendBuffer, isStreaming, currentPage, pageSize, captureReadyTrigger]);
+  }, [hasBytes, bytesCaptureId, isStreaming, currentPage, pageSize]);
 
-  // Determine which entries to display
-  // During streaming, use frontend entries (from events) since backend fetch may fail
-  // After streaming stops, use backend buffer if available
-  const displayEntries = (useBackendBuffer && !isStreaming) ? backendBytes : entries;
+  const displayEntries = backendBytes;
 
   // Get first entry timestamp for delta-start reference
   const startTimeUs = displayEntries.length > 0 ? displayEntries[0].timestampUs : 0;
@@ -224,20 +223,13 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
     wasAtBottom.current = scrollTop + clientHeight >= scrollHeight - 10;
   };
 
-  // Auto-scroll to bottom when new entries arrive (frontend mode)
+  // Follow the tail while streaming, unless the reader has scrolled away from it.
   useEffect(() => {
-    if (!useBackendBuffer && autoScroll && wasAtBottom.current && containerRef.current) {
+    if (hasBytes && isStreaming && autoScroll && wasAtBottom.current
+        && containerRef.current && !isLoadingPage) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-  }, [entries, autoScroll, useBackendBuffer]);
-
-  // Auto-scroll to bottom during streaming (backend mode)
-  useEffect(() => {
-    if (useBackendBuffer && isStreaming && containerRef.current && !isLoadingPage) {
-      // During streaming, always scroll to bottom to show latest bytes
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-    }
-  }, [useBackendBuffer, isStreaming, backendBytes, isLoadingPage]);
+  }, [hasBytes, isStreaming, autoScroll, backendBytes, isLoadingPage]);
 
   // Build display lines based on view mode
   const lines = useMemo(() => {
@@ -294,16 +286,15 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
 
   // Handle timeline scrub - find page containing the target timestamp
   const handleTimelineScrub = useCallback(async (targetTimeUs: number) => {
-    if (!useBackendBuffer) return;
+    if (!hasBytes || !bytesCaptureId) return;
 
     try {
-      // Use backend binary search to find byte offset for timestamp
-      const offset = await findCaptureBytesOffsetForTimestamp(bytesCaptureId ?? '', targetTimeUs);
+      const offset = await findCaptureBytesOffsetForTimestamp(bytesCaptureId, targetTimeUs);
       setCurrentPage(pageForOffset(offset, pageSize));
     } catch (error) {
       console.error('Failed to seek to timestamp:', error);
     }
-  }, [useBackendBuffer, pageSize]);
+  }, [hasBytes, bytesCaptureId, pageSize]);
 
   // Current time for timeline (first byte timestamp on current page)
   const currentTimeUs = useMemo(() => {
@@ -316,7 +307,7 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
   // Byte count info for toolbar
   const byteCountInfo = (
     <span className={`text-xs ${textDataSecondary}`}>
-      {t("serial.byteCount", { count: totalBytes.toLocaleString() })}
+      {t("serial.byteCount", { count: backendByteCount.toLocaleString() })}
       {isStreaming && (
         <span className={`ml-2 ${textDataGreen} bg-green-900/30 px-1.5 py-0.5 rounded font-medium`}>
           {t("serial.live")}
@@ -328,7 +319,7 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Toolbar - shown when using backend buffer */}
-      {useBackendBuffer && (
+      {hasBytes && (
         <PaginationToolbar
           currentPage={currentPage}
           totalPages={totalPages}
@@ -345,7 +336,7 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
 
       {/* Timeline Scrubber - shown when using backend buffer with time range, only when not streaming */}
       <TimelineSection
-        show={useBackendBuffer && !isStreaming && timeRange !== null && timeRange.max > timeRange.min}
+        show={hasBytes && !isStreaming && timeRange !== null && timeRange.max > timeRange.min}
         minTimeUs={timeRange?.min ?? 0}
         maxTimeUs={timeRange?.max ?? 0}
         currentTimeUs={currentTimeUs}

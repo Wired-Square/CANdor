@@ -8,10 +8,8 @@ import { create } from 'zustand';
 import { tlog } from '../api/settings';
 import type { FrameMessage } from '../types/frame';
 import {
-  getCaptureBytesPaginated,
   applyFramingToCapture,
   deleteCapture,
-  type PaginatedBytesResponse,
   type BackendFramingConfig,
 } from '../api/capture';
 import type { PageSize } from '../utils/pageSize';
@@ -62,14 +60,8 @@ export type ByteExtractionConfig = {
 /** Serial view tab IDs (string to support dynamic tool output tabs) */
 export type SerialTabId = string;
 
-// Buffer limits
-const MAX_SERIAL_BYTES = 100000;
-const MAX_DISPLAY_ENTRIES = 10000;
-
 interface DiscoverySerialState {
   // Serial bytes state
-  serialBytes: SerialBytesEntry[];
-  serialBytesBuffer: number[];
   isSerialMode: boolean;
   framingConfig: FramingConfig | null;
   framedData: FrameMessage[];
@@ -94,8 +86,6 @@ interface DiscoverySerialState {
   backendFrameCount: number;
   /** Minimum frame length filter (0 = no filter, independent of framing mode) */
   minFrameLength: number;
-  /** Trigger counter to force HexDump to re-fetch (incremented after setActiveCapture) */
-  captureReadyTrigger: number;
   /** Trigger counter to force FramedDataView to re-fetch (incremented after applyFraming) */
   framedDataTrigger: number;
   /** Frame ID extraction config (passed to backend framing) */
@@ -111,8 +101,7 @@ interface DiscoverySerialState {
 
   // Actions
   setSerialMode: (enabled: boolean) => void;
-  addSerialBytes: (entries: SerialBytesEntry[]) => void;
-  clearSerialBytes: (preserveBackendCount?: boolean) => void;
+  clearSerialBytes: () => void;
   setFramingConfig: (config: FramingConfig | null) => Promise<void>;
   applyFraming: (streamStartTimeUs: number | null, sessionId?: string) => Promise<FrameMessage[]>;
   acceptFraming: () => FrameMessage[];
@@ -130,10 +119,7 @@ interface DiscoverySerialState {
   // Backend buffer actions
   setBytesCaptureId: (id: string | null) => void;
   setBackendByteCount: (count: number) => void;
-  incrementBackendByteCount: (delta: number) => void;
-  fetchBytesFromBackend: (captureId: string, offset: number, limit: number) => Promise<PaginatedBytesResponse>;
   setRawBytesPageSize: (size: number) => void;
-  triggerCaptureReady: () => void;
   // Filter actions
   setMinFrameLength: (length: number) => void;
   // Backend frame count actions (for real-time streaming with backend framing)
@@ -143,8 +129,6 @@ interface DiscoverySerialState {
 
 export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) => ({
   // Initial state
-  serialBytes: [],
-  serialBytesBuffer: [],
   isSerialMode: false,
   framingConfig: null,
   framedData: [],
@@ -164,7 +148,6 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
   framedCaptureId: null, // ID of backend frame capture
   backendFrameCount: 0, // Frame count from backend framing
   minFrameLength: 0, // 0 = no filter
-  captureReadyTrigger: 0, // Incremented to force HexDump refetch
   framedDataTrigger: 0, // Incremented to force FramedDataView refetch
   frameIdExtractionConfig: null, // Frame ID extraction config
   sourceExtractionConfig: null, // Source address extraction config
@@ -181,8 +164,6 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
     }
     set({
       isSerialMode: enabled,
-      serialBytes: [],
-      serialBytesBuffer: [],
       framingConfig: null,
       framedData: [],
       framingAccepted: false,
@@ -200,51 +181,22 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
     });
   },
 
-  addSerialBytes: (entries) => {
-    const { serialBytes, serialBytesBuffer } = get();
-
-    // Append to entries list for hex dump display
-    const newSerialBytes = [...serialBytes, ...entries];
-
-    // Append to flat buffer for framing (just the byte values)
-    const newSerialBytesBuffer = [...serialBytesBuffer, ...entries.map(e => e.byte)];
-
-    // Trim if over limit
-    if (newSerialBytesBuffer.length > MAX_SERIAL_BYTES) {
-      const removeCount = newSerialBytesBuffer.length - MAX_SERIAL_BYTES;
-      newSerialBytesBuffer.splice(0, removeCount);
-    }
-
+  clearSerialBytes: () => {
+    // Point this view away from whatever capture it was showing and drop the framing
+    // derived from it. The captures themselves are Rust's to keep or delete — this only
+    // clears what the frontend is pointing at.
     set({
-      serialBytes: newSerialBytes.slice(-MAX_DISPLAY_ENTRIES),
-      serialBytesBuffer: newSerialBytesBuffer,
-    });
-  },
-
-  clearSerialBytes: (preserveBackendCount = false) => {
-    // Clear frontend state only - does NOT clear backend buffers
-    // The backend buffers are preserved so they can be used for replay/analysis
-    // Call clearBackendBuffer() separately when you want to delete all buffers
-    //
-    // preserveBackendCount: When true, keeps backendByteCount so HexDump continues
-    // to show data from the backend capture. Use this when transitioning from streaming
-    // to capture mode where we want to keep displaying the capture contents.
-    set((state) => ({
-      serialBytes: [],
-      serialBytesBuffer: [],
       framedData: [],
       framingAccepted: false,
-      backendByteCount: preserveBackendCount ? state.backendByteCount : 0,
-      bytesCaptureId: preserveBackendCount ? state.bytesCaptureId : null,
+      backendByteCount: 0,
+      bytesCaptureId: null,
       framedCaptureId: null,
       backendFrameCount: 0,
       minFrameLength: 0,
-      // Reset trigger when clearing for a fresh capture (but preserve when transitioning to capture mode)
-      captureReadyTrigger: preserveBackendCount ? state.captureReadyTrigger : 0,
       filteredFrames: [],
       filteredFrameCount: 0,
       filteredCaptureId: null,
-    }));
+    });
   },
 
   setFramingConfig: async (config) => {
@@ -346,11 +298,7 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
     if (!hasLocalFrames && !hasBackendFrames && !hasStreamingFrames) return [];
 
     // Clear serial bytes since they've been processed
-    set({
-      framingAccepted: true,
-      serialBytes: [],
-      serialBytesBuffer: [],
-    });
+    set({ framingAccepted: true });
 
     return framedData;
   },
@@ -498,24 +446,8 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
 
   setBackendByteCount: (count) => set({ backendByteCount: count }),
 
-  incrementBackendByteCount: (delta) => set((state) => ({
-    backendByteCount: state.backendByteCount + delta,
-  })),
-
-  fetchBytesFromBackend: async (captureId, offset, limit) => {
-    try {
-      return await getCaptureBytesPaginated(captureId, offset, limit);
-    } catch (error) {
-      tlog.info(`[discoverySerialStore] Failed to fetch bytes from backend: ${error}`);
-      return { bytes: [], total_count: 0, offset, limit };
-    }
-  },
-
   setRawBytesPageSize: (size) => set({ rawBytesPageSize: size }),
 
-  triggerCaptureReady: () => set((state) => ({
-    captureReadyTrigger: state.captureReadyTrigger + 1,
-  })),
 
   setMinFrameLength: (length) => set({ minFrameLength: length }),
 

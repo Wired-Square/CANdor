@@ -25,7 +25,7 @@ import {
 
 // Re-export for backward compatibility
 export { isCaptureProfileId };
-import type { BusMapping, PlaybackPosition, RawBytesPayload } from "../api/io";
+import type { BusMapping, PlaybackPosition } from "../api/io";
 import type { IOProfile } from "./useSettings";
 import type { FrameMessage } from "../types/frame";
 import { setSessionSubscriberActive, reconfigureReaderSession, switchSessionToCaptureReplay, leaveSessionToCapture, sessionStopToCapture, resumeSessionToLive, generateSessionId, type StreamEndedInfo, type IOCapabilities } from "../api/io";
@@ -132,8 +132,6 @@ export interface UseIOSessionManagerOptions {
   onFrames?: (frames: FrameMessage[]) => void;
   /** Callback when decoded signals arrive (Rust decoder; catalogue attached) */
   onDecoded?: (decoded: DecodedFrameMsg[]) => void;
-  /** Callback when raw bytes are received (serial byte streams) */
-  onBytes?: (payload: RawBytesPayload) => void;
   /** Callback on error */
   onError?: (error: string) => void;
   /** Callback when playback position updates (timestamp and frame index) */
@@ -236,6 +234,10 @@ export interface UseIOSessionManagerResult {
   watchFrameCount: number;
   /** Unique frame IDs seen during watch mode */
   watchUniqueFrameCount: number;
+  /** Total raw bytes captured this session (Rust-authoritative) */
+  watchByteCount: number;
+  /** Capture holding this session's raw bytes, if it has one (Rust-authoritative) */
+  bytesCaptureId: string | null;
   /** Reset watch frame count */
   resetWatchFrameCount: () => void;
   /** Whether currently watching (streaming with real-time display) */
@@ -323,7 +325,6 @@ export function useIOSessionManager(
     requireFrames,
     onFrames: onFramesProp,
     onDecoded,
-    onBytes,
     onError,
     onTimeUpdate,
     onStreamEnded,
@@ -392,6 +393,14 @@ export function useIOSessionManager(
     effectiveSessionId ? s.sessions[effectiveSessionId]?.frameCount ?? 0 : 0);
   const watchUniqueFrameCount = useSessionStore((s) =>
     effectiveSessionId ? s.sessions[effectiveSessionId]?.uniqueFrameCount ?? 0 : 0);
+
+  // Raw bytes are read from the capture, not streamed — so the count and the capture id
+  // arrive together (ByteCounts 0x19) and are all a byte view needs to follow the stream.
+  // Scalar selectors, so a 2 Hz count push doesn't re-render on session-object identity.
+  const watchByteCount = useSessionStore((s) =>
+    effectiveSessionId ? s.sessions[effectiveSessionId]?.byteCount ?? 0 : 0);
+  const bytesCaptureId = useSessionStore((s) =>
+    effectiveSessionId ? s.sessions[effectiveSessionId]?.bytesCaptureId ?? null : null);
 
   // Profile name for display
   const ioProfileName = useMemo(() => {
@@ -587,7 +596,6 @@ export function useIOSessionManager(
     requireFrames,
     onFrames: handleFrames,
     onDecoded,
-    onBytes,
     onError,
     onTimeUpdate,
     onStreamEnded: handleStreamEndedWithIngest,
@@ -1355,6 +1363,8 @@ export function useIOSessionManager(
     // Watch State
     watchFrameCount,
     watchUniqueFrameCount,
+    watchByteCount,
+    bytesCaptureId,
     resetWatchFrameCount,
     isWatching,
     setIsWatching,

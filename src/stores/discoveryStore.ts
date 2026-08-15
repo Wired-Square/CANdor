@@ -14,11 +14,16 @@ import { useDiscoveryUIStore, type FrameMetadata, type PlaybackSpeed } from './d
 import { useDiscoverySerialStore } from './discoverySerialStore';
 import { useDiscoveryToolboxStore } from './discoveryToolboxStore';
 import type { CaptureFrameInfo } from '../api/capture';
+import { getCaptureBytesTail } from '../api/io';
 import type { FrameMessage } from '../types/frame';
 import { keyOf, groupKeysByProtocol } from '../utils/frameKey';
 import type { PageSize } from '../utils/pageSize';
 import { selectionSetKeys, type SelectionSet } from '../utils/selectionSets';
 import { tlog } from '../api/settings';
+
+/** Bytes the framing detector samples. Matches the old in-memory buffer cap, so the
+ *  detector sees the same window it always did. */
+const SERIAL_FRAMING_SAMPLE_BYTES = 100000;
 
 // Re-export types for backward compatibility
 export type { FrameMessage } from '../types/frame';
@@ -49,12 +54,6 @@ export { useDiscoveryFrameStore, getDiscoveryFrameBuffer } from './discoveryFram
 export { useDiscoveryUIStore } from './discoveryUIStore';
 export { useDiscoverySerialStore } from './discoverySerialStore';
 export { useDiscoveryToolboxStore } from './discoveryToolboxStore';
-
-/** Raw serial bytes event payload from backend - batched for performance */
-export type SerialRawBytesPayload = {
-  bytes: Array<{ byte: number; timestamp_us: number; bus?: number }>;
-  port: string;
-};
 
 /** A single byte with its precise timestamp from backend */
 export type TimestampedByte = {
@@ -93,8 +92,6 @@ type CombinedDiscoveryState = {
   selectionSetDirty: boolean;
 
   // Serial store
-  serialBytes: import('./discoverySerialStore').SerialBytesEntry[];
-  serialBytesBuffer: number[];
   isSerialMode: boolean;
   framingConfig: import('./discoverySerialStore').FramingConfig | null;
   framedData: FrameMessage[];
@@ -148,8 +145,7 @@ type CombinedDiscoveryState = {
 
   // Serial actions
   setSerialMode: (enabled: boolean) => void;
-  addSerialBytes: (entries: import('./discoverySerialStore').SerialBytesEntry[]) => void;
-  clearSerialBytes: (preserveBackendCount?: boolean) => void;
+  clearSerialBytes: () => void;
   setFramingConfig: (config: import('./discoverySerialStore').FramingConfig | null) => void;
   applyFraming: () => Promise<FrameMessage[]>;
   acceptFraming: (captureName?: string) => Promise<FrameMessage[]>;
@@ -165,13 +161,11 @@ type CombinedDiscoveryState = {
   setSerialActiveTab: (tab: import('./discoverySerialStore').SerialTabId) => void;
   setBytesCaptureId: (id: string | null) => void;
   setBackendByteCount: (count: number) => void;
-  incrementBackendByteCount: (delta: number) => void;
   setBackendFrameCount: (count: number) => void;
   incrementBackendFrameCount: (delta: number) => void;
   setFramedPageSize: (size: PageSize) => void;
   setRawBytesPageSize: (size: number) => void;
   setMinFrameLength: (length: number) => void;
-  triggerCaptureReady: () => void;
 
   // Toolbox actions
   toggleToolboxExpanded: () => void;
@@ -232,8 +226,6 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     selectionSetDirty: uiStore.selectionSetDirty,
 
     // Serial store state
-    serialBytes: serialStore.serialBytes,
-    serialBytesBuffer: serialStore.serialBytesBuffer,
     isSerialMode: serialStore.isSerialMode,
     framingConfig: serialStore.framingConfig,
     framedData: serialStore.framedData,
@@ -343,12 +335,11 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
 
     // Serial store actions
     setSerialMode: serialStore.setSerialMode,
-    addSerialBytes: serialStore.addSerialBytes,
     clearSerialBytes: serialStore.clearSerialBytes,
     setFramingConfig: serialStore.setFramingConfig,
     applyFraming: () => serialStore.applyFraming(frameStore.streamStartTimeUs, uiStore.ioProfile ?? undefined),
     acceptFraming: async (captureName?: string) => {
-      // Get backend buffer info BEFORE calling acceptFraming (which clears serialBytes)
+      // Read the framing result before acceptFraming resets it.
       const { framedCaptureId, backendFrameCount } = serialStore;
       const hasBackendFrames = framedCaptureId !== null && backendFrameCount > 0;
       // Streaming mode: frames go directly to mainFrames (framedCaptureId is null)
@@ -461,13 +452,11 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     setSerialActiveTab: serialStore.setActiveTab,
     setBytesCaptureId: serialStore.setBytesCaptureId,
     setBackendByteCount: serialStore.setBackendByteCount,
-    incrementBackendByteCount: serialStore.incrementBackendByteCount,
     setBackendFrameCount: serialStore.setBackendFrameCount,
     incrementBackendFrameCount: serialStore.incrementBackendFrameCount,
     setFramedPageSize: serialStore.setFramedPageSize,
     setRawBytesPageSize: serialStore.setRawBytesPageSize,
     setMinFrameLength: serialStore.setMinFrameLength,
-    triggerCaptureReady: serialStore.triggerCaptureReady,
 
     // Toolbox store actions
     toggleToolboxExpanded: toolboxStore.toggleToolboxExpanded,
@@ -486,14 +475,19 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
       const { toolbox } = toolboxStore;
       const { selectedFrames, captureMode, frameInfoMap } = frameStore;
       const frames = getDiscoveryFrameBuffer();
-      const { framedData, serialBytesBuffer, isSerialMode } = serialStore;
+      const { framedData, isSerialMode, backendByteCount, bytesCaptureId } = serialStore;
 
       // Handle serial framing analysis separately - only needs raw bytes
       if (toolbox.activeView === 'serial-framing') {
-        if (serialBytesBuffer.length === 0) return;
+        if (backendByteCount === 0 || !bytesCaptureId) return;
+        // Detection reads the tail of the byte capture rather than a frontend copy of the
+        // stream. Same window it used to analyse, but it no longer depends on the view
+        // having been open while the bytes arrived.
+        const { bytes } = await getCaptureBytesTail(bytesCaptureId, SERIAL_FRAMING_SAMPLE_BYTES);
+        if (bytes.length === 0) return;
         // Clear payload results so framing results are shown
         toolboxStore.setSerialPayloadResults(null);
-        await toolboxStore.runSerialFramingAnalysis(serialBytesBuffer);
+        await toolboxStore.runSerialFramingAnalysis(bytes.map((b) => b.byte));
         return;
       }
 
