@@ -7,7 +7,7 @@ import { ReactNode, forwardRef, useRef, useEffect, useCallback, type MouseEvent 
 import { useAutoRowCount } from '../../../hooks/useAutoRowCount';
 import { useFrameIdFormat } from '../../../hooks/useFrameIdFormat';
 import { sendHexDataToCalculator } from '../../../utils/windowCommunication';
-import { bytesToHex, bytesToAscii } from '../../../utils/byteUtils';
+import { bytesToHex, bytesToAscii, asciiColumnChars } from '../../../utils/byteUtils';
 import { frameRowKey } from '../../../utils/frameKey';
 import { formatHumanUs } from '../../../utils/timeFormat';
 import {
@@ -220,6 +220,7 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
   const wasAtBottom = useRef(true);
   const highlightedRowRef = useRef<HTMLTableRowElement>(null);
 
+
   // Keep mutable refs for callbacks used in event delegation so handlers are stable
   const framesRef = useRef(frames);
   framesRef.current = frames;
@@ -312,6 +313,9 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
         current page, so toggling #/Bus/ASCII (or paging to frames with wider payloads)
         is a repaint rather than a full re-solve of every column. Data carries no width:
         it is the sole flexible column and absorbs whatever is left over.
+
+        ASCII is the exception: payload length spans two orders of magnitude across
+        protocols, so its width comes from the rows. Monospace, so `ch` is exact.
       */}
       <table className="w-full table-fixed">
         <colgroup>
@@ -325,7 +329,7 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
           <col className="w-12" />
           {showCalculator && <col className="w-7" />}
           <col />
-          {showAscii && <col className="w-32" />}
+          {showAscii && <col style={{ width: `calc(${asciiColumnChars(frames)}ch + 1rem)` }} />}
         </colgroup>
         <thead className={`sticky top-0 z-10 ${bgDataView} ${textDataSecondary}`}>
           <tr onContextMenu={onHeaderContextMenu ? (e) => { e.preventDefault(); onHeaderContextMenu({ x: e.clientX, y: e.clientY }); } : undefined}>

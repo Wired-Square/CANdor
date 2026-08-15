@@ -36,6 +36,29 @@ export function bytesToAscii(bytes: number[]): string {
   return bytes.map(byteToAscii).join('');
 }
 
+/** Width of the "ASCII" column header, the floor for an empty or all-empty page. */
+export const ASCII_COLUMN_MIN_CHARS = 5;
+/** CAN FD's 64 bytes plus the two pipes — the widest the column is allowed to get. */
+export const ASCII_COLUMN_MAX_CHARS = 66;
+
+/**
+ * Characters needed by the widest ASCII cell in `frames` — the payload plus the two
+ * delimiting pipes.
+ *
+ * The column used to be a fixed 8rem, which fits about fifteen characters: fine for
+ * CAN's 8 bytes, but serial frames run to 20 and beyond, so the cell wrapped mid-string
+ * and ran into its neighbour. Sizing to the page's widest row fixes that, and the cap
+ * keeps a pathological frame (SLIP has no length limit) from squeezing the flexible Data
+ * column to nothing — past the cap the cell wraps, as it always did.
+ */
+export function asciiColumnChars(frames: readonly { bytes: number[] }[]): number {
+  let widest = 0;
+  for (const frame of frames) {
+    if (frame.bytes.length > widest) widest = frame.bytes.length;
+  }
+  return Math.min(Math.max(widest + 2, ASCII_COLUMN_MIN_CHARS), ASCII_COLUMN_MAX_CHARS);
+}
+
 /**
  * Convert a hex string to byte array.
  * Handles "0x" prefix and ignores non-hex characters.
