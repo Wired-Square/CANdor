@@ -643,6 +643,7 @@ Per-session (channel 1..254):
 | `Reconfigured`      | 0x0A | Session was reconfigured (time range, bookmark) |
 | `DecodedSignals`    | 0x14 | JSON batch of decoded signals, pushed alongside `FrameData` when a catalogue is attached (see [§ Decoded-signal stream](#decoded-signal-stream)) |
 | `FrameCounts`       | 0x16 | Live total + distinct-(bus,frame_id) unique counts, pushed on the frame cadence (see [§ Frame counts](#frame-counts)) |
+| `ByteCounts`        | 0x19 | Live raw-byte total + the session's byte-capture id, pushed on the byte cadence (see [§ Raw serial bytes](#raw-serial-bytes--counted-not-streamed)) |
 
 Global (channel 0):
 
@@ -903,31 +904,47 @@ pulls from the capture and pushes to the WS channel at most twice per second.
 `SignalThrottle::flush()` is called on stream stop so the final batch is
 delivered immediately.
 
-#### ⚠ Raw serial bytes are never dispatched
+#### Raw serial bytes — counted, not streamed
 
-**A known gap, recorded here because the surrounding code reads as though it
-works.** A serial source in `Raw` mode (`emit_raw: true`, no framing encoding)
-captures correctly — the reader fills a `Bytes` capture, `list_captures` reports
-a climbing count, and the rows land in the `bytes` table. Nothing carries them
-onward to the frontend:
+A serial source in `Raw` mode (`emit_raw: true`, no framing encoding) fills a
+`Bytes` capture instead of a `Frames` one. Its bytes take a deliberately
+different path from the frame batches above:
 
-- **No producer.** The dispatch path above is frames-only; there is no
-  `send_new_bytes` beside `send_new_frames`. `FrameType::Serial` (`0x0004`)
-  exists in [ws/protocol.rs](../src-tauri/src/ws/protocol.rs) and round-trips in
-  `envelope_serial_raw_bytes`, but nothing outside that test constructs one.
-- **No consumer.** `onBytes` is declared on the sessionStore callback type,
-  passed down from Discovery through `useIOSessionManager` and `useIOSession`,
-  and registered into the store — which never calls it. Every link in that chain
-  exists except the last.
+```
+IOBroker merge task
+      │  capture_store::append_raw_bytes_to_session(session_id, bytes)
+      │  signal_bytes_ready(session_id)   ← same SignalThrottle, key "bytes-ready"
+      ▼
+ws::dispatch::send_new_bytes(session_id)
+      ├─ look up WS channel + the session's Bytes capture
+      ├─ read the capture's O(1) total
+      └─ encode_byte_counts → ByteCounts (0x19): total u64 + capture id
+                    │
+                    ▼
+   sessionStore stores byteCount + bytesCaptureId on the session
+                    │
+                    ▼
+   ByteView refetches rows from that capture — get_capture_bytes_tail while
+   streaming, get_capture_bytes_paginated when stopped
+```
 
-The visible result is Discovery's Raw Bytes view sitting on "Waiting for serial
-data…" while the capture fills behind it. Choosing a framing mode (SLIP, Modbus
-RTU, delimiter) **before** connecting avoids it, because framed serial is
-delivered as frames and travels the working path.
+**Only the count crosses the wire.** One small message twice a second, whatever
+the baud rate; the rows are read from the capture on demand. Streaming the bytes
+themselves would tie WS traffic to link speed (a `FrameEnvelope` caps at 255
+bytes of payload behind a 12-byte header) and would keep a second copy of data
+the capture already holds durably. This is the same "capture is the display
+source" contract the frames table follows — see
+[capture-flow.md § The capture is the display source](capture-flow.md#the-capture-is-the-display-source).
 
-Until this is closed, treat `rx_bytes: true` as "captured but not displayed"
-rather than a working stream, and do not add an ad-hoc `listen()` in an app to
-work around it — see the byte-ingest entry in the design vault's open register.
+Two consequences worth knowing:
+
+- **`get_capture_bytes_tail` must not scan.** It is called on every count push,
+  so it is `ORDER BY rowid DESC LIMIT n` with the total taken from the registry.
+  Reinstating an `OFFSET total - n` there makes it quadratic over a session.
+- **Readers coalesce their own fetches.** A fetch can outlast the 500 ms signal,
+  so the byte view skips while one is in flight and runs once more on completion
+  rather than queuing on the DB mutex ([ByteView.tsx](../src/apps/discovery/views/serial/ByteView.tsx),
+  mirroring `useCaptureFrameView`).
 
 ### Frame counts
 

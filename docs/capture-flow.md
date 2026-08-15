@@ -106,6 +106,7 @@ hijacks the user's view.
 | `orphan_captures_for_session(session_id)` | Clear ownership on every capture the session owns, return `OrphanedCaptureInfo` list. |
 | `get_session_capture_ids(session_id)` | Every capture currently owned by this session (frames + bytes). |
 | `get_session_frame_capture_id(session_id)` | Convenience: the session's frames capture, if any. |
+| `get_session_bytes_capture_id(session_id)` | Same, for the session's bytes capture. |
 
 ### Data writes (session-scoped)
 
@@ -317,6 +318,13 @@ and capture playback are the same query at different offsets.
 reference implementation: it refetches the tail when the session's
 Rust-reported `frameCount` moves (`MsgType 0x16`, the same 2 Hz signal above),
 and pages via `get_capture_frames_paginated_filtered` when stopped.
+
+**Byte captures work the same way.** `ByteCounts` (`MsgType 0x19`) carries the
+byte total and the byte capture's id; the serial byte view refetches from that
+capture — `get_capture_bytes_tail` while streaming, `get_capture_bytes_paginated`
+when stopped. Raw bytes are never pushed over the wire, so a byte view that is
+not reading from a capture is not going to show anything (see
+[session-flow.md § Raw serial bytes](session-flow.md#raw-serial-bytes--counted-not-streamed)).
 
 Two consequences worth knowing before changing it:
 
