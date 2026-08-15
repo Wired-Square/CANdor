@@ -4,6 +4,7 @@
 // Provides consistent dark-themed tabbed interface with status display and controls.
 
 import { ReactNode, useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
 import TimeDisplay from './TimeDisplay';
 import ProtocolBadge, { type StreamingStatus } from './ProtocolBadge';
@@ -12,6 +13,7 @@ import {
   bgDataToolbar,
   bgSurface,
   borderDataView,
+  hoverBg,
 } from '../styles';
 import { iconXs } from '../styles/spacing';
 import { textDataPrimary, textDataSecondary } from '../styles/colourTokens';
@@ -33,7 +35,7 @@ export interface TabDefinition {
   countPrefix?: string;
   /** Show purple dot indicator when true and tab is not active */
   hasIndicator?: boolean;
-  /** When true, tab can be closed via right-click context menu */
+  /** When true, tab shows an inline close button and a right-click Close tab menu */
   closeable?: boolean;
 }
 
@@ -99,6 +101,8 @@ export default function DataViewTabBar({
   controls,
   onTabClose,
 }: DataViewTabBarProps) {
+  const { t } = useTranslation("common");
+
   // Context menu state for closeable tabs
   const [contextMenu, setContextMenu] = useState<{ tabId: string; position: { x: number; y: number } } | null>(null);
 
@@ -163,6 +167,7 @@ export default function DataViewTabBar({
       <div role="tablist" className="contents">
       {tabs.map((tab) => {
         const isActive = activeTab === tab.id;
+        const canClose = tab.closeable === true && onTabClose !== undefined;
 
         return (
           <button
@@ -170,7 +175,7 @@ export default function DataViewTabBar({
             role="tab"
             aria-selected={isActive}
             onClick={() => onTabChange(tab.id)}
-            onContextMenu={tab.closeable ? (e) => handleTabContextMenu(e, tab.id) : undefined}
+            onContextMenu={canClose ? (e) => handleTabContextMenu(e, tab.id) : undefined}
             className={dataViewTabClass(isActive, tab.hasIndicator)}
           >
             {tab.label}
@@ -181,6 +186,30 @@ export default function DataViewTabBar({
             )}
             {tab.hasIndicator && !isActive && (
               <span className="ml-1 w-1.5 h-1.5 bg-purple-500 rounded-full inline-block" />
+            )}
+            {/*
+              A span rather than a nested <button>: the tab itself is a button, and
+              interactive content cannot nest. role/tabIndex/onKeyDown give it the
+              keyboard behaviour the element would otherwise have supplied.
+            */}
+            {canClose && (
+              <span
+                role="button"
+                tabIndex={0}
+                aria-label={t("tabs.close")}
+                title={t("tabs.close")}
+                onClick={(e) => { e.stopPropagation(); onTabClose?.(tab.id); }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onTabClose?.(tab.id);
+                  }
+                }}
+                className={`ml-1.5 -mr-1 p-0.5 rounded inline-flex items-center align-middle ${hoverBg}`}
+              >
+                <X className={iconXs} />
+              </span>
             )}
           </button>
         );
@@ -201,7 +230,7 @@ export default function DataViewTabBar({
       {contextMenu && (
         <ContextMenu
           items={[{
-            label: 'Close tab',
+            label: t("tabs.close"),
             icon: <X className={iconXs} />,
             onClick: () => onTabClose?.(contextMenu.tabId),
           }]}

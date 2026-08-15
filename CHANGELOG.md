@@ -37,6 +37,8 @@ All notable changes to WireTAP will be documented in this file.
 - **A database source is now a WireTAP backend, and only that.** Connecting straight to a PostgreSQL server is no longer offered — the backend owns the database and authenticates with an API key instead of database credentials. If you have a direct PostgreSQL source, it is removed when you upgrade and named in a notice; add a WireTAP backend profile under Settings → Data I/O in its place. Queries, replay and the analysis tools all behave as before against one.
 - **Sending a frame to the Frame Calculator moved to the right-click menu.** Every frame table carried a calculator button on every row, spending a column on an action that is rarely the one you want. It is now **Inspect** on the row's context menu, alongside Copy ID and Copy Data, and those three now read the same in the Frames, Filtered and serial Framed Bytes tables. Serial rows offer Copy ID only where you have declared an ID field for them to copy.
 
+- **Closeable tabs have a close button.** The Serial Payload and Serial Framing tool tabs could only be closed from a right-click menu, with nothing on screen to say so. They now carry an ×; right-click still works.
+
 - **The Frames tab reads its rows from the capture.** Live tail, a stopped page and capture playback now all come from one place, so the row count, the tab label and the toolbar counter always agree. The Source column moved to the column menu alongside # / Bus / ASCII rather than appearing and disappearing on its own.
 
 ## [0.10.2] - 2026-08-14

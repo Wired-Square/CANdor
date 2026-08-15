@@ -41,6 +41,9 @@
   "tooltips": {
     "selectFrames": "Select frames"
   },
+  "tabs": {
+    "close": "Close tab"
+  },
   "framelinkPicker": {
     "selectDevice": "Select device…",
     "empty": "No FrameLink devices configured",
