@@ -10,6 +10,8 @@ All notable changes to WireTAP will be documented in this file.
 
 ### Fixed
 
+- **Serial checksum settings are written where the catalogue reader looks for them.** They went out in a shape nothing read back, so no checksum WireTAP exported had ever survived a reload. Note that this is only half the trip: a detected checksum is usually positioned from the end of the frame, and loading those back needs a catalogue library update that has not shipped yet — so expect an exported checksum to still be dropped on reload until it does.
+
 - **Stopping a serial session keeps you in the serial view.** Stopping a session that had framing applied to it switched to a frame table labelled "CAN", showing the serial data as though it were something else, and the raw bytes became unreachable. Stopping now leaves the view where it was. The label on a stopped capture also reads what the data actually is — serial, or Modbus — instead of always saying CAN.
 
 - **Frame tables fit their data at any window size.** The ASCII text sat in a fixed-width column that suited 8-byte CAN frames and nothing longer, so serial frames wrapped mid-text and drew over the data beside them. ASCII now follows the bytes, dropping to its own line only when the panel is too narrow to hold both, and it lines up into a straight gutter rather than stepping in and out with each frame's length. The Time column also sizes itself to the time format you have chosen instead of always reserving room for the longest one, so the columns after it sit where you would expect. Applies to every view with a frame table.

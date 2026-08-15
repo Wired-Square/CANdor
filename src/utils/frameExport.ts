@@ -192,18 +192,36 @@ function writeSerialConfigSection(lines: string[], config: SerialFrameConfig, me
     lines.push(`header_length = ${config.header_length}`);
   }
 
-  // Write checksum configuration if detected
+  // Write checksum configuration if detected.
+  //
+  // A `[meta.serial.checksum]` sub-table, which is what the catalogue parser
+  // reads (`get(section, "checksum")` in wiretap-catalog's parse.rs). These used
+  // to be written as flat `checksum_*` keys directly under `[meta.serial]`, so
+  // nothing WireTAP exported here was ever read back.
+  //
+  // ⚠ Still only half the round trip: wiretap-catalog's `ChecksumConfig` types
+  // `start_byte`/`calc_start_byte`/`calc_end_byte` as `u32`, and detection is
+  // end-relative (-1, -2), which is the normal case. Needs `u32` -> `i32` in the
+  // crate before a detected checksum survives a save/load.
+  //
+  // Fix all three fields together. `start_byte` uses `as_u32(…)?` so a negative
+  // drops the whole block, but `calc_start_byte` is `unwrap_or(0)` and
+  // `calc_end_byte` is an `Option` — both silently substitute a plausible wrong
+  // value. Fixing `start_byte` alone would turn a missing checksum into one
+  // calculated over the wrong bytes.
+  //
+  // Keep this table last in the section: anything appended after it lands *inside*
+  // the sub-table.
   if (config.checksum) {
     lines.push("");
     lines.push("# Checksum configuration (detected from analysis)");
-    lines.push(`checksum_algorithm = "${config.checksum.algorithm}"`);
-    lines.push(`checksum_start_byte = ${config.checksum.start_byte}`);
-    lines.push(`checksum_byte_length = ${config.checksum.byte_length}`);
-    lines.push(`checksum_calc_start_byte = ${config.checksum.calc_start_byte}`);
-    lines.push(`checksum_calc_end_byte = ${config.checksum.calc_end_byte}`);
-    if (config.checksum.big_endian) {
-      lines.push(`checksum_big_endian = true`);
-    }
+    lines.push("[meta.serial.checksum]");
+    lines.push(`algorithm = "${config.checksum.algorithm}"`);
+    lines.push(`start_byte = ${config.checksum.start_byte}`);
+    lines.push(`byte_length = ${config.checksum.byte_length}`);
+    lines.push(`calc_start_byte = ${config.checksum.calc_start_byte}`);
+    lines.push(`calc_end_byte = ${config.checksum.calc_end_byte}`);
+    lines.push(`big_endian = ${config.checksum.big_endian === true}`);
   }
 
   lines.push("");
