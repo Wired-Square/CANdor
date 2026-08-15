@@ -4,8 +4,10 @@
 import { describe, it, expect } from "vitest";
 import {
   asciiColumnChars,
+  dataColumnChars,
   ASCII_COLUMN_MIN_CHARS,
   ASCII_COLUMN_MAX_CHARS,
+  DATA_COLUMN_MIN_CHARS,
 } from "../utils/byteUtils";
 
 /** Rows as the table sees them — only `bytes` matters for width. */
@@ -38,5 +40,27 @@ describe("ASCII column width", () => {
 
   it("is unaffected by byte values — width is a function of length alone", () => {
     expect(asciiColumnChars([{ bytes: [0x00, 0xff, 0x41] }])).toBe(ASCII_COLUMN_MIN_CHARS);
+  });
+});
+
+describe("Data column width", () => {
+  it("counts two characters per byte with single spaces between", () => {
+    expect(dataColumnChars(rows(8))).toBe(23);  // 8 pairs + 7 spaces
+    expect(dataColumnChars(rows(20))).toBe(59);
+  });
+
+  it("sizes to the widest row on the page", () => {
+    expect(dataColumnChars(rows(1, 20, 16))).toBe(59);
+  });
+
+  it("never falls below the header width", () => {
+    expect(dataColumnChars([])).toBe(DATA_COLUMN_MIN_CHARS);
+    expect(dataColumnChars(rows(0))).toBe(DATA_COLUMN_MIN_CHARS);
+    // A page of single-byte frames renders "FC" — narrower than the header.
+    expect(dataColumnChars(rows(1))).toBe(DATA_COLUMN_MIN_CHARS);
+  });
+
+  it("is not capped — Data is the payload, so a long frame scrolls rather than wraps", () => {
+    expect(dataColumnChars(rows(1024))).toBe(3071);
   });
 });

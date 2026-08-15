@@ -52,11 +52,35 @@ export const ASCII_COLUMN_MAX_CHARS = 66;
  * column to nothing — past the cap the cell wraps, as it always did.
  */
 export function asciiColumnChars(frames: readonly { bytes: number[] }[]): number {
+  return Math.min(
+    Math.max(widestPayload(frames) + 2, ASCII_COLUMN_MIN_CHARS),
+    ASCII_COLUMN_MAX_CHARS
+  );
+}
+
+/** Width of the "Data" column header, the floor for an empty page. */
+export const DATA_COLUMN_MIN_CHARS = 4;
+
+/**
+ * Characters needed by the widest hex cell in `frames`: two per byte, single-spaced.
+ *
+ * Data used to be the table's one flexible column, absorbing whatever the fixed columns
+ * left over. That reads fine on a wide window and fails on a narrow one — the cell is
+ * squeezed below its content and the hex, which must not wrap, spills over the column
+ * beside it. Giving it a real width instead lets the table outgrow its container and
+ * scroll, which is what keeps a row on one line at any window size.
+ */
+export function dataColumnChars(frames: readonly { bytes: number[] }[]): number {
+  const widest = widestPayload(frames);
+  return Math.max(widest > 0 ? widest * 3 - 1 : 0, DATA_COLUMN_MIN_CHARS);
+}
+
+function widestPayload(frames: readonly { bytes: number[] }[]): number {
   let widest = 0;
   for (const frame of frames) {
     if (frame.bytes.length > widest) widest = frame.bytes.length;
   }
-  return Math.min(Math.max(widest + 2, ASCII_COLUMN_MIN_CHARS), ASCII_COLUMN_MAX_CHARS);
+  return widest;
 }
 
 /**

@@ -7,7 +7,7 @@ import { ReactNode, forwardRef, useRef, useEffect, useCallback, type MouseEvent 
 import { useAutoRowCount } from '../../../hooks/useAutoRowCount';
 import { useFrameIdFormat } from '../../../hooks/useFrameIdFormat';
 import { sendHexDataToCalculator } from '../../../utils/windowCommunication';
-import { bytesToHex, bytesToAscii, asciiColumnChars } from '../../../utils/byteUtils';
+import { bytesToHex, bytesToAscii, asciiColumnChars, dataColumnChars } from '../../../utils/byteUtils';
 import { frameRowKey } from '../../../utils/frameKey';
 import { formatHumanUs } from '../../../utils/timeFormat';
 import {
@@ -311,13 +311,17 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
       {/*
         `table-fixed` + <colgroup> keeps column widths independent of the rows on the
         current page, so toggling #/Bus/ASCII (or paging to frames with wider payloads)
-        is a repaint rather than a full re-solve of every column. Data carries no width:
-        it is the sole flexible column and absorbs whatever is left over.
+        is a repaint rather than a full re-solve of every column.
 
-        ASCII is the exception: payload length spans two orders of magnitude across
-        protocols, so its width comes from the rows. Monospace, so `ch` is exact.
+        Data and ASCII take their widths from the rows, because payload length spans two
+        orders of magnitude across protocols and no fixed width serves both an 8-byte CAN
+        frame and a 256-byte serial one. Monospace, so `ch` is exact. Every column then
+        has a width, which is what lets `w-max` size the table to their sum: on a narrow
+        window it outgrows the container and scrolls rather than squeezing Data under its
+        content, where the hex would spill over the column beside it. `min-w-full` keeps
+        it filling a wide one.
       */}
-      <table className="w-full table-fixed">
+      <table className="min-w-full w-max table-fixed">
         <colgroup>
           {renderRowStatus && <col className="w-8" />}
           {onBookmark && <col className="w-7" />}
@@ -328,7 +332,7 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
           {showSourceAddress && <col className="w-20" />}
           <col className="w-12" />
           {showCalculator && <col className="w-7" />}
-          <col />
+          <col style={{ width: `calc(${dataColumnChars(frames)}ch + 1rem)` }} />
           {showAscii && <col style={{ width: `calc(${asciiColumnChars(frames)}ch + 1rem)` }} />}
         </colgroup>
         <thead className={`sticky top-0 z-10 ${bgDataView} ${textDataSecondary}`}>

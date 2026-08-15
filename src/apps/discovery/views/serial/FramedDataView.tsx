@@ -171,7 +171,7 @@ function ColoredHexBytes({ bytes, idConfig, srcConfig, checksumConfig, incomplet
   }, [bytes.length, idConfig, srcConfig, checksumConfig, incomplete]);
 
   return (
-    <span className="whitespace-nowrap">
+    <span className="break-all">
       {bytes.map((byte, i) => (
         <span key={i} className={byteColors[i]}>
           {i > 0 ? ' ' : ''}{byteToHex(byte)}
