@@ -236,3 +236,119 @@ export async function batchTestCrc(
     totalCount: result.total_count,
   };
 }
+
+/** One point in the checksum candidate space. */
+export interface ChecksumSpec {
+  algorithm: ChecksumAlgorithm;
+  /** Byte offset of the checksum; negative counts from the end. */
+  position: number;
+  byteLength: 1 | 2;
+  bigEndian: boolean;
+  calcStartByte: number;
+  calcEndByte: number;
+}
+
+export interface ChecksumSpecResult {
+  /** Index into the `specs` array passed in. */
+  specIndex: number;
+  matchCount: number;
+  /** Frames the spec fitted — frames too short for it are excluded, not counted as misses. */
+  totalCount: number;
+}
+
+export interface ChecksumSweepResponse {
+  results: ChecksumSpecResult[];
+}
+
+/**
+ * A translatable note. Rust decides *what* to say, the frontend decides how —
+ * render with `t(\`serial.checksumNote.${code}\`, values)`.
+ */
+export interface ChecksumNote {
+  code: string;
+  values: Record<string, string | number>;
+}
+
+/**
+ * What one end-relative byte column looks like across the sample: the structural
+ * evidence behind the detector's priors.
+ */
+export interface ChecksumColumnStat {
+  /** Negative index, e.g. -1 for the last byte. */
+  position: number;
+  distinctValues: number;
+  /** Set when the column holds one value across every sampled frame. */
+  constantValue: number | null;
+  sampleCount: number;
+}
+
+export interface ChecksumCandidate {
+  algorithm: ChecksumAlgorithm;
+  position: number;
+  length: 1 | 2;
+  bigEndian: boolean;
+  calcStartByte: number;
+  calcEndByte: number;
+  matchCount: number;
+  totalCount: number;
+  /** 0-100 */
+  matchRate: number;
+  /** 0-100 composite score. */
+  confidence: number;
+  notes: ChecksumNote[];
+  /** Other calculation ranges that scored identically. */
+  equivalentRanges: { calcStartByte: number; calcEndByte: number }[];
+}
+
+export interface ChecksumDetectionResult {
+  candidates: ChecksumCandidate[];
+  bestCandidate: ChecksumCandidate | null;
+  tailColumns: ChecksumColumnStat[];
+  /** Result-level explanation, including why nothing was found. */
+  notes: ChecksumNote[];
+}
+
+export interface ChecksumDetectionOptions {
+  /** Checksum offsets to try, end-relative (default [-1, -2, -3]). */
+  positions?: number[];
+  /** Restrict to checksums of these byte lengths; omit for both. */
+  lengths?: (1 | 2)[];
+  /**
+   * Byte offsets just past a declared header field, from the view's ID/Source
+   * chips. These widen the calculation-range candidates; they never narrow them.
+   */
+  headerBoundaries?: number[];
+  /** Percentage below which a candidate is discarded (default 50). */
+  minMatchRate?: number;
+  /** Confidence below which a candidate is discarded (default 35). */
+  minConfidence?: number;
+}
+
+/**
+ * Rank the checksum configurations that explain a set of frames.
+ *
+ * The whole engine — candidate space, structural priors, confidence scoring —
+ * lives in Rust beside the algorithms, so there is one implementation of each.
+ * One IPC call for the whole search.
+ */
+export async function detectChecksum(
+  frames: number[][],
+  options: ChecksumDetectionOptions = {}
+): Promise<ChecksumDetectionResult> {
+  return invoke<ChecksumDetectionResult>("detect_checksum_cmd", { frames, options });
+}
+
+/**
+ * Check specific checksum configurations against frames.
+ *
+ * For the live match rate behind a hand-edited configuration, where the caller
+ * has one spec rather than a space to search. Unlike `batchTestCrc` above, the
+ * response needs no field mapping — the Rust structs are `rename_all = "camelCase"`.
+ */
+export async function sweepChecksumSpecs(
+  frames: number[][],
+  specs: ChecksumSpec[]
+): Promise<ChecksumSweepResponse> {
+  if (specs.length === 0) return { results: [] };
+  return invoke<ChecksumSweepResponse>("sweep_checksum_specs_cmd", { frames, specs });
+}

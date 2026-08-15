@@ -7,7 +7,8 @@ import { create } from 'zustand';
 import type { FrameMessage } from '../types/frame';
 import type { MessageOrderResult } from '../utils/analysis/messageOrderAnalysis';
 import type { PayloadAnalysisResult, MirrorGroup, TimestampedPayload } from '../utils/analysis/payloadAnalysis';
-import type { SerialFrameAnalysisResult, FramingDetectionResult } from '../utils/analysis/serialFrameAnalysis';
+import type { SerialFrameAnalysisResult } from '../utils/analysis/serialFrameAnalysis';
+import type { FramingDetectionResult } from '../utils/analysis/framingDetection';
 import type {
   ChecksumDiscoveryOptions,
   ChecksumDiscoveryResult,
@@ -544,7 +545,7 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
 
     await new Promise(resolve => setTimeout(resolve, ANALYSIS_YIELD_MS));
 
-    const { detectFraming } = await import('../utils/analysis/serialFrameAnalysis');
+    const { detectFraming } = await import('../utils/analysis/framingDetection');
 
     const framingResult = detectFraming([...rawBytes]);
     const serialFramingResults: SerialFramingResult = {

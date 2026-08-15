@@ -3,15 +3,7 @@
 //
 // For framing detection (SLIP, Modbus RTU, delimiter-based), see framingDetection.ts
 
-import {
-  type ChecksumAlgorithm,
-  CHECKSUM_ALGORITHMS,
-  calculateChecksum,
-  resolveByteIndexSync,
-} from './checksums';
-
-// Re-export framing detection types and functions for backwards compatibility
-export { detectFraming, type FramingCandidate, type FramingDetectionResult } from './framingDetection';
+import { detectChecksum, type ChecksumCandidate } from '../../api/checksums';
 
 // ============================================================================
 // Types
@@ -42,20 +34,13 @@ export type CandidateSourceAddress = {
 };
 
 /**
- * Candidate checksum position - a byte position that could contain a checksum
+ * Candidate checksum position.
+ *
+ * An alias rather than a parallel shape: detection is shared with the Configure
+ * Checksum dialog via the Rust `detectChecksum`, and two structs for one
+ * concept is how the endianness field went missing here in the first place.
  */
-export type CandidateChecksum = {
-  position: number;         // Byte position (can be negative for end-relative)
-  length: number;           // 1 or 2 bytes
-  algorithm: ChecksumAlgorithm;
-  calcStartByte: number;    // Start of calculation range
-  calcEndByte: number;      // End of calculation range (exclusive)
-  matchRate: number;        // Percentage of frames where checksum validated (0-100)
-  matchCount: number;       // Number of frames that matched
-  totalCount: number;       // Total frames tested
-  confidence: number;       // 0-100 confidence score
-  notes: string[];          // Explanatory notes
-};
+export type CandidateChecksum = ChecksumCandidate;
 
 /**
  * Result of serial frame structure analysis
@@ -120,8 +105,9 @@ export async function analyzeSerialFrameStructure(
   const bestIdCandidate = candidateIdGroups.length > 0 ? candidateIdGroups[0] : null;
   const candidateSourceAddresses = findCandidateSourceAddresses(frames, minLength, bestIdCandidate);
 
-  // Find candidate checksums
-  const candidateChecksums = await findCandidateChecksums(frames, minLength);
+  // Find candidate checksums with the shared engine, so this tool and the
+  // Configure Checksum dialog always agree on what the data says.
+  const candidateChecksums = (await detectChecksum(frames)).candidates;
 
   // Add summary notes
   if (candidateIdGroups.length > 0) {
@@ -525,205 +511,6 @@ function analyzeTwoByteSourceAddress(
     confidence: Math.min(100, confidence),
     notes,
   };
-}
-
-/**
- * Find candidate checksum positions by testing various algorithms
- * against different byte positions
- */
-async function findCandidateChecksums(
-  frames: number[][],
-  minLength: number
-): Promise<CandidateChecksum[]> {
-  const candidates: CandidateChecksum[] = [];
-
-  // Algorithms to test (all algorithms from shared module)
-  const algorithms: ChecksumAlgorithm[] = CHECKSUM_ALGORITHMS.map(a => a.id);
-
-  // Common checksum positions to test:
-  // - Last byte (most common)
-  // - Second-to-last byte
-  // - First few bytes (sometimes CRC is at start after header)
-  const positionsToTest: { pos: number; len: number; calcStart: number; calcEnd: number }[] = [];
-
-  // Last byte, checksum over bytes 0 to len-1
-  positionsToTest.push({ pos: -1, len: 1, calcStart: 0, calcEnd: -1 });
-
-  // Last byte, checksum over bytes 1 to len-1 (skip type byte)
-  positionsToTest.push({ pos: -1, len: 1, calcStart: 1, calcEnd: -1 });
-
-  // Last 2 bytes for CRC-16
-  if (minLength >= 4) {
-    positionsToTest.push({ pos: -2, len: 2, calcStart: 0, calcEnd: -2 });
-    positionsToTest.push({ pos: -2, len: 2, calcStart: 1, calcEnd: -2 });
-  }
-
-  // Second-to-last byte (for protocols with padding after checksum)
-  if (minLength >= 3) {
-    positionsToTest.push({ pos: -2, len: 1, calcStart: 0, calcEnd: -2 });
-    positionsToTest.push({ pos: -2, len: 1, calcStart: 1, calcEnd: -2 });
-  }
-
-  for (const { pos, len, calcStart, calcEnd } of positionsToTest) {
-    for (const algorithm of algorithms) {
-      // Skip 2-byte algorithms for 1-byte checksum positions
-      if (len === 1 && (algorithm === 'crc16_modbus' || algorithm === 'crc16_ccitt')) {
-        continue;
-      }
-      // Skip 1-byte algorithms for 2-byte checksum positions
-      if (len === 2 && (algorithm === 'xor' || algorithm === 'sum8' || algorithm === 'crc8')) {
-        continue;
-      }
-
-      const result = await testChecksumCandidate(frames, pos, len, algorithm, calcStart, calcEnd);
-      if (result && result.matchRate >= 50) {
-        candidates.push(result);
-      }
-    }
-  }
-
-  // Sort by match rate (descending), then confidence
-  candidates.sort((a, b) => {
-    if (Math.abs(b.matchRate - a.matchRate) > 5) {
-      return b.matchRate - a.matchRate;
-    }
-    return b.confidence - a.confidence;
-  });
-
-  // Deduplicate - keep best match for each position
-  const seen = new Set<string>();
-  const deduped: CandidateChecksum[] = [];
-  for (const c of candidates) {
-    const key = `${c.position}:${c.length}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      deduped.push(c);
-    }
-  }
-
-  return deduped;
-}
-
-/**
- * Test a specific checksum candidate against the frames
- */
-async function testChecksumCandidate(
-  frames: number[][],
-  position: number,
-  length: number,
-  algorithm: ChecksumAlgorithm,
-  calcStart: number,
-  calcEnd: number
-): Promise<CandidateChecksum | null> {
-  let matchCount = 0;
-  let totalCount = 0;
-
-  for (const frame of frames) {
-    const frameLength = frame.length;
-
-    // Resolve positions
-    const resolvedPos = resolveByteIndexSync(position, frameLength);
-    const resolvedCalcStart = resolveByteIndexSync(calcStart, frameLength);
-    const resolvedCalcEnd = resolveByteIndexSync(calcEnd, frameLength);
-
-    // Skip if positions are out of bounds
-    if (resolvedPos < 0 || resolvedPos + length > frameLength) continue;
-    if (resolvedCalcStart < 0 || resolvedCalcEnd > frameLength) continue;
-    if (resolvedCalcStart >= resolvedCalcEnd) continue;
-
-    totalCount++;
-
-    // Extract the stored checksum value
-    const frameData = new Uint8Array(frame);
-    let storedChecksum: number;
-    if (length === 1) {
-      storedChecksum = frame[resolvedPos];
-    } else {
-      // Big-endian for CRC-16
-      storedChecksum = (frame[resolvedPos] << 8) | frame[resolvedPos + 1];
-    }
-
-    // Calculate expected checksum
-    const calculated = await calculateChecksum(
-      algorithm,
-      Array.from(frameData),
-      resolvedCalcStart,
-      resolvedCalcEnd
-    );
-
-    if (storedChecksum === calculated) {
-      matchCount++;
-    }
-  }
-
-  if (totalCount === 0) {
-    return null;
-  }
-
-  const matchRate = (matchCount / totalCount) * 100;
-
-  // Calculate confidence based on match rate and sample size
-  let confidence = matchRate;
-
-  // Boost confidence for high match rates with many samples
-  if (matchRate >= 95 && totalCount >= 100) {
-    confidence = Math.min(100, confidence + 10);
-  } else if (matchRate >= 90 && totalCount >= 50) {
-    confidence = Math.min(100, confidence + 5);
-  }
-
-  // Reduce confidence for low sample counts
-  if (totalCount < 10) {
-    confidence = confidence * 0.7;
-  } else if (totalCount < 50) {
-    confidence = confidence * 0.9;
-  }
-
-  const notes: string[] = [];
-
-  // Add algorithm info
-  const algoInfo = CHECKSUM_ALGORITHMS.find(a => a.id === algorithm);
-  if (algoInfo) {
-    notes.push(`${algoInfo.name}: ${algoInfo.description}`);
-  }
-
-  // Add range info
-  if (calcStart === 1) {
-    notes.push('Calculation skips first byte (type byte excluded)');
-  }
-
-  if (matchRate === 100) {
-    notes.push('Perfect match across all samples!');
-  } else if (matchRate >= 90) {
-    notes.push('High match rate - likely correct');
-  }
-
-  return {
-    position,
-    length,
-    algorithm,
-    calcStartByte: calcStart,
-    calcEndByte: calcEnd,
-    matchRate,
-    matchCount,
-    totalCount,
-    confidence,
-    notes,
-  };
-}
-
-/**
- * Format a checksum candidate for display
- */
-export function formatChecksumCandidate(candidate: CandidateChecksum, frameLength?: number): string {
-  const posStr = candidate.position < 0
-    ? `byte ${candidate.position}` + (frameLength ? ` (byte ${resolveByteIndexSync(candidate.position, frameLength)})` : '')
-    : `byte ${candidate.position}`;
-
-  const algoInfo = CHECKSUM_ALGORITHMS.find(a => a.id === candidate.algorithm);
-  const algoName = algoInfo?.name || candidate.algorithm;
-
-  return `${algoName} at ${posStr}, ${candidate.matchRate.toFixed(0)}% match`;
 }
 
 /**

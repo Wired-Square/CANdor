@@ -1,6 +1,6 @@
 // ui/src/apps/discovery/views/DiscoveryFramesView.tsx
 import React, { useEffect, useRef, useMemo, memo, useState, useCallback } from "react";
-import { FileText, Hash, Network, Filter, Calculator, Snowflake, RefreshCw, Copy, ClipboardCopy, Target, Send, Gauge, Bookmark, Search, Play } from "lucide-react";
+import { FileText, Hash, Network, Filter, Snowflake, RefreshCw, Target, Send, Gauge, Bookmark, Search, Play } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { iconSm, iconXs, flexRowGap2 } from "../../../styles/spacing";
 import { formatIsoUs, formatHumanUs, renderDeltaNode } from "../../../utils/timeFormat";
@@ -27,9 +27,9 @@ import type { IOCapabilities } from "../../../api/io";
 import { BUFFER_POLL_INTERVAL_MS } from "../../../constants";
 import { useCaptureFrameView } from "../hooks/useCaptureFrameView";
 import ContextMenu, { type ContextMenuItem } from "../../../components/ContextMenu";
-import { bytesToHex } from "../../../utils/byteUtils";
 import { formatFrameId } from "../../../utils/frameIds";
-import { sendHexDataToCalculator, openPanel } from "../../../utils/windowCommunication";
+import { openPanel } from "../../../utils/windowCommunication";
+import { frameCopyMenuItems, frameInspectMenuItem, menuSeparator } from "../components/frameContextMenuItems";
 import { useTransmitStore } from "../../../stores/transmitStore";
 import { useDashboardStore } from "../../../stores/dashboardStore";
 import { useSessionStore } from "../../../stores/sessionStore";
@@ -374,19 +374,11 @@ function DiscoveryFramesView({
   const contextMenuItems: ContextMenuItem[] = useMemo(() => {
     if (!contextMenu) return [];
     const { frame } = contextMenu;
-    const hexData = (frame.hexBytes ?? frame.bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase())).join(' ');
+    const formatId = (id: number, isExtended?: boolean) =>
+      formatFrameId(id, displayFrameIdFormat, isExtended);
     const items: ContextMenuItem[] = [
-      {
-        label: 'Copy ID',
-        icon: <Copy className={iconXs} />,
-        onClick: () => navigator.clipboard.writeText(formatFrameId(frame.frame_id, displayFrameIdFormat, frame.is_extended)),
-      },
-      {
-        label: 'Copy Data',
-        icon: <ClipboardCopy className={iconXs} />,
-        onClick: () => navigator.clipboard.writeText(hexData),
-      },
-      { separator: true, label: '', onClick: () => {} },
+      ...frameCopyMenuItems({ frame, t, formatId }),
+      menuSeparator,
       {
         label: 'Filter',
         icon: <Filter className={iconXs} />,
@@ -397,12 +389,8 @@ function DiscoveryFramesView({
         icon: <Target className={iconXs} />,
         onClick: () => { deselectAllFrames(); toggleFrameSelection(keyOf(frame as FrameMessage)); },
       },
-      { separator: true, label: '', onClick: () => {} },
-      {
-        label: 'Inspect',
-        icon: <Calculator className={iconXs} />,
-        onClick: () => sendHexDataToCalculator(bytesToHex(frame.bytes)),
-      },
+      menuSeparator,
+      frameInspectMenuItem(frame, t),
       {
         label: 'Send to Transmit',
         icon: <Send className={iconXs} />,
@@ -454,7 +442,7 @@ function DiscoveryFramesView({
       );
     }
     return items;
-  }, [contextMenu, toggleFrameSelection, deselectAllFrames, displayFrameIdFormat, onBookmark]);
+  }, [contextMenu, toggleFrameSelection, deselectAllFrames, displayFrameIdFormat, onBookmark, t]);
 
   const headerContextMenuItems: ContextMenuItem[] = useMemo(() => [
     { label: '# Column', checked: showRefColumn, onClick: toggleShowRefColumn },
@@ -1010,7 +998,6 @@ function DiscoveryFramesView({
                   ? 'No frames in capture'
                   : isStreaming ? 'Waiting for frames...' : 'No frames to display'
             }
-            showCalculator={false}
             showRef={showRefColumn}
             showAscii={showAsciiColumn}
             showBus={showBusColumn}

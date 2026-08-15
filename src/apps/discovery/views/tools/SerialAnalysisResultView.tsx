@@ -4,7 +4,10 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useDiscoveryStore, type FramingConfig } from "../../../../stores/discoveryStore";
-import type { FramingCandidate, CandidateChecksum, CandidateSourceAddress } from "../../../../utils/analysis/serialFrameAnalysis";
+import type { CandidateChecksum, CandidateSourceAddress } from "../../../../utils/analysis/serialFrameAnalysis";
+import type { FramingCandidate } from "../../../../utils/analysis/framingDetection";
+import ChecksumCandidateList from "../../components/ChecksumCandidateList";
+import { configFromCandidate, serialChecksumFromConfig } from "../serial/checksumConfig";
 import { Hash, Shield, Info, CheckCircle2, AlertCircle, Check, Layers, Radio, MapPin, X } from "lucide-react";
 import { iconMd, iconXs, iconLg, icon2xl, flexRowGap2 } from "../../../../styles/spacing";
 import { iconButtonDangerCompact } from "../../../../styles/buttonStyles";
@@ -95,26 +98,16 @@ export default function SerialAnalysisResultView({ mode, onClose }: Props) {
     }
   };
 
-  const handleToggleChecksum = (candidate: CandidateChecksum, idx: number) => {
-    if (appliedChecksumIdx === idx) {
-      // Unset
-      setSerialConfig({
-        checksum: undefined,
-      });
-      setAppliedChecksumIdx(null);
-    } else {
-      // Apply
-      setSerialConfig({
-        checksum: {
-          algorithm: candidate.algorithm,
-          start_byte: candidate.position,
-          byte_length: candidate.length,
-          calc_start_byte: candidate.calcStartByte,
-          calc_end_byte: candidate.calcEndByte,
-        },
-      });
-      setAppliedChecksumIdx(idx);
-    }
+  const handleApplyChecksum = (candidate: CandidateChecksum, idx: number) => {
+    setSerialConfig({
+      checksum: serialChecksumFromConfig(configFromCandidate(candidate)) ?? undefined,
+    });
+    setAppliedChecksumIdx(idx);
+  };
+
+  const handleUnapplyChecksum = () => {
+    setSerialConfig({ checksum: undefined });
+    setAppliedChecksumIdx(null);
   };
 
   const handleToggleFraming = (candidate: FramingCandidate, idx: number) => {
@@ -640,96 +633,13 @@ export default function SerialAnalysisResultView({ mode, onClose }: Props) {
             {t("serialAnalysis.noChecksumPatterns")}
           </p>
         ) : (
-          <div className="space-y-2">
-            {analysisResult.candidateChecksums
-              .filter((_, idx) => appliedChecksumIdx === null || appliedChecksumIdx === idx)
-              .map((candidate) => {
-                const idx = analysisResult.candidateChecksums.indexOf(candidate);
-                const isApplied = appliedChecksumIdx === idx;
-                return (
-                  <div
-                    key={idx}
-                    className={`p-3 rounded-lg border ${
-                      isApplied
-                        ? "bg-[var(--status-info-bg)] border-[color:var(--status-info-border)]"
-                        : candidate.matchRate >= 95
-                          ? "bg-[var(--status-success-bg)] border-[color:var(--status-success-border)]"
-                          : candidate.matchRate >= 80
-                            ? "bg-[var(--status-warning-bg)] border-[color:var(--status-warning-border)]"
-                            : "bg-[var(--bg-surface)] border-[color:var(--border-default)]"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex-1">
-                        <div className={flexRowGap2}>
-                          <span className={`${textMedium} font-mono`}>
-                            {candidate.algorithm}
-                          </span>
-                          <span className="text-sm text-[color:var(--text-secondary)]">
-                            {t("serialAnalysis.atByte", { position: candidate.position })}
-                            {candidate.length > 1 ? t("serialAnalysis.ofLength", { count: candidate.length }) : ""}
-                          </span>
-                          {isApplied ? (
-                            <span className="px-1.5 py-0.5 text-xs bg-[var(--status-info-bg)] text-[color:var(--status-info-text)] rounded flex items-center gap-1">
-                              <Check className={iconXs} />
-                              {t("serialAnalysis.applied")}
-                            </span>
-                          ) : candidate.matchRate === 100 && (
-                            <span className="px-1.5 py-0.5 text-xs bg-[var(--status-success-bg)] text-[color:var(--status-success-text)] rounded">
-                              {t("serialAnalysis.perfectMatch")}
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-sm text-[color:var(--text-secondary)] mt-1">
-                          <span
-                            className={
-                              candidate.matchRate >= 95
-                                ? "text-[color:var(--text-green)] font-medium"
-                                : candidate.matchRate >= 80
-                                  ? "text-[color:var(--text-amber)]"
-                                  : ""
-                            }
-                          >
-                            {t("serialAnalysis.matchPercent", { percent: candidate.matchRate.toFixed(1) })}
-                          </span>
-                          <span className="mx-2 text-[color:var(--text-muted)]">|</span>
-                          {t("serialAnalysis.matchedFrames", { matched: candidate.matchCount.toLocaleString(), total: candidate.totalCount.toLocaleString() })}
-                        </div>
-                        <div className="text-xs text-[color:var(--text-muted)] mt-1">
-                          {t("serialAnalysis.calcRange", { start: candidate.calcStartByte, end: candidate.calcEndByte })}
-                        </div>
-                        {candidate.notes.length > 0 && (
-                          <div className="text-xs text-[color:var(--text-muted)] mt-1">
-                            {candidate.notes.slice(0, 2).join(" • ")}
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex-shrink-0 flex items-center gap-2">
-                        <button
-                          onClick={() => handleToggleChecksum(candidate, idx)}
-                          className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-                            isApplied
-                              ? "bg-[var(--status-info-bg)] text-[color:var(--status-info-text)] hover:bg-[var(--status-info-bg-strong)]"
-                              : "bg-[var(--hover-bg)] text-[color:var(--text-secondary)] hover:bg-[var(--hover-bg-strong)]"
-                          }`}
-                        >
-                          {isApplied ? "Applied" : "Apply"}
-                        </button>
-                        {isApplied ? (
-                          <CheckCircle2 className={`${iconLg} text-blue-500`} />
-                        ) : candidate.matchRate >= 95 ? (
-                          <CheckCircle2 className={`${iconLg} text-green-500`} />
-                        ) : candidate.matchRate >= 80 ? (
-                          <AlertCircle className={`${iconLg} text-yellow-500`} />
-                        ) : (
-                          <AlertCircle className={`${iconLg} text-slate-400`} />
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-          </div>
+          <ChecksumCandidateList
+            candidates={analysisResult.candidateChecksums}
+            appliedIndex={appliedChecksumIdx}
+            onApply={handleApplyChecksum}
+            onUnapply={handleUnapplyChecksum}
+            collapseWhenApplied
+          />
         )}
       </div>
     </div>

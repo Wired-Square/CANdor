@@ -1358,6 +1358,8 @@ pub fn run() {
             checksums::crc8_parameterised_cmd,
             checksums::crc16_parameterised_cmd,
             checksums::batch_test_crc_cmd,
+            checksums::sweep_checksum_specs_cmd,
+            checksums::detect_checksum_cmd,
             // Transmit API
             transmit::get_transmit_capable_profiles,
             transmit::get_profile_usage,

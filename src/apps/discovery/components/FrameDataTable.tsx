@@ -6,8 +6,7 @@
 import { ReactNode, forwardRef, useRef, useEffect, useCallback, type MouseEvent } from 'react';
 import { useAutoRowCount } from '../../../hooks/useAutoRowCount';
 import { useFrameIdFormat } from '../../../hooks/useFrameIdFormat';
-import { sendHexDataToCalculator } from '../../../utils/windowCommunication';
-import { bytesToHex, bytesToAscii, hexRunChars } from '../../../utils/byteUtils';
+import { bytesToAscii, hexRunChars } from '../../../utils/byteUtils';
 import { frameRowKey } from '../../../utils/frameKey';
 import { formatHumanUs, TIME_COLUMN_CHARS } from '../../../utils/timeFormat';
 import type { TimeDisplayFormat } from '../../../types/common';
@@ -66,10 +65,6 @@ export interface FrameDataTableProps {
   showSourceAddress?: boolean;
   /** Called when bookmark button is clicked (omit to hide bookmark button) */
   onBookmark?: (frameId: number, timestampUs: number) => void;
-  /** Called when calculator button is clicked (omit to hide calculator button) */
-  onCalculator?: (bytes: number[]) => void;
-  /** Show calculator button (default: true if onCalculator not provided, uses default handler) */
-  showCalculator?: boolean;
   /** Empty state message */
   emptyMessage?: string;
   /** Number of source bytes for padding (serial extraction) */
@@ -128,14 +123,6 @@ function IconSprites() {
         <symbol id="fdt-bookmark" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
           <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z" />
         </symbol>
-        <symbol id="fdt-calculator" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-          <rect width="16" height="20" x="4" y="2" rx="2" />
-          <line x1="8" x2="16" y1="6" y2="6" />
-          <line x1="16" x2="16" y1="14" y2="18" />
-          <path d="M16 10h.01" /><path d="M12 10h.01" /><path d="M8 10h.01" />
-          <path d="M12 14h.01" /><path d="M8 14h.01" />
-          <path d="M12 18h.01" /><path d="M8 18h.01" />
-        </symbol>
       </defs>
     </svg>
   );
@@ -180,8 +167,6 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
   formatTime,
   showSourceAddress = false,
   onBookmark,
-  onCalculator,
-  showCalculator = true,
   emptyMessage = 'No frames to display',
   sourceByteCount = 2,
   renderBytes,
@@ -238,8 +223,6 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
   framesRef.current = frames;
   const onBookmarkRef = useRef(onBookmark);
   onBookmarkRef.current = onBookmark;
-  const onCalculatorRef = useRef(onCalculator);
-  onCalculatorRef.current = onCalculator;
   const onRowClickRef = useRef(onRowClick);
   onRowClickRef.current = onRowClick;
   const onContextMenuRef = useRef(onContextMenu);
@@ -284,12 +267,6 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
       const action = btn.dataset.action;
       if (action === 'bookmark' && onBookmarkRef.current) {
         onBookmarkRef.current(frame.frame_id, frame.timestamp_us);
-      } else if (action === 'calculator') {
-        if (onCalculatorRef.current) {
-          onCalculatorRef.current(frame.bytes);
-        } else {
-          sendHexDataToCalculator(bytesToHex(frame.bytes));
-        }
       }
       return;
     }
@@ -343,7 +320,6 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
           {showBus && <col className="w-12" />}
           {showSourceAddress && <col className="w-20" />}
           <col className="w-12" />
-          {showCalculator && <col className="w-7" />}
           <col />
         </colgroup>
         <thead className={`sticky top-0 z-10 ${bgDataView} ${textDataSecondary}`}>
@@ -368,9 +344,6 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
               <th className={`text-right ${dataHeaderCell} ${textDataPurple}`}>Source</th>
             )}
             <th className={`text-left ${dataHeaderCell}`}>Len</th>
-            {showCalculator && (
-              <th className={`${dataHeaderCellIcon}`}></th>
-            )}
             <th className={`text-left ${dataHeaderCell}`}>Data</th>
           </tr>
         </thead>
@@ -434,13 +407,6 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
                   </td>
                 )}
                 <td className={`${dataCell} ${textDataSecondary} ${cellHighlight}`}>{frame.dlc}</td>
-                {showCalculator && (
-                  <td className={`${dataCellIcon} ${cellHighlight}`}>
-                    <button data-action="calculator" className={tableIconButtonDark} title="Send to Frame Calculator">
-                      <UseIcon id="fdt-calculator" className={`w-3 h-3 ${textDataOrange}`} />
-                    </button>
-                  </td>
-                )}
                 <td className={`${dataCell} ${cellHighlight}`}>
                   {showAscii ? (
                     <>

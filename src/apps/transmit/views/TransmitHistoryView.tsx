@@ -262,7 +262,6 @@ export default function TransmitHistoryView({ sessionId }: TransmitHistoryViewPr
             displayTimeFormat={timestampFormat}
             frames={frameRows}
             formatTime={formatTimestamp}
-            showCalculator={false}
             showRef={false}
             showBus={true}
             autoScroll={isLive}

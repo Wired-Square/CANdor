@@ -10,6 +10,10 @@ All notable changes to WireTAP will be documented in this file.
 
 ### Fixed
 
+- **Serial checksum detection finds the checksum instead of guessing at it.** Configure Checksum used to open on a fixed CRC-16 guess that reproduced nothing, and the Serial Payload tool listed no candidates at all on any link that also carries short frames — a single one-byte acknowledgement sharing the line was enough to stop the search before it began. Detection now ranks every algorithm, position and byte range that reproduces your data, with a match rate and a confidence for each, and when nothing matches it says what it looked at and what it ruled out. Frames too short to hold the checksum are left out of the count rather than counted as failures, and a candidate you apply keeps the same denominator the ranking was measured against.
+
+- **A checksum you set by hand is no longer discarded when you save.** Whatever the Serial Payload tool had last detected overwrote your configuration at export time, so a checksum chosen in the dialog silently reverted. Your choice now wins, and detection only fills in a checksum when you have not set one.
+
 - **Serial checksum settings are written where the catalogue reader looks for them.** They went out in a shape nothing read back, so no checksum WireTAP exported had ever survived a reload. Note that this is only half the trip: a detected checksum is usually positioned from the end of the frame, and loading those back needs a catalogue library update that has not shipped yet — so expect an exported checksum to still be dropped on reload until it does.
 
 - **Stopping a serial session keeps you in the serial view.** Stopping a session that had framing applied to it switched to a frame table labelled "CAN", showing the serial data as though it were something else, and the raw bytes became unreachable. Stopping now leaves the view where it was. The label on a stopped capture also reads what the data actually is — serial, or Modbus — instead of always saying CAN.
@@ -31,6 +35,7 @@ All notable changes to WireTAP will be documented in this file.
 ### Changed
 
 - **A database source is now a WireTAP backend, and only that.** Connecting straight to a PostgreSQL server is no longer offered — the backend owns the database and authenticates with an API key instead of database credentials. If you have a direct PostgreSQL source, it is removed when you upgrade and named in a notice; add a WireTAP backend profile under Settings → Data I/O in its place. Queries, replay and the analysis tools all behave as before against one.
+- **Sending a frame to the Frame Calculator moved to the right-click menu.** Every frame table carried a calculator button on every row, spending a column on an action that is rarely the one you want. It is now **Inspect** on the row's context menu, alongside Copy ID and Copy Data, and those three now read the same in the Frames, Filtered and serial Framed Bytes tables. Serial rows offer Copy ID only where you have declared an ID field for them to copy.
 
 - **The Frames tab reads its rows from the capture.** Live tail, a stopped page and capture playback now all come from one place, so the row count, the tab label and the toolbar counter always agree. The Source column moved to the column menu alongside # / Bus / ASCII rather than appearing and disappearing on its own.
 

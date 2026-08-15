@@ -4,7 +4,8 @@
 // Shows frames whose IDs are in seenIds but NOT in selectedFrames.
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { Filter, Calculator, Copy, ClipboardCopy } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { Filter } from "lucide-react";
 import { useDiscoveryStore } from "../../../stores/discoveryStore";
 import { useDiscoveryUIStore } from "../../../stores/discoveryUIStore";
 import { keyOf, groupKeysByProtocol } from "../../../utils/frameKey";
@@ -15,9 +16,8 @@ import ContextMenu, { type ContextMenuItem } from "../../../components/ContextMe
 import { bgDataView } from "../../../styles";
 import { emptyStateText } from "../../../styles/typography";
 import { iconXs } from "../../../styles/spacing";
-import { bytesToHex } from "../../../utils/byteUtils";
 import { formatFrameId } from "../../../utils/frameIds";
-import { sendHexDataToCalculator } from "../../../utils/windowCommunication";
+import { frameCopyMenuItems, frameInspectMenuItem, menuSeparator } from "../components/frameContextMenuItems";
 import type { FrameMessage } from "../../../types/frame";
 import type { FrameRow } from "../components";
 import type { CaptureMetadata } from "../../../api/capture";
@@ -51,6 +51,7 @@ export default function FilteredTabContent({
   const toggleFrameSelection = useDiscoveryStore((s) => s.toggleFrameSelection);
 
   // Column visibility (for header context menu)
+  const { t } = useTranslation("discovery");
   const showRefColumn = useDiscoveryUIStore((s) => s.showRefColumn);
   const showAsciiColumn = useDiscoveryUIStore((s) => s.showAsciiColumn);
   const showBusColumn = useDiscoveryUIStore((s) => s.showBusColumn);
@@ -256,32 +257,20 @@ export default function FilteredTabContent({
   const contextMenuItems: ContextMenuItem[] = useMemo(() => {
     if (!contextMenu) return [];
     const { frame } = contextMenu;
-    const hexData = (frame.hexBytes ?? frame.bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase())).join(' ');
+    const formatId = (id: number, isExtended?: boolean) =>
+      formatFrameId(id, displayFrameIdFormat, isExtended);
     return [
-      {
-        label: 'Copy ID',
-        icon: <Copy className={iconXs} />,
-        onClick: () => navigator.clipboard.writeText(formatFrameId(frame.frame_id, displayFrameIdFormat, frame.is_extended)),
-      },
-      {
-        label: 'Copy Data',
-        icon: <ClipboardCopy className={iconXs} />,
-        onClick: () => navigator.clipboard.writeText(hexData),
-      },
-      { separator: true, label: '', onClick: () => {} },
+      ...frameCopyMenuItems({ frame, t, formatId }),
+      menuSeparator,
       {
         label: 'Unfilter',
         icon: <Filter className={iconXs} />,
         onClick: () => toggleFrameSelection(keyOf(frame)),
       },
-      { separator: true, label: '', onClick: () => {} },
-      {
-        label: 'Inspect',
-        icon: <Calculator className={iconXs} />,
-        onClick: () => sendHexDataToCalculator(bytesToHex(frame.bytes)),
-      },
+      menuSeparator,
+      frameInspectMenuItem(frame, t),
     ];
-  }, [contextMenu, toggleFrameSelection, displayFrameIdFormat]);
+  }, [contextMenu, toggleFrameSelection, displayFrameIdFormat, t]);
 
   // Header context menu items
   const headerContextMenuItems: ContextMenuItem[] = useMemo(() => [

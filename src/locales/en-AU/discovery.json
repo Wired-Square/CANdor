@@ -24,6 +24,11 @@
     "frameOrder": "Frame Order",
     "payloadChanges": "Payload Changes"
   },
+  "contextMenu": {
+    "copyId": "Copy ID",
+    "copyData": "Copy Data",
+    "inspect": "Inspect"
+  },
   "states": {
     "noProfile": "No source connected",
     "selectProfile": "Select an IO profile to start discovering frames.",
@@ -264,7 +269,6 @@
     "bestMatch": "Best Match",
     "applied": "Applied",
     "appliedWithCount": "Applied ({{count}} unique IDs)",
-    "perfectMatch": "Perfect Match",
     "confidencePercent": "{{percent}}% confidence",
     "estFrames": "~{{count}} frames",
     "avgFrameLength": "avg {{count}} bytes",
@@ -373,6 +377,32 @@
     "minLengthFilter": "{{min}}+",
     "protocolLabel": "Serial",
     "clear": "Clear",
-    "apply": "Apply"
+    "apply": "Apply",
+    "bigEndianShort": "BE",
+    "littleEndianShort": "LE",
+    "checksumDetecting": "Searching for a checksum…",
+    "checksumNoCandidates": "No known algorithm reproduced the checksum",
+    "checksumTailColumn": "byte {{position}}: {{distinct}} distinct values in {{samples}} frames",
+    "checksumColumnConstant": "constant {{value}}",
+    "checksumColumnConstantTooltip": "Constant across every sampled frame — likely padding",
+    "checksumEquivalentRanges": "(also {{ranges}})",
+    "checksumResetToDetected": "Use detected",
+    "checksumNote": {
+      "noFrames": "No frames to analyse",
+      "analysed": "Analysed {{frames}} frames (lengths {{minLength}}–{{maxLength}} bytes)",
+      "constantPadding": "Byte {{position}} is {{value}} in every frame — treated as padding, not checksum",
+      "configurationsTested": "Tested {{specs}} configurations across {{algorithms}} algorithms",
+      "matchesAll": "Matches all {{count}} frames",
+      "matchesSome": "Matches {{matched}} of {{total}} frames",
+      "fewSamples": "Only {{count}} samples — weak evidence",
+      "columnVaries": "Checksum column takes {{distinct}} distinct values across {{samples}} frames",
+      "columnNearlyConstant": "Checksum column takes only {{distinct}} distinct values — may be padding",
+      "startsAfterHeader": "Calculation starts after a declared header field (byte {{byte}})",
+      "constantExcluded": "Constant {{value}} before the checksum excluded",
+      "shortRange": "Calculation covers fewer than 2 bytes",
+      "highByteConstant": "High byte of the checksum never changes — may be a 1-byte checksum",
+      "noneLastByteConstant": "No checksum found. The last byte is {{value}} in all {{frames}} frames, so it is unlikely to be a checksum at all — try another position, or check the framing.",
+      "noneButLastByteVaries": "No known algorithm reproduced the checksum. The last byte does vary ({{distinct}} distinct values across {{frames}} frames), which is consistent with a checksum, so the algorithm may be one not built in — try Checksum Discovery to brute-force CRC polynomials, or configure it manually below."
+    }
   }
 }

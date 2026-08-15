@@ -10,5 +10,6 @@ export { default as TimelineSection } from '../../../components/DataViewTimeline
 export { default as DiscoveryViewController } from '../../../components/DataViewController';
 
 // Discovery-specific components
+export { default as ChecksumCandidateList } from './ChecksumCandidateList';
 export { default as FrameDataTable, type FrameRow, type FrameDataTableProps } from './FrameDataTable';
 export { default as DiscoveryFindBar } from './DiscoveryFindBar';

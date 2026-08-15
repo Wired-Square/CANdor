@@ -9,6 +9,7 @@ import { buildFramesTomlWithKnowledge, buildModbusDiscoveryToml, type ExportFram
 import { formatFrameId } from '../utils/frameIds';
 import { parseFrameKey } from '../utils/frameKey';
 import { normalizeMeta } from '../utils/catalogMeta';
+import { configFromCandidate, serialChecksumFromConfig } from '../apps/discovery/views/serial/checksumConfig';
 import type { FrameInfo } from './discoveryFrameStore';
 import { useDiscoveryToolboxStore } from './discoveryToolboxStore';
 import { useSessionStore } from './sessionStore';
@@ -247,7 +248,10 @@ export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
     }
 
     let enrichedSerialConfig = serialConfig;
-    if (detectedProtocol === 'serial') {
+    // Fill in a checksum only when none was chosen. This used to overwrite
+    // unconditionally, so a configuration set in the Configure Checksum dialog was
+    // silently replaced at save time by whatever the Serial Payload tool last saw.
+    if (detectedProtocol === 'serial' && !serialConfig?.checksum) {
       const serialAnalysis = toolbox.serialPayloadResults?.analysisResult;
       const bestChecksum = serialAnalysis?.candidateChecksums
         ?.filter((c: { matchRate: number }) => c.matchRate >= 90)
@@ -256,13 +260,7 @@ export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
       if (bestChecksum) {
         enrichedSerialConfig = {
           ...serialConfig,
-          checksum: {
-            algorithm: bestChecksum.algorithm,
-            start_byte: bestChecksum.position,
-            byte_length: bestChecksum.length,
-            calc_start_byte: bestChecksum.calcStartByte,
-            calc_end_byte: bestChecksum.calcEndByte,
-          },
+          checksum: serialChecksumFromConfig(configFromCandidate(bestChecksum)) ?? undefined,
         };
       }
     }

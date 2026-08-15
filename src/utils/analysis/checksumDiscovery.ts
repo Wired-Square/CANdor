@@ -6,13 +6,9 @@
 import type { FrameMessage } from '../../types/frame';
 import {
   batchTestCrc,
-  calculateChecksum,
-  type ChecksumAlgorithm,
+  detectChecksum,
+  sweepChecksumSpecs,
 } from '../../api/checksums';
-import {
-  autoDetectAlgorithm,
-  extractChecksumValue,
-} from './checksumAutoDetect';
 import { resolveByteIndexSync, CHECKSUM_ALGORITHMS } from './checksums';
 
 // ============================================================================
@@ -175,6 +171,13 @@ export async function discoverChecksums(
         position,
         checksumLength
       );
+      // Whole frames with the arbitration id prepended — the sweep resolves the
+      // checksum position end-relative, so the extra bytes shift nothing.
+      const framesWithFrameId = frameGroup.map((f) => [
+        f.frame_id & 0xFF,
+        (f.frame_id >> 8) & 0xFF,
+        ...f.bytes,
+      ]);
 
       if (dataPayloads.length < opts.minSamples) continue;
 
@@ -187,25 +190,12 @@ export async function discoverChecksums(
           currentFrameId: frameId,
         });
 
-        const simpleCandidate = await trySimpleAlgorithms(
-          frameId,
-          dataPayloads,
-          expectedChecksums,
-          position,
-          checksumLength,
-          opts.minMatchRate
-        );
-
-        if (simpleCandidate) {
-          candidates.push(simpleCandidate);
-          continue; // Found a match, skip to next position
-        }
-
-        // Try with frame ID prepended
+        // Only the frame-ID-prefixed variant runs here: plain payloads are
+        // covered by the shared engine below, which also varies the calculation
+        // range and scores the result instead of taking the first hit.
         const simpleCandidateWithId = await trySimpleAlgorithms(
           frameId,
-          dataPayloadsWithFrameId,
-          expectedChecksums,
+          framesWithFrameId,
           position,
           checksumLength,
           opts.minMatchRate,
@@ -411,6 +401,35 @@ function groupFramesByFrameId(
 }
 
 /**
+ * Extract a checksum value from a payload at a given position.
+ *
+ * @param payload - The frame payload bytes
+ * @param position - Starting byte position (already resolved, not negative)
+ * @param numBytes - Number of bytes (1 or 2)
+ * @param endianness - Byte order for multi-byte values
+ * @returns The extracted checksum value
+ */
+function extractChecksumValue(
+  payload: number[],
+  position: number,
+  numBytes: number,
+  endianness: 'big' | 'little'
+): number {
+  if (position + numBytes > payload.length) return 0;
+
+  if (numBytes === 1) {
+    return payload[position];
+  }
+
+  // 2 bytes
+  if (endianness === 'little') {
+    return payload[position] | (payload[position + 1] << 8);
+  } else {
+    return (payload[position] << 8) | payload[position + 1];
+  }
+}
+
+/**
  * Prepare payloads for a specific checksum position.
  * Returns data payloads (bytes before checksum), expected checksums, and
  * payloads with frame ID prepended.
@@ -457,49 +476,51 @@ function preparePayloadsForPosition(
 }
 
 /**
- * Try simple algorithms (XOR, Sum8).
+ * Try the simple algorithms (XOR, Sum8) in one batched sweep.
+ *
+ * `frames` are whole payloads: "data before the checksum" is just the range
+ * `[0, position)`, which a spec already expresses, so there is no need to slice
+ * and extract per frame. This used to be one IPC call per frame per algorithm.
  */
 async function trySimpleAlgorithms(
   frameId: number,
-  dataPayloads: number[][],
-  expectedChecksums: number[],
+  frames: number[][],
   position: number,
   checksumLength: number,
   minMatchRate: number,
   includesFrameId = false
 ): Promise<ChecksumCandidate | null> {
-  const simpleAlgos: { id: ChecksumAlgorithm; type: 'xor' | 'sum8' }[] = [
-    { id: 'xor', type: 'xor' },
-    { id: 'sum8', type: 'sum8' },
-  ];
+  const simpleAlgos = ['xor', 'sum8'] as const;
+  const { results } = await sweepChecksumSpecs(
+    frames,
+    simpleAlgos.map((algorithm) => ({
+      algorithm,
+      position,
+      byteLength: checksumLength as 1 | 2,
+      bigEndian: false,
+      calcStartByte: 0,
+      calcEndByte: position,
+    }))
+  );
 
-  for (const algo of simpleAlgos) {
-    let matchCount = 0;
-
-    for (let i = 0; i < dataPayloads.length; i++) {
-      const data = dataPayloads[i];
-      const expected = expectedChecksums[i];
-
-      const calculated = await calculateChecksum(algo.id, data, 0, data.length);
-      if (calculated === expected) {
-        matchCount++;
-      }
-    }
-
-    const matchRate = (matchCount / dataPayloads.length) * 100;
+  // Results come back in spec order, so this keeps the original preference for
+  // XOR over Sum8 when both clear the bar.
+  for (const result of results) {
+    const matchRate = (result.matchCount / result.totalCount) * 100;
     if (matchRate >= minMatchRate) {
+      const algorithm = simpleAlgos[result.specIndex];
       return {
         frameId,
         position,
         length: checksumLength as 1 | 2,
-        type: algo.type,
+        type: algorithm,
         endianness: 'little',
         includesFrameId,
-        matchCount,
-        totalCount: dataPayloads.length,
+        matchCount: result.matchCount,
+        totalCount: result.totalCount,
         matchRate,
         dataRange: { start: 0, end: position },
-        algorithmName: algo.id.toUpperCase(),
+        algorithmName: algorithm.toUpperCase(),
       };
     }
   }
@@ -508,7 +529,11 @@ async function trySimpleAlgorithms(
 }
 
 /**
- * Try known CRC algorithms using the auto-detect utility.
+ * Try the built-in algorithms via the shared detection engine, before paying for
+ * a polynomial brute force.
+ *
+ * Constrained to this position and length because the caller is already looping
+ * positions per frame ID; the engine's wider search would duplicate that work.
  */
 async function tryKnownCrcAlgorithms(
   frameId: number,
@@ -517,13 +542,17 @@ async function tryKnownCrcAlgorithms(
   checksumLength: number,
   minMatchRate: number
 ): Promise<ChecksumCandidate | null> {
-  const matches = await autoDetectAlgorithm(payloads, {
-    checksumPosition: position,
-    checksumBytes: checksumLength as 1 | 2,
+  const { candidates } = await detectChecksum(payloads, {
+    positions: [position],
+    lengths: [checksumLength as 1 | 2],
+    minMatchRate,
+    // The caller sets its own bar via minMatchRate; take the engine's ranking
+    // but not its confidence floor.
+    minConfidence: 0,
   });
 
-  if (matches.length > 0 && matches[0].matchRate >= minMatchRate) {
-    const match = matches[0];
+  const match = candidates[0];
+  if (match) {
     const algoInfo = CHECKSUM_ALGORITHMS.find(a => a.id === match.algorithm);
 
     return {
@@ -531,12 +560,12 @@ async function tryKnownCrcAlgorithms(
       position,
       length: checksumLength as 1 | 2,
       type: checksumLength === 1 ? 'crc8' : 'crc16',
-      endianness: match.endianness,
+      endianness: match.bigEndian ? 'big' : 'little',
       includesFrameId: false,
       matchCount: match.matchCount,
       totalCount: match.totalCount,
       matchRate: match.matchRate,
-      dataRange: { start: 0, end: position },
+      dataRange: { start: match.calcStartByte, end: match.calcEndByte },
       algorithmName: algoInfo?.name || match.algorithm,
     };
   }

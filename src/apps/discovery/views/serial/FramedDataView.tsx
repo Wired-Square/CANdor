@@ -6,7 +6,6 @@ import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDiscoveryStore, type FrameMessage } from '../../../../stores/discoveryStore';
 import { useDiscoverySerialStore } from '../../../../stores/discoverySerialStore';
-import { useDiscoveryToolboxStore } from '../../../../stores/discoveryToolboxStore';
 import { useDiscoveryUIStore } from '../../../../stores/discoveryUIStore';
 import { getCaptureFramesPaginatedById, getCaptureMetadataById, findCaptureOffsetForTimestamp, type CaptureFrame } from '../../../../api/capture';
 import type { SerialFrameConfig } from '../../../../utils/frameExport';
@@ -19,10 +18,14 @@ import {
 } from './serialTypes';
 import { byteToHex } from '../../../../utils/byteUtils';
 import { formatHumanUs, formatIsoUs, renderDeltaNode } from '../../../../utils/timeFormat';
+import { frameCopyMenuItems, frameInspectMenuItem, menuSeparator } from '../../components/frameContextMenuItems';
+import { useFrameIdFormat } from '../../../../hooks/useFrameIdFormat';
 import FrameDataTable, { type FrameRow } from '../../components/FrameDataTable';
+import ContextMenu, { type ContextMenuItem } from '../../../../components/ContextMenu';
 import { PaginationToolbar, TimelineSection, FRAME_PAGE_SIZE_OPTIONS } from '../../components';
 import ByteExtractionDialog from './ByteExtractionDialog';
 import ChecksumExtractionDialog from './ChecksumExtractionDialog';
+import { configFromSerialChecksum, serialChecksumFromConfig } from './checksumConfig';
 import { bgDataToolbar, borderDataView, bgSurface, textSecondary, borderDefault } from '../../../../styles';
 import { pageCount, pageForOffset, resolvePageSize } from "../../../../utils/pageSize";
 import type { TimeDisplayFormat } from "../../../../types/common";
@@ -239,40 +242,41 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
   const [showSrcDialog, setShowSrcDialog] = useState(false);
   const [showChecksumDialog, setShowChecksumDialog] = useState(false);
 
-  // Get serial payload analysis results from toolbox store for checksum suggestions
-  const serialPayloadResults = useDiscoveryToolboxStore((s) => s.toolbox.serialPayloadResults);
+  // Row context menu — the home of the Inspect action that used to be a per-row
+  // calculator icon. Mirrors the Frames and Filtered tabs so all three agree.
+  const { format: formatId } = useFrameIdFormat();
+  const [contextMenu, setContextMenu] = useState<{
+    frame: FrameRow;
+    position: { x: number; y: number };
+  } | null>(null);
 
-  // Derive suggested checksum config from serial payload analysis results
-  const suggestedChecksumConfig = useMemo((): ChecksumConfig | null => {
-    const analysisResult = serialPayloadResults?.analysisResult;
-    if (!analysisResult?.candidateChecksums?.length) return null;
+  const handleContextMenu = useCallback((frame: FrameRow, position: { x: number; y: number }) => {
+    setContextMenu({ frame, position });
+  }, []);
 
-    // Find the best candidate (highest match rate, must be >= 80%)
-    const bestCandidate = analysisResult.candidateChecksums[0];
-    if (!bestCandidate || bestCandidate.matchRate < 80) return null;
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
-    return {
-      startByte: bestCandidate.position,
-      numBytes: bestCandidate.length,
-      endianness: 'big', // Default to big-endian for checksums
-      algorithm: bestCandidate.algorithm,
-      calcStartByte: bestCandidate.calcStartByte,
-      calcEndByte: bestCandidate.calcEndByte,
-    };
-  }, [serialPayloadResults]);
+  // Serial frames only carry an id when a field has been declared for one, so
+  // Copy ID is offered on the same condition the column is.
+  const showIdColumn =
+    idConfig !== null ||
+    (serialConfig?.frame_id_start_byte !== undefined && serialConfig?.frame_id_bytes !== undefined);
+
+  const contextMenuItems: ContextMenuItem[] = useMemo(() => {
+    if (!contextMenu) return [];
+    const { frame } = contextMenu;
+    return [
+      ...frameCopyMenuItems({ frame, t, formatId, includeId: showIdColumn }),
+      menuSeparator,
+      frameInspectMenuItem(frame, t),
+    ];
+  }, [contextMenu, showIdColumn, formatId, t]);
 
   // Sync checksum config from store's serialConfig when it changes
   // (ID and source configs are read directly from serial store, not synced)
   useEffect(() => {
     if (serialConfig?.checksum) {
-      setChecksumConfig({
-        startByte: serialConfig.checksum.start_byte,
-        numBytes: serialConfig.checksum.byte_length,
-        endianness: 'big', // Checksums are typically big-endian
-        algorithm: serialConfig.checksum.algorithm as DiscoveryChecksumAlgorithm,
-        calcStartByte: serialConfig.checksum.calc_start_byte,
-        calcEndByte: serialConfig.checksum.calc_end_byte,
-      });
+      setChecksumConfig(configFromSerialChecksum(serialConfig.checksum));
     } else if (!serialConfig) {
       setChecksumConfig(null);
     }
@@ -366,11 +370,24 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
     ? backendFrames.some(f => f.source_address !== undefined)
     : frames.some(f => f.source_address !== undefined);
 
-  // Sample frames for the dialog (more for checksum detection)
+  // Sample frames for the byte-extraction dialogs, which only render 5 preview
+  // rows — the current page is a fine source for that.
   const sampleFrames = useMemo(() => {
     const sourcFrames = useBackendBuffer ? backendFrames : completeFrames;
     return sourcFrames.slice(0, 50).map(f => f.bytes);
   }, [useBackendBuffer, backendFrames, completeFrames]);
+
+  /**
+   * Byte just past each declared header field. Hints for where the checksummed
+   * range might start — they widen the search, never narrow it.
+   */
+  const headerBoundaries = useMemo(() => {
+    const boundaries: number[] = [];
+    for (const cfg of [idConfig, srcConfig]) {
+      if (cfg && cfg.startByte >= 0) boundaries.push(cfg.startByte + cfg.numBytes);
+    }
+    return boundaries;
+  }, [idConfig, srcConfig]);
 
   const totalPages = pageCount(totalFrames, effectivePageSize);
 
@@ -476,15 +493,10 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
       serialConfigToSave.source_address_byte_order = srcConfig.endianness;
     }
 
-    // Add checksum config
+    // Add checksum config (null for the 'unknown' placeholder, which no
+    // catalogue can decode)
     if (checksumConfig) {
-      serialConfigToSave.checksum = {
-        algorithm: checksumConfig.algorithm,
-        start_byte: checksumConfig.startByte,
-        byte_length: checksumConfig.numBytes,
-        calc_start_byte: checksumConfig.calcStartByte,
-        calc_end_byte: checksumConfig.calcEndByte,
-      };
+      serialConfigToSave.checksum = serialChecksumFromConfig(checksumConfig) ?? undefined;
     }
 
     onAccept(serialConfigToSave);
@@ -672,8 +684,17 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
         showBus={showBusColumn}
         autoFit={pageSizeSetting === "auto"}
         onFitChange={setAutoRows}
-        showId={idConfig !== null || (serialConfig?.frame_id_start_byte !== undefined && serialConfig?.frame_id_bytes !== undefined)}
+        showId={showIdColumn}
+        onContextMenu={handleContextMenu}
       />
+
+      {contextMenu && (
+        <ContextMenu
+          items={contextMenuItems}
+          position={contextMenu.position}
+          onClose={closeContextMenu}
+        />
+      )}
 
       {/* Extraction Dialogs */}
       <ByteExtractionDialog
@@ -700,7 +721,10 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
         isOpen={showChecksumDialog}
         onClose={() => setShowChecksumDialog(false)}
         sampleFrames={sampleFrames}
-        initialConfig={checksumConfig ?? suggestedChecksumConfig}
+        captureId={framedCaptureId}
+        captureFrameCount={backendFrameCount}
+        initialConfig={checksumConfig}
+        headerBoundaries={headerBoundaries}
         onApply={handleApplyChecksumConfig}
         onClear={checksumConfig ? handleClearChecksumConfig : undefined}
       />
