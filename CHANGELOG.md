@@ -10,6 +10,10 @@ All notable changes to WireTAP will be documented in this file.
 
 ### Fixed
 
+- **Stopping a serial session keeps you in the serial view.** Stopping a session that had framing applied to it switched to a frame table labelled "CAN", showing the serial data as though it were something else, and the raw bytes became unreachable. Stopping now leaves the view where it was. The label on a stopped capture also reads what the data actually is — serial, or Modbus — instead of always saying CAN.
+
+- **The ASCII column fits its data.** It was a fixed width that suited 8-byte CAN frames and nothing longer, so serial frames wrapped mid-text and ran into the neighbouring column. It now sizes to the widest frame on the page, in every view that offers the column.
+
 - **Raw serial bytes now appear on screen.** A serial source connected with no framing captured its bytes correctly and displayed nothing, leaving Discovery's Raw Bytes view on "Waiting for serial data…" for the whole session. The bytes show up live as they arrive, and page and scrub after the stream stops. Choosing a framing mode before connecting is no longer a workaround you need, and changing framing mid-session now fills the Framed tab from what has already been captured. Sessions recorded by earlier versions are unaffected — their bytes were always saved, so old captures open and display normally.
 
 - **The Serial Payload tool is reachable again for sources that frame their own data.** A serial source doing SLIP framing hands over complete messages and never emits a raw byte stream, and the Tools menu was hiding both serial tools from exactly those sessions — so the tool written for framed serial data was unreachable whenever the framing worked. Serial Payload now appears whenever the session speaks serial and has frames to analyse. Serial Framing still appears only when there are raw bytes to frame, which is the data it actually works on.

@@ -76,6 +76,16 @@ struct CaptureRegistry {
 A capture can be in both sets (live capture being rendered), either one, or
 neither (e.g. an orphaned capture that nothing is viewing).
 
+**A session owns captures it never streamed into.** `apply_framing_to_capture`
+derives a `Frames` capture from a `Bytes` one and assigns it to the session so it
+is cleaned up with it, but creates it *inactive* — it is a result, not a write
+target. Anything asking "what is this session's capture?" must therefore go
+through `get_session_streaming_capture_ids`, not `get_session_capture_ids`:
+choosing by ownership alone picks the derived capture, and a raw serial session
+then looks like a frames session the moment client-side framing runs. That is
+what `stop_and_switch_to_capture` does before stopping the source — after
+`stop()` the captures are finalised and `streaming_ids` is empty.
+
 This split replaced the old `Option<String>` globals that caused cross-session
 contamination when two sessions ran concurrently (see git commit `a320fb8`).
 
