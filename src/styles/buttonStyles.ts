@@ -345,8 +345,10 @@ export function tabCountColorClass(color: 'green' | 'purple' | 'gray' | 'orange'
 /**
  * Small icon button for tables - bookmark, calculator buttons
  */
+// inline-flex, not the default inline: a baseline-aligned button reserves descender
+// space and makes its row taller than the text rows beside it.
 export const tableIconButtonDark =
-  "p-0.5 rounded hover:bg-[var(--hover-bg)] transition-colors";
+  "inline-flex p-0.5 rounded hover:bg-[var(--hover-bg)] transition-colors";
 
 // =============================================================================
 // Icon Button Hover Styles (for toolbar/card action buttons)

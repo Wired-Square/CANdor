@@ -36,51 +36,16 @@ export function bytesToAscii(bytes: number[]): string {
   return bytes.map(byteToAscii).join('');
 }
 
-/** Width of the "ASCII" column header, the floor for an empty or all-empty page. */
-export const ASCII_COLUMN_MIN_CHARS = 5;
-/** CAN FD's 64 bytes plus the two pipes — the widest the column is allowed to get. */
-export const ASCII_COLUMN_MAX_CHARS = 66;
-
 /**
- * Characters needed by the widest ASCII cell in `frames` — the payload plus the two
- * delimiting pipes.
- *
- * The column used to be a fixed 8rem, which fits about fifteen characters: fine for
- * CAN's 8 bytes, but serial frames run to 20 and beyond, so the cell wrapped mid-string
- * and ran into its neighbour. Sizing to the page's widest row fixes that, and the cap
- * keeps a pathological frame (SLIP has no length limit) from squeezing the flexible Data
- * column to nothing — past the cap the cell wraps, as it always did.
+ * Characters in the widest hex run on this page: two per byte, single-spaced.
+ * The frame table pads every row's hex to this to keep the ASCII behind it aligned.
  */
-export function asciiColumnChars(frames: readonly { bytes: number[] }[]): number {
-  return Math.min(
-    Math.max(widestPayload(frames) + 2, ASCII_COLUMN_MIN_CHARS),
-    ASCII_COLUMN_MAX_CHARS
-  );
-}
-
-/** Width of the "Data" column header, the floor for an empty page. */
-export const DATA_COLUMN_MIN_CHARS = 4;
-
-/**
- * Characters needed by the widest hex cell in `frames`: two per byte, single-spaced.
- *
- * Data used to be the table's one flexible column, absorbing whatever the fixed columns
- * left over. That reads fine on a wide window and fails on a narrow one — the cell is
- * squeezed below its content and the hex, which must not wrap, spills over the column
- * beside it. Giving it a real width instead lets the table outgrow its container and
- * scroll, which is what keeps a row on one line at any window size.
- */
-export function dataColumnChars(frames: readonly { bytes: number[] }[]): number {
-  const widest = widestPayload(frames);
-  return Math.max(widest > 0 ? widest * 3 - 1 : 0, DATA_COLUMN_MIN_CHARS);
-}
-
-function widestPayload(frames: readonly { bytes: number[] }[]): number {
+export function hexRunChars(frames: readonly { bytes: number[] }[]): number {
   let widest = 0;
   for (const frame of frames) {
     if (frame.bytes.length > widest) widest = frame.bytes.length;
   }
-  return widest;
+  return widest > 0 ? widest * 3 - 1 : 0;
 }
 
 /**

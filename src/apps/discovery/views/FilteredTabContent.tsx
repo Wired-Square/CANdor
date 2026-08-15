@@ -24,10 +24,11 @@ import type { CaptureMetadata } from "../../../api/capture";
 import { formatIsoUs, formatHumanUs, renderDeltaNode } from "../../../utils/timeFormat";
 import type React from "react";
 import { pageCount, resolvePageSize, type PageSize } from "../../../utils/pageSize";
+import type { TimeDisplayFormat } from "../../../types/common";
 
 type Props = {
   displayFrameIdFormat: "hex" | "decimal";
-  displayTimeFormat: "delta-last" | "delta-start" | "timestamp" | "human";
+  displayTimeFormat: TimeDisplayFormat;
   isStreaming: boolean;
   streamStartTimeUs?: number | null;
   captureMetadata?: CaptureMetadata | null;
@@ -318,6 +319,7 @@ export default function FilteredTabContent({
         />
       )}
       <FrameDataTable
+        displayTimeFormat={displayTimeFormat}
         frames={displayFrames}
         formatTime={formatTime}
         showRef={showRefColumn}

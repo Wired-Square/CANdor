@@ -36,6 +36,7 @@ import { useSessionStore } from "../../../stores/sessionStore";
 import type { FrameRow } from "../components/FrameDataTable";
 import BulkAddToTransmitDialog from "../../../dialogs/BulkAddToTransmitDialog";
 import ReplayDialog from "../../../dialogs/ReplayDialog";
+import type { TimeDisplayFormat } from "../../../types/common";
 
 const DEFAULT_SPEED_OPTIONS: PlaybackSpeed[] = [0.125, 0.25, 0.5, 1, 2, 10, 30, 60];
 
@@ -46,7 +47,7 @@ type Props = {
   sessionId?: string | null;
   protocol: string;
   displayFrameIdFormat: "hex" | "decimal";
-  displayTimeFormat: "delta-last" | "delta-start" | "timestamp" | "human";
+  displayTimeFormat: TimeDisplayFormat;
   onBookmark?: (frameId: number, timestampUs: number) => void;
   isStreaming?: boolean;
 
@@ -995,6 +996,7 @@ function DiscoveryFramesView({
             />
           )}
           <FrameDataTable
+            displayTimeFormat={displayTimeFormat}
             ref={scrollRef}
             frames={visibleFrames}
             formatTime={formatTime}

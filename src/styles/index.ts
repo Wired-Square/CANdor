@@ -21,3 +21,6 @@ export * from './typography';
 
 // Spacing constants (padding, gaps, margins)
 export * from './spacing';
+
+// Monospace data-table metrics (frame tables, serial byte dump)
+export * from './tableStyles';

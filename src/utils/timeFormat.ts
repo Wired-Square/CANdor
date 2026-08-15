@@ -1,6 +1,7 @@
 // ui/src/utils/timeFormat.ts
 
 import React from "react";
+import type { TimeDisplayFormat } from "../types/common";
 
 /**
  * Formats a timestamp in microseconds into ISO-like string with microsecond precision.
@@ -158,3 +159,17 @@ export function formatFilenameDate(date: Date = new Date()): string {
   const minutes = String(date.getMinutes()).padStart(2, "0");
   return `${year}${month}${day}-${hours}${minutes}`;
 }
+
+/**
+ * Characters the widest value of each time format needs, for sizing a Time column. A
+ * column sized for the ISO timestamp is nearly twice what a delta needs, and the slack
+ * shows up as a gap between Time and whatever column follows it.
+ *
+ * Pinned to the formatters above by `timeColumnWidths` in the tests.
+ */
+export const TIME_COLUMN_CHARS: Record<TimeDisplayFormat, number> = {
+  timestamp: 27, // 2026-08-15T21:47:03.123456Z
+  human: 26, // 2026-08-15 21:47:03.123456
+  "delta-last": 16, // 1234.567s 999\u00b5s
+  "delta-start": 16,
+};

@@ -7,9 +7,10 @@ import { ReactNode, forwardRef, useRef, useEffect, useCallback, type MouseEvent 
 import { useAutoRowCount } from '../../../hooks/useAutoRowCount';
 import { useFrameIdFormat } from '../../../hooks/useFrameIdFormat';
 import { sendHexDataToCalculator } from '../../../utils/windowCommunication';
-import { bytesToHex, bytesToAscii, asciiColumnChars, dataColumnChars } from '../../../utils/byteUtils';
+import { bytesToHex, bytesToAscii, hexRunChars } from '../../../utils/byteUtils';
 import { frameRowKey } from '../../../utils/frameKey';
-import { formatHumanUs } from '../../../utils/timeFormat';
+import { formatHumanUs, TIME_COLUMN_CHARS } from '../../../utils/timeFormat';
+import type { TimeDisplayFormat } from '../../../types/common';
 import {
   bgDataView,
   borderDataView,
@@ -25,10 +26,15 @@ import {
   bgCyan,
 } from '../../../styles';
 import { emptyStateContainer, emptyStateText } from '../../../styles/typography';
+import { dataTableContainer, dataCell, dataHeaderCell } from '../../../styles/tableStyles';
 import { tableIconButtonDark } from '../../../styles/buttonStyles';
 
 /** Height of the spacer below the rows, in px. */
 const RESERVED_PX = 32;
+
+/** Cells holding only an icon button — tighter horizontally, same height. */
+const dataCellIcon = 'px-1 py-0.5';
+const dataHeaderCellIcon = `px-1 py-1.5 border-b ${borderDataView}`;
 
 // ============================================================================
 // Types
@@ -96,6 +102,9 @@ export interface FrameDataTableProps {
   renderRowStatus?: (frame: FrameRow, index: number) => ReactNode;
   /** Whether to use local timezone for tooltip timestamps */
   useLocalTimezone?: boolean;
+  /** Time format in use, so the Time column is sized to it rather than to the widest
+   *  format there is. Defaults to the widest. */
+  displayTimeFormat?: TimeDisplayFormat;
   /**
    * Measure how many rows fit and report it, for callers sizing their page to the panel.
    *
@@ -189,6 +198,7 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
   captureIndices,
   renderRowStatus,
   useLocalTimezone = false,
+  displayTimeFormat = 'timestamp',
   autoFit = false,
   onFitChange,
 }, ref) => {
@@ -217,6 +227,8 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
   useEffect(() => {
     if (autoFit && !isMeasured) remeasure();
   }, [autoFit, isMeasured, remeasure, frames.length]);
+  const hexChars = showAscii ? hexRunChars(frames) : 0;
+
   const wasAtBottom = useRef(true);
   const highlightedRowRef = useRef<HTMLTableRowElement>(null);
 
@@ -304,66 +316,62 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
   return (
     <div
       ref={ref || internalRef}
-      className={`flex-1 min-h-0 overflow-auto font-mono text-xs ${bgDataView}`}
+      className={`${dataTableContainer} ${bgDataView}`}
       onScroll={handleScroll}
     >
       <IconSprites />
       {/*
         `table-fixed` + <colgroup> keeps column widths independent of the rows on the
-        current page, so toggling #/Bus/ASCII (or paging to frames with wider payloads)
-        is a repaint rather than a full re-solve of every column.
+        current page, so toggling #/Bus (or paging to frames with wider payloads) is a
+        repaint rather than a full re-solve of every column. Data carries no width: it is
+        the sole flexible column and absorbs whatever is left over.
 
-        Data and ASCII take their widths from the rows, because payload length spans two
-        orders of magnitude across protocols and no fixed width serves both an 8-byte CAN
-        frame and a 256-byte serial one. Monospace, so `ch` is exact. Every column then
-        has a width, which is what lets `w-max` size the table to their sum: on a narrow
-        window it outgrows the container and scrolls rather than squeezing Data under its
-        content, where the hex would spill over the column beside it. `min-w-full` keeps
-        it filling a wide one.
+        ASCII rides in the Data cell rather than a column of its own, because a column
+        cannot move: payload length spans two orders of magnitude across protocols, and
+        the pair has to sit side by side when there is room and stack when there is not.
+        As two non-breaking spans in one cell they do exactly that, and padding the hex to
+        the page's widest run (`hexRunChars`) keeps the ASCII behind it in a straight
+        gutter rather than stepping in and out with each frame's length.
       */}
-      <table className="min-w-full w-max table-fixed">
+      <table className="w-full table-fixed">
         <colgroup>
           {renderRowStatus && <col className="w-8" />}
           {onBookmark && <col className="w-7" />}
           {showRef && <col className="w-16" />}
-          <col className="w-56" />
+          <col style={{ width: `calc(${TIME_COLUMN_CHARS[displayTimeFormat]}ch + 1rem)` }} />
           {showId && <col className="w-24" />}
           {showBus && <col className="w-12" />}
           {showSourceAddress && <col className="w-20" />}
           <col className="w-12" />
           {showCalculator && <col className="w-7" />}
-          <col style={{ width: `calc(${dataColumnChars(frames)}ch + 1rem)` }} />
-          {showAscii && <col style={{ width: `calc(${asciiColumnChars(frames)}ch + 1rem)` }} />}
+          <col />
         </colgroup>
         <thead className={`sticky top-0 z-10 ${bgDataView} ${textDataSecondary}`}>
           <tr onContextMenu={onHeaderContextMenu ? (e) => { e.preventDefault(); onHeaderContextMenu({ x: e.clientX, y: e.clientY }); } : undefined}>
             {renderRowStatus && (
-              <th className={`px-1 py-1.5 border-b ${borderDataView}`}></th>
+              <th className={`${dataHeaderCellIcon}`}></th>
             )}
             {onBookmark && (
-              <th className={`px-1 py-1.5 border-b ${borderDataView}`}></th>
+              <th className={`${dataHeaderCellIcon}`}></th>
             )}
             {showRef && (
-              <th className={`text-right px-2 py-1.5 border-b ${borderDataView} ${textDataSecondary}`}>#</th>
+              <th className={`text-right ${dataHeaderCell} ${textDataSecondary}`}>#</th>
             )}
-            <th className={`text-left px-2 py-1.5 border-b ${borderDataView}`}>Time</th>
+            <th className={`text-left ${dataHeaderCell}`}>Time</th>
             {showId && (
-              <th className={`text-right px-2 py-1.5 border-b ${borderDataView}`}>ID</th>
+              <th className={`text-right ${dataHeaderCell}`}>ID</th>
             )}
             {showBus && (
-              <th className={`text-center px-2 py-1.5 border-b ${borderDataView} ${textDataCyan}`}>Bus</th>
+              <th className={`text-center ${dataHeaderCell} ${textDataCyan}`}>Bus</th>
             )}
             {showSourceAddress && (
-              <th className={`text-right px-2 py-1.5 border-b ${borderDataView} ${textDataPurple}`}>Source</th>
+              <th className={`text-right ${dataHeaderCell} ${textDataPurple}`}>Source</th>
             )}
-            <th className={`text-left px-2 py-1.5 border-b ${borderDataView}`}>Len</th>
+            <th className={`text-left ${dataHeaderCell}`}>Len</th>
             {showCalculator && (
-              <th className={`px-1 py-1.5 border-b ${borderDataView}`}></th>
+              <th className={`${dataHeaderCellIcon}`}></th>
             )}
-            <th className={`text-left px-2 py-1.5 border-b ${borderDataView}`}>Data</th>
-            {showAscii && (
-              <th className={`text-left px-2 py-1.5 border-b ${borderDataView}`}>ASCII</th>
-            )}
+            <th className={`text-left ${dataHeaderCell}`}>Data</th>
           </tr>
         </thead>
         <tbody onClick={handleBodyClick} onContextMenu={handleBodyContextMenu}>
@@ -384,63 +392,74 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
                 title={`Frame ${displayIndex}${frame.incomplete ? ' - Incomplete (no delimiter found)' : ''}`}
               >
                 {renderRowStatus && (
-                  <td className={`px-1 py-0.5 ${cellHighlight}`}>
+                  <td className={`${dataCellIcon} ${cellHighlight}`}>
                     {renderRowStatus(frame, idx)}
                   </td>
                 )}
                 {onBookmark && (
-                  <td className={`px-1 py-0.5 ${cellHighlight}`}>
+                  <td className={`${dataCellIcon} ${cellHighlight}`}>
                     <button data-action="bookmark" className={tableIconButtonDark} title="Add bookmark at this frame's time">
                       <UseIcon id="fdt-bookmark" className={`w-3 h-3 ${textDataAmber}`} />
                     </button>
                   </td>
                 )}
                 {showRef && (
-                  <td className={`px-2 py-0.5 text-right tabular-nums ${textDataTertiary} ${cellHighlight}`}>
+                  <td className={`${dataCell} text-right tabular-nums ${textDataTertiary} ${cellHighlight}`}>
                     {displayIndex.toLocaleString()}
                   </td>
                 )}
                 <td
-                  className={`px-2 py-0.5 ${cellHighlight}`}
+                  className={`${dataCell} ${cellHighlight}`}
                   title={formatHumanUs(frame.timestamp_us, useLocalTimezone)}
                 >
                   <span className={textDataTertiary}>{formatTime(frame.timestamp_us, prevFrame?.timestamp_us ?? null)}</span>
                 </td>
                 {showId && (
-                  <td className={`px-2 py-0.5 text-right ${frame.incomplete ? textDataOrange : textDataYellow} ${cellHighlight}`}>
+                  <td className={`${dataCell} text-right ${frame.incomplete ? textDataOrange : textDataYellow} ${cellHighlight}`}>
                     {formatId(frame.frame_id, frame.is_extended)}
                     {frame.incomplete && <span className={`ml-1 ${textDataOrange}`}>?</span>}
                   </td>
                 )}
                 {showBus && (
-                  <td className={`px-2 py-0.5 text-center ${textDataCyan} ${cellHighlight}`}>
+                  <td className={`${dataCell} text-center ${textDataCyan} ${cellHighlight}`}>
                     {frame.bus ?? 0}
                   </td>
                 )}
                 {showSourceAddress && (
-                  <td className={`px-2 py-0.5 text-right ${textDataPurple} ${cellHighlight}`}>
+                  <td className={`${dataCell} text-right ${textDataPurple} ${cellHighlight}`}>
                     {frame.source_address !== undefined
                       ? `0x${frame.source_address.toString(16).toUpperCase().padStart(srcPadding, '0')}`
                       : '-'
                     }
                   </td>
                 )}
-                <td className={`px-2 py-0.5 ${textDataSecondary} ${cellHighlight}`}>{frame.dlc}</td>
+                <td className={`${dataCell} ${textDataSecondary} ${cellHighlight}`}>{frame.dlc}</td>
                 {showCalculator && (
-                  <td className={`px-1 py-0.5 ${cellHighlight}`}>
+                  <td className={`${dataCellIcon} ${cellHighlight}`}>
                     <button data-action="calculator" className={tableIconButtonDark} title="Send to Frame Calculator">
                       <UseIcon id="fdt-calculator" className={`w-3 h-3 ${textDataOrange}`} />
                     </button>
                   </td>
                 )}
-                <td className={`px-2 py-0.5 ${cellHighlight}`}>
-                  {renderBytes ? renderBytes(frame) : <DefaultBytes frame={frame} />}
+                <td className={`${dataCell} ${cellHighlight}`}>
+                  {showAscii ? (
+                    <>
+                      {/* Two non-breaking units with one space between them, so the only
+                          place the line can break is before the ASCII. */}
+                      <span
+                        className="inline-block whitespace-nowrap"
+                        style={{ minWidth: `${hexChars}ch` }}
+                      >
+                        {renderBytes ? renderBytes(frame) : <DefaultBytes frame={frame} />}
+                      </span>{' '}
+                      <span className={`whitespace-nowrap ${textDataYellow}`}>
+                        |{bytesToAscii(frame.bytes)}|
+                      </span>
+                    </>
+                  ) : (
+                    renderBytes ? renderBytes(frame) : <DefaultBytes frame={frame} />
+                  )}
                 </td>
-                {showAscii && (
-                  <td className={`px-2 py-0.5 ${textDataYellow} break-all ${cellHighlight}`}>
-                    |{bytesToAscii(frame.bytes)}|
-                  </td>
-                )}
               </tr>
             );
           })}

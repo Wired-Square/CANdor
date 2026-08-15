@@ -259,6 +259,7 @@ export default function TransmitHistoryView({ sessionId }: TransmitHistoryViewPr
 
           {/* Frame table — matches Discovery Frames styling */}
           <FrameDataTable
+            displayTimeFormat={timestampFormat}
             frames={frameRows}
             formatTime={formatTimestamp}
             showCalculator={false}

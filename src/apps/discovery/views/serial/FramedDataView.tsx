@@ -25,6 +25,7 @@ import ByteExtractionDialog from './ByteExtractionDialog';
 import ChecksumExtractionDialog from './ChecksumExtractionDialog';
 import { bgDataToolbar, borderDataView, bgSurface, textSecondary, borderDefault } from '../../../../styles';
 import { pageCount, pageForOffset, resolvePageSize } from "../../../../utils/pageSize";
+import type { TimeDisplayFormat } from "../../../../types/common";
 
 // ============================================================================
 // Extraction Badge
@@ -194,7 +195,7 @@ interface FramedDataViewProps {
   onClearSourceMapping?: () => void;
   accepted: boolean;
   framingMode?: string;
-  displayTimeFormat?: 'delta-last' | 'delta-start' | 'timestamp' | 'human';
+  displayTimeFormat?: TimeDisplayFormat;
   isStreaming?: boolean;
 }
 
@@ -660,6 +661,7 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
 
       {/* Frame Table */}
       <FrameDataTable
+        displayTimeFormat={displayTimeFormat}
         frames={processedFrames}
         formatTime={formatTime}
         showSourceAddress={hasSourceAddresses}

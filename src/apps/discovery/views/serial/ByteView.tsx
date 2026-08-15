@@ -14,9 +14,9 @@ import { byteToHex, byteToAscii } from '../../../../utils/byteUtils';
 import { pageCount, pageForOffset, type PageSize } from '../../../../utils/pageSize';
 import { formatHumanUs, formatIsoUs, renderDeltaNode } from '../../../../utils/timeFormat';
 import { PaginationToolbar, TimelineSection, BYTE_PAGE_SIZE_OPTIONS } from '../../components';
+import { dataTableContainer, dataCell, dataHeaderCell } from '../../../../styles/tableStyles';
 import {
   bgDataView,
-  borderDataView,
   textDataSecondary,
   textDataTertiary,
   hoverDataRow,
@@ -349,7 +349,7 @@ export default function ByteView({ viewConfig, autoScroll = true, displayTimeFor
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className={`flex-1 overflow-auto font-mono text-xs ${bgDataView}`}
+        className={`${dataTableContainer} ${bgDataView}`}
       >
         {lines.length === 0 ? (
           <div className={`${textDataTertiary} text-center py-8`}>
@@ -360,28 +360,28 @@ export default function ByteView({ viewConfig, autoScroll = true, displayTimeFor
             <table className="w-full">
               <thead className={`sticky top-0 z-10 ${bgDataView} ${textDataSecondary} shadow-sm`}>
                 <tr>
-                  <th className={`text-left px-2 py-1.5 border-b ${borderDataView}`}>{t("serial.headerTime")}</th>
-                  {showBusColumn && <th className={`text-left px-2 py-1.5 border-b ${borderDataView}`}>{t("serial.headerBus")}</th>}
-                  <th className={`text-left px-2 py-1.5 border-b ${borderDataView}`}>{t("serial.headerHex")}</th>
-                  {showAsciiColumn && <th className={`text-left px-2 py-1.5 border-b ${borderDataView}`}>{t("serial.headerAscii")}</th>}
+                  <th className={`text-left ${dataHeaderCell}`}>{t("serial.headerTime")}</th>
+                  {showBusColumn && <th className={`text-left ${dataHeaderCell}`}>{t("serial.headerBus")}</th>}
+                  <th className={`text-left ${dataHeaderCell}`}>{t("serial.headerHex")}</th>
+                  {showAsciiColumn && <th className={`text-left ${dataHeaderCell}`}>{t("serial.headerAscii")}</th>}
                 </tr>
               </thead>
               <tbody>
                 {lines.map((line, i) => (
                   <tr key={line.timestampUs ?? i} className={hoverDataRow}>
                     <td
-                      className={`${textDataTertiary} px-2 py-0.5 whitespace-nowrap`}
+                      className={`${textDataTertiary} ${dataCell} whitespace-nowrap`}
                       title={line.timestampUs !== null ? formatHumanUs(line.timestampUs) : undefined}
                     >
                       {line.timestamp}
                     </td>
                     {showBusColumn && (
-                      <td className={`${textDataCyan} px-2 py-0.5 whitespace-nowrap`}>
+                      <td className={`${textDataCyan} ${dataCell} whitespace-nowrap`}>
                         {line.bus !== null ? line.bus : ''}
                       </td>
                     )}
-                    <td className={`${textDataGreen} px-2 py-0.5 whitespace-nowrap`}>{line.hex}</td>
-                    {showAsciiColumn && <td className={`${textDataYellow} px-2 py-0.5 whitespace-nowrap`}>|{line.ascii}|</td>}
+                    <td className={`${textDataGreen} ${dataCell} whitespace-nowrap`}>{line.hex}</td>
+                    {showAsciiColumn && <td className={`${textDataYellow} ${dataCell} whitespace-nowrap`}>|{line.ascii}|</td>}
                   </tr>
                 ))}
               </tbody>
