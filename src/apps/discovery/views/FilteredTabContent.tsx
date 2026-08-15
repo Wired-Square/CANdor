@@ -23,6 +23,7 @@ import type { FrameRow } from "../components";
 import type { CaptureMetadata } from "../../../api/capture";
 import { formatIsoUs, formatHumanUs, renderDeltaNode } from "../../../utils/timeFormat";
 import type React from "react";
+import { PAGE_SIZE_AUTO, isAutoPageSize, resolvePageSize } from "../../../utils/pageSize";
 
 type Props = {
   displayFrameIdFormat: "hex" | "decimal";
@@ -59,7 +60,12 @@ export default function FilteredTabContent({
   const toggleShowBusColumn = useDiscoveryUIStore((s) => s.toggleShowBusColumn);
 
   const [currentPage, setCurrentPage] = useState(0);
-  const [pageSize, setPageSize] = useState(50);
+  // Auto by default; the table measures itself and reports how many rows fit. Everything
+  // below uses the resolved number — the raw setting is a sentinel and would go straight
+  // into an offset otherwise.
+  const [pageSizeSetting, setPageSizeSetting] = useState(PAGE_SIZE_AUTO);
+  const [autoRows, setAutoRows] = useState(0);
+  const pageSize = resolvePageSize(pageSizeSetting, autoRows);
 
   // Buffer mode state
   const [bufferFrames, setBufferFrames] = useState<FrameRow[]>([]);
@@ -186,6 +192,7 @@ export default function FilteredTabContent({
   // Buffer mode: fetch filtered-out frames from backend
   useEffect(() => {
     if (!captureMode.enabled || isStreaming || filteredOutIds.length === 0) return;
+    if (pageSize <= 0) return; // auto size not measured yet
 
     let cancelled = false;
     const fetchPage = async () => {
@@ -238,7 +245,7 @@ export default function FilteredTabContent({
   const loading = captureMode.enabled ? bufferLoading : false;
 
   const handlePageSizeChange = useCallback((size: number) => {
-    setPageSize(size);
+    setPageSizeSetting(size);
     setCurrentPage(0);
   }, []);
 
@@ -299,8 +306,9 @@ export default function FilteredTabContent({
         <PaginationToolbar
           currentPage={currentPage}
           totalPages={totalPages}
-          pageSize={pageSize}
+          pageSize={pageSizeSetting}
           pageSizeOptions={FRAME_PAGE_SIZE_OPTIONS}
+          allowAuto
           onPageChange={setCurrentPage}
           onPageSizeChange={handlePageSizeChange}
           isLoading={loading}
@@ -314,6 +322,8 @@ export default function FilteredTabContent({
         showAscii={showAsciiColumn}
         showBus={showBusColumn}
         showSourceAddress={showSourceColumn}
+        autoFit={isAutoPageSize(pageSizeSetting)}
+        onFitChange={setAutoRows}
         emptyMessage={loading ? "Loading filtered frames..." : "No filtered frames to display"}
         onContextMenu={handleContextMenu}
         onHeaderContextMenu={handleHeaderContextMenu}

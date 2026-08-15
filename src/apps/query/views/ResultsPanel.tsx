@@ -3,7 +3,7 @@
 // Results display panel. Shows query results in a timeline view with
 // click-to-ingest functionality. Supports grouped results by query.
 
-import { useCallback, useState, useMemo, useEffect } from "react";
+import { useCallback, useState, useMemo, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { PlayCircle, Download, AlertCircle, Database, Bookmark, FileDown } from "lucide-react";
 import {
@@ -29,6 +29,8 @@ import { iconButtonBase, buttonBase } from "../../../styles/buttonStyles";
 import { monoBody, emptyStateContainer, emptyStateText, emptyStateHeading, emptyStateDescription } from "../../../styles/typography";
 import { iconSm, iconMd, iconXl } from "../../../styles/spacing";
 import { bgSurface, borderDefault, borderDivider, hoverBg, textPrimary, textSecondary, textMuted, textDataAmber, textDataGreen, textDataPurple, textDataCyan, textDanger } from "../../../styles/colourTokens";
+import { useAutoRowCount } from "../../../hooks/useAutoRowCount";
+import { PAGE_SIZE_AUTO, isAutoPageSize, resolvePageSize } from "../../../utils/pageSize";
 
 interface Props {
   selectedQuery: QueuedQuery | null;
@@ -48,9 +50,19 @@ export default function ResultsPanel({
   const { t } = useTranslation("query");
   const timezone = useSettingsStore((s) => s.display.timezone);
 
-  // Pagination state
+  // Pagination state. Auto by default — this list is div-based rather than a table, so
+  // it measures itself directly instead of going through FrameDataTable.
   const [currentPage, setCurrentPage] = useState(0);
-  const [pageSize, setPageSize] = useState(100);
+  const [pageSizeSetting, setPageSizeSetting] = useState(PAGE_SIZE_AUTO);
+  const resultsScrollRef = useRef<HTMLDivElement | null>(null);
+  const autoFit = useAutoRowCount({
+    containerRef: resultsScrollRef,
+    enabled: isAutoPageSize(pageSizeSetting),
+    rowSelector: "[data-result-row]",
+    // Result rows are taller than a frame row, and vary by query type.
+    fallbackRowHeight: 33,
+  });
+  const pageSize = resolvePageSize(pageSizeSetting, autoFit.rows);
 
   // Extract data from selected query
   const queryType = selectedQuery?.queryType ?? "byte_changes";
@@ -76,8 +88,8 @@ export default function ResultsPanel({
 
     const allResults = results as (ByteChangeResult | FrameChangeResult | MirrorValidationResult | FrequencyBucket | DistributionResult | GapResult | PatternSearchResult)[];
 
-    // If pageSize is -1 (All), show all results
-    if (pageSize === -1) {
+    // Not measured yet, or "All" resolved past the result count — show everything.
+    if (pageSize <= 0 || pageSize >= resultCount) {
       return { paginatedResults: allResults, totalPages: 1 };
     }
 
@@ -358,28 +370,30 @@ export default function ResultsPanel({
       <DataViewPaginationToolbar
         currentPage={currentPage}
         totalPages={totalPages}
-        pageSize={pageSize}
+        pageSize={pageSizeSetting}
         pageSizeOptions={FRAME_PAGE_SIZE_OPTIONS}
+        allowAuto
         onPageChange={setCurrentPage}
         onPageSizeChange={(size) => {
-          setPageSize(size);
+          setPageSizeSetting(size);
           setCurrentPage(0);
         }}
       />
 
       {/* Results list */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto" ref={resultsScrollRef}>
         <div className="divide-y divide-[var(--border-default)]">
           {paginatedResults.map((result, index) => (
-            <ResultRow
-              key={currentPage * pageSize + index}
-              result={result}
-              queryType={queryType}
-              formatTimestamp={formatTimestamp}
-              formatTimestampFull={formatTimestampFull}
-              formatByte={formatByte}
-              onIngest={onIngestEvent}
-            />
+            <div data-result-row key={currentPage * pageSize + index}>
+              <ResultRow
+                result={result}
+                queryType={queryType}
+                formatTimestamp={formatTimestamp}
+                formatTimestampFull={formatTimestampFull}
+                formatByte={formatByte}
+                onIngest={onIngestEvent}
+              />
+            </div>
           ))}
         </div>
       </div>

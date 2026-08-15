@@ -24,6 +24,7 @@ import { PaginationToolbar, TimelineSection, FRAME_PAGE_SIZE_OPTIONS } from '../
 import ByteExtractionDialog from './ByteExtractionDialog';
 import ChecksumExtractionDialog from './ChecksumExtractionDialog';
 import { bgDataToolbar, borderDataView, bgSurface, textSecondary, borderDefault } from '../../../../styles';
+import { isAutoPageSize, resolvePageSize } from "../../../../utils/pageSize";
 
 // ============================================================================
 // Extraction Badge
@@ -205,9 +206,11 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
   // Read serialConfig from store to initialize extraction configs
   const serialConfig = useDiscoveryStore((s) => s.serialConfig);
 
-  // Pagination state from store
-  const pageSize = useDiscoverySerialStore((s) => s.framedPageSize);
+  // Pagination state from store. The stored value may be a sentinel (Auto / All); one
+  // `effectivePageSize` below is the only thing the paging maths may use.
+  const pageSizeSetting = useDiscoverySerialStore((s) => s.framedPageSize);
   const setPageSize = useDiscoverySerialStore((s) => s.setFramedPageSize);
+  const [autoRows, setAutoRows] = useState(0);
 
   // Backend buffer ID and frame count (set when framing is applied in backend)
   const framedCaptureId = useDiscoverySerialStore((s) => s.framedCaptureId);
@@ -308,7 +311,8 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
     const fetchPage = async () => {
       setIsLoadingPage(true);
       try {
-        const effectiveSize = pageSize === -1 ? backendFrameCount : pageSize;
+        const effectiveSize = resolvePageSize(pageSizeSetting, autoRows, backendFrameCount);
+        if (effectiveSize <= 0) return; // auto size not measured yet
         // During streaming, always show the last page (latest frames)
         const offset = isStreaming
           ? Math.max(0, backendFrameCount - effectiveSize)
@@ -340,7 +344,7 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
     };
 
     fetchPage();
-  }, [useBackendBuffer, framedCaptureId, currentPage, pageSize, backendFrameCount, isStreaming, framedDataTrigger]);
+  }, [useBackendBuffer, framedCaptureId, currentPage, pageSizeSetting, autoRows, backendFrameCount, isStreaming, framedDataTrigger]);
 
   // Filter to complete frames only (for prop-based frames)
   const completeFrames = useMemo(() => {
@@ -365,7 +369,7 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
   }, [useBackendBuffer, backendFrames, completeFrames]);
 
   // Pagination calculations
-  const effectivePageSize = pageSize === -1 ? totalFrames : pageSize;
+  const effectivePageSize = resolvePageSize(pageSizeSetting, autoRows, totalFrames);
   const totalPages = effectivePageSize > 0 ? Math.max(1, Math.ceil(totalFrames / effectivePageSize)) : 1;
 
   // Reset page when streaming starts or when frame count changes significantly
@@ -631,8 +635,9 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
         <PaginationToolbar
           currentPage={currentPage}
           totalPages={totalPages}
-          pageSize={pageSize}
+          pageSize={pageSizeSetting}
           pageSizeOptions={FRAME_PAGE_SIZE_OPTIONS}
+          allowAuto
           onPageChange={setCurrentPage}
           onPageSizeChange={(size) => {
             setPageSize(size);
@@ -663,6 +668,8 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
         emptyMessage={isLoadingPage ? t("serial.loadingFrames") : accepted ? t("serial.framingAccepted") : t("serial.applyFramingHint")}
         showAscii={showAsciiColumn}
         showBus={showBusColumn}
+        autoFit={isAutoPageSize(pageSizeSetting)}
+        onFitChange={setAutoRows}
         showId={idConfig !== null || (serialConfig?.frame_id_start_byte !== undefined && serialConfig?.frame_id_bytes !== undefined)}
       />
 

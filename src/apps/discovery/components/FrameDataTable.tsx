@@ -4,6 +4,7 @@
 // Optimised for streaming: SVG sprites, event delegation, stable keys.
 
 import { ReactNode, forwardRef, useRef, useEffect, useCallback, type MouseEvent } from 'react';
+import { useAutoRowCount } from '../../../hooks/useAutoRowCount';
 import { useFrameIdFormat } from '../../../hooks/useFrameIdFormat';
 import { sendHexDataToCalculator } from '../../../utils/windowCommunication';
 import { bytesToHex, bytesToAscii } from '../../../utils/byteUtils';
@@ -25,6 +26,9 @@ import {
 } from '../../../styles';
 import { emptyStateContainer, emptyStateText } from '../../../styles/typography';
 import { tableIconButtonDark } from '../../../styles/buttonStyles';
+
+/** Height of the spacer below the rows, in px. */
+const RESERVED_PX = 32;
 
 // ============================================================================
 // Types
@@ -92,6 +96,16 @@ export interface FrameDataTableProps {
   renderRowStatus?: (frame: FrameRow, index: number) => ReactNode;
   /** Whether to use local timezone for tooltip timestamps */
   useLocalTimezone?: boolean;
+  /**
+   * Measure how many rows fit and report it, for callers sizing their page to the panel.
+   *
+   * The table owns the scroll container, the sticky header and the trailing spacer, so it
+   * is the only thing that can describe its own geometry — a caller would otherwise have
+   * to restate all three and would silently drift when they change here.
+   */
+  autoFit?: boolean;
+  /** Called with the number of rows that fit, when `autoFit` is set. */
+  onFitChange?: (rows: number) => void;
 }
 
 // ============================================================================
@@ -175,10 +189,34 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
   captureIndices,
   renderRowStatus,
   useLocalTimezone = false,
+  autoFit = false,
+  onFitChange,
 }, ref) => {
   const { format: formatId } = useFrameIdFormat();
   const internalRef = useRef<HTMLDivElement>(null);
   const containerRef = (ref as React.RefObject<HTMLDivElement>) || internalRef;
+
+  const autoFitRows = useAutoRowCount({
+    containerRef,
+    enabled: autoFit,
+    rowSelector: "tbody > tr",
+    headerSelector: "thead",
+    reservedPx: RESERVED_PX,
+  });
+
+  const onFitChangeRef = useRef(onFitChange);
+  onFitChangeRef.current = onFitChange;
+  useEffect(() => {
+    if (autoFit && autoFitRows.rows > 0) onFitChangeRef.current?.(autoFitRows.rows);
+  }, [autoFit, autoFitRows.rows]);
+
+  // Re-measure until a real row has been measured — that is what replaces the assumed
+  // row height. Once it has, new data cannot change the fit, so this stops firing and
+  // the live stream doesn't drive a measure pass on every batch.
+  const { isMeasured, remeasure } = autoFitRows;
+  useEffect(() => {
+    if (autoFit && !isMeasured) remeasure();
+  }, [autoFit, isMeasured, remeasure, frames.length]);
   const wasAtBottom = useRef(true);
   const highlightedRowRef = useRef<HTMLTableRowElement>(null);
 
@@ -405,7 +443,7 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
           <p className={emptyStateText}>{emptyMessage}</p>
         </div>
       ) : (
-        <div className="h-8" />
+        <div style={{ height: RESERVED_PX }} />
       )}
     </div>
   );

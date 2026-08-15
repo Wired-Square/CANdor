@@ -13,6 +13,7 @@ import type { FrameInfo } from './discoveryFrameStore';
 import { useDiscoveryToolboxStore } from './discoveryToolboxStore';
 import { useSessionStore } from './sessionStore';
 import type { PlaybackSpeed } from '../components/TimeController';
+import { PAGE_SIZE_ALL, PAGE_SIZE_AUTO } from "../utils/pageSize";
 
 // Re-export PlaybackSpeed for backwards compatibility
 export type { PlaybackSpeed };
@@ -109,7 +110,7 @@ interface DiscoveryUIState {
 export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
   // Initial state
   maxBuffer: 100000,
-  renderBuffer: 20,
+  renderBuffer: PAGE_SIZE_AUTO,
   ioProfile: null,
   playbackSpeed: 1,
   currentTime: null,
@@ -142,7 +143,12 @@ export const useDiscoveryUIStore = create<DiscoveryUIState>((set, get) => ({
   },
 
   setRenderBuffer: (value) => {
-    const clamped = value === -1 ? -1 : Math.min(10000, Math.max(20, value));
+    // Sentinels must pass through untouched — the clamp would otherwise turn Auto into
+    // a literal 20 and the setting would appear to do nothing.
+    const clamped =
+      value === PAGE_SIZE_AUTO || value === PAGE_SIZE_ALL
+        ? value
+        : Math.min(10000, Math.max(20, value));
     set({ renderBuffer: clamped });
   },
 

@@ -10,6 +10,7 @@ import { useDiscoveryUIStore } from "../../../stores/discoveryUIStore";
 import { useDiscoveryToolboxStore } from "../../../stores/discoveryToolboxStore";
 import { type CaptureMetadata, searchCaptureFrames } from "../../../api/capture";
 import { FrameDataTable, type TabDefinition, FRAME_PAGE_SIZE_OPTIONS } from "../components";
+import { isAutoPageSize, resolvePageSize } from "../../../utils/pageSize";
 import DiscoveryFindBar, { type FindSearchMode } from "../components/DiscoveryFindBar";
 import AppTabView from "../../../components/AppTabView";
 import { PlaybackControls, type PlaybackState } from "../../../components/PlaybackControls";
@@ -150,6 +151,9 @@ function DiscoveryFramesView({
 }: Props) {
   const { t } = useTranslation("discovery");
 
+  // The frame table's scroll container — the element the auto page size is measured from.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
   // ── UI store ──
   const renderBuffer = useDiscoveryUIStore((s) => s.renderBuffer);
   const setRenderBuffer = useDiscoveryUIStore((s) => s.setRenderBuffer);
@@ -223,10 +227,12 @@ function DiscoveryFramesView({
   // Capture playback = pagination mode (not tail-follow). True for: recorded source, paused stream, or store-level capture mode (after ingest)
   const isCapturePlayback = isRecorded || isStreamPaused || captureMode.enabled;
 
-  // Rows per page. "All" (-1) is not one of the offered sizes, but the pagination maths
-  // still needs a concrete number, and every site must use the same one — they used to
+  // Rows per page. The stored setting may be a sentinel (Auto / All); everything below
+  // uses the resolved number, and every site must use the same one — they used to
   // disagree, so a row click and the playback highlight resolved different frame indices.
-  const pageSize = renderBuffer === -1 ? 1000 : renderBuffer;
+  // The table measures its own geometry and reports the fit; 0 until it has.
+  const [autoRows, setAutoRows] = useState(0);
+  const pageSize = resolvePageSize(renderBuffer, autoRows);
 
   const captureFrameView = useCaptureFrameView({
     captureId: effectiveBufferId,
@@ -234,7 +240,7 @@ function DiscoveryFramesView({
     isStreaming,
     selectedFrames,
     pageSize,
-    tailSize: renderBuffer === -1 ? 100 : renderBuffer,
+    tailSize: Math.min(pageSize, 200),
     pollIntervalMs: BUFFER_POLL_INTERVAL_MS,
     isCapturePlayback,
     frozen: renderFrozen,
@@ -262,14 +268,6 @@ function DiscoveryFramesView({
   const showSourceColumn = useDiscoveryUIStore((s) => s.showSourceColumn);
   const toggleShowSourceColumn = useDiscoveryUIStore((s) => s.toggleShowSourceColumn);
 
-  // Reset page size when streaming starts. Page position itself belongs to
-  // useCaptureFrameView, which resets it whenever the capture changes.
-  React.useEffect(() => {
-    if (isStreaming) {
-      setRenderBuffer(20);
-    }
-  }, [isStreaming, setRenderBuffer]);
-
   // Auto-unfreeze when streaming stops
   React.useEffect(() => {
     if (!isStreaming && renderFrozen) {
@@ -278,13 +276,8 @@ function DiscoveryFramesView({
   }, [isStreaming, renderFrozen, setRenderFrozen]);
 
   // Keep stable references for scrub handler to avoid callback identity changes
-  const renderBufferRef = useRef(renderBuffer);
   const effectiveTotalFramesRef = useRef<number | undefined>(undefined);
   const currentFrameIndexRef = useRef<number | null>(currentFrameIndex ?? null);
-
-  useEffect(() => {
-    renderBufferRef.current = renderBuffer;
-  }, [renderBuffer]);
 
   useEffect(() => {
     currentFrameIndexRef.current = currentFrameIndex ?? null;
@@ -338,7 +331,9 @@ function DiscoveryFramesView({
   const totalPages = captureFrameView.totalPages;
   const isCaptureFirstLoading = captureFrameView.isLoading;
 
-  const effectivePageStartIndex = effectiveCurrentPage * pageSize;
+  const effectivePageStartIndex = captureFrameView.pageStartIndex;
+
+
 
   // Frames arrive chronological from Rust (ORDER BY rowid, and the tail query reverses
   // its DESC result), so this view no longer sorts, reverses or index-maps them.
@@ -346,6 +341,7 @@ function DiscoveryFramesView({
   // The hook owns page state — there is no second copy to keep in sync any more, and the
   // useState setter it returns is already stable across renders.
   const setCurrentPageStable = captureFrameView.setCurrentPage;
+  const goToRowStable = captureFrameView.goToRow;
 
   // Timeline scrub / stepping by frame index: seek the backend when it can, and move to
   // the page holding that frame either way.
@@ -356,9 +352,8 @@ function DiscoveryFramesView({
     if (onFrameChange) {
       onFrameChange(clampedIndex);
     }
-    const pageSize = renderBufferRef.current === -1 ? 1000 : renderBufferRef.current;
-    setCurrentPageStable(Math.floor(clampedIndex / pageSize));
-  }, [onFrameChange, setCurrentPageStable]);
+    goToRowStable(clampedIndex);
+  }, [onFrameChange, goToRowStable]);
 
   const handleStepForwardLocal = useCallback(() => {
     const maxIdx = (effectiveTotalFramesRef.current ?? 1) - 1;
@@ -466,25 +461,6 @@ function DiscoveryFramesView({
     { label: 'ASCII Column', checked: showAsciiColumn, onClick: toggleShowAsciiColumn },
     { label: 'Source Column', checked: showSourceColumn, onClick: toggleShowSourceColumn },
   ], [showRefColumn, showBusColumn, showAsciiColumn, showSourceColumn, toggleShowRefColumn, toggleShowBusColumn, toggleShowAsciiColumn, toggleShowSourceColumn]);
-
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const scrollPending = useRef(false);
-
-  // Throttle auto-scroll with requestAnimationFrame
-  useEffect(() => {
-    if (scrollPending.current) return;
-    scrollPending.current = true;
-
-    requestAnimationFrame(() => {
-      scrollPending.current = false;
-      const el = scrollRef.current;
-      if (!el) return;
-      const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 200;
-      if (nearBottom) {
-        el.scrollTop = el.scrollHeight;
-      }
-    });
-  }, [visibleFrames]);
 
   // Compute count of filtered-out frame IDs (seen but not selected)
   const filteredOutCount = useMemo(() => {
@@ -596,7 +572,7 @@ function DiscoveryFramesView({
 
     // Prefer frame-index-based highlighting (exact row positioning after scrubber seeks)
     if (currentFrameIndex != null) {
-      const rowInPage = currentFrameIndex - effectiveCurrentPage * pageSize;
+      const rowInPage = currentFrameIndex - effectivePageStartIndex;
       if (rowInPage >= 0 && rowInPage < visibleFrames.length) {
         return rowInPage;
       }
@@ -682,9 +658,9 @@ function DiscoveryFramesView({
   const navigateToMatch = useCallback((idx: number) => {
     if (findResults.length === 0 || idx < 0) return;
     const filteredOffset = findResults[idx];
-    setCurrentPageStable(Math.floor(filteredOffset / pageSize));
+    goToRowStable(filteredOffset);
     setFindCurrentIndex(idx);
-  }, [findResults, pageSize, setCurrentPageStable]);
+  }, [findResults, goToRowStable]);
 
   // Auto-navigate when results first arrive
   useEffect(() => {
@@ -718,7 +694,7 @@ function DiscoveryFramesView({
   // Handle row click - convert row index to global frame index and get timestamp
   const handleRowClick = useCallback((rowIndex: number) => {
     if (!onFrameSelect || rowIndex >= visibleFrames.length) return;
-    const globalFrameIndex = effectiveCurrentPage * pageSize + rowIndex;
+    const globalFrameIndex = effectivePageStartIndex + rowIndex;
     const timestampUs = visibleFrames[rowIndex].timestamp_us;
     onFrameSelect(globalFrameIndex, timestampUs);
   }, [onFrameSelect, effectiveCurrentPage, pageSize, visibleFrames]);
@@ -966,6 +942,7 @@ function DiscoveryFramesView({
               totalPages: totalPages,
               pageSize: renderBuffer,
               pageSizeOptions: FRAME_PAGE_SIZE_OPTIONS,
+              allowAuto: true,
               onPageChange: setCurrentPageStable,
               onPageSizeChange: handlePageSizeChange,
               loading: isCaptureFirstLoading,
@@ -1038,6 +1015,9 @@ function DiscoveryFramesView({
             onRowClick={onFrameSelect ? handleRowClick : undefined}
             pageStartIndex={effectivePageStartIndex}
             captureIndices={captureFrameView.captureIndices}
+            autoScroll={isStreaming && !isCapturePlayback}
+            autoFit={isAutoPageSize(renderBuffer)}
+            onFitChange={setAutoRows}
             onContextMenu={handleContextMenu}
             onHeaderContextMenu={handleHeaderContextMenu}
             useLocalTimezone={useLocalTimezone}

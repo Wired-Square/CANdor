@@ -27,6 +27,7 @@ import { useTransmitHistoryView } from "../hooks/useTransmitHistoryView";
 import { FrameDataTable, type FrameRow, FRAME_PAGE_SIZE_OPTIONS } from "../../discovery/components";
 import DataViewPaginationToolbar from "../../../components/DataViewPaginationToolbar";
 import TimelineScrubber from "../../../components/TimelineScrubber";
+import { PAGE_SIZE_AUTO, isAutoPageSize, resolvePageSize } from "../../../utils/pageSize";
 
 interface TransmitHistoryViewProps {
   outputBusToSource?: Map<number, BusSourceInfo>;
@@ -48,7 +49,10 @@ function historyRowToFrameRow(row: TransmitHistoryRow): FrameRow {
 export default function TransmitHistoryView({ sessionId }: TransmitHistoryViewProps) {
   const { t, i18n } = useTranslation("transmit");
   const { settings } = useSettings();
-  const [pageSize, setPageSize] = useState(20);
+  // Auto by default; the table measures itself and reports how many rows fit.
+  const [pageSizeSetting, setPageSizeSetting] = useState(PAGE_SIZE_AUTO);
+  const [autoRows, setAutoRows] = useState(0);
+  const pageSize = resolvePageSize(pageSizeSetting, autoRows);
   const {
     rows, totalCount, isLive, isLoading, currentPage, totalPages,
     setCurrentPage, setIsLive, clear, timeRange, navigateToTimestamp,
@@ -56,7 +60,7 @@ export default function TransmitHistoryView({ sessionId }: TransmitHistoryViewPr
   const [isExporting, setIsExporting] = useState(false);
 
   const handlePageSizeChange = useCallback((size: number) => {
-    setPageSize(size);
+    setPageSizeSetting(size);
     setCurrentPage(0);
   }, [setCurrentPage]);
 
@@ -191,8 +195,9 @@ export default function TransmitHistoryView({ sessionId }: TransmitHistoryViewPr
           <DataViewPaginationToolbar
             currentPage={currentPage}
             totalPages={totalPages}
-            pageSize={pageSize}
+            pageSize={pageSizeSetting}
             pageSizeOptions={FRAME_PAGE_SIZE_OPTIONS}
+            allowAuto
             onPageChange={setCurrentPage}
             onPageSizeChange={handlePageSizeChange}
             disabled={isLive}
@@ -260,6 +265,8 @@ export default function TransmitHistoryView({ sessionId }: TransmitHistoryViewPr
             showRef={false}
             showBus={true}
             autoScroll={isLive}
+            autoFit={isAutoPageSize(pageSizeSetting)}
+            onFitChange={setAutoRows}
             emptyMessage={isLoading ? "Loading…" : "No frames to display"}
             renderRowStatus={renderRowStatus}
             useLocalTimezone={useLocalTimezone}

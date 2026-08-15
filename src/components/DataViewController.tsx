@@ -54,6 +54,8 @@ interface DataViewControllerProps {
   hidePagination?: boolean;
   /** Hide page size selector (use when pagination is not applicable at all) */
   hidePageSize?: boolean;
+  /** Offer an "Auto" page size that fits the available height. */
+  allowAuto?: boolean;
 
   // Timeline props
   showTimeline: boolean;
@@ -116,6 +118,7 @@ export default function DataViewController({
   toolbarRightContent,
   hidePagination = false,
   hidePageSize = false,
+  allowAuto = false,
 
   // Timeline
   showTimeline,
@@ -168,6 +171,7 @@ export default function DataViewController({
           rightContent={toolbarRightContent}
           hidePagination={hidePagination}
           hidePageSize={hidePageSize}
+          allowAuto={allowAuto}
         />
       )}
 

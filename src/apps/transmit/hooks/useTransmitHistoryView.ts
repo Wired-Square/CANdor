@@ -16,8 +16,7 @@ import {
   type TransmitHistoryRow,
 } from "../../../api/transmitHistory";
 import { trackAlloc } from "../../../services/memoryDiag";
-
-const DEFAULT_PAGE_SIZE = 20;
+import { DEFAULT_PAGE_SIZE } from "../../../utils/pageSize";
 
 interface UseTransmitHistoryViewOptions {
   pageSize?: number;
@@ -84,7 +83,7 @@ export function useTransmitHistoryView(
   // We subscribe to that value instead of blind polling, eliminating
   // the 500ms invoke round-trip that leaked WebKit networking objects.
   useEffect(() => {
-    if (!isLive) return;
+    if (!isLive || pageSize <= 0) return;
 
     const fetchNewest = async () => {
       const count = useTransmitStore.getState().historyDbCount;
@@ -117,7 +116,7 @@ export function useTransmitHistoryView(
 
   // --- Browse mode: fetch page on page change ---
   useEffect(() => {
-    if (isLive) return;
+    if (isLive || pageSize <= 0) return;
 
     const gen = generationRef.current;
     let cancelled = false;

@@ -18,6 +18,7 @@ import {
   gapDefault,
 } from "../styles";
 import { paginationButtonDark } from "../styles/buttonStyles";
+import { PAGE_SIZE_ALL, PAGE_SIZE_AUTO } from "../utils/pageSize";
 
 export interface PageSizeOption {
   value: number;
@@ -46,6 +47,14 @@ interface DataViewPaginationToolbarProps {
   hidePagination?: boolean;
   /** Hide page size selector (use when pagination is not applicable at all) */
   hidePageSize?: boolean;
+  /**
+   * Offer an "Auto" size that fits the page to the available height.
+   *
+   * Opt-in per view rather than baked into the options arrays: a view must resolve the
+   * sentinel through `resolvePageSize` before it reaches any offset or limit, and one
+   * that hasn't would compute a negative offset.
+   */
+  allowAuto?: boolean;
 }
 
 /** Standard page size options for frame-based views */
@@ -79,9 +88,16 @@ export default function DataViewPaginationToolbar({
   rightContent,
   hidePagination = false,
   hidePageSize = false,
+  allowAuto = false,
 }: DataViewPaginationToolbarProps) {
   const { t } = useTranslation("common");
-  const showPagination = !hidePagination && totalPages > 1 && pageSize !== -1;
+  // Auto still paginates, so it is deliberately not part of this test.
+  const showPagination = !hidePagination && totalPages > 1 && pageSize !== PAGE_SIZE_ALL;
+  // Prepended here rather than in the shared options arrays so the label can be
+  // translated — those arrays are module-level consts and cannot call `t`.
+  const options = allowAuto
+    ? [{ value: PAGE_SIZE_AUTO, label: t("pagination.auto") }, ...pageSizeOptions]
+    : pageSizeOptions;
 
   return (
     <div className={`flex-shrink-0 px-3 py-2 border-b ${borderDataView} ${bgDataToolbar} flex items-center ${gapDefault}`}>
@@ -146,7 +162,7 @@ export default function DataViewPaginationToolbar({
           className={`text-xs px-2 py-1 rounded border ${borderDataView} ${bgDataInput} ${textDataPrimary}`}
           title={t("pagination.rowsPerPage")}
         >
-          {pageSizeOptions.map((opt) => (
+          {options.map((opt) => (
             <option key={opt.value} value={opt.value}>
               {opt.label}
             </option>

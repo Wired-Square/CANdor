@@ -81,7 +81,8 @@
     "previousPage": "Previous page",
     "nextPage": "Next page",
     "lastPage": "Last page",
-    "rowsPerPage": "Rows per page"
+    "rowsPerPage": "Rows per page",
+    "auto": "Auto"
   },
   "playback": {
     "skipToStart": "Skip to start",

@@ -14,6 +14,7 @@ import {
   type PaginatedBytesResponse,
   type BackendFramingConfig,
 } from '../api/capture';
+import { PAGE_SIZE_AUTO } from '../utils/pageSize';
 
 /** A single byte with timestamp for hex dump display */
 export type SerialBytesEntry = {
@@ -78,7 +79,7 @@ interface DiscoverySerialState {
   activeTab: SerialTabId;
 
   // Pagination state for framed data view
-  framedPageSize: number;  // 20, 50, 100, 1000, 10000, -1 (All)
+  framedPageSize: number;  // a row count, or a PAGE_SIZE_* sentinel
 
   // Backend capture mode state
   /** Total byte count in backend capture (updated during streaming) */
@@ -156,7 +157,7 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
     showAscii: true, // Show ASCII column by default
   },
   activeTab: 'raw',
-  framedPageSize: 100, // Default page size for framed data
+  framedPageSize: PAGE_SIZE_AUTO, // Default page size for framed data
   backendByteCount: 0, // Total bytes in backend capture
   bytesCaptureId: null, // ID of active bytes capture
   rawBytesPageSize: 1000, // Default page size for raw bytes view

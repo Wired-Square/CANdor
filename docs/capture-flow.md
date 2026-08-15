@@ -330,9 +330,40 @@ Two consequences worth knowing before changing it:
 - **Frames arrive chronological.** The merge task sorts each batch by
   `timestamp_us` before appending, queries are `ORDER BY rowid`, and the tail
   query reverses its `DESC` result in Rust. Views must not re-sort or reverse.
+- **The window is addressed by row, not by page.** State is `anchorRow` — the
+  ordinal of the row at the top — and `pageStartIndex` is the offset actually
+  fetched. `currentPage` is derived from it for the toolbar and is display-only.
+  Use `pageStartIndex` / `goToRow` for anything positional; `currentPage *
+  pageSize` disagrees whenever the anchor is not page-aligned, which is exactly
+  what happens once the page size can change under a fixed anchor (see § Auto
+  rows-per-page) or once the window is clamped against the end of the capture.
 
 Discovery still keeps `_frameBuffer` in memory, but only for analysis, replay,
 bulk-add and the MCP live frame map — not for rendering the frames table.
+
+### Auto rows-per-page
+
+Tables default to fitting their page to the height available.
+[useAutoRowCount](../src/hooks/useAutoRowCount.ts) observes one element — the
+scroll container — which already reflects Dockview resizes, window resizes and
+every chrome row appearing or disappearing, so nothing enumerates the chrome.
+`FrameDataTable` calls it on its callers' behalf (`autoFit` / `onFitChange`),
+because it is the only thing that knows its own container, sticky header and
+trailing spacer; `ResultsPanel` is div-based and calls the hook directly.
+
+The setting itself is a numeric sentinel, because the `<select>` is numeric:
+`PAGE_SIZE_AUTO` / `PAGE_SIZE_ALL` in
+[src/utils/pageSize.ts](../src/utils/pageSize.ts). Views hold the **raw**
+setting so the select can match an option, and pass `resolvePageSize(...)` to
+their data layer. Two rules follow, and both have bitten:
+
+- **Never let a raw setting reach an offset or limit.** A sentinel is negative;
+  `currentPage * pageSize` on one produces a negative offset with no error.
+- **`resolvePageSize` returns 0 until the fit has been measured.** Every fetch
+  guards `if (pageSize <= 0) return;` — and that guard must sit in the effect's
+  *condition*, with the size in its dependencies, so the fetch re-runs when the
+  measurement lands. Reading the size from a ref instead leaves the effect
+  parked forever, which silently disables the live tail.
 
 ---
 

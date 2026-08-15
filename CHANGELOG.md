@@ -4,6 +4,10 @@ All notable changes to WireTAP will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Rows per page now defaults to "Auto", filling the panel.** Every table that offers a rows-per-page choice — Discovery frames and its Filtered tab, serial framed data, Transmit history, Query results — sizes its page to the space available instead of showing a fixed 20 and leaving the rest of a tall panel empty. Resize the panel and the row count follows, keeping the top row you were looking at in place. Pick a fixed 20/50/100 to override it; that choice now also survives a stream start, which previously reset it.
+
 ### Fixed
 
 - **Discovery no longer accumulates duplicate rows as a capture runs.** Rows were piling up on screen — the same frame drawn three or four times, more copies the longer a session ran — and toggling the #, Bus or ASCII columns left rows disagreeing with the header. Frames that shared a timestamp and ID could not be told apart, so the display kept adding rows without ever removing the old ones. The frame table also holds its column widths steady now instead of resizing as you page through.

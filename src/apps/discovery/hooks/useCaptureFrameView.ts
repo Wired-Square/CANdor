@@ -55,8 +55,12 @@ export interface UseBufferFrameViewResult {
   isLoading: boolean;
   /** Current page (0-indexed, only meaningful when stopped) */
   currentPage: number;
+  /** Row ordinal the current window starts at — the offset actually fetched. */
+  pageStartIndex: number;
   /** Set current page */
   setCurrentPage: (page: number) => void;
+  /** Put a given row at the top of the window. */
+  goToRow: (row: number) => void;
   /** Total pages (only meaningful when stopped) */
   totalPages: number;
   /** Buffer time range for timeline */
@@ -65,6 +69,18 @@ export interface UseBufferFrameViewResult {
   navigateToTimestamp: (timeUs: number) => Promise<void>;
   /** Pull the tail once while frozen, without unfreezing. */
   refreshOnce: () => void;
+}
+
+/** Hold the window inside the data: growing the page past the end would leave it part-empty. */
+function clampAnchor(anchorRow: number, totalCount: number, pageSize: number): number {
+  if (pageSize <= 0 || totalCount <= 0) return Math.max(0, anchorRow);
+  return Math.max(0, Math.min(anchorRow, totalCount - pageSize));
+}
+
+/** Snap an offset down to the start of the page containing it. */
+function pageAlignedAnchor(offset: number, pageSize: number): number {
+  const size = Math.max(1, pageSize);
+  return Math.max(0, Math.floor(offset / size) * size);
 }
 
 /** Convert CaptureFrame to FrameMessage with hex bytes */
@@ -110,7 +126,11 @@ export function useCaptureFrameView(
   const [captureIndices, setBufferIndices] = useState<number[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
-  const [currentPage, setCurrentPage] = useState(0);
+  // The 0-based ordinal, within the filtered result set, of the row at the top of the
+  // viewport. Pages used to be a grid of multiples of pageSize, which meant a page-size
+  // change could only land on a grid line — so growing the page pushed the row you were
+  // looking at up to a page away. Storing the anchor instead makes a resize keep it.
+  const [anchorRow, setAnchorRow] = useState(0);
   const [timeRange, setTimeRange] = useState<{
     startUs: number;
     endUs: number;
@@ -142,7 +162,7 @@ export function useCaptureFrameView(
       setFrames([]);
       setBufferIndices([]);
       setTotalCount(0);
-      setCurrentPage(0);
+      setAnchorRow(0);
       setTimeRange(null);
       prevBufferIdRef.current = captureId;
     }
@@ -179,7 +199,9 @@ export function useCaptureFrameView(
   frozenRef.current = frozen;
 
   useEffect(() => {
-    if (!captureId || !isStreaming || isCapturePlayback) return;
+    // tailSize is 0 until an auto fit has been measured; re-running when it lands is
+    // what arms the subscription.
+    if (!captureId || !isStreaming || isCapturePlayback || tailSize <= 0) return;
 
     let isMounted = true;
     // A tail fetch can outlast the 500ms signal interval on a large capture. Skip while
@@ -238,13 +260,14 @@ export function useCaptureFrameView(
   useEffect(() => {
     // Run pagination when stopped, OR when in buffer playback mode
     if (!captureId || (isStreaming && !isCapturePlayback)) return;
+    if (pageSize <= 0) return; // auto size not measured yet
 
     let isMounted = true;
 
     const fetchPage = async () => {
       setIsLoading(true);
       try {
-        const offset = currentPage * pageSize;
+        const offset = clampAnchor(anchorRow, totalCount, pageSize);
         const response = await getCaptureFramesPaginatedFiltered(
           captureId,
           offset,
@@ -271,7 +294,7 @@ export function useCaptureFrameView(
     return () => {
       isMounted = false;
     };
-  }, [captureId, isStreaming, isCapturePlayback, currentPage, pageSize, selectedFrames]);
+  }, [captureId, isStreaming, isCapturePlayback, anchorRow, pageSize, selectedFrames, totalCount]);
 
   // Navigate to timestamp (for timeline scrub and step following)
   const navigateToTimestamp = useCallback(
@@ -288,8 +311,7 @@ export function useCaptureFrameView(
           timeUsInt,
           selectedIdsRef.current
         );
-        const targetPage = Math.floor(offset / pageSizeRef.current);
-        setCurrentPage(targetPage);
+        setAnchorRow(pageAlignedAnchor(offset, pageSizeRef.current));
       } catch (e) {
         console.error("[useCaptureFrameView] timestamp navigation error:", e);
       }
@@ -317,8 +339,7 @@ export function useCaptureFrameView(
     const timeUsInt = Math.round(timeUs);
     findCaptureOffsetForTimestamp(captureId, timeUsInt, selectedIdsRef.current)
       .then((offset) => {
-        const targetPage = Math.floor(offset / pageSizeRef.current);
-        setCurrentPage(targetPage);
+        setAnchorRow(pageAlignedAnchor(offset, pageSizeRef.current));
       })
       .catch((e) => console.error("[useCaptureFrameView] follow navigation error:", e))
       .finally(() => {
@@ -366,7 +387,7 @@ export function useCaptureFrameView(
       [...selectedFrames].some((fk) => !prevSet.has(fk));
 
     if (changed && captureId) {
-      setCurrentPage(0);
+      setAnchorRow(0);
       prevSelectedFramesRef.current = selectedFrames;
     }
   }, [selectedFrames, captureId]);
@@ -377,6 +398,18 @@ export function useCaptureFrameView(
     return Math.max(1, Math.ceil(totalCount / pageSize));
   }, [totalCount, pageSize]);
 
+  // The row this window starts at. Callers must use this rather than page * pageSize:
+  // the clamp above lands on totalCount - pageSize, which is not page-aligned, so the
+  // two disagree exactly when a resize has done its job.
+  const pageStartIndex = clampAnchor(anchorRow, totalCount, pageSize);
+  // Page buttons still move in whole pages; the anchor is what a resize preserves.
+  const currentPage = pageSize > 0 ? Math.floor(pageStartIndex / pageSize) : 0;
+  const setCurrentPage = useCallback((page: number) => {
+    setAnchorRow(Math.max(0, page) * Math.max(1, pageSizeRef.current));
+  }, []);
+  /** Put `row` at the top of the window. */
+  const goToRow = useCallback((row: number) => setAnchorRow(Math.max(0, row)), []);
+
   return {
     frames,
     captureIndices,
@@ -384,6 +417,8 @@ export function useCaptureFrameView(
     isLoading,
     currentPage,
     setCurrentPage,
+    pageStartIndex,
+    goToRow,
     totalPages,
     timeRange,
     navigateToTimestamp,

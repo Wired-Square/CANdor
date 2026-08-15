@@ -31,6 +31,8 @@ interface ToolbarConfig {
   rightContent?: ReactNode;
   hidePagination?: boolean;
   hidePageSize?: boolean;
+  /** Offer an "Auto" page size that fits the available height. */
+  allowAuto?: boolean;
 }
 
 /**
@@ -217,6 +219,7 @@ export default function AppTabView({
         toolbarRightContent={toolbar?.rightContent}
         hidePagination={toolbar?.hidePagination}
         hidePageSize={toolbar?.hidePageSize}
+        allowAuto={toolbar?.allowAuto}
         // Timeline
         showTimeline={timeline !== undefined}
         minTimeUs={timeline?.minTimeUs ?? 0}
