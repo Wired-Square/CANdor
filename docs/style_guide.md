@@ -183,6 +183,31 @@ the token. Hardcoded `text-zinc-100` will not update.
 | `errorBoxCompact` | Inline form error (red, small) |
 | `cardPadding.{none,sm,md,lg}` | Card padding helper |
 
+### Data tables — [tableStyles.ts](../src/styles/tableStyles.ts)
+
+The monospace data tables — Discovery's frame table and its Filtered tab, serial
+framed data, the serial byte dump, Transmit history — are read side by side, so
+their rows have to line up. These are the metrics that keep them in step.
+
+| Token | Use |
+|---|---|
+| `dataTableContainer` | Scroll container (`flex-1 min-h-0 overflow-auto font-mono text-xs`) |
+| `dataCell` | Body cell padding |
+| `dataHeaderCell` | Header cell padding, rule included |
+
+Two things worth knowing before changing the frame table's columns:
+
+- **ASCII is not a column.** It shares the Data cell with the hex, as two
+  non-breaking spans, because a column cannot move: payload length spans two
+  orders of magnitude across protocols, and the pair has to sit side by side when
+  there is room and stack when there is not. Every row's hex is padded to the
+  page's widest run (`hexRunChars` in [byteUtils.ts](../src/utils/byteUtils.ts))
+  so the ASCII behind it stays in a straight gutter.
+- **Time is sized to the format in use**, via `TIME_COLUMN_CHARS` in
+  [timeFormat.ts](../src/utils/timeFormat.ts). A column wide enough for an ISO
+  timestamp is nearly twice what a delta needs, and the slack shows up as a gap
+  before whatever column follows.
+
 ## Composition recipes
 
 ### Toolbar action button (icon + label)
@@ -738,6 +763,7 @@ adjacency so related tooling is visible at a glance.
 | [../src/styles/inputStyles.ts](../src/styles/inputStyles.ts) | Input/select variants, label / help / heights |
 | [../src/styles/badgeStyles.ts](../src/styles/badgeStyles.ts) | Standard, small, dark-panel, metadata badges |
 | [../src/styles/cardStyles.ts](../src/styles/cardStyles.ts) | Card/alert variants, detail box, panel footer, expandable row, selectable option |
+| [../src/styles/tableStyles.ts](../src/styles/tableStyles.ts) | Monospace data-table container, cell and header metrics |
 | [../src/styles/index.ts](../src/styles/index.ts) | Single barrel — import from here |
 | [../src/locales/en-AU/common.json](../src/locales/en-AU/common.json) | Buttons, generic states, errors, units |
 | [../src/locales/en-AU/settings.json](../src/locales/en-AU/settings.json) | Settings panel strings |
