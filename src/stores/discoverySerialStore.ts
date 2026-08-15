@@ -14,7 +14,7 @@ import {
   type PaginatedBytesResponse,
   type BackendFramingConfig,
 } from '../api/capture';
-import { PAGE_SIZE_AUTO } from '../utils/pageSize';
+import { PAGE_SIZE_ALL, PAGE_SIZE_AUTO } from '../utils/pageSize';
 
 /** A single byte with timestamp for hex dump display */
 export type SerialBytesEntry = {
@@ -491,7 +491,12 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 
-  setFramedPageSize: (size) => set({ framedPageSize: size }),
+  setFramedPageSize: (size) => set({
+    // Sentinels pass through untouched; the clamp would turn Auto into a literal 20.
+    framedPageSize: size === PAGE_SIZE_AUTO || size === PAGE_SIZE_ALL
+      ? size
+      : Math.min(10000, Math.max(1, size)),
+  }),
 
   // Backend buffer actions
   setBytesCaptureId: (id) => set({ bytesCaptureId: id }),

@@ -24,7 +24,7 @@ import { PaginationToolbar, TimelineSection, FRAME_PAGE_SIZE_OPTIONS } from '../
 import ByteExtractionDialog from './ByteExtractionDialog';
 import ChecksumExtractionDialog from './ChecksumExtractionDialog';
 import { bgDataToolbar, borderDataView, bgSurface, textSecondary, borderDefault } from '../../../../styles';
-import { isAutoPageSize, resolvePageSize } from "../../../../utils/pageSize";
+import { isAutoPageSize, pageCount, pageForOffset, resolvePageSize } from "../../../../utils/pageSize";
 
 // ============================================================================
 // Extraction Badge
@@ -370,7 +370,7 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
 
   // Pagination calculations
   const effectivePageSize = resolvePageSize(pageSizeSetting, autoRows, totalFrames);
-  const totalPages = effectivePageSize > 0 ? Math.max(1, Math.ceil(totalFrames / effectivePageSize)) : 1;
+  const totalPages = pageCount(totalFrames, effectivePageSize);
 
   // Reset page when streaming starts or when frame count changes significantly
   useEffect(() => {
@@ -407,8 +407,7 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
       // Use backend binary search to find offset
       try {
         const offset = await findCaptureOffsetForTimestamp(framedCaptureId!, targetTimeUs, []);
-        const targetPage = Math.floor(offset / effectivePageSize);
-        setCurrentPage(targetPage);
+        setCurrentPage(pageForOffset(offset, effectivePageSize));
       } catch (error) {
         console.error('Failed to seek to timestamp:', error);
       }
@@ -427,9 +426,7 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
       targetIndex = i; // Last frame if target is after all frames
     }
 
-    // Calculate which page this frame is on
-    const targetPage = Math.floor(targetIndex / effectivePageSize);
-    setCurrentPage(targetPage);
+    setCurrentPage(pageForOffset(targetIndex, effectivePageSize));
   }, [useBackendBuffer, completeFrames, effectivePageSize]);
 
   const handleApplyIdConfig = (config: ExtractionConfig) => {
@@ -515,6 +512,8 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
       // In backend buffer mode, frames are fetched paginated
       return backendFrames;
     }
+    // Auto fit not measured yet — the slices below would silently come back empty.
+    if (effectivePageSize <= 0) return [];
     if (isStreaming) {
       // During streaming, show latest frames (auto-scroll behavior)
       const startIndex = Math.max(0, totalFrames - effectivePageSize);

@@ -16,7 +16,7 @@ import {
   type TransmitHistoryRow,
 } from "../../../api/transmitHistory";
 import { trackAlloc } from "../../../services/memoryDiag";
-import { DEFAULT_PAGE_SIZE } from "../../../utils/pageSize";
+import { DEFAULT_PAGE_SIZE, pageCount, pageForOffset } from "../../../utils/pageSize";
 
 interface UseTransmitHistoryViewOptions {
   pageSize?: number;
@@ -150,8 +150,7 @@ export function useTransmitHistoryView(
     setIsLive(false);
     try {
       const offset = await transmitHistoryFindOffset(timestampUs);
-      const page = Math.floor(offset / pageSize);
-      setCurrentPage(page);
+      setCurrentPage(pageForOffset(offset, pageSize));
     } catch {
       // Non-critical
     }
@@ -173,7 +172,7 @@ export function useTransmitHistoryView(
     queueMicrotask(() => setIsLive(true));
   }, []);
 
-  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const totalPages = pageCount(totalCount, pageSize);
 
   return {
     rows,

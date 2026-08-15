@@ -686,7 +686,10 @@ function DiscoveryFramesView({
   const currentMatchOffset = (findOpen && findCurrentIndex >= 0 && findResults.length > 0)
     ? findResults[findCurrentIndex]
     : null;
-  const currentMatchPage = currentMatchOffset != null ? Math.floor(currentMatchOffset / pageSize) : null;
+  // Unmeasured page size means no page to compare against, so no match highlight yet.
+  const currentMatchPage = currentMatchOffset != null && pageSize > 0
+    ? Math.floor(currentMatchOffset / pageSize)
+    : null;
   const effectiveHighlightedRow = (currentMatchPage === effectiveCurrentPage && currentMatchOffset != null)
     ? currentMatchOffset % pageSize
     : highlightedRowIndex;

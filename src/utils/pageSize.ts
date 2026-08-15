@@ -38,3 +38,14 @@ export function resolvePageSize(
   if (setting === PAGE_SIZE_ALL) return Math.max(1, allRows ?? ALL_FALLBACK_ROWS);
   return setting > 0 ? setting : DEFAULT_PAGE_SIZE;
 }
+
+// Dividing by an unmeasured size gives Infinity, and it reaches the page counter and
+// `setCurrentPage`. Both divisions live here so no caller has to remember the guard.
+
+/** Pages needed for `totalRows`, or 1 while the size is unresolved. */
+export const pageCount = (totalRows: number, pageSize: number): number =>
+  pageSize <= 0 ? 1 : Math.max(1, Math.ceil(totalRows / pageSize));
+
+/** The page an absolute row offset lands on, or 0 while the size is unresolved. */
+export const pageForOffset = (offset: number, pageSize: number): number =>
+  pageSize <= 0 ? 0 : Math.floor(Math.max(0, offset) / pageSize);

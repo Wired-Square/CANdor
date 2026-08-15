@@ -141,6 +141,8 @@ export default function FilteredTabContent({
   // Non-buffer mode: filter frames from the in-memory buffer
   const localResult = useMemo(() => {
     if (captureMode.enabled || filteredOutIds.length === 0) return null;
+    // Auto fit not measured yet — the tail limit and the slice below both come back empty.
+    if (pageSize <= 0) return null;
 
     const filteredIdSet = new Set(filteredOutIds);
     const matching: FrameMessage[] = [];

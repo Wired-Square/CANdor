@@ -10,6 +10,7 @@ import { useDiscoverySerialStore } from '../../../../stores/discoverySerialStore
 import { useDiscoveryUIStore } from '../../../../stores/discoveryUIStore';
 import { getCaptureBytesPaginated, getCaptureMetadataById, findCaptureBytesOffsetForTimestamp, type TimestampedByte } from '../../../../api/capture';
 import { byteToHex, byteToAscii } from '../../../../utils/byteUtils';
+import { pageCount, pageForOffset } from '../../../../utils/pageSize';
 import { formatHumanUs, formatIsoUs, renderDeltaNode } from '../../../../utils/timeFormat';
 import { PaginationToolbar, TimelineSection, BYTE_PAGE_SIZE_OPTIONS } from '../../components';
 import {
@@ -99,7 +100,7 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
   // Pagination calculations for backend mode
   const totalBytes = useBackendBuffer ? backendByteCount : entries.length;
   const pageSize = rawBytesPageSize;
-  const totalPages = Math.max(1, Math.ceil(totalBytes / pageSize));
+  const totalPages = pageCount(totalBytes, pageSize);
 
   // When streaming stops, jump to the last page
   const prevIsStreamingRef = useRef(isStreaming);
@@ -296,8 +297,7 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
     try {
       // Use backend binary search to find byte offset for timestamp
       const offset = await findCaptureBytesOffsetForTimestamp(bytesCaptureId ?? '', targetTimeUs);
-      const targetPage = Math.floor(offset / pageSize);
-      setCurrentPage(targetPage);
+      setCurrentPage(pageForOffset(offset, pageSize));
     } catch (error) {
       console.error('Failed to seek to timestamp:', error);
     }

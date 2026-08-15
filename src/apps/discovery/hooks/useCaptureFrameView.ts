@@ -4,7 +4,7 @@
 // Provides a unified interface for viewing frames from a capture,
 // with tail polling during streaming and pagination when stopped.
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   getCaptureFramesTail,
   getCaptureFramesPaginatedFiltered,
@@ -16,6 +16,7 @@ import { BUFFER_POLL_INTERVAL_MS } from "../../../constants";
 import { useSessionStore } from "../../../stores/sessionStore";
 import type { FrameMessage } from "../../../types/frame";
 import { parseFrameKey } from "../../../utils/frameKey";
+import { pageCount, pageForOffset } from "../../../utils/pageSize";
 
 /** Frame with pre-computed hex bytes for display */
 export type FrameWithHex = FrameMessage & { hexBytes: string[] };
@@ -392,18 +393,14 @@ export function useCaptureFrameView(
     }
   }, [selectedFrames, captureId]);
 
-  // Calculate total pages
-  const totalPages = useMemo(() => {
-    if (pageSize <= 0) return 1;
-    return Math.max(1, Math.ceil(totalCount / pageSize));
-  }, [totalCount, pageSize]);
+  const totalPages = pageCount(totalCount, pageSize);
 
   // The row this window starts at. Callers must use this rather than page * pageSize:
   // the clamp above lands on totalCount - pageSize, which is not page-aligned, so the
   // two disagree exactly when a resize has done its job.
   const pageStartIndex = clampAnchor(anchorRow, totalCount, pageSize);
   // Page buttons still move in whole pages; the anchor is what a resize preserves.
-  const currentPage = pageSize > 0 ? Math.floor(pageStartIndex / pageSize) : 0;
+  const currentPage = pageForOffset(pageStartIndex, pageSize);
   const setCurrentPage = useCallback((page: number) => {
     setAnchorRow(Math.max(0, page) * Math.max(1, pageSizeRef.current));
   }, []);
