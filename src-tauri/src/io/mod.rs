@@ -1452,9 +1452,10 @@ pub fn signal_frames_ready(session_id: &str) {
 }
 
 /// Signal the frontend that new bytes are available for a session.
-/// The frontend fetches bytes via get_capture_bytes_tail.
+/// Pushes the byte total and capture id (ByteCounts 0x19); the frontend fetches the rows
+/// themselves from that capture via get_capture_bytes_tail.
 pub fn signal_bytes_ready(session_id: &str) {
-    crate::ws::dispatch::send_capture_changed(session_id);
+    crate::ws::dispatch::send_new_bytes(session_id);
 }
 
 /// Emit stream-ended signal with capture info.

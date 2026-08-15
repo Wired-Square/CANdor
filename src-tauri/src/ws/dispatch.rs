@@ -296,6 +296,37 @@ pub fn send_new_frames(session_id: &str) {
     }
 }
 
+/// Push the live byte total for a session's byte capture, with the capture's id.
+/// Called from signal_bytes_ready at the 2Hz throttle cadence.
+///
+/// Unlike frames, the bytes themselves are never sent: the frontend reads rows from the
+/// capture on demand. That keeps the wire cost independent of baud rate — one small
+/// message twice a second, whether the link is 9600 or 921600 — and avoids a second copy
+/// of data the capture already holds durably.
+pub fn send_new_bytes(session_id: &str) {
+    let server = match ws_server() {
+        Some(s) => s,
+        None => return,
+    };
+    let channel = match server.channel_for_session(session_id) {
+        Some(c) => c,
+        None => return,
+    };
+
+    let capture_id = match crate::capture_store::get_session_bytes_capture_id(session_id) {
+        Some(id) => id,
+        None => return,
+    };
+
+    let total = crate::capture_store::get_capture_count(&capture_id);
+    if total == 0 {
+        return;
+    }
+
+    let counts = protocol::encode_byte_counts(total as u64, &capture_id);
+    server.send_to_channel(channel, protocol::encode_message(MsgType::ByteCounts, channel, &counts));
+}
+
 /// Reset frame offset for a session to the current capture length.
 /// Called on subscribe so that only frames arriving after subscription are sent.
 pub fn reset_frame_offset(session_id: &str) {

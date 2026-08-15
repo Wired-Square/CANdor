@@ -1196,6 +1196,27 @@ pub fn count_frames_before_rowid(capture_id: &str, rowid: i64) -> Result<usize, 
 // Byte Capture Operations
 // ============================================================================
 
+/// Columns every byte query selects, in the order [`row_to_byte`] reads them.
+const BYTE_COLUMNS: &str = "byte_val, timestamp_us, bus";
+
+fn row_to_byte(row: &rusqlite::Row) -> rusqlite::Result<TimestampedByte> {
+    Ok(TimestampedByte {
+        byte: row.get::<_, i64>(0)? as u8,
+        timestamp_us: row.get::<_, i64>(1)? as u64,
+        bus: row.get::<_, i64>(2)? as u8,
+    })
+}
+
+fn collect_bytes(
+    stmt: &mut rusqlite::CachedStatement<'_>,
+    params: &[&dyn rusqlite::ToSql],
+) -> Result<Vec<TimestampedByte>, String> {
+    stmt.query_map(params, row_to_byte)
+        .map_err(|e| format!("Failed to query: {}", e))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| format!("Failed to read row: {}", e))
+}
+
 /// Get paginated bytes for a capture. Returns (bytes, total_count).
 pub fn get_bytes_paginated(
     capture_id: &str,
@@ -1204,7 +1225,15 @@ pub fn get_bytes_paginated(
 ) -> Result<(Vec<TimestampedByte>, usize), String> {
     let guard = DB.lock().unwrap();
     let conn = guard.as_ref().ok_or("Database not initialised")?;
+    get_bytes_paginated_with_conn(conn, capture_id, offset, limit)
+}
 
+fn get_bytes_paginated_with_conn(
+    conn: &Connection,
+    capture_id: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<(Vec<TimestampedByte>, usize), String> {
     let total: usize = conn
         .query_row(
             "SELECT COUNT(*) FROM bytes WHERE capture_id = ?1",
@@ -1214,27 +1243,42 @@ pub fn get_bytes_paginated(
         .map_err(|e| format!("Failed to count: {}", e))? as usize;
 
     let mut stmt = conn
-        .prepare_cached(
-            "SELECT byte_val, timestamp_us, bus FROM bytes WHERE capture_id = ?1 ORDER BY rowid LIMIT ?2 OFFSET ?3",
-        )
+        .prepare_cached(&format!(
+            "SELECT {BYTE_COLUMNS} FROM bytes WHERE capture_id = ?1 ORDER BY rowid LIMIT ?2 OFFSET ?3"
+        ))
         .map_err(|e| format!("Failed to prepare: {}", e))?;
 
-    let rows = stmt
-        .query_map(params![capture_id, limit as i64, offset as i64], |row| {
-            Ok(TimestampedByte {
-                byte: row.get::<_, i64>(0)? as u8,
-                timestamp_us: row.get::<_, i64>(1)? as u64,
-                bus: row.get::<_, i64>(2)? as u8,
-            })
-        })
-        .map_err(|e| format!("Failed to query: {}", e))?;
-
-    let mut bytes = Vec::with_capacity(limit);
-    for row in rows {
-        bytes.push(row.map_err(|e| format!("Failed to read row: {}", e))?);
-    }
-
+    let bytes = collect_bytes(&mut stmt, params![capture_id, limit as i64, offset as i64])?;
     Ok((bytes, total))
+}
+
+/// Get the last N bytes for a capture, in chronological order (oldest first).
+///
+/// Rows only — the caller supplies the total from the capture registry, which already
+/// tracks it. Used by the live view, which refetches on every byte-count signal, so
+/// this must not scan the capture. `LIMIT ?2 OFFSET total - n` would walk every skipped
+/// row on each call, which is quadratic over a session.
+pub fn get_bytes_tail_rows(capture_id: &str, limit: usize) -> Result<Vec<TimestampedByte>, String> {
+    let guard = DB.lock().unwrap();
+    let conn = guard.as_ref().ok_or("Database not initialised")?;
+    get_bytes_tail_rows_with_conn(conn, capture_id, limit)
+}
+
+fn get_bytes_tail_rows_with_conn(
+    conn: &Connection,
+    capture_id: &str,
+    limit: usize,
+) -> Result<Vec<TimestampedByte>, String> {
+    let mut stmt = conn
+        .prepare_cached(&format!(
+            "SELECT {BYTE_COLUMNS} FROM bytes WHERE capture_id = ?1 ORDER BY rowid DESC LIMIT ?2"
+        ))
+        .map_err(|e| format!("Failed to prepare: {}", e))?;
+
+    let mut bytes = collect_bytes(&mut stmt, params![capture_id, limit as i64])?;
+    // Results came in DESC order, reverse to chronological
+    bytes.reverse();
+    Ok(bytes)
 }
 
 /// Get all bytes for a capture (used by framing which needs the full stream).
@@ -1243,26 +1287,12 @@ pub fn get_all_bytes(capture_id: &str) -> Result<Vec<TimestampedByte>, String> {
     let conn = guard.as_ref().ok_or("Database not initialised")?;
 
     let mut stmt = conn
-        .prepare_cached(
-            "SELECT byte_val, timestamp_us, bus FROM bytes WHERE capture_id = ?1 ORDER BY rowid",
-        )
+        .prepare_cached(&format!(
+            "SELECT {BYTE_COLUMNS} FROM bytes WHERE capture_id = ?1 ORDER BY rowid"
+        ))
         .map_err(|e| format!("Failed to prepare: {}", e))?;
 
-    let rows = stmt
-        .query_map(params![capture_id], |row| {
-            Ok(TimestampedByte {
-                byte: row.get::<_, i64>(0)? as u8,
-                timestamp_us: row.get::<_, i64>(1)? as u64,
-                bus: row.get::<_, i64>(2)? as u8,
-            })
-        })
-        .map_err(|e| format!("Failed to query: {}", e))?;
-
-    let mut bytes = Vec::new();
-    for row in rows {
-        bytes.push(row.map_err(|e| format!("Failed to read row: {}", e))?);
-    }
-    Ok(bytes)
+    collect_bytes(&mut stmt, params![capture_id])
 }
 
 
@@ -1615,6 +1645,62 @@ mod tests {
         )
         .unwrap();
         conn
+    }
+
+    /// A migrated byte capture `b1` holding six bytes, plus a decoy capture whose rows
+    /// must never appear in `b1`'s tail.
+    fn byte_capture() -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_migrations(&mut conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO bytes (capture_id, byte_val, timestamp_us, bus)
+             VALUES ('b1', 10, 100, 0), ('b1', 11, 101, 0), ('b1', 12, 102, 1),
+                    ('b1', 13, 103, 0), ('b1', 14, 104, 0), ('b1', 15, 105, 0),
+                    ('b2', 99, 106, 0);",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// The tail must be the *last* N rows, chronological, scoped to one capture — the
+    /// live byte view refetches this on every count signal.
+    #[test]
+    fn bytes_tail_returns_last_rows_chronologically() {
+        let conn = byte_capture();
+
+        let bytes = get_bytes_tail_rows_with_conn(&conn, "b1", 3).unwrap();
+
+        assert_eq!(bytes.iter().map(|b| b.byte).collect::<Vec<_>>(), vec![13, 14, 15]);
+        assert_eq!(bytes.iter().map(|b| b.timestamp_us).collect::<Vec<_>>(), vec![103, 104, 105]);
+        assert_eq!(bytes[0].bus, 0);
+    }
+
+    /// A limit past the end returns the whole capture rather than padding or erroring.
+    #[test]
+    fn bytes_tail_limit_past_start_returns_all() {
+        let conn = byte_capture();
+
+        let bytes = get_bytes_tail_rows_with_conn(&conn, "b1", 100).unwrap();
+
+        assert_eq!(bytes.len(), 6);
+        assert_eq!(bytes.first().unwrap().byte, 10);
+        assert_eq!(bytes.last().unwrap().byte, 15);
+    }
+
+    /// The tail and the equivalent page agree, so switching between live and stopped
+    /// views cannot shift the rows under the reader.
+    #[test]
+    fn bytes_tail_matches_equivalent_page() {
+        let conn = byte_capture();
+
+        let tail = get_bytes_tail_rows_with_conn(&conn, "b1", 2).unwrap();
+        let (page, total) = get_bytes_paginated_with_conn(&conn, "b1", 4, 2).unwrap();
+
+        assert_eq!(total, 6);
+        assert_eq!(
+            tail.iter().map(|b| b.byte).collect::<Vec<_>>(),
+            page.iter().map(|b| b.byte).collect::<Vec<_>>()
+        );
     }
 
     fn selection(groups: &[(&str, &[u32])]) -> FrameSelection {

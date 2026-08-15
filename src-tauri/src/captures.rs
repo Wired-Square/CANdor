@@ -547,13 +547,16 @@ pub struct BytesTailResponse {
 }
 
 /// Get the most recent bytes from a capture (tail view for serial discovery).
+///
+/// The live view calls this on every byte-count signal, so it must not scan the
+/// capture: the rows come from a `ORDER BY rowid DESC LIMIT n` tail and the total
+/// from the registry's O(1) counter.
 #[tauri::command(rename_all = "snake_case")]
-pub fn get_capture_bytes_tail(capture_id: String, tail_size: usize) -> BytesTailResponse {
-    let total_count = capture_store::get_capture_count(&capture_id);
-    let offset = total_count.saturating_sub(tail_size);
-    let limit = tail_size.min(total_count);
-    let (bytes, _) = capture_store::get_capture_bytes_paginated(&capture_id, offset, limit);
-    BytesTailResponse { bytes, total_count }
+pub async fn get_capture_bytes_tail(capture_id: String, tail_size: usize) -> BytesTailResponse {
+    BytesTailResponse {
+        bytes: capture_store::get_capture_bytes_tail(&capture_id, tail_size),
+        total_count: capture_store::get_capture_count(&capture_id),
+    }
 }
 
 // ============================================================================

@@ -670,17 +670,27 @@ pub fn next_indexed_name(base: &str) -> String {
     format!("{}_{}", base, max_n + 1)
 }
 
-/// Get the frame capture ID for a session, if one exists.
-pub fn get_session_frame_capture_id(session_id: &str) -> Option<String> {
+/// The capture of `kind` owned by `session_id`, if one exists. A session owns at most
+/// one of each kind, so this identifies it uniquely.
+fn session_capture_id(session_id: &str, kind: CaptureKind) -> Option<String> {
     let registry = CAPTURE_REGISTRY.read().unwrap();
     registry
         .captures
         .values()
         .find(|b| {
-            b.metadata.owning_session_id.as_deref() == Some(session_id)
-                && b.metadata.kind == CaptureKind::Frames
+            b.metadata.owning_session_id.as_deref() == Some(session_id) && b.metadata.kind == kind
         })
         .map(|b| b.metadata.id.clone())
+}
+
+/// Get the frame capture ID for a session, if one exists.
+pub fn get_session_frame_capture_id(session_id: &str) -> Option<String> {
+    session_capture_id(session_id, CaptureKind::Frames)
+}
+
+/// Get the byte capture ID for a session, if one exists.
+pub fn get_session_bytes_capture_id(session_id: &str) -> Option<String> {
+    session_capture_id(session_id, CaptureKind::Bytes)
 }
 
 /// Append frames to this session's frame capture.
@@ -690,13 +700,7 @@ pub fn append_frames_to_session(session_id: &str, new_frames: Vec<FrameMessage>)
     if new_frames.is_empty() { return; }
     // Tap test pattern frames for active io_test runners
     crate::io_test::tap_test_frames(session_id, &new_frames);
-    let capture_id = {
-        let registry = CAPTURE_REGISTRY.read().unwrap();
-        registry.captures.values()
-            .find(|b| b.metadata.owning_session_id.as_deref() == Some(session_id)
-                    && b.metadata.kind == CaptureKind::Frames)
-            .map(|b| b.metadata.id.clone())
-    };
+    let capture_id = get_session_frame_capture_id(session_id);
     if let Some(id) = capture_id {
         append_frames_to_capture(&id, new_frames);
     } else {
@@ -709,14 +713,7 @@ pub fn append_frames_to_session(session_id: &str, new_frames: Vec<FrameMessage>)
 /// capture kind == Bytes. No-op if session has no byte capture.
 pub fn append_raw_bytes_to_session(session_id: &str, new_bytes: Vec<TimestampedByte>) {
     if new_bytes.is_empty() { return; }
-    let capture_id = {
-        let registry = CAPTURE_REGISTRY.read().unwrap();
-        registry.captures.values()
-            .find(|b| b.metadata.owning_session_id.as_deref() == Some(session_id)
-                    && b.metadata.kind == CaptureKind::Bytes)
-            .map(|b| b.metadata.id.clone())
-    };
-    if let Some(id) = capture_id {
+    if let Some(id) = get_session_bytes_capture_id(session_id) {
         append_raw_bytes_to_capture(&id, new_bytes);
     }
 }
@@ -1170,25 +1167,25 @@ pub fn append_raw_bytes_to_capture(capture_id: &str, new_bytes: Vec<TimestampedB
 /// Get raw bytes from a specific capture.
 /// Returns None if capture doesn't exist or is not a byte capture.
 pub fn get_capture_bytes(id: &str) -> Option<Vec<TimestampedByte>> {
-    let registry = CAPTURE_REGISTRY.read().unwrap();
-    let cap = registry.captures.get(id)?;
-    if cap.metadata.kind != CaptureKind::Bytes {
+    if !is_byte_capture(id) {
         return None;
     }
-    drop(registry);
 
     capture_db::get_all_bytes(id).ok()
+}
+
+/// Whether `id` names a capture that holds bytes. Byte queries return empty rather
+/// than erroring for a frames capture, so every one of them checks first.
+fn is_byte_capture(id: &str) -> bool {
+    let registry = CAPTURE_REGISTRY.read().unwrap();
+    matches!(registry.captures.get(id), Some(b) if b.metadata.kind == CaptureKind::Bytes)
 }
 
 /// Get a page of bytes from a specific capture.
 /// Returns (bytes, total_count).
 pub fn get_capture_bytes_paginated(id: &str, offset: usize, limit: usize) -> (Vec<TimestampedByte>, usize) {
-    {
-        let registry = CAPTURE_REGISTRY.read().unwrap();
-        match registry.captures.get(id) {
-            Some(b) if b.metadata.kind == CaptureKind::Bytes => {},
-            _ => return (Vec::new(), 0),
-        }
+    if !is_byte_capture(id) {
+        return (Vec::new(), 0);
     }
 
     match capture_db::get_bytes_paginated(id, offset, limit) {
@@ -1200,14 +1197,23 @@ pub fn get_capture_bytes_paginated(id: &str, offset: usize, limit: usize) -> (Ve
     }
 }
 
+/// Get the last `limit` bytes from a specific capture, oldest first.
+/// The caller takes the total from `get_capture_count`, which is O(1).
+pub fn get_capture_bytes_tail(id: &str, limit: usize) -> Vec<TimestampedByte> {
+    if !is_byte_capture(id) {
+        return Vec::new();
+    }
+
+    capture_db::get_bytes_tail_rows(id, limit).unwrap_or_else(|e| {
+        tlog!("[CaptureStore] Failed to get bytes tail: {}", e);
+        Vec::new()
+    })
+}
+
 /// Find the byte offset for a given timestamp in a specific byte capture.
 pub fn find_capture_bytes_offset_for_timestamp_by_id(capture_id: &str, target_time_us: u64) -> usize {
-    {
-        let registry = CAPTURE_REGISTRY.read().unwrap();
-        match registry.captures.get(capture_id) {
-            Some(b) if b.metadata.kind == CaptureKind::Bytes => {},
-            _ => return 0,
-        }
+    if !is_byte_capture(capture_id) {
+        return 0;
     }
 
     match capture_db::find_bytes_offset_for_timestamp(capture_id, target_time_us) {

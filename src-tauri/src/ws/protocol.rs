@@ -39,6 +39,9 @@ pub enum MsgType {
     // Global signal: the decoder-catalogue list changed (mutation, decoder-dir
     // change, or filesystem watcher). The frontend reconciles via list_catalogs.
     CatalogListChanged = 0x18,
+    // Live byte total for a session's byte capture, plus that capture's id. Raw serial
+    // bytes are read from the capture, not streamed, so this is the whole byte signal.
+    ByteCounts       = 0x19,
     Command          = 0x20,
     CommandResponse  = 0x21,
     // Reverse RPC: server (Rust/MCP) → frontend request, frontend → server reply.
@@ -77,6 +80,7 @@ impl TryFrom<u8> for MsgType {
             0x16 => Ok(MsgType::FrameCounts),
             0x17 => Ok(MsgType::OpenAppsChanged),
             0x18 => Ok(MsgType::CatalogListChanged),
+            0x19 => Ok(MsgType::ByteCounts),
             0x20 => Ok(MsgType::Command),
             0x21 => Ok(MsgType::CommandResponse),
             0x30 => Ok(MsgType::BridgeRequest),
@@ -561,6 +565,22 @@ pub fn encode_frame_counts(total: u64, unique: u32) -> Vec<u8> {
     out
 }
 
+// ----------------------------------------------------------------------------
+// 0x19 — Byte Counts
+// ----------------------------------------------------------------------------
+
+/// Encode a ByteCounts payload: total u64 LE + length-prefixed capture id.
+///
+/// The capture id rides along rather than being fetched separately because the byte
+/// capture is created after subscribe, and can be replaced mid-session — carrying it
+/// on every count means the reader never holds a stale id.
+pub fn encode_byte_counts(total: u64, capture_id: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(10 + capture_id.len());
+    out.extend_from_slice(&total.to_le_bytes());
+    out.extend_from_slice(&encode_length_prefixed_str(capture_id));
+    out
+}
+
 pub fn decode_session_info(payload: &[u8]) -> Result<SessionInfoMsg, ProtocolError> {
     if payload.len() < 10 {
         return Err(ProtocolError::InsufficientData { needed: 10, available: payload.len() });
@@ -955,6 +975,33 @@ mod tests {
         buf[11] = 10;   // len = 10, but no body follows
         let result = FrameEnvelope::decode(&buf);
         assert_eq!(result, Err(ProtocolError::InsufficientData { needed: ENVELOPE_HEADER_SIZE + 10, available: ENVELOPE_HEADER_SIZE }));
+    }
+
+    /// Pins the wire layout `decodeByteCounts` in wsProtocol.ts reads. There is no Rust
+    /// decoder to round-trip against, so assert the bytes.
+    #[test]
+    fn byte_counts_layout() {
+        let payload = encode_byte_counts(0x0102, "cap_7");
+
+        assert_eq!(&payload[0..8], &[0x02, 0x01, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(u16::from_le_bytes([payload[8], payload[9]]), 5);
+        assert_eq!(&payload[10..], b"cap_7");
+        assert_eq!(payload.len(), 15);
+    }
+
+    /// An empty capture id still produces a well-formed payload rather than a short read.
+    #[test]
+    fn byte_counts_empty_capture_id() {
+        let payload = encode_byte_counts(0, "");
+
+        assert_eq!(payload.len(), 10);
+        assert_eq!(u16::from_le_bytes([payload[8], payload[9]]), 0);
+    }
+
+    #[test]
+    fn msg_type_byte_counts_round_trips() {
+        assert_eq!(MsgType::try_from(0x19).unwrap(), MsgType::ByteCounts);
+        assert_eq!(MsgType::ByteCounts as u8, 0x19);
     }
 
     #[test]
