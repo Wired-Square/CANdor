@@ -1016,6 +1016,9 @@ pub fn get_capture_frames_tail(
 /// Frame info extracted from a capture
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct CaptureFrameInfo {
+    /// Frame identity is (protocol, frame_id) — CAN 0x100 and Modbus register 256
+    /// are different frames that share a numeric id.
+    pub protocol: String,
     pub frame_id: u32,
     pub max_dlc: u8,
     pub bus: u8,

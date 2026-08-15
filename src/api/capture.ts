@@ -361,6 +361,8 @@ export async function getCaptureFramesPaginatedById(
  * Frame info extracted from the capture
  */
 export interface CaptureFrameInfo {
+  /** Frame identity is (protocol, frame_id) — see `utils/frameKey.ts`. */
+  protocol: string;
   frame_id: number;
   max_dlc: number;
   bus: number;

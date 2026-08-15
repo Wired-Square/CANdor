@@ -123,6 +123,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "frames_capture_rowid_index",
         step: MigrationStep::Sql(include_str!("../migrations/0002_frames_capture_rowid_index.sql")),
     },
+    Migration {
+        version: 3,
+        name: "frames_fid_protocol_index",
+        step: MigrationStep::Sql(include_str!("../migrations/0003_frames_fid_protocol_index.sql")),
+    },
 ];
 
 fn schema_version(conn: &Connection) -> Result<i64, String> {
@@ -657,15 +662,16 @@ pub fn get_frame_info(capture_id: &str) -> Result<Vec<CaptureFrameInfo>, String>
 
     let mut stmt = conn
         .prepare_cached(
-            "SELECT frame_id, MAX(dlc) as max_dlc, MIN(bus) as bus, MAX(is_extended) as is_extended,
+            "SELECT protocol, frame_id, MAX(dlc) as max_dlc, MIN(bus) as bus, MAX(is_extended) as is_extended,
                     (MIN(dlc) != MAX(dlc)) as has_dlc_mismatch
-             FROM frames WHERE capture_id = ?1 GROUP BY frame_id",
+             FROM frames WHERE capture_id = ?1 GROUP BY protocol, frame_id",
         )
         .map_err(|e| format!("Failed to prepare: {}", e))?;
 
     let rows = stmt
         .query_map(params![capture_id], |row| {
             Ok(CaptureFrameInfo {
+                protocol: row.get::<_, String>("protocol")?,
                 frame_id: row.get::<_, i64>("frame_id")? as u32,
                 max_dlc: row.get::<_, i64>("max_dlc")? as u8,
                 bus: row.get::<_, i64>("bus")? as u8,
@@ -1606,6 +1612,7 @@ mod tests {
             vec![
                 (1, "baseline_capture_schema".to_string()),
                 (2, "frames_capture_rowid_index".to_string()),
+                (3, "frames_fid_protocol_index".to_string()),
             ]
         );
         assert!(has_column(&conn, "frames", "capture_id").unwrap());
@@ -1733,6 +1740,48 @@ mod tests {
             plan.contains("idx_frames_capture_rowid"),
             "tail query should use the rowid index, got: {plan}"
         );
+    }
+
+    fn index_columns(conn: &Connection, index: &str) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA index_info({index})"))
+            .unwrap();
+        stmt.query_map([], |r| r.get::<_, String>(2))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    /// Frame identity is (protocol, frame_id), so the filtered COUNT tests protocol too
+    /// and the index has to carry it or stop being covering — and one of the two counts
+    /// is on the live tail path. Migration 3 replaces the v1 index rather than adding
+    /// one, so a database holding the narrow version must end up with the wide one, not
+    /// both. A fresh database takes the same path: migration 1 creates the narrow index.
+    #[test]
+    fn frame_id_index_is_widened_to_carry_protocol() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_TABLES_SQL).unwrap();
+        conn.execute_batch(SCHEMA_INDEXES_SQL).unwrap();
+        assert_eq!(
+            index_columns(&conn, "idx_frames_capture_fid"),
+            vec!["capture_id", "frame_id"]
+        );
+
+        run_migrations(&mut conn).unwrap();
+
+        assert_eq!(
+            index_columns(&conn, "idx_frames_capture_fid"),
+            vec!["capture_id", "frame_id", "protocol"]
+        );
+        let matching: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'index' AND tbl_name = 'frames' AND name LIKE 'idx_frames_capture_fid%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(matching, 1);
     }
 
     #[test]

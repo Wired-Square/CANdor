@@ -39,9 +39,9 @@ Stores CAN frames and framed serial messages. One row per frame received.
 |--------|------|----------|---------|-------------|
 | `rowid` | INTEGER | NO | autoincrement | Primary key. Insertion order is preserved and used for pagination, chunked streaming, and position tracking. |
 | `capture_id` | TEXT | NO | | Logical capture this frame belongs to (6–8 char random ID, e.g. `xk9m2p`). Multiple captures coexist in the same table. |
-| `protocol` | TEXT | NO | | Protocol identifier (e.g. `can`, `j1939`, `obd2`, `isotp`). |
+| `protocol` | TEXT | NO | | One of `can`, `modbus`, `serial` — no writer emits anything else (CAN FD is `can` with `is_fd = 1`). Half of a frame's identity: see `frame_id`. |
 | `timestamp_us` | INTEGER | NO | | Timestamp in microseconds. Source-dependent (device clock or import timestamp). |
-| `frame_id` | INTEGER | NO | | CAN arbitration ID (11-bit or 29-bit). Stored as unsigned 32-bit value. |
+| `frame_id` | INTEGER | NO | | CAN arbitration ID (11- or 29-bit) or Modbus register, as unsigned 32-bit. **Not unique on its own** — identity is `(protocol, frame_id)`, since CAN `0x100` and Modbus register 256 are different frames. Filtered reads key on the pair. |
 | `bus` | INTEGER | NO | | Bus/interface number. `0` for single-bus sources. |
 | `dlc` | INTEGER | NO | | Data length code (0-8 for classic CAN, 0-64 for CAN FD). |
 | `payload` | BLOB | NO | | Raw frame payload bytes. Length may differ from `dlc` in some protocols. |
@@ -86,7 +86,7 @@ One row per capture. Survives `ALTER TABLE RENAME` from the legacy
 | Index | Columns | Purpose |
 |-------|---------|---------|
 | `idx_frames_capture_ts` | `(capture_id, timestamp_us)` | Timestamp-based seeks and lookback window queries. |
-| `idx_frames_capture_fid` | `(capture_id, frame_id)` | Filtered pagination by frame ID. |
+| `idx_frames_capture_fid` | `(capture_id, frame_id, protocol)` | Filtered pagination by frame identity. `protocol` is in the key so the filtered `COUNT(*)` stays covering — frame identity is `(protocol, frame_id)`, not the bare id. |
 | `idx_frames_capture_rowid` | `(capture_id, rowid)` | The live frame tail (`ORDER BY rowid DESC LIMIT n`). Without it SQLite sorts the whole capture into a temp b-tree on a query the frames view reissues twice a second. |
 | `idx_bytes_capture_ts` | `(capture_id, timestamp_us)` | Timestamp-based seeks for byte captures. |
 
