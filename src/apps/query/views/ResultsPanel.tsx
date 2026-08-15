@@ -30,7 +30,7 @@ import { monoBody, emptyStateContainer, emptyStateText, emptyStateHeading, empty
 import { iconSm, iconMd, iconXl } from "../../../styles/spacing";
 import { bgSurface, borderDefault, borderDivider, hoverBg, textPrimary, textSecondary, textMuted, textDataAmber, textDataGreen, textDataPurple, textDataCyan, textDanger } from "../../../styles/colourTokens";
 import { useAutoRowCount } from "../../../hooks/useAutoRowCount";
-import { resolvePageSize, type PageSize } from "../../../utils/pageSize";
+import { pageCount, resolvePageSize, type PageSize } from "../../../utils/pageSize";
 
 interface Props {
   selectedQuery: QueuedQuery | null;
@@ -96,7 +96,7 @@ export default function ResultsPanel({
     const start = currentPage * pageSize;
     return {
       paginatedResults: allResults.slice(start, Math.min(start + pageSize, resultCount)),
-      totalPages: Math.ceil(resultCount / pageSize),
+      totalPages: pageCount(resultCount, pageSize),
       pageStart: start,
     };
   }, [results, resultCount, currentPage, pageSize]);

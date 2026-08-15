@@ -285,8 +285,7 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
 
   // Handle page size change
   const handlePageSizeChange = useCallback((newSize: PageSize) => {
-    // This view offers no Auto and its options are all numeric, so the modes are
-    // unreachable — narrowing here is what keeps the store's plain count honest.
+    // No Auto here and the options are all numeric, so the modes are unreachable.
     if (typeof newSize !== 'number') return;
     setRawBytesPageSize(newSize);
     // Reset to first page when changing size (only applies when not streaming)

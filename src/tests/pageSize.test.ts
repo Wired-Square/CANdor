@@ -32,7 +32,6 @@ describe("resolvePageSize", () => {
     // The whole point: a view guards on null rather than fetching an arbitrary page at
     // mount and replacing it a frame later. The type makes forgetting a compile error.
     expect(resolvePageSize("auto", null)).toBeNull();
-    expect(resolvePageSize("auto", 0)).toBeNull();
   });
 
   it("resolves all to the supplied total, or a bounded fallback", () => {
@@ -109,7 +108,7 @@ describe("computeAutoRows", () => {
 
 describe("shouldCommit", () => {
   it("commits the first measurement", () => {
-    expect(shouldCommit(30, 0, 739, 0, 24)).toBe(true);
+    expect(shouldCommit(30, null, 739, 0, 24)).toBe(true);
   });
 
   it("ignores a recomputation that lands on the same count", () => {

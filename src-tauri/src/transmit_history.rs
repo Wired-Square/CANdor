@@ -171,9 +171,9 @@ pub fn count() -> i64 {
 
 /// Return up to `limit` rows ordered by newest first, starting at `offset`.
 ///
-/// Unsigned deliberately: SQLite reads a negative `LIMIT` as *no limit*, so a bad
-/// value would quietly return the whole table. `u32` makes serde reject it instead.
-pub fn query(offset: u32, limit: u32) -> Vec<TransmitHistoryRow> {
+/// Unsigned deliberately, matching the capture readers: SQLite reads a negative `LIMIT`
+/// as *no limit*, so a bad value would quietly return the whole table instead of erroring.
+pub fn query(offset: usize, limit: usize) -> Vec<TransmitHistoryRow> {
     let db = match DB.lock() {
         Ok(g) => g,
         Err(_) => return vec![],
@@ -267,7 +267,7 @@ pub fn find_offset(timestamp_us: i64) -> i64 {
 // ============================================================================
 
 #[tauri::command]
-pub fn transmit_history_query(offset: u32, limit: u32) -> Result<Vec<TransmitHistoryRow>, String> {
+pub fn transmit_history_query(offset: usize, limit: usize) -> Result<Vec<TransmitHistoryRow>, String> {
     Ok(query(offset, limit))
 }
 

@@ -9,7 +9,13 @@
 // unresolved setting does not compile, and neither does arithmetic on a resolved
 // size that has not been null-checked.
 
-/** What the rows-per-page control holds. */
+/**
+ * What the rows-per-page control holds.
+ *
+ * `"all"` is not currently selectable — no options array offers it. It survives as the
+ * "this view has no pager" value, and because `resolvePageSize` is already built for it
+ * if it is ever offered as a real choice.
+ */
 export type PageSize = number | "auto" | "all";
 
 /** A concrete row count, or `null` while an Auto fit has not been measured. */
@@ -33,7 +39,7 @@ export function resolvePageSize(
   /** Real total for `all`; omit and it falls back to a bounded cap. */
   allRows?: number,
 ): ResolvedPageSize {
-  if (setting === "auto") return autoRows !== null && autoRows > 0 ? autoRows : null;
+  if (setting === "auto") return autoRows;
   if (setting === "all") return Math.max(1, allRows ?? ALL_FALLBACK_ROWS);
   return setting > 0 ? setting : DEFAULT_PAGE_SIZE;
 }

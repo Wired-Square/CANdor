@@ -82,13 +82,13 @@ export function computeAutoRows(m: {
  */
 export function shouldCommit(
   next: number,
-  committed: number,
+  committed: number | null,
   usablePx: number,
   committedUsablePx: number,
   rowHeight: number,
 ): boolean {
   if (next === committed) return false;
-  if (committed === 0) return true; // first measurement
+  if (committed === null) return true; // first measurement
   return Math.abs(usablePx - committedUsablePx) >= Math.max(8, rowHeight / 2);
 }
 
@@ -112,7 +112,12 @@ export function useAutoRowCount({
   // `remeasure` — keep a stable identity and the ResizeObserver is built once. When these
   // were state deps, committing a row height tore the observer down and rebuilt it, and
   // the rebuild's cleanup cancelled the very work the commit had just scheduled.
-  const committedRef = useRef({ rows: 0, usablePx: 0, rowHeight: fallbackRowHeight, isMeasured: false });
+  const committedRef = useRef<{
+    rows: number | null;
+    usablePx: number;
+    rowHeight: number;
+    isMeasured: boolean;
+  }>({ rows: null, usablePx: 0, rowHeight: fallbackRowHeight, isMeasured: false });
   // Height reported by the observer. ResizeObserver delivers post-layout, so reading it
   // costs nothing, whereas `clientHeight` forces a style+layout flush.
   const observedHeightRef = useRef(0);
@@ -183,7 +188,7 @@ export function useAutoRowCount({
     }, settleMs);
   }, [measure, settleMs]);
 
-  // First measurement runs before paint, so the initial rows === 0 render is never shown.
+  // First measurement runs before paint, so the initial null-rows render is never shown.
   useLayoutEffect(() => {
     if (enabled) measure();
   }, [enabled, measure]);

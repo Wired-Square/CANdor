@@ -80,7 +80,7 @@ function clampAnchor(anchorRow: number, totalCount: number, pageSize: ResolvedPa
 
 /** Snap an offset down to the start of the page containing it. */
 function pageAlignedAnchor(offset: number, pageSize: ResolvedPageSize): number {
-  const size = Math.max(1, pageSize ?? 1);
+  const size = pageSize ?? 1;
   return Math.max(0, Math.floor(offset / size) * size);
 }
 
@@ -402,7 +402,7 @@ export function useCaptureFrameView(
   // Page buttons still move in whole pages; the anchor is what a resize preserves.
   const currentPage = pageForOffset(pageStartIndex, pageSize);
   const setCurrentPage = useCallback((page: number) => {
-    setAnchorRow(Math.max(0, page) * Math.max(1, pageSizeRef.current ?? 1));
+    setAnchorRow(Math.max(0, page) * (pageSizeRef.current ?? 1));
   }, []);
   /** Put `row` at the top of the window. */
   const goToRow = useCallback((row: number) => setAnchorRow(Math.max(0, row)), []);

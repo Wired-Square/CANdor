@@ -60,8 +60,7 @@ export default function FilteredTabContent({
   const toggleShowBusColumn = useDiscoveryUIStore((s) => s.toggleShowBusColumn);
 
   const [currentPage, setCurrentPage] = useState(0);
-  // Auto by default; the table measures itself and reports how many rows fit. Everything
-  // below uses the resolved count — the setting itself cannot reach an offset.
+  // Auto by default; the table measures itself and reports how many rows fit.
   const [pageSizeSetting, setPageSizeSetting] = useState<PageSize>("auto");
   const [autoRows, setAutoRows] = useState<number | null>(null);
   const pageSize = resolvePageSize(pageSizeSetting, autoRows);

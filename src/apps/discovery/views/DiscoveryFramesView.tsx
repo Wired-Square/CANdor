@@ -10,7 +10,7 @@ import { useDiscoveryUIStore } from "../../../stores/discoveryUIStore";
 import { useDiscoveryToolboxStore } from "../../../stores/discoveryToolboxStore";
 import { type CaptureMetadata, searchCaptureFrames } from "../../../api/capture";
 import { FrameDataTable, type TabDefinition, FRAME_PAGE_SIZE_OPTIONS } from "../components";
-import { resolvePageSize, type PageSize } from "../../../utils/pageSize";
+import { pageForOffset, resolvePageSize, type PageSize } from "../../../utils/pageSize";
 import DiscoveryFindBar, { type FindSearchMode } from "../components/DiscoveryFindBar";
 import AppTabView from "../../../components/AppTabView";
 import { PlaybackControls, type PlaybackState } from "../../../components/PlaybackControls";
@@ -687,13 +687,11 @@ function DiscoveryFramesView({
     ? findResults[findCurrentIndex]
     : null;
   // Unmeasured page size means no page to compare against, so no match highlight yet.
-  const currentMatchPage = currentMatchOffset != null && pageSize !== null
-    ? Math.floor(currentMatchOffset / pageSize)
+  const currentMatch = currentMatchOffset != null && pageSize !== null
+    ? { page: pageForOffset(currentMatchOffset, pageSize), row: currentMatchOffset % pageSize }
     : null;
   const effectiveHighlightedRow =
-    currentMatchPage === effectiveCurrentPage && currentMatchOffset != null && pageSize !== null
-      ? currentMatchOffset % pageSize
-      : highlightedRowIndex;
+    currentMatch?.page === effectiveCurrentPage ? currentMatch.row : highlightedRowIndex;
 
   // Handle row click - convert row index to global frame index and get timestamp
   const handleRowClick = useCallback((rowIndex: number) => {

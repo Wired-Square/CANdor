@@ -491,10 +491,7 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 
-  setFramedPageSize: (size) =>
-    set({
-      framedPageSize: typeof size === 'number' ? Math.min(10000, Math.max(1, size)) : size,
-    }),
+  setFramedPageSize: (size) => set({ framedPageSize: size }),
 
   // Backend buffer actions
   setBytesCaptureId: (id) => set({ bytesCaptureId: id }),

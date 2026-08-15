@@ -206,8 +206,6 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
   // Read serialConfig from store to initialize extraction configs
   const serialConfig = useDiscoveryStore((s) => s.serialConfig);
 
-  // Pagination state from store. `effectivePageSize` below is the only thing the paging
-  // maths may use — the setting itself carries Auto / All and cannot reach an offset.
   const pageSizeSetting = useDiscoverySerialStore((s) => s.framedPageSize);
   const setPageSize = useDiscoverySerialStore((s) => s.setFramedPageSize);
   const [autoRows, setAutoRows] = useState<number | null>(null);
@@ -304,21 +302,37 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
     setCurrentPage(0); // Reset to first page when buffer changes
   }, [framedCaptureId]);
 
+  // Filter to complete frames only (for prop-based frames)
+  const completeFrames = useMemo(() => {
+    if (useBackendBuffer) {
+      return backendFrames; // Backend frames are already filtered
+    }
+    return frames.filter(f => !f.incomplete);
+  }, [useBackendBuffer, backendFrames, frames]);
+
+  // Total frame count - use store's backendFrameCount for backend mode (updates during streaming)
+  const totalFrames = useBackendBuffer ? backendFrameCount : completeFrames.length;
+
+  // The one resolved page size in this component — declared above the fetch effect so the
+  // effect closes over it rather than resolving a second time from its own arguments.
+  const effectivePageSize = resolvePageSize(pageSizeSetting, autoRows, totalFrames);
+
   // Fetch frames from backend when page changes or frame count updates (backend buffer mode)
   useEffect(() => {
+    // The null check belongs in the condition, with the size in the deps, so the fetch
+    // re-runs when the measurement lands — see docs/capture-flow.md § Auto rows-per-page.
     if (!useBackendBuffer || !framedCaptureId || backendFrameCount === 0) return;
+    if (effectivePageSize === null) return;
 
     const fetchPage = async () => {
       setIsLoadingPage(true);
       try {
-        const effectiveSize = resolvePageSize(pageSizeSetting, autoRows, backendFrameCount);
-        if (effectiveSize === null) return; // auto size not measured yet
         // During streaming, always show the last page (latest frames)
         const offset = isStreaming
-          ? Math.max(0, backendFrameCount - effectiveSize)
-          : currentPage * effectiveSize;
+          ? Math.max(0, backendFrameCount - effectivePageSize)
+          : currentPage * effectivePageSize;
         // Fetch from the specific frames buffer by ID (not the active buffer)
-        const response = await getCaptureFramesPaginatedById(framedCaptureId, offset, effectiveSize);
+        const response = await getCaptureFramesPaginatedById(framedCaptureId, offset, effectivePageSize);
 
         // Convert CaptureFrame to FrameMessage
         const fetchedFrames: FrameMessage[] = response.frames.map((f: CaptureFrame) => ({
@@ -344,18 +358,7 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
     };
 
     fetchPage();
-  }, [useBackendBuffer, framedCaptureId, currentPage, pageSizeSetting, autoRows, backendFrameCount, isStreaming, framedDataTrigger]);
-
-  // Filter to complete frames only (for prop-based frames)
-  const completeFrames = useMemo(() => {
-    if (useBackendBuffer) {
-      return backendFrames; // Backend frames are already filtered
-    }
-    return frames.filter(f => !f.incomplete);
-  }, [useBackendBuffer, backendFrames, frames]);
-
-  // Total frame count - use store's backendFrameCount for backend mode (updates during streaming)
-  const totalFrames = useBackendBuffer ? backendFrameCount : completeFrames.length;
+  }, [useBackendBuffer, framedCaptureId, currentPage, effectivePageSize, backendFrameCount, isStreaming, framedDataTrigger]);
 
   // Check if any frame has source_address set
   const hasSourceAddresses = useBackendBuffer
@@ -368,8 +371,6 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
     return sourcFrames.slice(0, 50).map(f => f.bytes);
   }, [useBackendBuffer, backendFrames, completeFrames]);
 
-  // Pagination calculations
-  const effectivePageSize = resolvePageSize(pageSizeSetting, autoRows, totalFrames);
   const totalPages = pageCount(totalFrames, effectivePageSize);
 
   // Reset page when streaming starts or when frame count changes significantly
