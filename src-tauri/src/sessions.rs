@@ -1249,7 +1249,7 @@ pub async fn resume_session_to_live(
 /// Returns the new frame index and timestamp after stepping, or None if at the boundary.
 /// Only works when the session is paused.
 /// Requires either current_frame_index or current_timestamp_us to determine position.
-/// If filter_frame_ids is provided, skips frames that don't match the filter.
+/// If filter_selection is provided, skips frames it does not name.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn step_capture_frame(
     app: tauri::AppHandle,
@@ -1258,9 +1258,10 @@ pub async fn step_capture_frame(
     current_frame_index: Option<usize>,
     current_timestamp_us: Option<i64>,
     backward: bool,
-    filter_frame_ids: Option<Vec<u32>>,
+    filter_selection: Option<Vec<crate::capture_store::ProtocolFrames>>,
 ) -> Result<Option<StepResult>, String> {
-    step_frame(&app, &session_id, &capture_id, current_frame_index, current_timestamp_us, backward, filter_frame_ids.as_deref())
+    let selection = crate::capture_store::FrameSelection::from_groups(filter_selection.unwrap_or_default());
+    step_frame(&app, &session_id, &capture_id, current_frame_index, current_timestamp_us, backward, &selection)
 }
 
 // Legacy heartbeat commands removed - use register_session_subscriber/unregister_session_subscriber instead

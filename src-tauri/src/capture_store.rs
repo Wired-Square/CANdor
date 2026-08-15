@@ -86,16 +86,81 @@ struct NamedCapture {
     metadata: CaptureMetadata,
     /// In-memory set for efficient bus tracking during streaming
     seen_buses: HashSet<u8>,
-    /// Distinct (bus, frame_id) keys seen during streaming, for a cheap O(1)
+    /// Distinct frame ids per protocol seen during streaming, for a cheap O(1)
     /// unique-frame count. Populated on append only — empty for DB-hydrated
     /// captures (their live "unique" display uses a different path).
-    unique_frame_ids: HashSet<u64>,
+    unique_frames: HashMap<String, HashSet<u32>>,
 }
 
-/// Pack (bus, frame_id) into one key for the unique-frame set.
+/// Record a frame's identity in the unique-frame index. Clones the protocol only the
+/// first time each one is seen, so the streaming path stays allocation-free.
 #[inline]
-fn unique_frame_key(bus: u8, frame_id: u32) -> u64 {
-    ((bus as u64) << 32) | frame_id as u64
+fn note_unique_frame(unique: &mut HashMap<String, HashSet<u32>>, frame: &FrameMessage) {
+    if let Some(ids) = unique.get_mut(&frame.protocol) {
+        ids.insert(frame.frame_id);
+    } else {
+        unique.insert(frame.protocol.clone(), HashSet::from([frame.frame_id]));
+    }
+}
+
+/// A protocol and the frame ids selected under it.
+///
+/// Frame identity is (protocol, frame_id): CAN 0x100 and Modbus register 256 are
+/// different frames that share a numeric id, so a bare id over-matches across
+/// protocols. Grouping keeps the protocol string off every entry — a busy selection
+/// is thousands of ids across at most three protocols.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProtocolFrames {
+    pub protocol: String,
+    pub frame_ids: Vec<u32>,
+}
+
+/// A normalised frame selection: empty groups dropped, ids deduplicated.
+///
+/// Every consumer reads empty as "select everything", so a group carrying no ids must
+/// not leave the selection looking non-empty — that would turn "select nothing" into
+/// "select everything".
+#[derive(Debug, Clone, Default)]
+pub struct FrameSelection(HashMap<String, HashSet<u32>>);
+
+impl FrameSelection {
+    pub fn from_groups(groups: Vec<ProtocolFrames>) -> Self {
+        let mut by_protocol: HashMap<String, HashSet<u32>> = HashMap::new();
+        for group in groups {
+            if group.frame_ids.is_empty() {
+                continue;
+            }
+            by_protocol
+                .entry(group.protocol)
+                .or_default()
+                .extend(group.frame_ids);
+        }
+        Self(by_protocol)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// True when every frame the capture has seen is selected, so the filter can be
+    /// skipped entirely. Discovery auto-selects each id it discovers, making this the
+    /// common case.
+    pub fn covers(&self, unique: &HashMap<String, HashSet<u32>>) -> bool {
+        unique.iter().all(|(protocol, ids)| {
+            self.0.get(protocol).is_some_and(|selected| ids.is_subset(selected))
+        })
+    }
+
+    /// (frame_id, protocol) pairs, sorted so the JSON payload is stable across calls.
+    pub fn pairs(&self) -> Vec<(u32, &str)> {
+        let mut pairs: Vec<(u32, &str)> = self
+            .0
+            .iter()
+            .flat_map(|(protocol, ids)| ids.iter().map(move |id| (*id, protocol.as_str())))
+            .collect();
+        pairs.sort_unstable();
+        pairs
+    }
 }
 
 /// Capture registry holding multiple named captures
@@ -221,7 +286,7 @@ fn create_capture_internal(kind: CaptureKind, name: String, set_streaming: bool)
         buses: Vec::new(),
     };
 
-    let capture = NamedCapture { metadata: metadata.clone(), seen_buses: HashSet::new(), unique_frame_ids: HashSet::new() };
+    let capture = NamedCapture { metadata: metadata.clone(), seen_buses: HashSet::new(), unique_frames: HashMap::new() };
     registry.captures.insert(id.clone(), capture);
 
     if set_streaming {
@@ -333,7 +398,7 @@ pub fn clear_capture(id: &str) -> Result<(), String> {
             cap.metadata.end_time_us = None;
             cap.metadata.buses = Vec::new();
             cap.seen_buses.clear();
-            cap.unique_frame_ids.clear();
+            cap.unique_frames.clear();
         } else {
             return Err(format!("Capture '{}' not found", id));
         }
@@ -475,7 +540,7 @@ pub fn hydrate_from_db() {
                 ..meta
             },
             seen_buses,
-            unique_frame_ids: HashSet::new(),
+            unique_frames: HashMap::new(),
         };
 
         // Persist if we changed anything (backfilled buses or orphaned)
@@ -759,7 +824,7 @@ pub fn copy_capture(source_capture_id: &str, new_name: String) -> Result<String,
         };
 
         let seen_buses: HashSet<u8> = source_metadata.buses.iter().copied().collect();
-        let entry = NamedCapture { metadata: metadata.clone(), seen_buses, unique_frame_ids: HashSet::new() };
+        let entry = NamedCapture { metadata: metadata.clone(), seen_buses, unique_frames: HashMap::new() };
         registry.captures.insert(id.clone(), entry);
         (id, metadata)
     };
@@ -810,7 +875,7 @@ pub fn append_frames_to_capture(capture_id: &str, new_frames: Vec<FrameMessage>)
             let prev_len = cap.seen_buses.len();
             for f in &new_frames {
                 cap.seen_buses.insert(f.bus);
-                cap.unique_frame_ids.insert(unique_frame_key(f.bus, f.frame_id));
+                note_unique_frame(&mut cap.unique_frames, f);
             }
             if cap.seen_buses.len() != prev_len {
                 let mut sorted: Vec<u8> = cap.seen_buses.iter().copied().collect();
@@ -847,10 +912,10 @@ pub fn clear_and_refill_capture(capture_id: &str, new_frames: Vec<FrameMessage>)
 
             // Reset and rebuild bus + unique-frame tracking
             cap.seen_buses.clear();
-            cap.unique_frame_ids.clear();
+            cap.unique_frames.clear();
             for f in &new_frames {
                 cap.seen_buses.insert(f.bus);
-                cap.unique_frame_ids.insert(unique_frame_key(f.bus, f.frame_id));
+                note_unique_frame(&mut cap.unique_frames, f);
             }
             let mut sorted: Vec<u8> = cap.seen_buses.iter().copied().collect();
             sorted.sort();
@@ -916,7 +981,7 @@ pub fn get_capture_frames_paginated_filtered(
     id: &str,
     offset: usize,
     limit: usize,
-    selected_ids: &std::collections::HashSet<u32>,
+    selection: &FrameSelection,
 ) -> (Vec<FrameMessage>, Vec<usize>, usize) {
     {
         let registry = CAPTURE_REGISTRY.read().unwrap();
@@ -926,12 +991,11 @@ pub fn get_capture_frames_paginated_filtered(
         }
     }
 
-    if selected_ids.is_empty() {
+    if selection.is_empty() {
         return get_capture_frames_paginated(id, offset, limit);
     }
 
-    let frame_ids: Vec<u32> = selected_ids.iter().copied().collect();
-    match capture_db::get_frames_paginated_filtered(id, offset, limit, &frame_ids) {
+    match capture_db::get_frames_paginated_filtered(id, offset, limit, selection) {
         Ok((frames, rowids, total)) => {
             let indices = rowids.into_iter().map(|r| r as usize).collect();
             (frames, indices, total)
@@ -966,11 +1030,7 @@ impl TailResponse {
 
 /// Get the most recent N frames from a capture, optionally filtered by frame IDs.
 /// Returns the frames in chronological order (oldest first) for display.
-pub fn get_capture_frames_tail(
-    id: &str,
-    limit: usize,
-    selected_ids: &std::collections::HashSet<u32>,
-) -> TailResponse {
+pub fn get_capture_frames_tail(id: &str, limit: usize, selection: &FrameSelection) -> TailResponse {
     // The registry tracks the count, the end time and the distinct frame ids for every
     // capture. The live view refetches this on each frame-count signal, so answering from
     // RAM keeps a COUNT(*) and a MAX() scan of the whole capture off that path.
@@ -980,23 +1040,18 @@ pub fn get_capture_frames_tail(
             Some(b) if b.metadata.kind == CaptureKind::Frames => {
                 // Discovery auto-selects every id it discovers, so the common case is a
                 // selection that excludes nothing. Recognising that takes the cheap path
-                // instead of filtering by every id in the capture. Keys are
-                // (bus << 32 | frame_id); the same id on two buses is one selection entry.
-                let covers = b
-                    .unique_frame_ids
-                    .iter()
-                    .all(|k| selected_ids.contains(&(*k as u32)));
+                // instead of filtering by every id in the capture.
+                let covers = selection.covers(&b.unique_frames);
                 (b.metadata.count, b.metadata.end_time_us, covers)
             }
             _ => return TailResponse::empty(),
         }
     };
 
-    let result = if selected_ids.is_empty() || covers_everything {
+    let result = if selection.is_empty() || covers_everything {
         capture_db::get_frames_tail_rows(id, limit).map(|(frames, rowids)| (frames, rowids, total))
     } else {
-        let frame_ids: Vec<u32> = selected_ids.iter().copied().collect();
-        capture_db::get_frames_tail_filtered(id, limit, &frame_ids)
+        capture_db::get_frames_tail_filtered(id, limit, selection)
     };
 
     match result {
@@ -1049,7 +1104,7 @@ pub fn get_capture_frame_info(id: &str) -> Vec<CaptureFrameInfo> {
 pub fn find_capture_offset_for_timestamp(
     id: &str,
     target_time_us: u64,
-    selected_ids: &std::collections::HashSet<u32>,
+    selection: &FrameSelection,
 ) -> usize {
     {
         let registry = CAPTURE_REGISTRY.read().unwrap();
@@ -1059,8 +1114,7 @@ pub fn find_capture_offset_for_timestamp(
         }
     }
 
-    let frame_ids: Vec<u32> = selected_ids.iter().copied().collect();
-    match capture_db::find_offset_for_timestamp(id, target_time_us, &frame_ids) {
+    match capture_db::find_offset_for_timestamp(id, target_time_us, selection) {
         Ok(offset) => offset,
         Err(e) => {
             tlog!("[CaptureStore] Failed to find offset for timestamp: {}", e);
@@ -1185,7 +1239,11 @@ pub fn get_capture_count(id: &str) -> usize {
 /// O(1). Returns 0 for DB-hydrated captures that have had no live appends.
 pub fn get_capture_unique_count(id: &str) -> usize {
     let registry = CAPTURE_REGISTRY.read().unwrap();
-    registry.captures.get(id).map(|b| b.unique_frame_ids.len()).unwrap_or(0)
+    registry
+        .captures
+        .get(id)
+        .map(|b| b.unique_frames.values().map(HashSet::len).sum())
+        .unwrap_or(0)
 }
 
 /// Get the kind of a specific capture.
@@ -1195,3 +1253,61 @@ pub fn get_capture_kind(id: &str) -> Option<CaptureKind> {
 }
 
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn groups(entries: &[(&str, &[u32])]) -> Vec<ProtocolFrames> {
+        entries
+            .iter()
+            .map(|(protocol, ids)| ProtocolFrames {
+                protocol: protocol.to_string(),
+                frame_ids: ids.to_vec(),
+            })
+            .collect()
+    }
+
+    fn unique(entries: &[(&str, &[u32])]) -> HashMap<String, HashSet<u32>> {
+        entries
+            .iter()
+            .map(|(protocol, ids)| (protocol.to_string(), ids.iter().copied().collect()))
+            .collect()
+    }
+
+    /// Empty means "select everything" at every call site, so a group carrying no ids must
+    /// not leave the selection looking non-empty — that would invert "select nothing".
+    #[test]
+    fn groups_with_no_ids_normalise_to_an_empty_selection() {
+        assert!(FrameSelection::from_groups(groups(&[("can", &[])])).is_empty());
+        assert!(FrameSelection::from_groups(Vec::new()).is_empty());
+        assert!(!FrameSelection::from_groups(groups(&[("can", &[256])])).is_empty());
+    }
+
+    #[test]
+    fn repeated_groups_merge_and_deduplicate() {
+        let selection = FrameSelection::from_groups(groups(&[("can", &[256, 256]), ("can", &[257])]));
+        assert_eq!(selection.pairs(), vec![(256, "can"), (257, "can")]);
+    }
+
+    /// The tail skips filtering when the selection covers every frame seen. Keyed on the
+    /// bare id, a CAN-only selection wrongly "covered" a capture holding Modbus too, and
+    /// the tail silently returned unfiltered rows.
+    #[test]
+    fn covers_is_protocol_aware() {
+        let capture = unique(&[("can", &[256]), ("modbus", &[256])]);
+
+        assert!(!FrameSelection::from_groups(groups(&[("can", &[256, 257])])).covers(&capture));
+        assert!(
+            FrameSelection::from_groups(groups(&[("can", &[256]), ("modbus", &[256])]))
+                .covers(&capture)
+        );
+    }
+
+    #[test]
+    fn pairs_are_sorted_regardless_of_insertion_order() {
+        let a = FrameSelection::from_groups(groups(&[("modbus", &[257, 256]), ("can", &[256])]));
+        let b = FrameSelection::from_groups(groups(&[("can", &[256]), ("modbus", &[256, 257])]));
+        assert_eq!(a.pairs(), b.pairs());
+        assert_eq!(a.pairs(), vec![(256, "can"), (256, "modbus"), (257, "modbus")]);
+    }
+}

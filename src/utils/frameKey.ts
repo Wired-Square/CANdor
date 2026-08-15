@@ -24,6 +24,33 @@ export function keyOf(frame: { protocol: string; frame_id: number }): string {
   return `${frame.protocol}:${frame.frame_id}`;
 }
 
+/** A protocol and the frame ids selected under it — the capture filter's wire shape. */
+export interface ProtocolFrames {
+  protocol: string;
+  frame_ids: number[];
+}
+
+/**
+ * Group composite keys for the capture filter API.
+ *
+ * The backend filters on the identity pair, so sending bare numeric ids matched them
+ * across protocols — CAN 0x100 and Modbus register 256 selected each other. Grouping
+ * keeps the protocol string off every entry: a busy selection is thousands of ids
+ * across at most three protocols.
+ *
+ * An empty result means "no filter", which every consumer reads as "all frames".
+ */
+export function groupKeysByProtocol(keys: Iterable<string>): ProtocolFrames[] {
+  const byProtocol = new Map<string, number[]>();
+  for (const key of keys) {
+    const { protocol, frameId } = parseFrameKey(key);
+    const ids = byProtocol.get(protocol);
+    if (ids) ids.push(frameId);
+    else byProtocol.set(protocol, [frameId]);
+  }
+  return [...byProtocol].map(([protocol, frame_ids]) => ({ protocol, frame_ids }));
+}
+
 /**
  * Stable React key for a row in a frame table.
  *

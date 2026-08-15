@@ -3,7 +3,7 @@
 //! MCP tool definitions. Read tools are always available; control (mutation)
 //! tools are only merged into the router when `mcp_allow_control` is on.
 
-use std::collections::HashSet;
+use crate::capture_store::{FrameSelection, ProtocolFrames};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -272,17 +272,29 @@ impl WireTapTools {
         ok_json(json!({ "total": total, "offset": p.offset, "frames": frames }))
     }
 
-    #[tool(description = "Query frames from a capture, optionally filtered to a single frame id (decimal).")]
+    #[tool(description = "Query frames from a capture, optionally filtered to a single frame id (decimal), and optionally to one protocol.")]
     async fn query_capture_frames(
         &self,
         Parameters(p): Parameters<QueryFramesParams>,
     ) -> Result<CallToolResult, McpError> {
-        let selected: HashSet<u32> = p.frame_id.into_iter().collect();
+        // Identity is (protocol, frame_id). With no protocol given, match the id under
+        // every protocol the capture holds, which is what a bare id used to do.
+        let groups = match (p.frame_id, p.protocol) {
+            (None, _) => Vec::new(),
+            (Some(frame_id), Some(protocol)) => {
+                vec![ProtocolFrames { protocol, frame_ids: vec![frame_id] }]
+            }
+            (Some(frame_id), None) => crate::capture_store::get_capture_frame_info(&p.capture_id)
+                .into_iter()
+                .filter(|info| info.frame_id == frame_id)
+                .map(|info| ProtocolFrames { protocol: info.protocol, frame_ids: vec![frame_id] })
+                .collect(),
+        };
         let (frames, _idx, total) = crate::capture_store::get_capture_frames_paginated_filtered(
             &p.capture_id,
             p.offset,
             p.count,
-            &selected,
+            &FrameSelection::from_groups(groups),
         );
         ok_json(json!({ "total": total, "offset": p.offset, "frames": frames }))
     }

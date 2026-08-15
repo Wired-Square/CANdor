@@ -66,6 +66,11 @@ pub struct QueryFramesParams {
     /// Only return frames with this CAN/Modbus frame id (decimal).
     #[serde(default)]
     pub frame_id: Option<u32>,
+    /// Restrict `frame_id` to one protocol ("can", "modbus", "serial"). Frame identity is
+    /// (protocol, frame_id), so CAN 0x100 and Modbus register 256 share a numeric id.
+    /// Omit to match that id under every protocol in the capture.
+    #[serde(default)]
+    pub protocol: Option<String>,
     /// Zero-based offset into the (filtered) result set.
     #[serde(default)]
     pub offset: usize,

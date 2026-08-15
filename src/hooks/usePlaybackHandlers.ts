@@ -6,7 +6,7 @@
 import { useCallback } from "react";
 import type { PlaybackSpeed } from "../components/TimeController";
 import { stepCaptureFrame, updateReaderDirection } from "../api/io";
-import { parseFrameKey } from "../utils/frameKey";
+import { groupKeysByProtocol } from "../utils/frameKey";
 import { tlog } from "../api/settings";
 
 export interface UsePlaybackHandlersParams {
@@ -125,57 +125,34 @@ export function usePlaybackHandlers({
     [setPlaybackSpeed, setSpeed]
   );
 
-  // Handle step backward (one frame earlier, respecting filter)
-  const handleStepBackward = useCallback(async () => {
-    tlog.debug(`[PlaybackHandlers] handleStepBackward called ${JSON.stringify({ isPaused, currentFrameIndex, currentTimestampUs, sessionId })}`);
+  // Step one frame earlier or later, respecting the frame filter.
+  const step = useCallback(async (backward: boolean) => {
+    const direction = backward ? 'backward' : 'forward';
+    tlog.debug(`[PlaybackHandlers] step ${direction} called ${JSON.stringify({ isPaused, currentFrameIndex, currentTimestampUs, sessionId })}`);
 
     // Allow stepping when paused, or when stopped (before first play / after completion)
     const canStep = isPaused || isStopped;
     if (!canStep || !captureId || (currentFrameIndex == null && currentTimestampUs == null)) {
-      tlog.debug('[PlaybackHandlers] handleStepBackward early return - guard condition met');
+      tlog.debug(`[PlaybackHandlers] step ${direction} early return - guard condition met`);
       return;
     }
     try {
-      // Convert composite keys to numeric IDs for the buffer API call
       const filter = selectedFrameIds && selectedFrameIds.size > 0
-        ? Array.from(selectedFrameIds).map(fk => parseFrameKey(fk).frameId)
+        ? groupKeysByProtocol(selectedFrameIds)
         : undefined;
-      const result = await stepCaptureFrame(sessionId, captureId, currentFrameIndex ?? null, currentTimestampUs ?? null, true, filter);
+      const result = await stepCaptureFrame(sessionId, captureId, currentFrameIndex ?? null, currentTimestampUs ?? null, backward, filter);
       // Update the store immediately with the new frame index and timestamp
       if (result != null) {
         setCurrentFrameIndex?.(result.frame_index);
         updateCurrentTime?.(result.timestamp_us / 1_000_000);
       }
     } catch (e) {
-      tlog.debug(`[PlaybackHandlers] Failed to step backward: ${e}`);
+      tlog.debug(`[PlaybackHandlers] Failed to step ${direction}: ${e}`);
     }
   }, [sessionId, captureId, isPaused, isStopped, currentFrameIndex, currentTimestampUs, selectedFrameIds, setCurrentFrameIndex, updateCurrentTime]);
 
-  // Handle step forward (one frame later, respecting filter)
-  const handleStepForward = useCallback(async () => {
-    tlog.debug(`[PlaybackHandlers] handleStepForward called ${JSON.stringify({ isPaused, currentFrameIndex, currentTimestampUs, sessionId })}`);
-
-    // Allow stepping when paused, or when stopped (before first play / after completion)
-    const canStep = isPaused || isStopped;
-    if (!canStep || !captureId || (currentFrameIndex == null && currentTimestampUs == null)) {
-      tlog.debug('[PlaybackHandlers] handleStepForward early return - guard condition met');
-      return;
-    }
-    try {
-      // Convert composite keys to numeric IDs for the buffer API call
-      const filter = selectedFrameIds && selectedFrameIds.size > 0
-        ? Array.from(selectedFrameIds).map(fk => parseFrameKey(fk).frameId)
-        : undefined;
-      const result = await stepCaptureFrame(sessionId, captureId, currentFrameIndex ?? null, currentTimestampUs ?? null, false, filter);
-      // Update the store immediately with the new frame index and timestamp
-      if (result != null) {
-        setCurrentFrameIndex?.(result.frame_index);
-        updateCurrentTime?.(result.timestamp_us / 1_000_000);
-      }
-    } catch (e) {
-      tlog.debug(`[PlaybackHandlers] Failed to step forward: ${e}`);
-    }
-  }, [sessionId, captureId, isPaused, isStopped, currentFrameIndex, currentTimestampUs, selectedFrameIds, setCurrentFrameIndex, updateCurrentTime]);
+  const handleStepBackward = useCallback(() => step(true), [step]);
+  const handleStepForward = useCallback(() => step(false), [step]);
 
   return {
     handlePlay,

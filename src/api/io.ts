@@ -5,6 +5,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type { FrameMessage } from "../types/frame";
+import type { ProtocolFrames } from "../utils/frameKey";
 import type { SerialFrameConfig } from "../utils/frameExport";
 
 // ============================================================================
@@ -595,7 +596,7 @@ export interface PlaybackPosition {
  * @param currentFrameIndex The current frame index (0-based), or null to use timestamp
  * @param currentTimestampUs The current timestamp in microseconds (used if frame index is null)
  * @param backward true for backward step, false for forward
- * @param filterFrameIds Optional filter - if provided, skips frames that don't match
+ * @param filterSelection Optional filter - if provided, skips frames it does not name
  * @returns The new frame index and timestamp after stepping, or null if at the boundary
  */
 export async function stepCaptureFrame(
@@ -604,7 +605,7 @@ export async function stepCaptureFrame(
   currentFrameIndex: number | null,
   currentTimestampUs: number | null,
   backward: boolean,
-  filterFrameIds?: number[]
+  filterSelection?: ProtocolFrames[]
 ): Promise<StepResult | null> {
   return invoke("step_capture_frame", {
     session_id: sessionId,
@@ -612,7 +613,7 @@ export async function stepCaptureFrame(
     current_frame_index: currentFrameIndex,
     current_timestamp_us: currentTimestampUs,
     backward,
-    filter_frame_ids: filterFrameIds,
+    filter_selection: filterSelection,
   });
 }
 

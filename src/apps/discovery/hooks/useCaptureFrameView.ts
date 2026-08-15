@@ -15,7 +15,7 @@ import {
 import { BUFFER_POLL_INTERVAL_MS } from "../../../constants";
 import { useSessionStore } from "../../../stores/sessionStore";
 import type { FrameMessage } from "../../../types/frame";
-import { parseFrameKey } from "../../../utils/frameKey";
+import { groupKeysByProtocol, type ProtocolFrames } from "../../../utils/frameKey";
 import { pageCount, pageForOffset, type ResolvedPageSize } from "../../../utils/pageSize";
 
 /** Frame with pre-computed hex bytes for display */
@@ -141,13 +141,12 @@ export function useCaptureFrameView(
   const refreshOnce = useCallback(() => fetchTailRef.current(), []);
 
   // Refs to avoid stale closures in intervals
-  // Buffer API uses numeric IDs — extract from composite keys
-  const selectedIdsRef = useRef<number[]>(Array.from(selectedFrames).map(fk => parseFrameKey(fk).frameId));
+  const selectionRef = useRef<ProtocolFrames[]>(groupKeysByProtocol(selectedFrames));
   const pageSizeRef = useRef(pageSize);
 
   // Update refs when values change
   useEffect(() => {
-    selectedIdsRef.current = Array.from(selectedFrames).map(fk => parseFrameKey(fk).frameId);
+    selectionRef.current = groupKeysByProtocol(selectedFrames);
   }, [selectedFrames]);
 
   useEffect(() => {
@@ -215,7 +214,7 @@ export function useCaptureFrameView(
       if (inFlight) { missed = true; return; }
       inFlight = true;
       try {
-        const response = await getCaptureFramesTail(captureId, tailSize, selectedIdsRef.current);
+        const response = await getCaptureFramesTail(captureId, tailSize, selectionRef.current);
         if (!isMounted) return;
         setFrames(addHexBytes(response.frames));
         setBufferIndices(response.capture_indices);
@@ -273,7 +272,7 @@ export function useCaptureFrameView(
           captureId,
           offset,
           pageSize,
-          selectedIdsRef.current
+          selectionRef.current
         );
         if (!isMounted) return;
 
@@ -310,7 +309,7 @@ export function useCaptureFrameView(
         const offset = await findCaptureOffsetForTimestamp(
           captureId,
           timeUsInt,
-          selectedIdsRef.current
+          selectionRef.current
         );
         setAnchorRow(pageAlignedAnchor(offset, pageSizeRef.current));
       } catch (e) {
@@ -338,7 +337,7 @@ export function useCaptureFrameView(
   const doFollowNavigate = useCallback((timeUs: number) => {
     if (!captureId) return;
     const timeUsInt = Math.round(timeUs);
-    findCaptureOffsetForTimestamp(captureId, timeUsInt, selectedIdsRef.current)
+    findCaptureOffsetForTimestamp(captureId, timeUsInt, selectionRef.current)
       .then((offset) => {
         setAnchorRow(pageAlignedAnchor(offset, pageSizeRef.current));
       })

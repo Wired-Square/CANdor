@@ -12,7 +12,7 @@ import { getDiscoveryFrameBuffer, getLastFrameDataMap } from "../stores/discover
 import type { LastFrameData } from "../stores/discoveryFrameStore";
 import { getDecodedFrames } from "../stores/decoderStore";
 import { analyzePayloadsWithMuxDetection } from "../utils/analysis/payloadAnalysis";
-import type { FrameMessage } from "../types/frame";
+import { keyOf } from "../utils/frameKey";
 import { openPanel } from "../utils/windowCommunication";
 import { openDashboard } from "../api/dashboards";
 import { parseDashboard } from "../utils/dashboards";
@@ -29,11 +29,6 @@ interface DiscoveryParams {
 interface DecoderParams {
   session_id?: string | null;
   frame_id?: string | null;
-}
-
-/** Composite frame key, matching the discovery store convention (e.g. "can:256"). */
-function frameKey(f: FrameMessage): string {
-  return `${f.protocol}:${f.frame_id}`;
 }
 
 /** Convert a value to a plain JSON-safe structure (Sets → arrays). */
@@ -54,7 +49,7 @@ function discoveryAnalysis(params: unknown) {
     { protocol: string; frameId: number; payloads: number[][] }
   >();
   for (const f of buffer) {
-    const key = frameKey(f);
+    const key = keyOf(f);
     if (wanted && !wanted.has(key)) continue;
     let g = groups.get(key);
     if (!g) {

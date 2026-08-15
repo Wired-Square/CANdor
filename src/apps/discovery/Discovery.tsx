@@ -10,7 +10,7 @@ import { useIOSourcePickerHandlers } from '../../hooks/useIOSourcePickerHandlers
 import { useMenuSessionControl } from '../../hooks/useMenuSessionControl';
 import { useSessionStore } from '../../stores/sessionStore';
 import { type FrameMessage, type PlaybackSpeed } from "../../stores/discoveryStore";
-import { keyOf, parseFrameKey } from "../../utils/frameKey";
+import { keyOf, groupKeysByProtocol } from "../../utils/frameKey";
 import { useDiscoveryFrameStore, getDiscoveryFrameBuffer } from "../../stores/discoveryFrameStore";
 import { useDiscoveryUIStore } from "../../stores/discoveryUIStore";
 import { useDiscoverySerialStore } from "../../stores/discoverySerialStore";
@@ -972,11 +972,10 @@ function DiscoveryInner() {
       await seekByFrame(frameIndex);
     } else {
       // Capture-only mode: look up timestamp from capture
-      // Capture API uses numeric IDs — extract from composite keys
-      const selectedNumericIds = Array.from(selectedFrames).map(fk => parseFrameKey(fk).frameId);
+      const selection = groupKeysByProtocol(selectedFrames);
       const frameBufferId = captureMetadata?.id ?? sessionCaptureId;
       try {
-        const response = await getCaptureFramesPaginatedFiltered(frameBufferId!, frameIndex, 1, selectedNumericIds);
+        const response = await getCaptureFramesPaginatedFiltered(frameBufferId!, frameIndex, 1, selection);
         if (response.frames.length > 0) {
           updateCurrentTime(response.frames[0].timestamp_us / 1_000_000);
         }

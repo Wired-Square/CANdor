@@ -22,7 +22,7 @@ import ModbusScanResultView from "./tools/ModbusScanResultView";
 import FilteredTabContent from "./FilteredTabContent";
 import { bgDataView, bgSurface, tabBarIconToggle, textDataSecondary, textMuted, textPrimary, textSecondary, borderDefault } from "../../../styles";
 import type { FrameMessage } from "../../../types/frame";
-import { keyOf, parseFrameKey } from "../../../utils/frameKey";
+import { keyOf, groupKeysByProtocol } from "../../../utils/frameKey";
 import type { IOCapabilities } from "../../../api/io";
 import { BUFFER_POLL_INTERVAL_MS } from "../../../constants";
 import { useCaptureFrameView } from "../hooks/useCaptureFrameView";
@@ -635,7 +635,7 @@ function DiscoveryFramesView({
             q,
             findMode !== 'data',
             findMode !== 'id',
-            Array.from(selectedFrames).map(fk => parseFrameKey(fk).frameId),
+            groupKeysByProtocol(selectedFrames),
           );
           setFindResults(results);
           setFindCurrentIndex(results.length > 0 ? 0 : -1);

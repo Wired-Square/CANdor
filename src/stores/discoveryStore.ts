@@ -15,7 +15,7 @@ import { useDiscoverySerialStore } from './discoverySerialStore';
 import { useDiscoveryToolboxStore } from './discoveryToolboxStore';
 import type { CaptureFrameInfo } from '../api/capture';
 import type { FrameMessage } from '../types/frame';
-import { keyOf, parseFrameKey } from '../utils/frameKey';
+import { keyOf, groupKeysByProtocol } from '../utils/frameKey';
 import type { PageSize } from '../utils/pageSize';
 import type { SelectionSet } from '../utils/selectionSets';
 import { tlog } from '../api/settings';
@@ -562,9 +562,8 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
         const { useSessionStore } = await import('./sessionStore');
         const sessionId = uiStore.ioProfile ?? '';
         const captureId = useSessionStore.getState().sessions[sessionId]?.capture?.id ?? '';
-        // Buffer DB still uses numeric IDs — extract from composite keys
-        const selectedNumericIds = Array.from(targetKeys).map(fk => parseFrameKey(fk).frameId);
-        if (selectedNumericIds.length === 0 || !captureId) return;
+        const selection = groupKeysByProtocol(targetKeys);
+        if (selection.length === 0 || !captureId) return;
 
         toolboxStore.setIsRunning(true);
         await new Promise(resolve => setTimeout(resolve, 50));
@@ -574,13 +573,13 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
         let offset = 0;
 
         try {
-          const firstResponse = await getCaptureFramesPaginatedFiltered(captureId, 0, BATCH_SIZE, selectedNumericIds);
+          const firstResponse = await getCaptureFramesPaginatedFiltered(captureId, 0, BATCH_SIZE, selection);
           const totalCount = firstResponse.total_count;
           selectedFrameData.push(...(firstResponse.frames as FrameMessage[]));
           offset = firstResponse.frames.length;
 
           while (offset < totalCount) {
-            const response = await getCaptureFramesPaginatedFiltered(captureId, offset, BATCH_SIZE, selectedNumericIds);
+            const response = await getCaptureFramesPaginatedFiltered(captureId, offset, BATCH_SIZE, selection);
             selectedFrameData.push(...(response.frames as FrameMessage[]));
             offset += response.frames.length;
           }

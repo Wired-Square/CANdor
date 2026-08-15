@@ -7,7 +7,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { Filter, Calculator, Copy, ClipboardCopy } from "lucide-react";
 import { useDiscoveryStore } from "../../../stores/discoveryStore";
 import { useDiscoveryUIStore } from "../../../stores/discoveryUIStore";
-import { keyOf, parseFrameKey } from "../../../utils/frameKey";
+import { keyOf, groupKeysByProtocol } from "../../../utils/frameKey";
 import { getCaptureFramesPaginatedFiltered } from "../../../api/capture";
 import { FrameDataTable, FRAME_PAGE_SIZE_OPTIONS } from "../components";
 import { PaginationToolbar } from "../components";
@@ -97,17 +97,20 @@ export default function FilteredTabContent({
     setHeaderContextMenu(null);
   }, []);
 
-  // Compute filtered-out IDs: in seenIds but NOT in selectedFrames
-  // Extract numeric IDs for the buffer API
-  const filteredOutIds = useMemo(() => {
-    const ids: number[] = [];
+  // The complement: seen but not selected. Keys stay composite — matching on the bare
+  // numeric id would pull in the same id under another protocol.
+  const filteredOutKeys = useMemo(() => {
+    const keys = new Set<string>();
     for (const fk of seenIds) {
-      if (!selectedFrames.has(fk)) {
-        ids.push(parseFrameKey(fk).frameId);
-      }
+      if (!selectedFrames.has(fk)) keys.add(fk);
     }
-    return ids;
+    return keys;
   }, [seenIds, selectedFrames]);
+
+  const filteredOutSelection = useMemo(
+    () => groupKeysByProtocol(filteredOutKeys),
+    [filteredOutKeys]
+  );
 
   // Effective start time for delta calculations
   const effectiveStartTimeUs = useMemo(() => {
@@ -138,18 +141,17 @@ export default function FilteredTabContent({
 
   // Non-buffer mode: filter frames from the in-memory buffer
   const localResult = useMemo(() => {
-    if (captureMode.enabled || filteredOutIds.length === 0) return null;
+    if (captureMode.enabled || filteredOutKeys.size === 0) return null;
     // Auto fit not measured yet — the tail limit and the slice below both come back empty.
     if (pageSize === null) return null;
 
-    const filteredIdSet = new Set(filteredOutIds);
     const matching: FrameMessage[] = [];
 
     if (isStreaming) {
       // During streaming: show the most recent matching frames (tail)
       const limit = pageSize;
       for (let i = frames.length - 1; i >= 0 && matching.length < limit; i--) {
-        if (filteredIdSet.has(frames[i].frame_id)) {
+        if (filteredOutKeys.has(keyOf(frames[i]))) {
           matching.push(frames[i]);
         }
       }
@@ -157,14 +159,14 @@ export default function FilteredTabContent({
     } else {
       // Stopped: collect all matching frames for pagination
       for (const f of frames) {
-        if (filteredIdSet.has(f.frame_id)) {
+        if (filteredOutKeys.has(keyOf(f))) {
           matching.push(f);
         }
       }
     }
 
     return matching;
-  }, [captureMode.enabled, filteredOutIds, frameVersion, isStreaming, pageSize]);
+  }, [captureMode.enabled, filteredOutKeys, frameVersion, isStreaming, pageSize]);
 
   // Paginate the local result
   const localPage = useMemo(() => {
@@ -191,7 +193,7 @@ export default function FilteredTabContent({
 
   // Buffer mode: fetch filtered-out frames from backend
   useEffect(() => {
-    if (!captureMode.enabled || isStreaming || filteredOutIds.length === 0) return;
+    if (!captureMode.enabled || isStreaming || filteredOutKeys.size === 0) return;
     if (pageSize === null) return; // auto size not measured yet
 
     let cancelled = false;
@@ -203,7 +205,7 @@ export default function FilteredTabContent({
           captureMetadata?.id ?? '',
           offset,
           pageSize,
-          filteredOutIds
+          filteredOutSelection
         );
         if (cancelled) return;
         const withHex: FrameRow[] = response.frames.map((f: FrameMessage) => ({
@@ -225,7 +227,7 @@ export default function FilteredTabContent({
     return () => {
       cancelled = true;
     };
-  }, [captureMode.enabled, isStreaming, filteredOutIds, currentPage, pageSize]);
+  }, [captureMode.enabled, isStreaming, filteredOutKeys, filteredOutSelection, currentPage, pageSize]);
 
   // Reset page when selection changes
   useEffect(() => {
@@ -288,7 +290,7 @@ export default function FilteredTabContent({
     { label: 'Source Column', checked: showSourceColumn, onClick: toggleShowSourceColumn },
   ], [showRefColumn, showBusColumn, showAsciiColumn, showSourceColumn, toggleShowRefColumn, toggleShowBusColumn, toggleShowAsciiColumn]);
 
-  if (filteredOutIds.length === 0) {
+  if (filteredOutKeys.size === 0) {
     return (
       <div className={`flex-1 min-h-0 flex items-center justify-center ${bgDataView}`}>
         <p className={`${emptyStateText} py-8`}>

@@ -10,6 +10,8 @@ All notable changes to WireTAP will be documented in this file.
 
 ### Fixed
 
+- **Frame filters no longer mix up protocols.** In a capture holding both CAN and Modbus, a CAN frame and a Modbus register with the same number counted as one frame: the picker listed a single row for the two, with their length and bus merged, and selecting it filtered the frames table, the Filtered tab, search and the timeline to both at once. They are now separate rows you can pick independently, and every one of those views agrees. The "unique" counter matches what the picker lists for the first time — in a single-protocol capture, which is the usual case, none of this changes what you see.
+
 - **Paginated tables no longer misbehave in the moment before they measure themselves.** Transmit history showed a page counter of "1 / Infinity" on first paint, and scrubbing the timeline in Transmit history or serial framed data before the table had sized itself jumped to a nonexistent page. Tables that fit their rows to the panel now hold off until they know how many rows fit, rather than acting on a size they do not have yet.
 
 - **Discovery no longer accumulates duplicate rows as a capture runs.** Rows were piling up on screen — the same frame drawn three or four times, more copies the longer a session ran — and toggling the #, Bus or ASCII columns left rows disagreeing with the header. Frames that shared a timestamp and ID could not be told apart, so the display kept adding rows without ever removing the old ones. The frame table also holds its column widths steady now instead of resizing as you page through.

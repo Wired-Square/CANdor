@@ -13,7 +13,7 @@
 use tauri::{AppHandle, Emitter};
 
 use crate::{
-    capture_store::{self, CaptureMetadata, CaptureFrameInfo, TimestampedByte, TailResponse},
+    capture_store::{self, CaptureMetadata, CaptureFrameInfo, FrameSelection, ProtocolFrames, TimestampedByte, TailResponse},
     io::{self, FrameMessage},
 };
 
@@ -332,16 +332,16 @@ pub async fn get_capture_frames_paginated(
     })
 }
 
-/// Get a page of frames from a capture, filtered by selected frame IDs
+/// Get a page of frames from a capture, filtered by selected frames
 #[tauri::command(rename_all = "snake_case")]
 pub async fn get_capture_frames_paginated_filtered(
     capture_id: String,
     offset: usize,
     limit: usize,
-    selected_ids: Vec<u32>,
+    selection: Vec<ProtocolFrames>,
 ) -> Result<PaginatedFramesResponse, String> {
-    let selected_set: std::collections::HashSet<u32> = selected_ids.into_iter().collect();
-    let (frames, capture_indices, total_count) = capture_store::get_capture_frames_paginated_filtered(&capture_id, offset, limit, &selected_set);
+    let selection = FrameSelection::from_groups(selection);
+    let (frames, capture_indices, total_count) = capture_store::get_capture_frames_paginated_filtered(&capture_id, offset, limit, &selection);
     Ok(PaginatedFramesResponse {
         frames,
         total_count,
@@ -351,16 +351,16 @@ pub async fn get_capture_frames_paginated_filtered(
     })
 }
 
-/// Get the most recent N frames from a capture, optionally filtered by frame IDs.
+/// Get the most recent N frames from a capture, optionally filtered by selected frames.
 /// Used for "tail mode" during streaming.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn get_capture_frames_tail(
     capture_id: String,
     limit: usize,
-    selected_ids: Vec<u32>,
+    selection: Vec<ProtocolFrames>,
 ) -> Result<TailResponse, String> {
-    let selected_set: std::collections::HashSet<u32> = selected_ids.into_iter().collect();
-    Ok(capture_store::get_capture_frames_tail(&capture_id, limit, &selected_set))
+    let selection = FrameSelection::from_groups(selection);
+    Ok(capture_store::get_capture_frames_tail(&capture_id, limit, &selection))
 }
 
 /// Get unique frame IDs and their metadata from a capture
@@ -374,10 +374,10 @@ pub async fn get_capture_frame_info(capture_id: String) -> Result<Vec<CaptureFra
 pub async fn find_capture_offset_for_timestamp(
     capture_id: String,
     timestamp_us: u64,
-    selected_ids: Vec<u32>,
+    selection: Vec<ProtocolFrames>,
 ) -> Result<usize, String> {
-    let selected_set: std::collections::HashSet<u32> = selected_ids.into_iter().collect();
-    Ok(capture_store::find_capture_offset_for_timestamp(&capture_id, timestamp_us, &selected_set))
+    let selection = FrameSelection::from_groups(selection);
+    Ok(capture_store::find_capture_offset_for_timestamp(&capture_id, timestamp_us, &selection))
 }
 
 // ============================================================================
@@ -525,7 +525,7 @@ pub async fn find_capture_bytes_offset_for_timestamp(
 }
 
 /// Search a specific capture for frames matching a query string.
-/// Returns 0-based offsets in the selected-ID-filtered result set.
+/// Returns 0-based offsets in the filtered result set.
 /// `query` should have whitespace stripped before calling.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn search_capture_frames(
@@ -533,9 +533,10 @@ pub async fn search_capture_frames(
     query: String,
     search_id: bool,
     search_data: bool,
-    selected_ids: Vec<u32>,
+    selection: Vec<ProtocolFrames>,
 ) -> Result<Vec<usize>, String> {
-    crate::capture_db::search_frames(&capture_id, &query, search_id, search_data, &selected_ids)
+    let selection = FrameSelection::from_groups(selection);
+    crate::capture_db::search_frames(&capture_id, &query, search_id, search_data, &selection)
 }
 
 /// Response for tail-mode byte capture queries

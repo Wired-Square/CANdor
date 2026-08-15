@@ -202,7 +202,7 @@ pub fn step_frame(
     current_frame_index: Option<usize>,
     current_timestamp_us: Option<i64>,
     backward: bool,
-    filter_frame_ids: Option<&[u32]>,
+    selection: &crate::capture_store::FrameSelection,
 ) -> Result<Option<StepResult>, String> {
     let buf_id = capture_id;
 
@@ -240,8 +240,7 @@ pub fn step_frame(
     };
 
     // Find next/prev frame using targeted SQLite query
-    let filter = filter_frame_ids.unwrap_or(&[]);
-    match capture_db::get_next_filtered_frame(&buf_id, current_rowid, filter, backward)? {
+    match capture_db::get_next_filtered_frame(&buf_id, current_rowid, selection, backward)? {
         Some((_, new_idx, frame)) => {
             let new_timestamp_us = frame.timestamp_us as i64;
 

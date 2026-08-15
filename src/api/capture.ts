@@ -5,6 +5,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type { IOCapabilities } from "./io";
+import type { ProtocolFrames } from "../utils/frameKey";
 
 /**
  * Capture kind - determines what kind of data is stored
@@ -286,24 +287,24 @@ export async function getCaptureFramesPaginated(
 }
 
 /**
- * Get a page of frames from the shared capture, filtered by selected frame IDs.
+ * Get a page of frames from the shared capture, filtered by selected frames.
  * Use this when the user has selected specific frames in the frame picker.
  *
  * @param offset - Starting index (0-based) in the filtered result
  * @param limit - Maximum number of frames to return
- * @param selectedIds - Array of frame IDs to include (empty = all frames)
+ * @param selection - Frames to include, grouped by protocol (empty = all frames)
  */
 export async function getCaptureFramesPaginatedFiltered(
   captureId: string,
   offset: number,
   limit: number,
-  selectedIds: number[]
+  selection: ProtocolFrames[]
 ): Promise<PaginatedFramesResponse> {
   return invoke("get_capture_frames_paginated_filtered", {
     capture_id: captureId,
     offset,
     limit,
-    selected_ids: selectedIds,
+    selection,
   });
 }
 
@@ -319,21 +320,21 @@ export interface TailResponse {
 }
 
 /**
- * Get the most recent N frames from the active capture, optionally filtered by frame IDs.
+ * Get the most recent N frames from the active capture, optionally filtered by selected frames.
  * Used for "tail mode" during streaming - shows latest frames without frontend accumulation.
  *
  * @param limit - Maximum number of frames to return
- * @param selectedIds - Array of frame IDs to filter by (empty = all frames)
+ * @param selection - Frames to include, grouped by protocol (empty = all frames)
  */
 export async function getCaptureFramesTail(
   captureId: string,
   limit: number,
-  selectedIds: number[]
+  selection: ProtocolFrames[]
 ): Promise<TailResponse> {
   return invoke("get_capture_frames_tail", {
     capture_id: captureId,
     limit,
-    selected_ids: selectedIds,
+    selection,
   });
 }
 
@@ -383,18 +384,18 @@ export async function getCaptureFrameInfo(captureId: string): Promise<CaptureFra
  * Used for timeline scrubber navigation in capture mode.
  *
  * @param timestampUs - Target timestamp in microseconds
- * @param selectedIds - Array of frame IDs to filter by (empty = all frames)
+ * @param selection - Frames to include, grouped by protocol (empty = all frames)
  * @returns Offset of the first frame at or after the given timestamp
  */
 export async function findCaptureOffsetForTimestamp(
   captureId: string,
   timestampUs: number,
-  selectedIds: number[]
+  selection: ProtocolFrames[]
 ): Promise<number> {
   return invoke("find_capture_offset_for_timestamp", {
     capture_id: captureId,
     timestamp_us: timestampUs,
-    selected_ids: selectedIds,
+    selection,
   });
 }
 
@@ -715,26 +716,26 @@ export async function findCaptureBytesOffsetForTimestamp(
 
 /**
  * Search a frame capture for frames matching a query string.
- * Returns 0-based offsets in the selected-ID-filtered result set.
+ * Returns 0-based offsets in the filtered result set.
  *
  * @param captureId - The capture ID to search
  * @param query - Search string (whitespace already stripped by caller)
  * @param searchId - Whether to search the frame ID column
  * @param searchData - Whether to search the payload (data) column
- * @param selectedIds - Frame IDs to include (empty = all)
+ * @param selection - Frames to include, grouped by protocol (empty = all frames)
  */
 export async function searchCaptureFrames(
   captureId: string,
   query: string,
   searchId: boolean,
   searchData: boolean,
-  selectedIds: number[]
+  selection: ProtocolFrames[]
 ): Promise<number[]> {
   return invoke("search_capture_frames", {
     capture_id: captureId,
     query,
     search_id: searchId,
     search_data: searchData,
-    selected_ids: selectedIds,
+    selection,
   });
 }
