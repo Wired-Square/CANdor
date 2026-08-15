@@ -903,6 +903,32 @@ pulls from the capture and pushes to the WS channel at most twice per second.
 `SignalThrottle::flush()` is called on stream stop so the final batch is
 delivered immediately.
 
+#### ⚠ Raw serial bytes are never dispatched
+
+**A known gap, recorded here because the surrounding code reads as though it
+works.** A serial source in `Raw` mode (`emit_raw: true`, no framing encoding)
+captures correctly — the reader fills a `Bytes` capture, `list_captures` reports
+a climbing count, and the rows land in the `bytes` table. Nothing carries them
+onward to the frontend:
+
+- **No producer.** The dispatch path above is frames-only; there is no
+  `send_new_bytes` beside `send_new_frames`. `FrameType::Serial` (`0x0004`)
+  exists in [ws/protocol.rs](../src-tauri/src/ws/protocol.rs) and round-trips in
+  `envelope_serial_raw_bytes`, but nothing outside that test constructs one.
+- **No consumer.** `onBytes` is declared on the sessionStore callback type,
+  passed down from Discovery through `useIOSessionManager` and `useIOSession`,
+  and registered into the store — which never calls it. Every link in that chain
+  exists except the last.
+
+The visible result is Discovery's Raw Bytes view sitting on "Waiting for serial
+data…" while the capture fills behind it. Choosing a framing mode (SLIP, Modbus
+RTU, delimiter) **before** connecting avoids it, because framed serial is
+delivered as frames and travels the working path.
+
+Until this is closed, treat `rx_bytes: true` as "captured but not displayed"
+rather than a working stream, and do not add an ad-hoc `listen()` in an app to
+work around it — see the byte-ingest entry in the design vault's open register.
+
 ### Frame counts
 
 Frame counts are **Rust-authoritative** — the frontend does not count. Each
