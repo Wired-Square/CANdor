@@ -25,7 +25,7 @@ import {
 } from "../../../hooks/useSelectionSetHandlers";
 import { useTimeHandlers, type TimeHandlers } from "../../../hooks/useTimeHandlers";
 import type { PlaybackSpeed, FrameMessage } from "../../../stores/discoveryStore";
-import type { CaptureMetadata, TimestampedByte } from "../../../api/capture";
+import type { CaptureFrameInfo, CaptureMetadata, TimestampedByte } from "../../../api/capture";
 import type { ExportDataMode } from "../../../dialogs/ExportFramesDialog";
 import type { SelectionSet } from "../../../utils/selectionSets";
 import { type LoadOptions as ManagerLoadOptions } from "../../../hooks/useIOSessionManager";
@@ -115,7 +115,7 @@ export interface UseDiscoveryHandlersParams {
   /** Single teardown entry point — see resetDiscoveryView in Discovery.tsx. */
   resetView: () => void;
   enableCaptureMode: (count: number) => void;
-  setFrameInfoFromCapture: (frameInfo: any[]) => void;
+  setFrameInfoFromCapture: (frameInfo: CaptureFrameInfo[]) => void;
   setBackendFrameCount: (count: number) => void;
   addSerialBytes: (entries: { byte: number; timestampUs: number }[]) => void;
   openSaveDialog: () => void;

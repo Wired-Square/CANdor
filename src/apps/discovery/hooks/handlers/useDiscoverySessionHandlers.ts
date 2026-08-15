@@ -7,7 +7,7 @@
 // Note: Playback handlers (play/pause/stop/step) are in useDiscoveryPlaybackHandlers.
 
 import { useCallback } from "react";
-import { getCaptureFrameInfo, setActiveCapture, type CaptureMetadata } from "../../../../api/capture";
+import { getCaptureFrameInfo, setActiveCapture, type CaptureFrameInfo, type CaptureMetadata } from "../../../../api/capture";
 import { isCaptureProfileId, type LoadOptions } from "../../../../hooks/useIOSessionManager";
 import { useCaptureSession } from "../../../../hooks/useCaptureSession";
 
@@ -23,7 +23,7 @@ export interface UseDiscoverySessionHandlersParams {
   /** Single teardown entry point — clears frames, picker, analysis, serial and capture state. */
   resetView: () => void;
   enableCaptureMode: (count: number) => void;
-  setFrameInfoFromCapture: (frameInfo: any[]) => void;
+  setFrameInfoFromCapture: (frameInfo: CaptureFrameInfo[]) => void;
 
   // Buffer state
   setCaptureMetadata: (meta: CaptureMetadata | null) => void;

@@ -102,7 +102,7 @@ One row per capture. Survives `ALTER TABLE RENAME` from the legacy
 - **Paginated read:** `SELECT ... WHERE capture_id = ? ORDER BY rowid LIMIT ? OFFSET ?`
 - **Filtered paginated read:** Adds `AND frame_id IN (...)` clause.
 - **Tail read:** `ORDER BY rowid DESC LIMIT ?`, then reverse in application code.
-- **Frame info aggregation:** `SELECT frame_id, MAX(dlc), MIN(bus), MAX(is_extended), (MIN(dlc) != MAX(dlc)) ... GROUP BY frame_id`
+- **Frame info aggregation:** `SELECT protocol, frame_id, MAX(dlc), MIN(bus), MAX(is_extended), (MIN(dlc) != MAX(dlc)) ... GROUP BY protocol, frame_id` — grouped on the identity pair, so a capture holding CAN `0x100` and Modbus register 256 yields two picker rows rather than one with their metadata merged.
 - **Offset for timestamp:** `SELECT COUNT(*) WHERE capture_id = ? AND timestamp_us < ?`
 
 ### Capture replay (chunked streaming for playback)

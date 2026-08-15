@@ -6,8 +6,9 @@
 import { create } from 'zustand';
 import { tlog } from '../api/settings';
 import { trackAlloc } from '../services/memoryDiag';
+import type { CaptureFrameInfo } from '../api/capture';
 import type { FrameMessage } from '../types/frame';
-import { keyOf } from '../utils/frameKey';
+import { frameKey, keyOf } from '../utils/frameKey';
 import type { SelectionSet } from '../utils/selectionSets';
 
 // Frame buffer for throttling UI updates
@@ -132,13 +133,7 @@ interface DiscoveryFrameState {
   // Actions - Capture mode
   enableCaptureMode: (totalFrames: number) => void;
   disableCaptureMode: () => void;
-  setFrameInfoFromCapture: (frameInfoList: Array<{
-    frame_id: number;
-    max_dlc: number;
-    bus: number;
-    is_extended: boolean;
-    has_dlc_mismatch: boolean;
-  }>, protocol?: string, activeSelectionSetSelectedIds?: Set<string> | null) => void;
+  setFrameInfoFromCapture: (frameInfoList: CaptureFrameInfo[], activeSelectionSetSelectedIds?: Set<string> | null) => void;
 }
 
 export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => ({
@@ -495,22 +490,17 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
     });
   },
 
-  setFrameInfoFromCapture: (frameInfoList, protocol, activeSelectionSetSelectedIds = null) => {
-    const proto = protocol || 'can';
-    tlog.debug(`[discoveryFrameStore] Setting frame info from capture: ${frameInfoList.length} unique frames, protocol: ${proto}`);
+  setFrameInfoFromCapture: (frameInfoList, activeSelectionSetSelectedIds = null) => {
+    tlog.debug(`[discoveryFrameStore] Setting frame info from capture: ${frameInfoList.length} unique frames`);
 
     const nextSeenIds = new Set<string>();
     const nextFrameInfoMap = new Map<string, FrameInfo>();
     const nextSelectedFrames = new Set<string>();
 
     for (const info of frameInfoList) {
-      const fk = `${proto}:${info.frame_id}`;
+      const fk = frameKey(info.protocol, info.frame_id);
       nextSeenIds.add(fk);
-      if (activeSelectionSetSelectedIds) {
-        if (activeSelectionSetSelectedIds.has(fk)) {
-          nextSelectedFrames.add(fk);
-        }
-      } else {
+      if (!activeSelectionSetSelectedIds || activeSelectionSetSelectedIds.has(fk)) {
         nextSelectedFrames.add(fk);
       }
       nextFrameInfoMap.set(fk, {
@@ -518,7 +508,7 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
         isExtended: info.is_extended,
         bus: info.bus,
         lenMismatch: info.has_dlc_mismatch,
-        protocol: proto,
+        protocol: info.protocol,
       });
     }
 

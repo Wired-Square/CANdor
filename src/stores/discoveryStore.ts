@@ -13,6 +13,7 @@ import { useDiscoveryFrameStore, getDiscoveryFrameBuffer, type FrameInfo } from 
 import { useDiscoveryUIStore, type FrameMetadata, type PlaybackSpeed } from './discoveryUIStore';
 import { useDiscoverySerialStore } from './discoverySerialStore';
 import { useDiscoveryToolboxStore } from './discoveryToolboxStore';
+import type { CaptureFrameInfo } from '../api/capture';
 import type { FrameMessage } from '../types/frame';
 import { keyOf, parseFrameKey } from '../utils/frameKey';
 import type { PageSize } from '../utils/pageSize';
@@ -142,13 +143,7 @@ type CombinedDiscoveryState = {
   refreshFrozenView: () => void;
   enableCaptureMode: (totalFrames: number) => void;
   disableCaptureMode: () => void;
-  setFrameInfoFromCapture: (frameInfoList: Array<{
-    frame_id: number;
-    max_dlc: number;
-    bus: number;
-    is_extended: boolean;
-    has_dlc_mismatch: boolean;
-  }>, protocol?: string) => void;
+  setFrameInfoFromCapture: (frameInfoList: CaptureFrameInfo[]) => void;
   setFrames: (frames: FrameMessage[]) => void;
 
   // Serial actions
@@ -369,8 +364,7 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
         try {
           const { getCaptureFrameInfo } = await import('../api/capture');
           const frameInfoList = await getCaptureFrameInfo(framedCaptureId);
-          // Pass 'serial' protocol since this is from serial framing
-          frameStore.setFrameInfoFromCapture(frameInfoList, 'serial');
+          frameStore.setFrameInfoFromCapture(frameInfoList);
           frameStore.enableCaptureMode(backendFrameCount);
           tlog.debug(`[discoveryStore] Loaded ${frameInfoList.length} unique frame IDs from backend buffer`);
         } catch (e) {
