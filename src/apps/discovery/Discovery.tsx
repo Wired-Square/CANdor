@@ -11,6 +11,7 @@ import { useMenuSessionControl } from '../../hooks/useMenuSessionControl';
 import { useSessionStore } from '../../stores/sessionStore';
 import { type FrameMessage, type PlaybackSpeed } from "../../stores/discoveryStore";
 import { keyOf, groupKeysByProtocol } from "../../utils/frameKey";
+import { selectionSetKeys, type SelectionSet } from "../../utils/selectionSets";
 import { useDiscoveryFrameStore, getDiscoveryFrameBuffer } from "../../stores/discoveryFrameStore";
 import { useDiscoveryUIStore } from "../../stores/discoveryUIStore";
 import { useDiscoverySerialStore } from "../../stores/discoverySerialStore";
@@ -164,7 +165,7 @@ function DiscoveryInner() {
     useDiscoveryFrameStore.getState().deselectAllFrames(asid, ssd);
   }, []);
 
-  const applySelectionSet = useCallback((selectionSet: import('../../utils/selectionSets').SelectionSet) => {
+  const applySelectionSet = useCallback((selectionSet: SelectionSet) => {
     const uiState = useDiscoveryUIStore.getState();
     // Detect protocol from current frameInfoMap, default to 'can'
     let protocol = 'can';
@@ -174,10 +175,8 @@ function DiscoveryInner() {
     useDiscoveryFrameStore.getState().applySelectionSet(
       selectionSet, protocol, uiState.setActiveSelectionSet, uiState.setSelectionSetDirty
     );
-    // Convert numeric selection set IDs to composite keys
-    const numericIds = selectionSet.selectedIds ?? selectionSet.frameIds;
     uiState.setActiveSelectionSetSelectedIds(
-      new Set(numericIds.map(id => `${protocol}:${id}`))
+      new Set(selectionSetKeys(selectionSet, protocol).selected)
     );
   }, []);
 

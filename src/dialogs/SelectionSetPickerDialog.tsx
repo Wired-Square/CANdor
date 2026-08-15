@@ -12,6 +12,7 @@ import {
   getAllSelectionSets,
   updateSelectionSet,
   deleteSelectionSet,
+  selectionSetSize,
   type SelectionSet,
 } from "../utils/selectionSets";
 import { useSessionStore } from "../stores/sessionStore";
@@ -181,10 +182,7 @@ export default function SelectionSetPickerDialog({
                       {set.name}
                     </div>
                     <div className={`${captionMuted} mt-0.5`}>
-                      {t("selectionSetPicker.selectedSummary", {
-                        selected: set.selectedIds?.length ?? set.frameIds.length,
-                        total: set.frameIds.length,
-                      })}
+                      {t("selectionSetPicker.selectedSummary", selectionSetSize(set))}
                     </div>
                   </button>
                 ))}
@@ -211,10 +209,7 @@ export default function SelectionSetPickerDialog({
                 <div className="space-y-1">
                   <label className={labelSmall}>{t("selectionSetPicker.frames")}</label>
                   <div className={`px-3 py-2 text-sm rounded border border-[color:var(--border-default)] ${bgSecondary} text-[color:var(--text-secondary)]`}>
-                    {t("selectionSetPicker.selectedSummary", {
-                      selected: selectedSet.selectedIds?.length ?? selectedSet.frameIds.length,
-                      total: selectedSet.frameIds.length,
-                    })}
+                    {t("selectionSetPicker.selectedSummary", selectionSetSize(selectedSet))}
                   </div>
                 </div>
 

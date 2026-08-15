@@ -8,8 +8,8 @@ import { tlog } from '../api/settings';
 import { trackAlloc } from '../services/memoryDiag';
 import type { CaptureFrameInfo } from '../api/capture';
 import type { FrameMessage } from '../types/frame';
-import { frameKey, keyOf } from '../utils/frameKey';
-import type { SelectionSet } from '../utils/selectionSets';
+import { frameKey, keyOf, parseFrameKey } from '../utils/frameKey';
+import { selectionSetKeys, type SelectionSet } from '../utils/selectionSets';
 
 // Frame buffer for throttling UI updates
 let pendingFrames: FrameMessage[] = [];
@@ -422,14 +422,13 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
     const newSeenIds = new Set(seenIds);
     const newSelectedFrames = new Set<string>();
 
-    // Selection sets store numeric IDs — convert to composite keys using the session's protocol
-    const proto = protocol || 'can';
-    for (const numericId of selectionSet.frameIds) {
-      const fk = `${proto}:${numericId}`;
+    const { all, selected } = selectionSetKeys(selectionSet, protocol || 'can');
+    for (const fk of all) {
       if (!newFrameInfoMap.has(fk)) {
+        const { protocol: proto, frameId } = parseFrameKey(fk);
         newFrameInfoMap.set(fk, {
           len: 8,
-          isExtended: numericId > 0x7ff,
+          isExtended: frameId > 0x7ff,
           bus: undefined,
           lenMismatch: false,
           protocol: proto,
@@ -437,10 +436,8 @@ export const useDiscoveryFrameStore = create<DiscoveryFrameState>((set, get) => 
         newSeenIds.add(fk);
       }
     }
-
-    const idsToSelect = selectionSet.selectedIds ?? selectionSet.frameIds;
-    for (const numericId of idsToSelect) {
-      newSelectedFrames.add(`${proto}:${numericId}`);
+    for (const fk of selected) {
+      newSelectedFrames.add(fk);
     }
 
     set({

@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { iconMd, flexRowGap2 } from "../../../styles/spacing";
 import { cardDefault } from "../../../styles/cardStyles";
 import { iconButtonHover, iconButtonHoverDanger } from "../../../styles/buttonStyles";
-import type { SelectionSet } from "../../../utils/selectionSets";
+import { selectionSetSize, type SelectionSet } from "../../../utils/selectionSets";
 
 type SelectionSetsViewProps = {
   selectionSets: SelectionSet[];
@@ -42,8 +42,7 @@ export default function SelectionSetsView({
       ) : (
         <div className="space-y-2">
           {selectionSets.map((set) => {
-            const selected = set.selectedIds?.length ?? set.frameIds.length;
-            const total = set.frameIds.length;
+            const { total, selected } = selectionSetSize(set);
             return (
               <div
                 key={set.id}

@@ -17,7 +17,7 @@ import type { CaptureFrameInfo } from '../api/capture';
 import type { FrameMessage } from '../types/frame';
 import { keyOf, groupKeysByProtocol } from '../utils/frameKey';
 import type { PageSize } from '../utils/pageSize';
-import type { SelectionSet } from '../utils/selectionSets';
+import { selectionSetKeys, type SelectionSet } from '../utils/selectionSets';
 import { tlog } from '../api/settings';
 
 // Re-export types for backward compatibility
@@ -280,10 +280,8 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
         if (info.protocol) { protocol = info.protocol; break; }
       }
       frameStore.applySelectionSet(selectionSet, protocol, uiStore.setActiveSelectionSet, uiStore.setSelectionSetDirty);
-      // Convert numeric selection set IDs to composite keys
-      const numericIds = selectionSet.selectedIds ?? selectionSet.frameIds;
       uiStore.setActiveSelectionSetSelectedIds(
-        new Set(numericIds.map(id => `${protocol}:${id}`))
+        new Set(selectionSetKeys(selectionSet, protocol).selected)
       );
     },
     setRenderFrozen: frameStore.setRenderFrozen,

@@ -43,14 +43,11 @@ export function useSelectionSetHandlers({
   onAfterMutate,
 }: UseSelectionSetHandlersParams) {
   // Save selection set: update existing if dirty, otherwise open dialog
-  // SelectionSet persistence uses numeric IDs — extract from composite keys
   const handleSaveSelectionSet = useCallback(async () => {
     if (activeSelectionSetId && selectionSetDirty) {
-      const allFrameIds = Array.from(frameMap.keys()).map(fk => parseFrameKey(fk).frameId);
-      const selectedIds = Array.from(selectedFrames).map(fk => parseFrameKey(fk).frameId);
       await updateSelectionSet(activeSelectionSetId, {
-        frameIds: allFrameIds,
-        selectedIds: selectedIds,
+        frameKeys: Array.from(frameMap.keys()),
+        selectedKeys: Array.from(selectedFrames),
       });
       setSelectionSetDirty(false);
       onAfterMutate?.();
@@ -70,9 +67,11 @@ export function useSelectionSetHandlers({
   // Save new selection set with a name
   const handleSaveNewSelectionSet = useCallback(
     async (name: string) => {
-      const allFrameIds = Array.from(frameMap.keys()).map(fk => parseFrameKey(fk).frameId);
-      const selectedIds = Array.from(selectedFrames).map(fk => parseFrameKey(fk).frameId);
-      const newSet = await addSelectionSet(name, allFrameIds, selectedIds);
+      const newSet = await addSelectionSet(
+        name,
+        Array.from(frameMap.keys()),
+        Array.from(selectedFrames)
+      );
       setActiveSelectionSet(newSet.id);
       setSelectionSetDirty(false);
       onAfterMutate?.();
@@ -86,12 +85,15 @@ export function useSelectionSetHandlers({
       applySelectionSet(selectionSet);
       await markSelectionSetUsed(selectionSet.id);
 
-      // If the current frame map has numeric IDs not tracked by the selection set,
-      // mark dirty so the user can save those new frames into the set
-      const setFrameIds = new Set(selectionSet.frameIds);
+      // If the frame map holds frames the set does not track, mark dirty so the user
+      // can save them into it. A set saved before keys existed only knows numbers, so
+      // compare on whichever identity it actually carries.
+      const tracked = new Set<string | number>(selectionSet.frameKeys ?? selectionSet.frameIds);
+      const identityOf = selectionSet.frameKeys
+        ? (fk: string): string | number => fk
+        : (fk: string): string | number => parseFrameKey(fk).frameId;
       for (const fk of frameMap.keys()) {
-        const { frameId } = parseFrameKey(fk);
-        if (!setFrameIds.has(frameId)) {
+        if (!tracked.has(identityOf(fk))) {
           setSelectionSetDirty(true);
           break;
         }

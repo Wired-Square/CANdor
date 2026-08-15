@@ -55,7 +55,7 @@ import { buildFramesToml, type SerialFrameConfig } from '../utils/frameExport';
 import { formatFrameId } from '../utils/frameIds';
 import type { FrameDetail, SignalDef } from '../types/decoder';
 import type { DecodedFrameMsg, DecodedMirrorVerdict } from '../services/wsProtocol';
-import type { SelectionSet } from '../utils/selectionSets';
+import { selectionSetKeys, type SelectionSet } from '../utils/selectionSets';
 import type { CanHeaderField, HeaderFieldFormat } from '../apps/catalog/types';
 import type { PlaybackSpeed } from '../components/TimeController';
 import { loadCatalog as loadCatalogFromPath, attachAndResolve, type ParsedCatalog, type ModbusProtocolConfig } from '../utils/catalogParser';
@@ -935,20 +935,13 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
   setSelectionSetDirty: (dirty) => set({ selectionSetDirty: dirty }),
 
   applySelectionSet: (selectionSet) => {
-    // Decoder behavior: only select IDs from selectedIds
-    // (including IDs that don't exist in current catalog)
-    // Fall back to frameIds for backwards compatibility with old selection sets
-    // Convert numeric IDs to composite keys using the catalog's protocol
+    // Decoder behaviour: select only what the set names, including frames the current
+    // catalogue does not hold. A set saved before keys existed carries bare numbers, so
+    // the catalogue's protocol stands in for the one they were saved under.
     const { protocol } = get();
-    const idsToSelect = selectionSet.selectedIds ?? selectionSet.frameIds;
-    const newSelectedFrames = new Set<string>();
-
-    for (const numericId of idsToSelect) {
-      newSelectedFrames.add(frameKey(protocol, numericId));
-    }
 
     set({
-      selectedFrames: newSelectedFrames,
+      selectedFrames: new Set(selectionSetKeys(selectionSet, protocol).selected),
       activeSelectionSetId: selectionSet.id,
       selectionSetDirty: false,
     });
