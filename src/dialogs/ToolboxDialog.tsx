@@ -24,6 +24,13 @@ import ChecksumDiscoveryToolPanel from "../apps/discovery/views/tools/ChecksumDi
 import ModbusRegisterScanPanel from "../apps/discovery/views/tools/ModbusRegisterScanPanel";
 import ModbusUnitIdScanPanel from "../apps/discovery/views/tools/ModbusUnitIdScanPanel";
 import type { ModbusScanConfig, UnitIdScanConfig } from "../api/io";
+import {
+  toolNeeds,
+  isToolApplicable,
+  hasToolData,
+  type SessionShape,
+  type ToolDataCounts,
+} from "./toolboxGating";
 
 type ToolConfig = {
   id: ToolboxView;
@@ -56,8 +63,11 @@ type Props = {
   onClose: () => void;
   selectedCount: number;
   frameCount: number;
-  /** True when in serial mode - filters available tools and uses serial frame data */
+  /** True when the source emits a raw byte stream — gates the byte view and Serial Framing */
   isSerialMode?: boolean;
+  /** True when the session's protocol is serial, however it delivers its data. A source
+   *  that frames in the backend has serial frames without ever emitting raw bytes. */
+  isSerialProtocol?: boolean;
   /** True when the Filtered tab is active — analysis will target filtered-out IDs */
   isFilteredView?: boolean;
   /** Number of serial frames (framedData + frames) available for analysis */
@@ -100,6 +110,7 @@ export default function ToolboxDialog({
   selectedCount,
   frameCount,
   isSerialMode = false,
+  isSerialProtocol = false,
   isFilteredView = false,
   serialFrameCount = 0,
   serialBytesCount = 0,
@@ -117,48 +128,36 @@ export default function ToolboxDialog({
 
   const activeTool = activeView !== "frames" ? activeView : null;
 
-  // Filter tools based on mode
-  const availableTools = isSerialMode
-    ? tools.filter((t) => t.serialRequires !== undefined)
-    : isModbusProfile
-      ? tools.filter((t) => t.modbusRequires === true || (!t.serialRequires && !t.modbusRequires))
-      : tools.filter((t) => !t.serialRequires && !t.modbusRequires);
+  const session: SessionShape = { isSerialMode, isSerialProtocol, isModbusProfile };
+  const counts: ToolDataCounts = { frameCount, serialFrameCount, serialBytesCount };
 
-  const isToolAvailable = (tool: ToolConfig): boolean => {
-    if (tool.modbusRequires) return isModbusProfile;
-    if (!isSerialMode) return frameCount > 0;
-    if (tool.serialRequires === 'bytes') return serialBytesCount > 0;
-    if (tool.serialRequires === 'frames') return serialFrameCount > 0;
-    return false;
-  };
+  const availableTools = tools.filter((tool) => isToolApplicable(tool, session));
+  const isToolAvailable = (tool: ToolConfig): boolean => hasToolData(tool, session, counts);
 
   const getEffectiveCount = (): number => {
-    if (!activeTool) return 0;
-    const tool = tools.find(t => t.id === activeTool);
+    const tool = activeTool ? tools.find(t => t.id === activeTool) : undefined;
     if (!tool) return 0;
-    if (tool.modbusRequires) return 0;
-    if (!isSerialMode) return selectedCount;
-    if (tool.serialRequires === 'bytes') return serialBytesCount;
-    if (tool.serialRequires === 'frames') return serialFrameCount;
-    return 0;
+    switch (toolNeeds(tool)) {
+      case 'modbus': return 0;
+      case 'serial-bytes': return serialBytesCount;
+      case 'serial-frames': return serialFrameCount;
+      case 'frames': return selectedCount;
+    }
   };
 
   const effectiveSelectedCount = getEffectiveCount();
 
   const getDisabledReason = (tool: ToolConfig): string | null => {
-    if (tool.modbusRequires) {
-      return isModbusProfile ? null : t("toolbox.disabledReasons.modbusProfile");
+    switch (toolNeeds(tool)) {
+      case 'modbus':
+        return isModbusProfile ? null : t("toolbox.disabledReasons.modbusProfile");
+      case 'serial-bytes':
+        return serialBytesCount === 0 ? t("toolbox.disabledReasons.noBytes") : null;
+      case 'serial-frames':
+        return serialFrameCount === 0 ? t("toolbox.disabledReasons.needFraming") : null;
+      case 'frames':
+        return frameCount === 0 ? t("toolbox.disabledReasons.noFrames") : null;
     }
-    if (!isSerialMode) {
-      return frameCount === 0 ? t("toolbox.disabledReasons.noFrames") : null;
-    }
-    if (tool.serialRequires === 'bytes' && serialBytesCount === 0) {
-      return t("toolbox.disabledReasons.noBytes");
-    }
-    if (tool.serialRequires === 'frames' && serialFrameCount === 0) {
-      return t("toolbox.disabledReasons.needFraming");
-    }
-    return null;
   };
 
   const handleToolClick = (toolId: ToolboxView) => {

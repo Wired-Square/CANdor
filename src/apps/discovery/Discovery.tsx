@@ -1268,6 +1268,7 @@ function DiscoveryInner() {
         selectedCount={framesViewActiveTab === 'filtered' ? seenIds.size - selectedFrames.size : selectedFrames.size}
         frameCount={frameList.length}
         isSerialMode={isSerialMode}
+        isSerialProtocol={capabilities?.traits?.protocols?.includes("serial") ?? false}
         isFilteredView={framesViewActiveTab === 'filtered'}
         serialFrameCount={backendFrameCount > 0 ? backendFrameCount : (framedData.length + frames.length)}
         serialBytesCount={backendByteCount > 0 ? backendByteCount : serialBytesBuffer.length}
