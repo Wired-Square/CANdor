@@ -207,7 +207,7 @@ const FrameDataTable = forwardRef<HTMLDivElement, FrameDataTableProps>(({
   const onFitChangeRef = useRef(onFitChange);
   onFitChangeRef.current = onFitChange;
   useEffect(() => {
-    if (autoFit && autoFitRows.rows > 0) onFitChangeRef.current?.(autoFitRows.rows);
+    if (autoFit && autoFitRows.rows !== null) onFitChangeRef.current?.(autoFitRows.rows);
   }, [autoFit, autoFitRows.rows]);
 
   // Re-measure until a real row has been measured — that is what replaces the assumed

@@ -1,51 +1,60 @@
-// Page-size sentinels shared by every paginated data view.
+// Page sizes shared by every paginated data view.
 //
-// The rows-per-page <select> is numeric — its value is read back with
-// `Number(e.target.value)` — so the non-numeric modes have to travel as sentinels.
-// Views hold the *raw* setting (so the select can match an option) and pass the
-// *resolved* row count to their data layer; `resolvePageSize` is the only place that
-// knows how to get from one to the other.
+// Two types, because two different things were being carried in one number. A
+// `PageSize` is what the rows-per-page control holds — a row count, or one of the
+// non-numeric modes. A `ResolvedPageSize` is a concrete count ready to reach an
+// offset or a limit, and `null` until the Auto fit has been measured.
+//
+// Keeping the modes as strings is the whole point: `total / pageSize` on an
+// unresolved setting does not compile, and neither does arithmetic on a resolved
+// size that has not been null-checked.
 
-/** Fit the page to the height available, measured at runtime. */
-export const PAGE_SIZE_AUTO = -2;
+/** What the rows-per-page control holds. */
+export type PageSize = number | "auto" | "all";
 
-/** Show every row in one page. */
-export const PAGE_SIZE_ALL = -1;
+/** A concrete row count, or `null` while an Auto fit has not been measured. */
+export type ResolvedPageSize = number | null;
 
 /** Rows per page when a view has no better answer. */
 export const DEFAULT_PAGE_SIZE = 20;
 
-/** Cap for `All` — bounded so a stray sentinel can't request an unbounded page. */
+/** Cap for `all` when the caller has no real total to offer. */
 export const ALL_FALLBACK_ROWS = 1000;
-
-export const isAutoPageSize = (value: number): boolean => value === PAGE_SIZE_AUTO;
 
 /**
  * Turn a page-size setting into a concrete row count.
  *
- * `autoRows` is the measured fit from `useAutoRowCount`, where **0 means "not measured
- * yet"** — that zero is passed straight through so callers can guard on
- * `resolved <= 0` and skip the fetch rather than requesting an arbitrary page at mount
- * and replacing it a frame later.
+ * Returns `null` until the Auto fit lands, so callers skip the fetch rather than
+ * requesting an arbitrary page at mount and replacing it a frame later.
  */
 export function resolvePageSize(
-  setting: number,
-  autoRows: number,
-  /** Real total for `All`; omit and it falls back to a bounded cap. */
+  setting: PageSize,
+  autoRows: ResolvedPageSize,
+  /** Real total for `all`; omit and it falls back to a bounded cap. */
   allRows?: number,
-): number {
-  if (setting === PAGE_SIZE_AUTO) return autoRows;
-  if (setting === PAGE_SIZE_ALL) return Math.max(1, allRows ?? ALL_FALLBACK_ROWS);
+): ResolvedPageSize {
+  if (setting === "auto") return autoRows !== null && autoRows > 0 ? autoRows : null;
+  if (setting === "all") return Math.max(1, allRows ?? ALL_FALLBACK_ROWS);
   return setting > 0 ? setting : DEFAULT_PAGE_SIZE;
 }
 
-// Dividing by an unmeasured size gives Infinity, and it reaches the page counter and
+/** `<option>` value for a page size — a select's values are strings anyway. */
+export const pageSizeToOptionValue = (size: PageSize): string => String(size);
+
+/** Read an `<option>` value back. Total, and never yields a non-positive number. */
+export function pageSizeFromOptionValue(raw: string): PageSize {
+  if (raw === "auto" || raw === "all") return raw;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_PAGE_SIZE;
+}
+
+// Dividing by an unresolved size gives Infinity, and it reaches the page counter and
 // `setCurrentPage`. Both divisions live here so no caller has to remember the guard.
 
 /** Pages needed for `totalRows`, or 1 while the size is unresolved. */
-export const pageCount = (totalRows: number, pageSize: number): number =>
-  pageSize <= 0 ? 1 : Math.max(1, Math.ceil(totalRows / pageSize));
+export const pageCount = (totalRows: number, pageSize: ResolvedPageSize): number =>
+  pageSize === null ? 1 : Math.max(1, Math.ceil(totalRows / pageSize));
 
 /** The page an absolute row offset lands on, or 0 while the size is unresolved. */
-export const pageForOffset = (offset: number, pageSize: number): number =>
-  pageSize <= 0 ? 0 : Math.floor(Math.max(0, offset) / pageSize);
+export const pageForOffset = (offset: number, pageSize: ResolvedPageSize): number =>
+  pageSize === null ? 0 : Math.floor(Math.max(0, offset) / pageSize);

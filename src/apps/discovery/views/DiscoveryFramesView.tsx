@@ -10,7 +10,7 @@ import { useDiscoveryUIStore } from "../../../stores/discoveryUIStore";
 import { useDiscoveryToolboxStore } from "../../../stores/discoveryToolboxStore";
 import { type CaptureMetadata, searchCaptureFrames } from "../../../api/capture";
 import { FrameDataTable, type TabDefinition, FRAME_PAGE_SIZE_OPTIONS } from "../components";
-import { isAutoPageSize, resolvePageSize } from "../../../utils/pageSize";
+import { resolvePageSize, type PageSize } from "../../../utils/pageSize";
 import DiscoveryFindBar, { type FindSearchMode } from "../components/DiscoveryFindBar";
 import AppTabView from "../../../components/AppTabView";
 import { PlaybackControls, type PlaybackState } from "../../../components/PlaybackControls";
@@ -227,11 +227,11 @@ function DiscoveryFramesView({
   // Capture playback = pagination mode (not tail-follow). True for: recorded source, paused stream, or store-level capture mode (after ingest)
   const isCapturePlayback = isRecorded || isStreamPaused || captureMode.enabled;
 
-  // Rows per page. The stored setting may be a sentinel (Auto / All); everything below
-  // uses the resolved number, and every site must use the same one — they used to
-  // disagree, so a row click and the playback highlight resolved different frame indices.
-  // The table measures its own geometry and reports the fit; 0 until it has.
-  const [autoRows, setAutoRows] = useState(0);
+  // Rows per page. Everything below uses the resolved count, and every site must use the
+  // same one — they used to disagree, so a row click and the playback highlight resolved
+  // different frame indices.
+  // The table measures its own geometry and reports the fit; null until it has.
+  const [autoRows, setAutoRows] = useState<number | null>(null);
   const pageSize = resolvePageSize(renderBuffer, autoRows);
 
   const captureFrameView = useCaptureFrameView({
@@ -240,7 +240,7 @@ function DiscoveryFramesView({
     isStreaming,
     selectedFrames,
     pageSize,
-    tailSize: Math.min(pageSize, 200),
+    tailSize: pageSize === null ? null : Math.min(pageSize, 200),
     pollIntervalMs: BUFFER_POLL_INTERVAL_MS,
     isCapturePlayback,
     frozen: renderFrozen,
@@ -531,7 +531,7 @@ function DiscoveryFramesView({
   }, [activeTab, tabs, setActiveTab]);
 
   // Handle page size change - reset to page 0
-  const handlePageSizeChange = useCallback((size: number) => {
+  const handlePageSizeChange = useCallback((size: PageSize) => {
     setRenderBuffer(size);
     // Reset page using the stable callback
     setCurrentPageStable(0);
@@ -687,12 +687,13 @@ function DiscoveryFramesView({
     ? findResults[findCurrentIndex]
     : null;
   // Unmeasured page size means no page to compare against, so no match highlight yet.
-  const currentMatchPage = currentMatchOffset != null && pageSize > 0
+  const currentMatchPage = currentMatchOffset != null && pageSize !== null
     ? Math.floor(currentMatchOffset / pageSize)
     : null;
-  const effectiveHighlightedRow = (currentMatchPage === effectiveCurrentPage && currentMatchOffset != null)
-    ? currentMatchOffset % pageSize
-    : highlightedRowIndex;
+  const effectiveHighlightedRow =
+    currentMatchPage === effectiveCurrentPage && currentMatchOffset != null && pageSize !== null
+      ? currentMatchOffset % pageSize
+      : highlightedRowIndex;
 
   // Handle row click - convert row index to global frame index and get timestamp
   const handleRowClick = useCallback((rowIndex: number) => {
@@ -1019,7 +1020,7 @@ function DiscoveryFramesView({
             pageStartIndex={effectivePageStartIndex}
             captureIndices={captureFrameView.captureIndices}
             autoScroll={isStreaming && !isCapturePlayback}
-            autoFit={isAutoPageSize(renderBuffer)}
+            autoFit={renderBuffer === "auto"}
             onFitChange={setAutoRows}
             onContextMenu={handleContextMenu}
             onHeaderContextMenu={handleHeaderContextMenu}

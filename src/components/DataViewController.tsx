@@ -5,6 +5,7 @@
 
 import DataViewTabBar, { type TabDefinition, type ProtocolBadge } from "./DataViewTabBar";
 import DataViewPaginationToolbar, { type PageSizeOption, FRAME_PAGE_SIZE_OPTIONS } from "./DataViewPaginationToolbar";
+import type { PageSize } from "../utils/pageSize";
 import DataViewTimelineSection from "./DataViewTimelineSection";
 
 interface DataViewControllerProps {
@@ -36,10 +37,10 @@ interface DataViewControllerProps {
   showToolbar?: boolean;
   currentPage: number;
   totalPages: number;
-  pageSize: number;
+  pageSize: PageSize;
   pageSizeOptions?: PageSizeOption[];
   onPageChange: (page: number) => void;
-  onPageSizeChange: (size: number) => void;
+  onPageSizeChange: (size: PageSize) => void;
   toolbarLoading?: boolean;
   toolbarDisabled?: boolean;
   /** Content to show on the left side of the toolbar (e.g., time range inputs) */

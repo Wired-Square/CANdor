@@ -1,15 +1,17 @@
-// Page-size sentinel resolution and the Auto row-count arithmetic.
+// Page-size resolution, the option-value codec and the Auto row-count arithmetic.
 //
 // The DOM half of useAutoRowCount is not covered here — Vitest runs with
 // `environment: "node"` and no jsdom, which is why the arithmetic is exported separately.
 
 import { describe, it, expect } from "vitest";
 import {
-  PAGE_SIZE_AUTO,
-  PAGE_SIZE_ALL,
   DEFAULT_PAGE_SIZE,
   ALL_FALLBACK_ROWS,
   resolvePageSize,
+  pageSizeToOptionValue,
+  pageSizeFromOptionValue,
+  pageCount,
+  pageForOffset,
 } from "../utils/pageSize";
 import { computeAutoRows, shouldCommit } from "../hooks/useAutoRowCount";
 
@@ -18,29 +20,68 @@ describe("resolvePageSize", () => {
     expect(resolvePageSize(50, 33)).toBe(50);
   });
 
-  it("resolves Auto to the measured row count", () => {
-    expect(resolvePageSize(PAGE_SIZE_AUTO, 33)).toBe(33);
+  it("does not make a numeric setting wait on the fit", () => {
+    expect(resolvePageSize(50, null)).toBe(50);
   });
 
-  it("propagates the unmeasured zero so callers can skip the fetch", () => {
-    // The whole point: a view guards on `<= 0` rather than fetching an arbitrary page at
-    // mount and replacing it a frame later.
-    expect(resolvePageSize(PAGE_SIZE_AUTO, 0)).toBe(0);
+  it("resolves auto to the measured row count", () => {
+    expect(resolvePageSize("auto", 33)).toBe(33);
   });
 
-  it("resolves All to the supplied total, or a bounded fallback", () => {
-    expect(resolvePageSize(PAGE_SIZE_ALL, 33, 4812)).toBe(4812);
-    expect(resolvePageSize(PAGE_SIZE_ALL, 33)).toBe(ALL_FALLBACK_ROWS);
+  it("returns null until the fit is measured, so callers skip the fetch", () => {
+    // The whole point: a view guards on null rather than fetching an arbitrary page at
+    // mount and replacing it a frame later. The type makes forgetting a compile error.
+    expect(resolvePageSize("auto", null)).toBeNull();
+    expect(resolvePageSize("auto", 0)).toBeNull();
   });
 
-  it("never returns a negative or zero size for a non-Auto setting", () => {
-    // A stray sentinel from persisted or stale state must not become an offset.
-    expect(resolvePageSize(0, 0)).toBe(DEFAULT_PAGE_SIZE);
-    expect(resolvePageSize(-7, 0)).toBe(DEFAULT_PAGE_SIZE);
+  it("resolves all to the supplied total, or a bounded fallback", () => {
+    expect(resolvePageSize("all", 33, 4812)).toBe(4812);
+    expect(resolvePageSize("all", 33)).toBe(ALL_FALLBACK_ROWS);
   });
 
-  it("clamps a bogus All total rather than requesting zero rows", () => {
-    expect(resolvePageSize(PAGE_SIZE_ALL, 0, 0)).toBe(1);
+  it("never returns a negative or zero size for a numeric setting", () => {
+    // The union rules out the modes, not a nonsense number from stale state.
+    expect(resolvePageSize(0, 10)).toBe(DEFAULT_PAGE_SIZE);
+    expect(resolvePageSize(-7, 10)).toBe(DEFAULT_PAGE_SIZE);
+  });
+
+  it("clamps a bogus all total rather than requesting zero rows", () => {
+    expect(resolvePageSize("all", 10, 0)).toBe(1);
+  });
+});
+
+describe("page-size option values", () => {
+  it("round-trips every page size through a select's string value", () => {
+    for (const size of ["auto", "all", 20, 100] as const) {
+      expect(pageSizeFromOptionValue(pageSizeToOptionValue(size))).toBe(size);
+    }
+  });
+
+  it("falls back rather than yielding a non-positive size", () => {
+    // "-2" is a page-size sentinel from a previous build; it must not come back as -2.
+    for (const raw of ["", "-1", "-2", "0", "abc"]) {
+      expect(pageSizeFromOptionValue(raw)).toBe(DEFAULT_PAGE_SIZE);
+    }
+  });
+});
+
+describe("pageCount / pageForOffset", () => {
+  it("counts and locates pages for a resolved size", () => {
+    expect(pageCount(500, 20)).toBe(25);
+    expect(pageCount(0, 20)).toBe(1);
+    expect(pageForOffset(1234, 20)).toBe(61);
+  });
+
+  it("stays finite while the size is unresolved", () => {
+    // Both used to divide by 0: the counter rendered "1 / Infinity" and the timeline
+    // scrub called setCurrentPage(Infinity).
+    expect(pageCount(500, null)).toBe(1);
+    expect(pageForOffset(1234, null)).toBe(0);
+  });
+
+  it("never locates a negative page", () => {
+    expect(pageForOffset(-1, 20)).toBe(0);
   });
 });
 

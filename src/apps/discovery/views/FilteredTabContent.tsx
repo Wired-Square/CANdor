@@ -23,7 +23,7 @@ import type { FrameRow } from "../components";
 import type { CaptureMetadata } from "../../../api/capture";
 import { formatIsoUs, formatHumanUs, renderDeltaNode } from "../../../utils/timeFormat";
 import type React from "react";
-import { PAGE_SIZE_AUTO, isAutoPageSize, resolvePageSize } from "../../../utils/pageSize";
+import { pageCount, resolvePageSize, type PageSize } from "../../../utils/pageSize";
 
 type Props = {
   displayFrameIdFormat: "hex" | "decimal";
@@ -61,10 +61,9 @@ export default function FilteredTabContent({
 
   const [currentPage, setCurrentPage] = useState(0);
   // Auto by default; the table measures itself and reports how many rows fit. Everything
-  // below uses the resolved number — the raw setting is a sentinel and would go straight
-  // into an offset otherwise.
-  const [pageSizeSetting, setPageSizeSetting] = useState(PAGE_SIZE_AUTO);
-  const [autoRows, setAutoRows] = useState(0);
+  // below uses the resolved count — the setting itself cannot reach an offset.
+  const [pageSizeSetting, setPageSizeSetting] = useState<PageSize>("auto");
+  const [autoRows, setAutoRows] = useState<number | null>(null);
   const pageSize = resolvePageSize(pageSizeSetting, autoRows);
 
   // Buffer mode state
@@ -142,7 +141,7 @@ export default function FilteredTabContent({
   const localResult = useMemo(() => {
     if (captureMode.enabled || filteredOutIds.length === 0) return null;
     // Auto fit not measured yet — the tail limit and the slice below both come back empty.
-    if (pageSize <= 0) return null;
+    if (pageSize === null) return null;
 
     const filteredIdSet = new Set(filteredOutIds);
     const matching: FrameMessage[] = [];
@@ -170,7 +169,7 @@ export default function FilteredTabContent({
 
   // Paginate the local result
   const localPage = useMemo(() => {
-    if (!localResult) return { frames: [] as FrameRow[], totalCount: 0 };
+    if (!localResult || pageSize === null) return { frames: [] as FrameRow[], totalCount: 0 };
 
     const totalCount = localResult.length;
     let slice: FrameMessage[];
@@ -194,7 +193,7 @@ export default function FilteredTabContent({
   // Buffer mode: fetch filtered-out frames from backend
   useEffect(() => {
     if (!captureMode.enabled || isStreaming || filteredOutIds.length === 0) return;
-    if (pageSize <= 0) return; // auto size not measured yet
+    if (pageSize === null) return; // auto size not measured yet
 
     let cancelled = false;
     const fetchPage = async () => {
@@ -243,10 +242,10 @@ export default function FilteredTabContent({
     setHeaderContextMenu(null);
   }, [currentPage, displayFrames]);
   const totalCount = captureMode.enabled ? bufferTotalCount : localPage.totalCount;
-  const totalPages = totalCount > 0 && pageSize > 0 ? Math.ceil(totalCount / pageSize) : 1;
+  const totalPages = pageCount(totalCount, pageSize);
   const loading = captureMode.enabled ? bufferLoading : false;
 
-  const handlePageSizeChange = useCallback((size: number) => {
+  const handlePageSizeChange = useCallback((size: PageSize) => {
     setPageSizeSetting(size);
     setCurrentPage(0);
   }, []);
@@ -324,7 +323,7 @@ export default function FilteredTabContent({
         showAscii={showAsciiColumn}
         showBus={showBusColumn}
         showSourceAddress={showSourceColumn}
-        autoFit={isAutoPageSize(pageSizeSetting)}
+        autoFit={pageSizeSetting === "auto"}
         onFitChange={setAutoRows}
         emptyMessage={loading ? "Loading filtered frames..." : "No filtered frames to display"}
         onContextMenu={handleContextMenu}

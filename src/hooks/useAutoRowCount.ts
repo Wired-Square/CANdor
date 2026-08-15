@@ -29,9 +29,15 @@ export interface AutoRowCountOptions {
 }
 
 export interface AutoRowCount {
-  /** Rows that fit. **0 means not measured yet** — callers should not fetch on 0. */
-  rows: number;
-  /** True once a real row has been measured (rather than the fallback). */
+  /** Rows that fit, or `null` before there is an answer — callers must not fetch on null. */
+  rows: number | null;
+  /**
+   * True once a real *row* has been measured, rather than `fallbackRowHeight`.
+   *
+   * Not the same question as `rows !== null`: the first pass commits a fit derived
+   * from the assumed row height, so a non-null `rows` with `isMeasured` false is the
+   * normal state until real rows have rendered.
+   */
   isMeasured: boolean;
   /**
    * Re-measure after the rows change — that is what replaces the assumed row height with
@@ -97,7 +103,10 @@ export function useAutoRowCount({
   maxRows = 500,
   settleMs = 150,
 }: AutoRowCountOptions): AutoRowCount {
-  const [state, setState] = useState({ rows: 0, isMeasured: false });
+  const [state, setState] = useState<{ rows: number | null; isMeasured: boolean }>({
+    rows: null,
+    isMeasured: false,
+  });
 
   // Everything `measure` reads lives in refs, so `measure` — and therefore `schedule` and
   // `remeasure` — keep a stable identity and the ResizeObserver is built once. When these

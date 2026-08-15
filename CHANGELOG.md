@@ -10,6 +10,8 @@ All notable changes to WireTAP will be documented in this file.
 
 ### Fixed
 
+- **Paginated tables no longer misbehave in the moment before they measure themselves.** Transmit history showed a page counter of "1 / Infinity" on first paint, and scrubbing the timeline in Transmit history or serial framed data before the table had sized itself jumped to a nonexistent page. Tables that fit their rows to the panel now hold off until they know how many rows fit, rather than acting on a size they do not have yet.
+
 - **Discovery no longer accumulates duplicate rows as a capture runs.** Rows were piling up on screen — the same frame drawn three or four times, more copies the longer a session ran — and toggling the #, Bus or ASCII columns left rows disagreeing with the header. Frames that shared a timestamp and ID could not be told apart, so the display kept adding rows without ever removing the old ones. The frame table also holds its column widths steady now instead of resizing as you page through.
 
 - **Dropping a source clears the view.** Destroying a session, or choosing "Continue without a source", could leave frames on screen underneath "No frames to display", with the frame count and the filter count disagreeing about what was there. Every way of leaving a source now clears the frames, the frame picker and the counts together.

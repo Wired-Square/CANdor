@@ -30,7 +30,7 @@ import { monoBody, emptyStateContainer, emptyStateText, emptyStateHeading, empty
 import { iconSm, iconMd, iconXl } from "../../../styles/spacing";
 import { bgSurface, borderDefault, borderDivider, hoverBg, textPrimary, textSecondary, textMuted, textDataAmber, textDataGreen, textDataPurple, textDataCyan, textDanger } from "../../../styles/colourTokens";
 import { useAutoRowCount } from "../../../hooks/useAutoRowCount";
-import { PAGE_SIZE_AUTO, isAutoPageSize, resolvePageSize } from "../../../utils/pageSize";
+import { resolvePageSize, type PageSize } from "../../../utils/pageSize";
 
 interface Props {
   selectedQuery: QueuedQuery | null;
@@ -53,11 +53,11 @@ export default function ResultsPanel({
   // Pagination state. Auto by default — this list is div-based rather than a table, so
   // it measures itself directly instead of going through FrameDataTable.
   const [currentPage, setCurrentPage] = useState(0);
-  const [pageSizeSetting, setPageSizeSetting] = useState(PAGE_SIZE_AUTO);
+  const [pageSizeSetting, setPageSizeSetting] = useState<PageSize>("auto");
   const resultsScrollRef = useRef<HTMLDivElement | null>(null);
   const autoFit = useAutoRowCount({
     containerRef: resultsScrollRef,
-    enabled: isAutoPageSize(pageSizeSetting),
+    enabled: pageSizeSetting === "auto",
     rowSelector: "[data-result-row]",
     // Result rows are taller than a frame row, and vary by query type.
     fallbackRowHeight: 33,
@@ -81,24 +81,23 @@ export default function ResultsPanel({
   const queryInfo = QUERY_TYPE_INFO[queryType];
 
   // Calculate paginated results (only for array-based query types)
-  const { paginatedResults, totalPages } = useMemo(() => {
+  const { paginatedResults, totalPages, pageStart } = useMemo(() => {
     if (!results || resultCount === 0 || !Array.isArray(results)) {
-      return { paginatedResults: [], totalPages: 0 };
+      return { paginatedResults: [], totalPages: 0, pageStart: 0 };
     }
 
     const allResults = results as (ByteChangeResult | FrameChangeResult | MirrorValidationResult | FrequencyBucket | DistributionResult | GapResult | PatternSearchResult)[];
 
     // Not measured yet, or "All" resolved past the result count — show everything.
-    if (pageSize <= 0 || pageSize >= resultCount) {
-      return { paginatedResults: allResults, totalPages: 1 };
+    if (pageSize === null || pageSize >= resultCount) {
+      return { paginatedResults: allResults, totalPages: 1, pageStart: 0 };
     }
 
-    const total = Math.ceil(resultCount / pageSize);
     const start = currentPage * pageSize;
-    const end = Math.min(start + pageSize, resultCount);
     return {
-      paginatedResults: allResults.slice(start, end),
-      totalPages: total,
+      paginatedResults: allResults.slice(start, Math.min(start + pageSize, resultCount)),
+      totalPages: Math.ceil(resultCount / pageSize),
+      pageStart: start,
     };
   }, [results, resultCount, currentPage, pageSize]);
 
@@ -384,7 +383,7 @@ export default function ResultsPanel({
       <div className="flex-1 overflow-auto" ref={resultsScrollRef}>
         <div className="divide-y divide-[var(--border-default)]">
           {paginatedResults.map((result, index) => (
-            <div data-result-row key={currentPage * pageSize + index}>
+            <div data-result-row key={pageStart + index}>
               <ResultRow
                 result={result}
                 queryType={queryType}

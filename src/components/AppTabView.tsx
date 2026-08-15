@@ -12,17 +12,20 @@ import DataViewController, {
   FRAME_PAGE_SIZE_OPTIONS,
 } from "./DataViewController";
 import { bgDataView, dataViewContainer } from "../styles";
+import type { PageSize } from "../utils/pageSize";
 
 /**
  * Toolbar configuration for AppTabView.
  */
 interface ToolbarConfig {
-  currentPage: number;
-  totalPages: number;
-  pageSize: number;
+  // All optional: a view that only wants the toolbar's content slots sets
+  // `hidePagination` / `hidePageSize` and supplies none of these.
+  currentPage?: number;
+  totalPages?: number;
+  pageSize?: PageSize;
   pageSizeOptions?: PageSizeOption[];
-  onPageChange: (page: number) => void;
-  onPageSizeChange: (size: number) => void;
+  onPageChange?: (page: number) => void;
+  onPageSizeChange?: (size: PageSize) => void;
   loading?: boolean;
   disabled?: boolean;
   leftContent?: ReactNode;
@@ -207,7 +210,7 @@ export default function AppTabView({
         showToolbar={toolbar !== undefined}
         currentPage={toolbar?.currentPage ?? 0}
         totalPages={toolbar?.totalPages ?? 1}
-        pageSize={toolbar?.pageSize ?? -1}
+        pageSize={toolbar?.pageSize ?? "all"}
         pageSizeOptions={toolbar?.pageSizeOptions ?? FRAME_PAGE_SIZE_OPTIONS}
         onPageChange={toolbar?.onPageChange ?? (() => {})}
         onPageSizeChange={toolbar?.onPageSizeChange ?? (() => {})}

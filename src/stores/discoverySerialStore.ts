@@ -14,7 +14,7 @@ import {
   type PaginatedBytesResponse,
   type BackendFramingConfig,
 } from '../api/capture';
-import { PAGE_SIZE_ALL, PAGE_SIZE_AUTO } from '../utils/pageSize';
+import type { PageSize } from '../utils/pageSize';
 
 /** A single byte with timestamp for hex dump display */
 export type SerialBytesEntry = {
@@ -79,12 +79,12 @@ interface DiscoverySerialState {
   activeTab: SerialTabId;
 
   // Pagination state for framed data view
-  framedPageSize: number;  // a row count, or a PAGE_SIZE_* sentinel
+  framedPageSize: PageSize;
 
   // Backend capture mode state
   /** Total byte count in backend capture (updated during streaming) */
   backendByteCount: number;
-  /** Pagination state for raw bytes view */
+  /** Rows per page for the raw bytes view. A plain count — ByteView offers no Auto. */
   rawBytesPageSize: number;
   /** ID of the active bytes capture (null = no bytes capture loaded) */
   bytesCaptureId: string | null;
@@ -126,7 +126,7 @@ interface DiscoverySerialState {
   setSerialViewConfig: (config: SerialViewConfig) => void;
   toggleShowAscii: () => void;
   setActiveTab: (tab: SerialTabId) => void;
-  setFramedPageSize: (size: number) => void;
+  setFramedPageSize: (size: PageSize) => void;
   // Backend buffer actions
   setBytesCaptureId: (id: string | null) => void;
   setBackendByteCount: (count: number) => void;
@@ -157,7 +157,7 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
     showAscii: true, // Show ASCII column by default
   },
   activeTab: 'raw',
-  framedPageSize: PAGE_SIZE_AUTO, // Default page size for framed data
+  framedPageSize: "auto", // Default page size for framed data
   backendByteCount: 0, // Total bytes in backend capture
   bytesCaptureId: null, // ID of active bytes capture
   rawBytesPageSize: 1000, // Default page size for raw bytes view
@@ -491,12 +491,10 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 
-  setFramedPageSize: (size) => set({
-    // Sentinels pass through untouched; the clamp would turn Auto into a literal 20.
-    framedPageSize: size === PAGE_SIZE_AUTO || size === PAGE_SIZE_ALL
-      ? size
-      : Math.min(10000, Math.max(1, size)),
-  }),
+  setFramedPageSize: (size) =>
+    set({
+      framedPageSize: typeof size === 'number' ? Math.min(10000, Math.max(1, size)) : size,
+    }),
 
   // Backend buffer actions
   setBytesCaptureId: (id) => set({ bytesCaptureId: id }),

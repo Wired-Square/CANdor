@@ -18,20 +18,20 @@ import {
   gapDefault,
 } from "../styles";
 import { paginationButtonDark } from "../styles/buttonStyles";
-import { PAGE_SIZE_ALL, PAGE_SIZE_AUTO } from "../utils/pageSize";
+import { pageSizeFromOptionValue, pageSizeToOptionValue, type PageSize } from "../utils/pageSize";
 
 export interface PageSizeOption {
-  value: number;
+  value: PageSize;
   label: string;
 }
 
 interface DataViewPaginationToolbarProps {
   currentPage: number;
   totalPages: number;
-  pageSize: number;
+  pageSize: PageSize;
   pageSizeOptions: PageSizeOption[];
   onPageChange: (page: number) => void;
-  onPageSizeChange: (size: number) => void;
+  onPageSizeChange: (size: PageSize) => void;
   /** @deprecated No longer rendered — kept for backward compatibility */
   isLoading?: boolean;
   disabled?: boolean;
@@ -47,13 +47,7 @@ interface DataViewPaginationToolbarProps {
   hidePagination?: boolean;
   /** Hide page size selector (use when pagination is not applicable at all) */
   hidePageSize?: boolean;
-  /**
-   * Offer an "Auto" size that fits the page to the available height.
-   *
-   * Opt-in per view rather than baked into the options arrays: a view must resolve the
-   * sentinel through `resolvePageSize` before it reaches any offset or limit, and one
-   * that hasn't would compute a negative offset.
-   */
+  /** Offer an "Auto" size that fits the page to the available height. */
   allowAuto?: boolean;
 }
 
@@ -92,11 +86,11 @@ export default function DataViewPaginationToolbar({
 }: DataViewPaginationToolbarProps) {
   const { t } = useTranslation("common");
   // Auto still paginates, so it is deliberately not part of this test.
-  const showPagination = !hidePagination && totalPages > 1 && pageSize !== PAGE_SIZE_ALL;
+  const showPagination = !hidePagination && totalPages > 1 && pageSize !== "all";
   // Prepended here rather than in the shared options arrays so the label can be
   // translated — those arrays are module-level consts and cannot call `t`.
-  const options = allowAuto
-    ? [{ value: PAGE_SIZE_AUTO, label: t("pagination.auto") }, ...pageSizeOptions]
+  const options: PageSizeOption[] = allowAuto
+    ? [{ value: "auto", label: t("pagination.auto") }, ...pageSizeOptions]
     : pageSizeOptions;
 
   return (
@@ -157,16 +151,15 @@ export default function DataViewPaginationToolbar({
 
       {!hidePageSize && (
         <select
-          value={pageSize}
-          onChange={(e) => onPageSizeChange(Number(e.target.value))}
+          value={pageSizeToOptionValue(pageSize)}
+          onChange={(e) => onPageSizeChange(pageSizeFromOptionValue(e.target.value))}
           className={`text-xs px-2 py-1 rounded border ${borderDataView} ${bgDataInput} ${textDataPrimary}`}
           title={t("pagination.rowsPerPage")}
         >
-          {options.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
+          {options.map((opt) => {
+            const value = pageSizeToOptionValue(opt.value);
+            return <option key={value} value={value}>{opt.label}</option>;
+          })}
         </select>
       )}
     </div>

@@ -10,7 +10,7 @@ import { useDiscoverySerialStore } from '../../../../stores/discoverySerialStore
 import { useDiscoveryUIStore } from '../../../../stores/discoveryUIStore';
 import { getCaptureBytesPaginated, getCaptureMetadataById, findCaptureBytesOffsetForTimestamp, type TimestampedByte } from '../../../../api/capture';
 import { byteToHex, byteToAscii } from '../../../../utils/byteUtils';
-import { pageCount, pageForOffset } from '../../../../utils/pageSize';
+import { pageCount, pageForOffset, type PageSize } from '../../../../utils/pageSize';
 import { formatHumanUs, formatIsoUs, renderDeltaNode } from '../../../../utils/timeFormat';
 import { PaginationToolbar, TimelineSection, BYTE_PAGE_SIZE_OPTIONS } from '../../components';
 import {
@@ -284,7 +284,10 @@ export default function ByteView({ entries, viewConfig, autoScroll = true, displ
   }, [displayEntries, viewConfig.displayMode, viewConfig.chunkGapUs, formatTime]);
 
   // Handle page size change
-  const handlePageSizeChange = useCallback((newSize: number) => {
+  const handlePageSizeChange = useCallback((newSize: PageSize) => {
+    // This view offers no Auto and its options are all numeric, so the modes are
+    // unreachable — narrowing here is what keeps the store's plain count honest.
+    if (typeof newSize !== 'number') return;
     setRawBytesPageSize(newSize);
     // Reset to first page when changing size (only applies when not streaming)
     setCurrentPage(0);

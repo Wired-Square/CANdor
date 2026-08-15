@@ -16,7 +16,7 @@ import { BUFFER_POLL_INTERVAL_MS } from "../../../constants";
 import { useSessionStore } from "../../../stores/sessionStore";
 import type { FrameMessage } from "../../../types/frame";
 import { parseFrameKey } from "../../../utils/frameKey";
-import { pageCount, pageForOffset } from "../../../utils/pageSize";
+import { pageCount, pageForOffset, type ResolvedPageSize } from "../../../utils/pageSize";
 
 /** Frame with pre-computed hex bytes for display */
 export type FrameWithHex = FrameMessage & { hexBytes: string[] };
@@ -31,9 +31,9 @@ export interface UseBufferFrameViewOptions {
   /** Selected composite frame keys filter (empty = all) */
   selectedFrames: Set<string>;
   /** Page size for pagination (when stopped) */
-  pageSize: number;
-  /** Tail size for streaming mode (default: 50) */
-  tailSize?: number;
+  pageSize: ResolvedPageSize;
+  /** Tail size for streaming mode (default: 50); null until an Auto fit lands. */
+  tailSize?: ResolvedPageSize;
   /** Poll interval for tail updates in ms (default: 200) */
   pollIntervalMs?: number;
   /** Buffer playback mode - uses pagination even when isStreaming is true */
@@ -73,14 +73,14 @@ export interface UseBufferFrameViewResult {
 }
 
 /** Hold the window inside the data: growing the page past the end would leave it part-empty. */
-function clampAnchor(anchorRow: number, totalCount: number, pageSize: number): number {
-  if (pageSize <= 0 || totalCount <= 0) return Math.max(0, anchorRow);
+function clampAnchor(anchorRow: number, totalCount: number, pageSize: ResolvedPageSize): number {
+  if (pageSize === null || totalCount <= 0) return Math.max(0, anchorRow);
   return Math.max(0, Math.min(anchorRow, totalCount - pageSize));
 }
 
 /** Snap an offset down to the start of the page containing it. */
-function pageAlignedAnchor(offset: number, pageSize: number): number {
-  const size = Math.max(1, pageSize);
+function pageAlignedAnchor(offset: number, pageSize: ResolvedPageSize): number {
+  const size = Math.max(1, pageSize ?? 1);
   return Math.max(0, Math.floor(offset / size) * size);
 }
 
@@ -200,9 +200,9 @@ export function useCaptureFrameView(
   frozenRef.current = frozen;
 
   useEffect(() => {
-    // tailSize is 0 until an auto fit has been measured; re-running when it lands is
+    // tailSize is null until an auto fit has been measured; re-running when it lands is
     // what arms the subscription.
-    if (!captureId || !isStreaming || isCapturePlayback || tailSize <= 0) return;
+    if (!captureId || !isStreaming || isCapturePlayback || tailSize === null) return;
 
     let isMounted = true;
     // A tail fetch can outlast the 500ms signal interval on a large capture. Skip while
@@ -261,7 +261,7 @@ export function useCaptureFrameView(
   useEffect(() => {
     // Run pagination when stopped, OR when in buffer playback mode
     if (!captureId || (isStreaming && !isCapturePlayback)) return;
-    if (pageSize <= 0) return; // auto size not measured yet
+    if (pageSize === null) return; // auto size not measured yet
 
     let isMounted = true;
 
@@ -402,7 +402,7 @@ export function useCaptureFrameView(
   // Page buttons still move in whole pages; the anchor is what a resize preserves.
   const currentPage = pageForOffset(pageStartIndex, pageSize);
   const setCurrentPage = useCallback((page: number) => {
-    setAnchorRow(Math.max(0, page) * Math.max(1, pageSizeRef.current));
+    setAnchorRow(Math.max(0, page) * Math.max(1, pageSizeRef.current ?? 1));
   }, []);
   /** Put `row` at the top of the window. */
   const goToRow = useCallback((row: number) => setAnchorRow(Math.max(0, row)), []);

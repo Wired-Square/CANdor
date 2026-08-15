@@ -27,7 +27,7 @@ import { useTransmitHistoryView } from "../hooks/useTransmitHistoryView";
 import { FrameDataTable, type FrameRow, FRAME_PAGE_SIZE_OPTIONS } from "../../discovery/components";
 import DataViewPaginationToolbar from "../../../components/DataViewPaginationToolbar";
 import TimelineScrubber from "../../../components/TimelineScrubber";
-import { PAGE_SIZE_AUTO, isAutoPageSize, resolvePageSize } from "../../../utils/pageSize";
+import { resolvePageSize, type PageSize } from "../../../utils/pageSize";
 
 interface TransmitHistoryViewProps {
   outputBusToSource?: Map<number, BusSourceInfo>;
@@ -50,8 +50,8 @@ export default function TransmitHistoryView({ sessionId }: TransmitHistoryViewPr
   const { t, i18n } = useTranslation("transmit");
   const { settings } = useSettings();
   // Auto by default; the table measures itself and reports how many rows fit.
-  const [pageSizeSetting, setPageSizeSetting] = useState(PAGE_SIZE_AUTO);
-  const [autoRows, setAutoRows] = useState(0);
+  const [pageSizeSetting, setPageSizeSetting] = useState<PageSize>("auto");
+  const [autoRows, setAutoRows] = useState<number | null>(null);
   const pageSize = resolvePageSize(pageSizeSetting, autoRows);
   const {
     rows, totalCount, isLive, isLoading, currentPage, totalPages,
@@ -59,7 +59,7 @@ export default function TransmitHistoryView({ sessionId }: TransmitHistoryViewPr
   } = useTransmitHistoryView({ pageSize, sessionId });
   const [isExporting, setIsExporting] = useState(false);
 
-  const handlePageSizeChange = useCallback((size: number) => {
+  const handlePageSizeChange = useCallback((size: PageSize) => {
     setPageSizeSetting(size);
     setCurrentPage(0);
   }, [setCurrentPage]);
@@ -265,7 +265,7 @@ export default function TransmitHistoryView({ sessionId }: TransmitHistoryViewPr
             showRef={false}
             showBus={true}
             autoScroll={isLive}
-            autoFit={isAutoPageSize(pageSizeSetting)}
+            autoFit={pageSizeSetting === "auto"}
             onFitChange={setAutoRows}
             emptyMessage={isLoading ? "Loading…" : "No frames to display"}
             renderRowStatus={renderRowStatus}

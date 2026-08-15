@@ -15,6 +15,7 @@ import { useDiscoverySerialStore } from './discoverySerialStore';
 import { useDiscoveryToolboxStore } from './discoveryToolboxStore';
 import type { FrameMessage } from '../types/frame';
 import { keyOf, parseFrameKey } from '../utils/frameKey';
+import type { PageSize } from '../utils/pageSize';
 import type { SelectionSet } from '../utils/selectionSets';
 import { tlog } from '../api/settings';
 
@@ -77,7 +78,7 @@ type CombinedDiscoveryState = {
 
   // UI store
   maxBuffer: number;
-  renderBuffer: number;
+  renderBuffer: PageSize;
   ioProfile: string | null;
   playbackSpeed: PlaybackSpeed;
   currentTime: number | null;
@@ -102,7 +103,7 @@ type CombinedDiscoveryState = {
   serialActiveTab: import('./discoverySerialStore').SerialTabId;
   backendByteCount: number;
   backendFrameCount: number;
-  framedPageSize: number;
+  framedPageSize: PageSize;
   rawBytesPageSize: number;
   framedCaptureId: string | null;
   minFrameLength: number;
@@ -119,7 +120,7 @@ type CombinedDiscoveryState = {
   toggleFrameSelection: (id: string) => void;
   bulkSelectBus: (bus: number | null, select: boolean) => void;
   setMaxBuffer: (value: number) => void;
-  setRenderBuffer: (value: number) => void;
+  setRenderBuffer: (value: PageSize) => void;
   setIoProfile: (profile: string | null) => void;
   setPlaybackSpeed: (speed: PlaybackSpeed) => void;
   updateCurrentTime: (time: number | null) => void;
@@ -172,7 +173,7 @@ type CombinedDiscoveryState = {
   incrementBackendByteCount: (delta: number) => void;
   setBackendFrameCount: (count: number) => void;
   incrementBackendFrameCount: (delta: number) => void;
-  setFramedPageSize: (size: number) => void;
+  setFramedPageSize: (size: PageSize) => void;
   setRawBytesPageSize: (size: number) => void;
   setMinFrameLength: (length: number) => void;
   triggerCaptureReady: () => void;

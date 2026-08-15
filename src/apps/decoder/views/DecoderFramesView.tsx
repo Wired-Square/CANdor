@@ -1460,15 +1460,10 @@ export default function DecoderFramesView({
       displayTime={displayTime ?? undefined}
       isRecorded={isRecorded}
       tabBarControls={tabBarControls}
-      // Toolbar - show when we have time range or playback controls
+      // Toolbar - content slots only; this view doesn't paginate
       toolbar={
         showTimeRange || isReady
           ? {
-              currentPage: 0,
-              totalPages: 1,
-              pageSize: -1,
-              onPageChange: () => {},
-              onPageSizeChange: () => {},
               leftContent: timeRangeInputs,
               centerContent: playbackControls,
               infoContent: frameCounterInfo,

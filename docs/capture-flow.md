@@ -351,19 +351,27 @@ every chrome row appearing or disappearing, so nothing enumerates the chrome.
 because it is the only thing that knows its own container, sticky header and
 trailing spacer; `ResultsPanel` is div-based and calls the hook directly.
 
-The setting itself is a numeric sentinel, because the `<select>` is numeric:
-`PAGE_SIZE_AUTO` / `PAGE_SIZE_ALL` in
-[src/utils/pageSize.ts](../src/utils/pageSize.ts). Views hold the **raw**
-setting so the select can match an option, and pass `resolvePageSize(...)` to
-their data layer. Two rules follow, and both have bitten:
+Two types carry this, both in
+[src/utils/pageSize.ts](../src/utils/pageSize.ts). A `PageSize` is what the
+control holds — `number | "auto" | "all"` — and a `ResolvedPageSize` is a
+concrete count, `null` until the fit has been measured. Views hold the setting
+so the select can match an option, and pass `resolvePageSize(...)` to their
+data layer.
 
-- **Never let a raw setting reach an offset or limit.** A sentinel is negative;
-  `currentPage * pageSize` on one produces a negative offset with no error.
-- **`resolvePageSize` returns 0 until the fit has been measured.** Every fetch
-  guards `if (pageSize <= 0) return;` — and that guard must sit in the effect's
-  *condition*, with the size in its dependencies, so the fetch re-runs when the
-  measurement lands. Reading the size from a ref instead leaves the effect
-  parked forever, which silently disables the live tail.
+Both of those used to be numbers, and both bit. The modes rode as `-2` / `-1`
+in the same field as a row count, so a missed resolution was a negative offset
+with no error; and the unmeasured state was `0`, so a missed guard divided into
+`Infinity`. Keeping the modes as strings and the unmeasured state as `null`
+makes each of those a compile error instead. One rule survives, because the
+compiler cannot check it:
+
+- **The null guard must sit in the effect's *condition*,** with the size in its
+  dependencies, so the fetch re-runs when the measurement lands. Reading the
+  size from a ref instead leaves the effect parked forever, which silently
+  disables the live tail.
+
+`pageCount` and `pageForOffset` own the two divisions, so page arithmetic
+cannot go infinite even where a size is legitimately unresolved.
 
 ---
 
