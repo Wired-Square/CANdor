@@ -33,6 +33,7 @@ import { COPY_FEEDBACK_TIMEOUT_MS } from "../../../../constants";
 import { getAlgorithmInfo } from "../../../../utils/analysis/checksums";
 import {
   MatchRateIcon,
+  formatMatchRate,
   matchRateTextClass,
   matchRateToneClasses,
 } from "../../components/checksumTone";
@@ -216,7 +217,9 @@ function FrameCard({ finding }: { finding: FrameChecksumFinding }) {
     const lines = finding.candidates.map(
       (c) =>
         `${describeSpecification(c.specification)} @ ${c.position} [${c.calcStartByte}:${c.calcEndByte}]` +
-        ` — ${c.matchRate.toFixed(1)}% (${c.matchCount}/${c.totalCount}), confidence ${c.confidence}`,
+        ` — ${formatMatchRate(c.matchRate, c.matchCount, t)}` +
+        `${c.matchRate === null ? "" : ` (${c.matchCount}/${c.totalCount})`}` +
+        `, confidence ${c.confidence}`,
     );
     void navigator.clipboard.writeText(
       `${formatFrameId(finding.frameId, frameIdFormat, finding.isExtended)}\n${lines.join("\n")}`,
@@ -227,7 +230,7 @@ function FrameCard({ finding }: { finding: FrameChecksumFinding }) {
 
   return (
     <div
-      className={`${cardBase} ${matchRateToneClasses(best?.matchRate ?? 0)}`}
+      className={`${cardBase} ${matchRateToneClasses(best ? best.matchRate : 0)}`}
     >
       <div className="flex items-center gap-2 px-3 py-2">
         <button
@@ -245,7 +248,7 @@ function FrameCard({ finding }: { finding: FrameChecksumFinding }) {
                 {describeSpecification(best.specification)}
               </span>
               <span className={`text-xs ${matchRateTextClass(best.matchRate)}`}>
-                {best.matchRate.toFixed(1)}%
+                {formatMatchRate(best.matchRate, best.matchCount, t)}
               </span>
             </>
           ) : (
@@ -320,15 +323,32 @@ function CandidateRow({ candidate }: { candidate: DiscoveredChecksum }) {
 
       <div className={`text-xs ${textSecondary}`}>
         <span className={matchRateTextClass(candidate.matchRate)}>
-          {t("serialAnalysis.matchPercent", { percent: candidate.matchRate.toFixed(1) })}
+          {formatMatchRate(candidate.matchRate, candidate.matchCount, t)}
         </span>
-        <span className={`mx-2 ${textMuted}`}>|</span>
-        {t("serialAnalysis.matchedFrames", {
-          matched: candidate.matchCount.toLocaleString(),
-          total: candidate.totalCount.toLocaleString(),
-        })}
+        {/* A solved configuration's counts are the same number twice — it was
+            verified against every sample it saw — so the pair only says
+            something for a measured rate. */}
+        {candidate.matchRate !== null && (
+          <>
+            <span className={`mx-2 ${textMuted}`}>|</span>
+            {t("serialAnalysis.matchedFrames", {
+              matched: candidate.matchCount.toLocaleString(),
+              total: candidate.totalCount.toLocaleString(),
+            })}
+          </>
+        )}
         <span className={`mx-2 ${textMuted}`}>|</span>
         {t("serialAnalysis.confidencePercent", { percent: candidate.confidence })}
+        {/* Samples the solver could not use, because their calculation range was
+            a different length. Silence here would overstate the evidence. */}
+        {candidate.excludedCount > 0 && (
+          <>
+            <span className={`mx-2 ${textMuted}`}>|</span>
+            <span className={textMuted}>
+              {t("checksumDiscovery.excludedSamples", { count: candidate.excludedCount })}
+            </span>
+          </>
+        )}
       </div>
 
       <div className={`text-xs ${textMuted}`}>

@@ -472,7 +472,7 @@ impl WireTapTools {
         Parameters(p): Parameters<ChecksumScanParams>,
     ) -> Result<CallToolResult, McpError> {
         let src = crate::analysis::resolve(p.capture_id, p.profile_id).map_err(err)?;
-        let options = crate::checksum_discovery::ChecksumDiscoveryOptions {
+        let options = wiretap_analysis::ChecksumScanOptions {
             search_custom_polynomials: p.search_custom_polynomials,
             min_likeness: p.min_likeness,
             ..Default::default()

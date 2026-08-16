@@ -333,7 +333,7 @@ pub struct ByteProfileParams {
 }
 
 fn default_min_likeness() -> u8 {
-    crate::checksum_discovery::DEFAULT_MIN_LIKENESS
+    wiretap_analysis::DEFAULT_MIN_LIKENESS
 }
 
 /// Scan a source for checksums, frame id by frame id.

@@ -231,8 +231,8 @@ pub async fn checksum_scan(
     src: &QuerySource,
     frame_ids: Option<Vec<u32>>,
     sample_limit: u32,
-    options: crate::checksum_discovery::ChecksumDiscoveryOptions,
-) -> Result<crate::checksum_discovery::ChecksumDiscoveryResult, String> {
+    options: wiretap_analysis::ChecksumScanOptions,
+) -> Result<wiretap_analysis::ChecksumScanResult, String> {
     let wanted: Option<std::collections::HashSet<u32>> =
         frame_ids.map(|ids| ids.into_iter().collect());
 
@@ -248,23 +248,25 @@ pub async fn checksum_scan(
             continue;
         }
         unique_frame_ids += 1;
+        // Analysed as each id is fetched, so one id's payloads are resident at a
+        // time. Collecting every group first is tidier to read and holds the
+        // whole scan in memory at once — `sample_limit` and the id count are
+        // both unbounded (an MCP caller sets the first), and every payload is
+        // sampled down to 200 the moment it is analysed anyway.
         let payloads =
             fetch_payloads(app, src, row.frame_id, Some(row.is_extended), sample_limit).await?;
         frame_count += payloads.len();
         if payloads.len() < options.min_samples {
             continue;
         }
-        // Already grouped by the query, so hand it straight to the per-id unit
-        // rather than flattening for `discover_checksums` to regroup.
-        findings.push(crate::checksum_discovery::analyse_group(
-            row.frame_id,
-            row.is_extended,
+        findings.push(wiretap_analysis::analyse_group(
+            wiretap_analysis::FrameKey::new(row.frame_id, row.is_extended),
             &payloads,
             &options,
         ));
     }
 
-    Ok(crate::checksum_discovery::ChecksumDiscoveryResult {
+    Ok(wiretap_analysis::ChecksumScanResult {
         skipped_frame_ids: unique_frame_ids - findings.len(),
         findings,
         frame_count,

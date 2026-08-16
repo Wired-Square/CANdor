@@ -296,10 +296,19 @@ export interface DiscoveredChecksum {
   bigEndian: boolean;
   calcStartByte: number;
   calcEndByte: number;
+  /** Samples the configuration reproduced. */
   matchCount: number;
+  /** Samples it was measured against. */
   totalCount: number;
-  /** 0-100 */
-  matchRate: number;
+  /**
+   * 0-100, and `null` for a solved configuration.
+   *
+   * A solve reproduces every sample it was verified against or is not reported
+   * at all, so there is no rate to state — render the sample count instead.
+   */
+  matchRate: number | null;
+  /** Samples left out because their calculation range was a different length. */
+  excludedCount: number;
   /** 0-100 composite score. */
   confidence: number;
   notes: ChecksumNote[];
