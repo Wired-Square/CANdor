@@ -107,9 +107,11 @@ the hypertable drops the legacy `row_id`/`id_hex`/`data_hex` columns, so the
 column sets do not match. Stop writes to the source first (switch the Pi to
 `[forward]` mode) so the archive is static while it copies.
 
-**2. Point the app at the gateway.** Create a `read` API key in the admin UI,
-then add a **WireTAP Backend** profile under Settings → Data I/O with the
-gateway URL, that key, and the capture database name. Any direct PostgreSQL
+**2. Point the app at the gateway.** Create an API key in the admin UI — `read`
+is enough for querying, replay and analysis — then add a **WireTAP Backend**
+profile under Settings → Data I/O with the gateway URL, that key, and the
+capture database name. (The Database Activity view needs an `admin` key, and
+importing a capture needs `ingest`; the runbook has the full table.) Any direct PostgreSQL
 profile is removed on first launch after upgrading, named in a notice, and its
 keychain password deleted; captures, catalogues and other profiles are
 untouched. Queries, bookmarks, replay and the MCP analysis tools all behave as

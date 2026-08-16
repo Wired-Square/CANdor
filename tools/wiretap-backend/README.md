@@ -121,6 +121,9 @@ docker compose up -d
 #    not published by default — temporarily expose it:
 #      uncomment "127.0.0.1:5432:5432" under timescaledb in docker-compose.yml
 #      docker compose up -d
+#    It binds to 127.0.0.1, so it is not reachable off the host — but re-comment
+#    the line and `docker compose up -d` again once the migration is done. The
+#    gateway is the only thing that should be talking to that database.
 SRC=postgresql://user:pass@old-host:5432/legacy_archive
 TGT=postgresql://postgres:$POSTGRES_PASSWORD@127.0.0.1:5432/wiretap
 pip install psycopg2-binary    # one-off, for the migrator
@@ -145,12 +148,24 @@ touched: captures, catalogues and every other profile are untouched.
 
 To replace it:
 
-1. In the admin UI, create a **`read`** API key (per user, revocable). Copy it —
-   the plaintext is shown once.
+1. In the admin UI, create an API key (per user, revocable). Copy it — the
+   plaintext is shown once. **`read` covers querying, replay and analysis**,
+   which is everything the migration path needs. Three app features want more:
+
+   | App feature | Needs |
+   |---|---|
+   | Query engines, inventory, replay, cancelling a query, listing databases | `read` |
+   | Query app's Database Activity view (list / cancel / terminate backends) | `admin` |
+   | Importing a local capture into the backend | `ingest` or `admin` |
+   | Creating a capture database from the app | `admin` |
+
+   Test Connection only calls `/v1/health`, which is unauthenticated, so it
+   succeeds with any key — it proves the gateway is reachable, not that the key
+   is accepted. Run a query to confirm the key works.
 2. In the app, **Settings → Data I/O → + Profile**, choose **WireTAP Backend**
    and fill in:
    - **Backend URL** — the gateway, e.g. `http://gateway.local:8423`
-   - **API Key** — the `read` key from step 1 (stored in the OS keychain)
+   - **API Key** — the key from step 1 (stored in the OS keychain)
    - **Capture Database** — the database this profile reads, e.g. `wiretap`.
      One profile per capture database; add several if you migrated more than one.
 3. Optionally set a **Default Playback Speed** for replay.
