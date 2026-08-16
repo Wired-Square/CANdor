@@ -65,7 +65,7 @@ export interface DataViewTabBarProps {
   timestamp?: number | null;
   /** @deprecated Use timestamp instead. Pre-formatted time string */
   displayTime?: string | null;
-  /** Whether the data source is recorded (e.g., PostgreSQL, CSV) vs live */
+  /** Whether the data source is recorded (e.g., WireTAP backend, CSV) vs live */
   isRecorded?: boolean;
   /** Current frame index (0-based) for display */
   frameIndex?: number | null;

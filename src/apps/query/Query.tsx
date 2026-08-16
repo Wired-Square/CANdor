@@ -1,6 +1,6 @@
 // src/apps/query/Query.tsx
 //
-// Query app for querying PostgreSQL data sources to answer analytical questions
+// Query app for querying WireTAP backend sources to answer analytical questions
 // about CAN bus history. Uses the session system so other apps can share the
 // session to visualise discovered timeslices.
 
@@ -114,9 +114,8 @@ function QueryInner() {
   }, [catalogPath, setParsedCatalog]);
 
 
-  // Filter profiles to database-backed kinds (direct PostgreSQL or the
-  // WireTAP backend API — both answer the same analytical queries).
-  const postgresProfiles = useMemo(
+  // The Query app works against a database, which means a WireTAP backend.
+  const backendProfiles = useMemo(
     () => getTimeRangeCapableProfiles(settings?.io_profiles ?? []),
     [settings?.io_profiles]
   );
@@ -143,7 +142,7 @@ function QueryInner() {
   // Session manager - used when clicking result rows to ingest data
   const manager = useIOSessionManager({
     appName: "query",
-    ioProfiles: postgresProfiles,
+    ioProfiles: backendProfiles,
     store: { ioProfile, setIoProfile },
     onFrames: handleFrames,
     onError: handleError,
@@ -370,7 +369,7 @@ function QueryInner() {
     <AppLayout
       topBar={
         <QueryTopBar
-          ioProfiles={postgresProfiles}
+          ioProfiles={backendProfiles}
           ioProfile={ioProfile}
           defaultReadProfileId={settings?.default_read_profile}
           catalogs={catalogs}
@@ -430,21 +429,21 @@ function QueryInner() {
           captureId
             ? <div className="flex flex-col items-center justify-center h-full p-8 text-center">
                 <p className="text-xs text-[color:var(--text-muted)]">
-                  {t("stats.postgresOnly")}
+                  {t("stats.backendOnly")}
                 </p>
               </div>
             : <StatsPanel profileId={profileId} />
         )}
       </AppTabView>
 
-      {/* Data Source picker — captures (replay) and PostgreSQL profiles only */}
+      {/* Data Source picker — captures (replay) and WireTAP backend profiles only */}
       <IoSourcePickerDialog
         mode="connect"
         hideSessions
         {...ioPickerProps}
         isOpen={dialogs.ioSessionPicker.isOpen}
         onClose={() => dialogs.ioSessionPicker.close()}
-        ioProfiles={postgresProfiles}
+        ioProfiles={backendProfiles}
         selectedId={sourceProfileId}
         defaultId={settings?.default_read_profile}
         onSelect={setIoProfile}

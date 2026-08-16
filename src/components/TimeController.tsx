@@ -56,7 +56,7 @@ export interface TimeControllerProps {
   /** Whether controls are disabled */
   disabled?: boolean;
 
-  /** Show time range inputs (for PostgreSQL replay) */
+  /** Show time range inputs (for backend replay) */
   showTimeRange?: boolean;
 
   /** Compact mode (smaller UI) */

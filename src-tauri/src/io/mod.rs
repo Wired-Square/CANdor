@@ -1,7 +1,7 @@
 // ui/src-tauri/src/io/mod.rs
 //
 // IO device abstraction for CAN data sources.
-// Provides a common interface for different device types (GVRET, PostgreSQL, etc.)
+// Provides a common interface for different device types (GVRET, the WireTAP backend, etc.)
 // with session-based isolation for multiple concurrent connections.
 
 // Core modules
@@ -39,7 +39,6 @@ pub use recorded::{
     parse_csv_file, parse_csv_with_mapping, preview_csv_file, CsvColumnMapping, CsvPreview,
     Delimiter, SequenceGap, TimestampUnit,
 };
-pub use recorded::{PostgresConfig, PostgresSource, PostgresSourceOptions, PostgresSourceType};
 pub use recorded::{BackendApiConfig, BackendApiSource, BackendApiSourceOptions};
 
 // Re-export codec types (platform-specific codecs are conditionally exported from codec.rs)
@@ -232,7 +231,7 @@ pub enum TransmitPayload {
 pub enum TemporalMode {
     /// Real-time streaming from live devices (GVRET, slcan, gs_usb, SocketCAN, MQTT)
     Realtime,
-    /// Playback from recorded sources (PostgreSQL, CSV)
+    /// Playback from recorded sources (WireTAP backend, CSV)
     Recorded,
     /// Capture replay from previously captured data
     Capture,
@@ -284,11 +283,11 @@ pub struct SessionDataStreams {
 /// IO device capabilities - what this device type supports
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IOCapabilities {
-    /// Supports pause/resume (PostgreSQL: true, GVRET: false)
+    /// Supports pause/resume (WireTAP backend: true, GVRET: false)
     pub can_pause: bool,
-    /// Supports time range filtering (PostgreSQL: true, GVRET: false)
+    /// Supports time range filtering (WireTAP backend: true, GVRET: false)
     pub supports_time_range: bool,
-    /// Supports speed control (PostgreSQL: true, GVRET: false)
+    /// Supports speed control (WireTAP backend: true, GVRET: false)
     pub supports_speed_control: bool,
     /// Supports seeking to a specific timestamp (Buffer: true, others: false)
     #[serde(default)]
@@ -2321,7 +2320,7 @@ pub async fn resume_session_fresh(session_id: &str) -> Result<IOState, String> {
     crate::ws::dispatch::send_session_lifecycle_scoped(session_id, &previous, &caps);
 
     // Start the device - this will orphan old capture and create new one
-    // Recorded sources (PostgreSQL, CSV, Capture) handle capture creation in start()
+    // Recorded sources (the WireTAP backend, CSV, Capture) handle capture creation in start()
     session.source.start().await?;
 
     let current = session.source.state();

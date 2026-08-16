@@ -8,7 +8,6 @@ mod base;
 mod capture;
 mod csv;
 mod pacing;
-mod postgres;
 
 // Re-export public items
 pub use backend_api::{BackendApiConfig, BackendApiSource, BackendApiSourceOptions};
@@ -17,4 +16,3 @@ pub use csv::{
     parse_csv_file, parse_csv_with_mapping, preview_csv_file, CsvColumnMapping, CsvPreview,
     Delimiter, SequenceGap, TimestampUnit,
 };
-pub use postgres::{PostgresConfig, PostgresSource, PostgresSourceOptions, PostgresSourceType};

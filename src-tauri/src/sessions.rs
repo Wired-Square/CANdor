@@ -23,8 +23,7 @@ use crate::{
         MqttConfig, MqttSource,
         VirtualDeviceConfig, VirtualSource, VirtualInterfaceConfig, VirtualTrafficType,
         ModbusRole, IOBroker, SourceConfig,
-        BackendApiConfig, BackendApiSource, BackendApiSourceOptions, PostgresConfig,
-        PostgresSource, PostgresSourceOptions, PostgresSourceType,
+        BackendApiConfig, BackendApiSource, BackendApiSourceOptions,
         CanTransmitFrame, TransmitResult,
         emit_device_probe, DeviceProbePayload,
         set_wake_settings as io_set_wake_settings,
@@ -556,95 +555,6 @@ pub async fn create_reader_session(
     } else {
         // Non-realtime devices use their direct readers
         match profile.kind.as_str() {
-        "postgres" => {
-            let config = PostgresConfig {
-                host: profile
-                    .connection
-                    .get("host")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("localhost")
-                    .to_string(),
-                port: profile
-                    .connection
-                    .get("port")
-                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                    .unwrap_or(5432) as u16,
-                database: profile
-                    .connection
-                    .get("database")
-                    .or_else(|| profile.connection.get("db"))
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| "PostgreSQL database name is required".to_string())?
-                    .to_string(),
-                username: profile
-                    .connection
-                    .get("username")
-                    .or_else(|| profile.connection.get("user"))
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| "PostgreSQL username is required".to_string())?
-                    .to_string(),
-                password: credentials::resolve_secret(&profile, "password"),
-                sslmode: profile
-                    .connection
-                    .get("sslmode")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-            };
-
-            // Use provided time range or fall back to profile settings
-            let start_from_profile = profile
-                .connection
-                .get("start")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let end_from_profile = profile
-                .connection
-                .get("end")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-
-            tlog!(
-                "[create_reader_session] PostgreSQL time range - param start: {:?}, param end: {:?}, profile start: {:?}, profile end: {:?}",
-                start_time, end_time, start_from_profile, end_from_profile
-            );
-
-            // Use provided limit or fall back to profile settings
-            let limit_from_profile = profile.connection.get("limit").and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())));
-
-            // Extract source type (defaults to can_frame for backward compatibility)
-            let source_type = profile
-                .connection
-                .get("source_type")
-                .and_then(|v| v.as_str())
-                .map(PostgresSourceType::from_str)
-                .unwrap_or_default();
-
-            let options = PostgresSourceOptions {
-                source_type,
-                start: start_time.or(start_from_profile),
-                end: end_time.or(end_from_profile),
-                limit: limit.or(limit_from_profile),
-                speed: speed.unwrap_or_else(|| {
-                    profile
-                        .connection
-                        .get("speed")
-                        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                        .unwrap_or(0.0) // 0 = no limit (no pacing) by default
-                }),
-                batch_size: profile
-                    .connection
-                    .get("batch_size")
-                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                    .unwrap_or(1000) as i32,
-            };
-
-            Box::new(PostgresSource::new(
-                app.clone(),
-                session_id.clone(),
-                config,
-                options,
-            ))
-        }
         "wiretap" => {
             let config = BackendApiConfig {
                 base_url: profile
@@ -924,7 +834,7 @@ pub async fn create_reader_session(
     // Playback sources (postgres) should NOT auto-start because frames would be emitted
     // before the frontend has registered its listener and set up event handlers.
     // The frontend will call start_reader_session after registering the listener.
-    let is_playback_source = matches!(profile.kind.as_str(), "postgres" | "wiretap");
+    let is_playback_source = profile.kind == "wiretap";
 
     if result.is_new && !is_playback_source {
         tlog!("[create_reader_session] Auto-starting new session '{}' (device type: {})", session_id, profile.kind);
@@ -1217,7 +1127,7 @@ pub async fn create_capture_source_session(
 }
 
 /// Transition an existing session to use a capture for replay.
-/// This is used when a streaming source (GVRET, PostgreSQL) ends and
+/// This is used when a streaming source (GVRET, the WireTAP backend) ends and
 /// the user wants to replay the captured frames.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn transition_to_capture_source(

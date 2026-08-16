@@ -39,7 +39,7 @@
       "canAnalysis": "CAN bus analysis, decoding, and discovery",
       "modbus": "Modbus TCP client/server polling",
       "serial": "Serial device communication",
-      "mqttPostgres": "MQTT and PostgreSQL integration",
+      "mqttBackend": "MQTT and WireTAP backend integration",
       "multiSource": "Multi-source I/O with real-time streaming",
       "catalogue": "Signal catalogue editor",
       "transmission": "Frame transmission and playback",

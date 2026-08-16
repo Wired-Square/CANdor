@@ -47,13 +47,7 @@ type Props = {
 function supportsFraming(profile: IOProfile | null): boolean {
   if (!profile) return false;
   // Serial port always supports framing
-  if (profile.kind === "serial") return true;
-  // PostgreSQL with serial_raw source type supports framing
-  if (profile.kind === "postgres") {
-    const sourceType = profile.connection?.source_type;
-    return sourceType === "serial_raw";
-  }
-  return false;
+  return profile.kind === "serial";
 }
 
 /** Convert external FramingConfig to panel config */

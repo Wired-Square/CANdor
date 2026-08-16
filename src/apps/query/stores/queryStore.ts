@@ -201,9 +201,9 @@ export interface QueuedQuery {
   queryType: QueryType;
   /** Query parameters at time of submission */
   queryParams: QueryParams;
-  /** Profile ID for the database connection (PostgreSQL queries) */
+  /** Profile ID for the database connection (backend queries) */
   profileId: string;
-  /** Buffer ID for buffer queries (when set, routes to SQLite instead of PostgreSQL) */
+  /** Buffer ID for buffer queries (when set, routes to SQLite instead of the backend) */
   captureId?: string;
   /** Current status */
   status: QueryStatus;
@@ -735,7 +735,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
           }
         }
       } else {
-        // ── PostgreSQL query path ──
+        // ── Backend query path ──
         // Convert datetime-local format to ISO-8601 for the backend
         // datetime-local is "YYYY-MM-DDTHH:mm" but backend needs full ISO timestamp
         const toIsoTimestamp = (dt: string | undefined): string | undefined => {

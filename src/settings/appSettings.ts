@@ -17,7 +17,6 @@ import { getTraitsForKind, getProfileTraits, type Protocol } from "../utils/prof
 
 export type ProfileKindId =
   | "mqtt"
-  | "postgres"
   | "wiretap"
   | "gvret_tcp"
   | "gvret_usb"
@@ -46,20 +45,7 @@ export interface MqttConnection {
   };
 }
 
-export interface PostgresConnection {
-  host?: string;
-  port?: string;
-  database?: string;
-  username?: string;
-  password?: string;
-  _password_stored?: boolean;
-  sslmode?: string;
-  source_type?: "can_frame" | "modbus_frame" | "serial_frame" | "serial_raw";
-  default_speed?: string;
-  framing_mode?: string;
-}
-
-/** Connection to a WireTAP backend gateway (HTTP API, not direct Postgres) */
+/** Connection to a WireTAP backend gateway — the only database-backed source. */
 export interface WiretapConnection {
   url?: string;
   database?: string;
@@ -190,7 +176,6 @@ export interface VirtualConnection {
 
 export interface ConnectionTypeMap {
   mqtt: MqttConnection;
-  postgres: PostgresConnection;
   wiretap: WiretapConnection;
   gvret_tcp: GvretTcpConnection;
   gvret_usb: GvretUsbConnection;

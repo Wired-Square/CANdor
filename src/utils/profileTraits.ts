@@ -109,14 +109,6 @@ const PROFILE_TRAIT_REGISTRY: Record<ProfileKind, ProfileTraits> = {
     multiSource: true,
     hasDeviceBuses: false,
   },
-  postgres: {
-    temporalMode: "recorded",
-    protocols: ["can"], // Can also be modbus/serial depending on source_type
-    canTransmit: false,
-    platforms: ["windows", "macos", "linux", "ios"],
-    multiSource: false,
-    hasDeviceBuses: false,
-  },
   wiretap: {
     temporalMode: "recorded",
     protocols: ["can"],
@@ -221,17 +213,6 @@ export function getProfileTraits(profile: IOProfile): ProfileTraits | undefined 
       break;
     }
 
-    case "postgres":
-      switch (profile.connection?.source_type) {
-        case "modbus_frame":
-          traits.protocols = ["modbus"];
-          break;
-        case "serial_frame":
-        case "serial_raw":
-          traits.protocols = ["serial"];
-          break;
-      }
-      break;
   }
 
   return traits;

@@ -1,6 +1,6 @@
 // src/components/PlaybackControls.tsx
 //
-// Reusable playback controls for recorded sources (Buffer, CSV, PostgreSQL).
+// Reusable playback controls for recorded sources (Buffer, CSV, WireTAP backend).
 // Used by Discovery and Decoder when viewing recorded/buffered data.
 //
 // Renders only transport buttons. Frame counter and speed selector are
@@ -28,7 +28,7 @@ export interface PlaybackControlsProps {
   supportsSpeedControl?: boolean;
   /** Whether reverse playback is supported */
   supportsReverse?: boolean;
-  /** Whether a live stream is actively fetching data (e.g., PostgreSQL streaming) */
+  /** Whether a live stream is actively fetching data (e.g., a WireTAP backend streaming) */
   isLiveStreaming?: boolean;
   /** Whether the stream is paused (separate from buffer playback pause) */
   isStreamPaused?: boolean;
@@ -57,7 +57,7 @@ export interface PlaybackControlsProps {
   /** Called for frame-based seeking (preferred for buffer playback) */
   onFrameChange?: (frameIndex: number) => void;
   onSpeedChange?: (speed: PlaybackSpeed) => void;
-  /** Called to resume a paused stream (e.g., resume PostgreSQL fetch) */
+  /** Called to resume a paused stream (e.g., resume a backend fetch) */
   onResumeStream?: () => void;
 }
 
@@ -307,7 +307,7 @@ export function PlaybackControls({
         </button>
       )}
 
-      {/* Resume Stream button - resumes PostgreSQL/recorded fetch after pause */}
+      {/* Resume Stream button - resumes recorded fetch after pause */}
       {isStreamPaused && onResumeStream && (
         <button
           type="button"

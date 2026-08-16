@@ -1,7 +1,7 @@
 // src/api/capturequery.ts
 //
 // API wrappers for capture query commands. These run analytical queries
-// against the local SQLite capture database instead of PostgreSQL.
+// against the local SQLite capture database instead of the backend.
 
 import { invoke } from "@tauri-apps/api/core";
 import type {

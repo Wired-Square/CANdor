@@ -76,7 +76,7 @@ type Props = {
   // Capture metadata (for timeline in capture mode)
   captureMetadata?: CaptureMetadata | null;
 
-  // Whether the data source is recorded (e.g., PostgreSQL, CSV) vs live
+  // Whether the data source is recorded (e.g., WireTAP backend, CSV) vs live
   isRecorded?: boolean;
 
   // Playback controls (for capture replay)
@@ -94,7 +94,7 @@ type Props = {
   onSpeedChange?: (speed: PlaybackSpeed) => void;
   /** Frame-based seeking (preferred for capture playback) */
   onFrameChange?: (frameIndex: number) => void;
-  /** Whether a recorded source is actively streaming (e.g., PostgreSQL fetching) */
+  /** Whether a recorded source is actively streaming (e.g., a WireTAP backend fetching) */
   isLiveStreaming?: boolean;
   /** Whether the timeline stream is paused (separate from capture playback pause) */
   isStreamPaused?: boolean;

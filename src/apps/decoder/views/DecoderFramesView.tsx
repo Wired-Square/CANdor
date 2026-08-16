@@ -1331,7 +1331,7 @@ export default function DecoderFramesView({
   // Tab bar controls (right side buttons)
   const tabBarControls = (
     <>
-      {/* Time range toggle - only for PostgreSQL readers */}
+      {/* Time range toggle - only for WireTAP backend readers */}
       {supportsTimeRange && (
         <button
           type="button"
@@ -1346,7 +1346,7 @@ export default function DecoderFramesView({
           <Clock className={iconSm} />
         </button>
       )}
-      {/* Bookmark picker - only for PostgreSQL readers */}
+      {/* Bookmark picker - only for WireTAP backend readers */}
       {supportsTimeRange && onOpenBookmarkPicker && (
         <button
           type="button"

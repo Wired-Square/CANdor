@@ -24,7 +24,7 @@ export interface ProtocolBadgeProps {
   status?: StreamingStatus;
   /** @deprecated Use status instead. Whether data is currently streaming */
   isStreaming?: boolean;
-  /** Whether the data source is recorded (e.g., PostgreSQL, CSV) vs live */
+  /** Whether the data source is recorded (e.g., WireTAP backend, CSV) vs live */
   isRecorded?: boolean;
   /** Called when the badge is clicked (for future functionality) */
   onClick?: () => void;

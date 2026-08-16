@@ -2,7 +2,7 @@
 //
 // Query configuration panel. Users select query type, frame ID, byte index,
 // and context window settings. Supports favourite-based time bounds. The source
-// (a SQLite capture or a PostgreSQL profile) is chosen via the shared Data Source
+// (a SQLite capture or a WireTAP backend profile) is chosen via the shared Data Source
 // picker in the top bar, not here.
 
 import { useCallback, useState, useEffect, useMemo } from "react";
@@ -371,7 +371,7 @@ export default function QueryBuilderPanel({
     [maxLimit]
   );
 
-  // Whether we're targeting a buffer (SQLite) vs PostgreSQL
+  // Whether we're targeting a buffer (SQLite) vs a WireTAP backend
   const isBufferSource = !!captureId;
 
   // Generate SQL query preview
@@ -500,7 +500,7 @@ LIMIT ${limitOverride.toLocaleString()}
       return `-- Query type "${queryType}" not yet implemented for captures`;
     }
 
-    // PostgreSQL preview
+    // Backend preview
     const extendedClause = queryParams.isExtended !== null
       ? ` AND extended = ${queryParams.isExtended}`
       : "";

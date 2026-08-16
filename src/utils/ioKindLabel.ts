@@ -10,8 +10,6 @@ export function getIOKindLabel(kind: string | undefined): string {
   switch (kind) {
     case "mqtt":
       return "MQTT";
-    case "postgres":
-      return "PostgreSQL";
     case "wiretap":
       return "WireTAP Backend";
     case "gvret_tcp":

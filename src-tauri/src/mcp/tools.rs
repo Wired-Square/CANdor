@@ -427,7 +427,7 @@ impl WireTapTools {
 
     // ── Headless analysis levers (capture OR postgres) ───────────────────────
 
-    #[tool(description = "Per-frame-id rollup (count, first/last timestamp, max dlc, extended) for a capture (capture_id) or postgres profile (profile_id). Headless — no view needed. Use to see which frame ids exist and how often.")]
+    #[tool(description = "Per-frame-id rollup (count, first/last timestamp, max dlc, extended) for a capture (capture_id) or WireTAP backend profile (profile_id). Headless — no view needed. Use to see which frame ids exist and how often.")]
     async fn frame_inventory(
         &self,
         Parameters(p): Parameters<FrameInventoryParams>,
@@ -480,7 +480,7 @@ impl WireTapTools {
         Parameters(p): Parameters<ByteQueryParams>,
     ) -> Result<CallToolResult, McpError> {
         let r = match crate::analysis::resolve(p.capture_id, p.profile_id).map_err(err)? {
-            QuerySource::Postgres(pid) => {
+            QuerySource::Backend(pid) => {
                 crate::dbquery::db_query_byte_changes(
                     self.app.clone(), pid, p.frame_id, p.byte_index, p.is_extended,
                     p.start_time, p.end_time, p.limit, None,
@@ -499,7 +499,7 @@ impl WireTapTools {
         Parameters(p): Parameters<FrameQueryParams>,
     ) -> Result<CallToolResult, McpError> {
         let r = match crate::analysis::resolve(p.capture_id, p.profile_id).map_err(err)? {
-            QuerySource::Postgres(pid) => {
+            QuerySource::Backend(pid) => {
                 crate::dbquery::db_query_frame_changes(
                     self.app.clone(), pid, p.frame_id, p.is_extended, p.start_time, p.end_time, p.limit, None,
                 ).await
@@ -517,7 +517,7 @@ impl WireTapTools {
         Parameters(p): Parameters<ByteQueryParams>,
     ) -> Result<CallToolResult, McpError> {
         let r = match crate::analysis::resolve(p.capture_id, p.profile_id).map_err(err)? {
-            QuerySource::Postgres(pid) => {
+            QuerySource::Backend(pid) => {
                 crate::dbquery::db_query_distribution(
                     self.app.clone(), pid, p.frame_id, p.byte_index, p.is_extended, p.start_time, p.end_time, None,
                 ).await
@@ -535,7 +535,7 @@ impl WireTapTools {
         Parameters(p): Parameters<GapQueryParams>,
     ) -> Result<CallToolResult, McpError> {
         let r = match crate::analysis::resolve(p.capture_id, p.profile_id).map_err(err)? {
-            QuerySource::Postgres(pid) => {
+            QuerySource::Backend(pid) => {
                 crate::dbquery::db_query_gap_analysis(
                     self.app.clone(), pid, p.frame_id, p.is_extended, p.gap_threshold_ms,
                     p.start_time, p.end_time, p.limit, None,
@@ -554,7 +554,7 @@ impl WireTapTools {
         Parameters(p): Parameters<FrequencyQueryParams>,
     ) -> Result<CallToolResult, McpError> {
         let r = match crate::analysis::resolve(p.capture_id, p.profile_id).map_err(err)? {
-            QuerySource::Postgres(pid) => {
+            QuerySource::Backend(pid) => {
                 crate::dbquery::db_query_frequency(
                     self.app.clone(), pid, p.frame_id, p.is_extended, p.bucket_size_ms,
                     p.start_time, p.end_time, p.limit, None,
@@ -573,7 +573,7 @@ impl WireTapTools {
         Parameters(p): Parameters<FrameQueryParams>,
     ) -> Result<CallToolResult, McpError> {
         let r = match crate::analysis::resolve(p.capture_id, p.profile_id).map_err(err)? {
-            QuerySource::Postgres(pid) => {
+            QuerySource::Backend(pid) => {
                 crate::dbquery::db_query_first_last(
                     self.app.clone(), pid, p.frame_id, p.is_extended, p.start_time, p.end_time, None,
                 ).await
@@ -591,7 +591,7 @@ impl WireTapTools {
         Parameters(p): Parameters<MuxQueryParams>,
     ) -> Result<CallToolResult, McpError> {
         let r = match crate::analysis::resolve(p.capture_id, p.profile_id).map_err(err)? {
-            QuerySource::Postgres(pid) => {
+            QuerySource::Backend(pid) => {
                 crate::dbquery::db_query_mux_statistics(
                     self.app.clone(), pid, p.frame_id, p.mux_selector_byte, p.is_extended,
                     p.include_16bit, p.payload_length, p.start_time, p.end_time, p.limit, None,

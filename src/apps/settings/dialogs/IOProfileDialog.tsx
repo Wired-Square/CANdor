@@ -89,7 +89,7 @@ export default function IOProfileDialog({
   // Catalog list for preferred decoder picker
   const catalogs = useCatalogList();
 
-  // Check password storage status (only mqtt and postgres have password fields)
+  // Check password storage status (only mqtt has a password field)
   const conn = profileForm.connection;
   const isPasswordSecurelyStored = !!('_password_stored' in conn && conn._password_stored);
   const isApiKeySecurelyStored = !!('_api_key_stored' in conn && conn._api_key_stored);
@@ -506,7 +506,6 @@ export default function IOProfileDialog({
               {availableKinds.includes("gvret_usb") && <option value="gvret_usb">{t("ioProfileDialog.kinds.gvret_usb")}</option>}
               {availableKinds.includes("modbus_tcp") && <option value="modbus_tcp">{t("ioProfileDialog.kinds.modbus_tcp")}</option>}
               {availableKinds.includes("mqtt") && <option value="mqtt">{t("ioProfileDialog.kinds.mqtt")}</option>}
-              {availableKinds.includes("postgres") && <option value="postgres">{t("ioProfileDialog.kinds.postgres")}</option>}
               {availableKinds.includes("wiretap") && <option value="wiretap">{t("ioProfileDialog.kinds.wiretap")}</option>}
               {availableKinds.includes("serial") && <option value="serial">{t("ioProfileDialog.kinds.serial")}</option>}
               {availableKinds.includes("slcan") && <option value="slcan">{t("ioProfileDialog.kinds.slcan")}</option>}
@@ -718,105 +717,6 @@ export default function IOProfileDialog({
             </div>
           )}
 
-          {/* PostgreSQL */}
-          {profileForm.kind === "postgres" && (
-            <div className={`${spaceYDefault} border-t ${borderDefault} pt-6`}>
-              <h3 className={h3}>{t("ioProfileDialog.postgres.title")}</h3>
-
-              <div className="grid grid-cols-2 gap-4">
-                <FormField label={t("ioProfileDialog.common.host")} variant="default">
-                  <Input
-                    variant="default"
-                    value={profileForm.connection.host || ""}
-                    onChange={(e) => onUpdateConnectionField("host", e.target.value)}
-                    placeholder={t("ioProfileDialog.postgres.hostPlaceholder")}
-                  />
-                </FormField>
-                <FormField label={t("ioProfileDialog.common.port")} variant="default">
-                  <Input
-                    variant="default"
-                    type="number"
-                    value={profileForm.connection.port || ""}
-                    onChange={(e) => onUpdateConnectionField("port", e.target.value)}
-                    placeholder={t("ioProfileDialog.postgres.portPlaceholder")}
-                  />
-                </FormField>
-              </div>
-
-              <FormField label={t("ioProfileDialog.postgres.database")} variant="default">
-                <Input
-                  variant="default"
-                  value={profileForm.connection.database || ""}
-                  onChange={(e) => onUpdateConnectionField("database", e.target.value)}
-                  placeholder={t("ioProfileDialog.postgres.databasePlaceholder")}
-                />
-              </FormField>
-
-              <FormField label={t("ioProfileDialog.common.username")} variant="default">
-                <Input
-                  variant="default"
-                  value={profileForm.connection.username || ""}
-                  onChange={(e) => onUpdateConnectionField("username", e.target.value)}
-                />
-              </FormField>
-
-              <SecurePasswordField
-                value={profileForm.connection.password || ""}
-                onChange={(value) => onUpdateConnectionField("password", value)}
-                isSecurelyStored={isPasswordSecurelyStored}
-                hasLegacyPassword={hasLegacyPassword}
-                onMigrate={onMigratePassword}
-              />
-
-              <FormField label={t("ioProfileDialog.postgres.sslMode")} variant="default">
-                <Select
-                  variant="default"
-                  value={profileForm.connection.sslmode || "prefer"}
-                  onChange={(e) => onUpdateConnectionField("sslmode", e.target.value)}
-                >
-                  <option value="disable">{t("ioProfileDialog.postgres.ssl.disable")}</option>
-                  <option value="allow">{t("ioProfileDialog.postgres.ssl.allow")}</option>
-                  <option value="prefer">{t("ioProfileDialog.postgres.ssl.prefer")}</option>
-                  <option value="require">{t("ioProfileDialog.postgres.ssl.require")}</option>
-                  <option value="verify-ca">{t("ioProfileDialog.postgres.ssl.verifyCa")}</option>
-                  <option value="verify-full">{t("ioProfileDialog.postgres.ssl.verifyFull")}</option>
-                </Select>
-              </FormField>
-
-              <FormField label={t("ioProfileDialog.postgres.sourceType")} variant="default">
-                <Select
-                  variant="default"
-                  value={profileForm.connection.source_type || "can_frame"}
-                  onChange={(e) => onUpdateConnectionField("source_type", e.target.value)}
-                >
-                  <option value="can_frame">{t("ioProfileDialog.postgres.sources.canFrame")}</option>
-                  <option value="modbus_frame">{t("ioProfileDialog.postgres.sources.modbusFrame")}</option>
-                  <option value="serial_frame">{t("ioProfileDialog.postgres.sources.serialFrame")}</option>
-                  <option value="serial_raw">{t("ioProfileDialog.postgres.sources.serialRaw")}</option>
-                </Select>
-              </FormField>
-
-              {/* Note: Framing for serial_raw is handled client-side in Discovery mode */}
-
-              <FormField label={t("ioProfileDialog.postgres.defaultSpeed")} variant="default">
-                <Select
-                  variant="default"
-                  value={profileForm.connection.default_speed || "1"}
-                  onChange={(e) => onUpdateConnectionField("default_speed", e.target.value)}
-                >
-                  <option value="0.25">{t("ioProfileDialog.postgres.speeds.025")}</option>
-                  <option value="0.5">{t("ioProfileDialog.postgres.speeds.05")}</option>
-                  <option value="1">{t("ioProfileDialog.postgres.speeds.1")}</option>
-                  <option value="2">{t("ioProfileDialog.postgres.speeds.2")}</option>
-                  <option value="10">{t("ioProfileDialog.postgres.speeds.10")}</option>
-                  <option value="30">{t("ioProfileDialog.postgres.speeds.30")}</option>
-                  <option value="60">{t("ioProfileDialog.postgres.speeds.60")}</option>
-                  <option value="0">{t("ioProfileDialog.postgres.speeds.noLimit")}</option>
-                </Select>
-              </FormField>
-            </div>
-          )}
-
           {/* WireTAP Backend (HTTP API) */}
           {profileForm.kind === "wiretap" && (
             <div className={`${spaceYDefault} border-t ${borderDefault} pt-6`}>
@@ -849,20 +749,20 @@ export default function IOProfileDialog({
                 />
               </FormField>
 
-              <FormField label={t("ioProfileDialog.postgres.defaultSpeed")} variant="default">
+              <FormField label={t("ioProfileDialog.wiretap.defaultSpeed")} variant="default">
                 <Select
                   variant="default"
                   value={profileForm.connection.default_speed || "1"}
                   onChange={(e) => onUpdateConnectionField("default_speed", e.target.value)}
                 >
-                  <option value="0.25">{t("ioProfileDialog.postgres.speeds.025")}</option>
-                  <option value="0.5">{t("ioProfileDialog.postgres.speeds.05")}</option>
-                  <option value="1">{t("ioProfileDialog.postgres.speeds.1")}</option>
-                  <option value="2">{t("ioProfileDialog.postgres.speeds.2")}</option>
-                  <option value="10">{t("ioProfileDialog.postgres.speeds.10")}</option>
-                  <option value="30">{t("ioProfileDialog.postgres.speeds.30")}</option>
-                  <option value="60">{t("ioProfileDialog.postgres.speeds.60")}</option>
-                  <option value="0">{t("ioProfileDialog.postgres.speeds.noLimit")}</option>
+                  <option value="0.25">{t("ioProfileDialog.wiretap.speeds.025")}</option>
+                  <option value="0.5">{t("ioProfileDialog.wiretap.speeds.05")}</option>
+                  <option value="1">{t("ioProfileDialog.wiretap.speeds.1")}</option>
+                  <option value="2">{t("ioProfileDialog.wiretap.speeds.2")}</option>
+                  <option value="10">{t("ioProfileDialog.wiretap.speeds.10")}</option>
+                  <option value="30">{t("ioProfileDialog.wiretap.speeds.30")}</option>
+                  <option value="60">{t("ioProfileDialog.wiretap.speeds.60")}</option>
+                  <option value="0">{t("ioProfileDialog.wiretap.speeds.noLimit")}</option>
                 </Select>
               </FormField>
             </div>

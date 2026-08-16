@@ -299,7 +299,7 @@ pub struct FrameInventoryParams {
     /// Capture ID (mutually exclusive with `profile_id`).
     #[serde(default)]
     pub capture_id: Option<String>,
-    /// PostgreSQL profile ID (mutually exclusive with `capture_id`).
+    /// WireTAP backend profile ID (mutually exclusive with `capture_id`).
     #[serde(default)]
     pub profile_id: Option<String>,
     /// Optional RFC3339 lower time bound (inclusive).

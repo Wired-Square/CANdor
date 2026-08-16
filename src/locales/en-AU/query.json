@@ -6,16 +6,15 @@
     "stats": "Stats"
   },
   "protocols": {
-    "capture": "Capture",
-    "postgres": "PostgreSQL"
+    "capture": "Capture"
   },
   "errors": {
     "queryTitle": "Query Error",
     "generic": "An error occurred"
   },
   "topBar": {
-    "noProfile": "No PostgreSQL profile selected",
-    "selectProfile": "Select a PostgreSQL profile to query frames.",
+    "noProfile": "No WireTAP backend profile selected",
+    "selectProfile": "Select a WireTAP backend profile to query frames.",
     "captureMode": "Capture Mode",
     "newQuery": "New Query"
   },
@@ -84,9 +83,8 @@
     "wordsTitle": "16-bit Word Statistics"
   },
   "stats": {
-    "postgresOnly": "Activity monitoring is only available for PostgreSQL sources.",
     "noProfileHeading": "No Database Selected",
-    "noProfileDescription": "Select a PostgreSQL profile to view database activity.",
+    "noProfileDescription": "Select a WireTAP backend profile to view database activity.",
     "title": "Database Activity",
     "queries_one": "{{count}} running query",
     "queries_other": "{{count}} running queries",
@@ -120,7 +118,8 @@
     },
     "cancelQuery": "Cancel query",
     "terminateSession": "Terminate session",
-    "terminateConfirm": "Terminate this session? This will close the connection."
+    "terminateConfirm": "Terminate this session? This will close the connection.",
+    "backendOnly": "Activity monitoring is only available for WireTAP backend sources."
   },
   "builder": {
     "queryType": "Query Type",

@@ -51,7 +51,7 @@ To use gs_usb, flash your CANable with [candleLight firmware](https://github.com
 ## Data Sources
 
 - Live CAN hardware (GVRET, slcan, gs_usb, SocketCAN)
-- PostgreSQL database (historical replay with speed control)
+- WireTAP backend (historical replay with speed control)
 - WireTAP backend gateway (historical replay + analysis over its HTTP API, no direct database access)
 - CSV file import
 - In-memory buffer replay
@@ -71,7 +71,7 @@ See [tools/gs_usb_cli/README.md](tools/gs_usb_cli/README.md) for build and usage
 A GVRET-compatible TCP server for Linux that bridges SocketCAN interfaces to TCP clients. Deploy on a Raspberry Pi or any Linux system with CAN hardware to:
 
 - Stream live CAN data to the WireTAP desktop app over the network
-- Optionally log all frames to PostgreSQL for historical analysis, or forward them to a WireTAP backend over the binary ingest protocol
+- Optionally forward all frames to a WireTAP backend over the binary ingest protocol for historical analysis
 - Support multiple CAN interfaces and CAN FD
 
 See [tools/wiretap-server/README.md](tools/wiretap-server/README.md) for setup instructions.

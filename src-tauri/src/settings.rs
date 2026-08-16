@@ -619,6 +619,34 @@ pub async fn load_settings(app: AppHandle) -> Result<AppSettings, String> {
             settings.report_dir = fresh_defaults.report_dir;
         }
 
+        // Direct PostgreSQL profiles no longer open anything — a database-backed
+        // source is a WireTAP backend now. Drop them rather than leaving a kind
+        // in the settings file that every picker hides and every reader rejects,
+        // and say so once, because a profile disappearing silently is worse than
+        // one that fails.
+        let dropped: Vec<String> = settings
+            .io_profiles
+            .iter()
+            .filter(|p| p.kind == "postgres")
+            .map(|p| p.name.clone())
+            .collect();
+        if !dropped.is_empty() {
+            for profile in settings.io_profiles.iter().filter(|p| p.kind == "postgres") {
+                let _ = crate::credentials::delete_all_credentials(&profile.id);
+            }
+            settings.io_profiles.retain(|p| p.kind != "postgres");
+            let notice = format!(
+                "Removed {} direct PostgreSQL source{} ({}). WireTAP now reaches a database \
+                 through a WireTAP backend profile; add one under Settings → Data I/O.",
+                dropped.len(),
+                if dropped.len() == 1 { "" } else { "s" },
+                dropped.join(", ")
+            );
+            tlog!("[settings] {}", notice);
+            crate::record_startup_error(notice);
+            save_settings(app.clone(), settings.clone()).await?;
+        }
+
         // Check for stale paths (e.g., old iOS container UUIDs after reinstall)
         if paths_are_stale(&settings, &app) {
             tlog!("[settings] Regenerating stale directory paths");

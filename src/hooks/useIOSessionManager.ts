@@ -43,7 +43,7 @@ function attachSessionCatalog(sessionId: string, catalogPath?: string | null): v
 /**
  * Generate a unique session ID for recorded sources.
  * Pattern: t_{shortId}
- * - t_ = recorded (postgres, csv, or other recorded sources)
+ * - t_ = recorded (WireTAP backend, csv, or other recorded sources)
  * - b_ = capture replay (viewing stored capture data)
  */
 function generateRecordedSessionId(): string {
@@ -1060,8 +1060,8 @@ export function useIOSessionManager(
   // Creates/joins the session with skipAutoStart to prevent auto-starting playback sources.
   // Also marks our subscriber as INACTIVE so we don't receive frames even if session is running.
   // This is useful when:
-  // - Postgres session is new: session stays stopped, Query won't receive frames
-  // - Postgres session is shared (Discovery streaming): Query joins but won't receive frames
+  // - Backend session is new: session stays stopped, Query won't receive frames
+  // - Backend session is shared (Discovery streaming): Query joins but won't receive frames
   const connectOnly = useCallback(async (
     profileId: string,
     opts?: LoadOptions
@@ -1243,7 +1243,7 @@ export function useIOSessionManager(
     // Set default speed from the selected profile if it has one (non-capture only)
     if (profileId && !isCaptureProfileId(profileId)) {
       const profile = ioProfiles.find((p) => p.id === profileId);
-      if (profile && (profile.kind === "postgres" || profile.kind === "wiretap") && profile.connection?.default_speed) {
+      if (profile && profile.kind === "wiretap" && profile.connection?.default_speed) {
         const defaultSpeed = parseFloat(profile.connection.default_speed);
         setPlaybackSpeedProp?.(defaultSpeed);
       }

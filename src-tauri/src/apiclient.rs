@@ -23,8 +23,9 @@ use crate::settings::IOProfile;
 
 static HTTP: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 
-/// query_id -> endpoint, for cancelling in-flight HTTP queries via the API.
-static API_RUNNING: LazyLock<Mutex<HashMap<String, Endpoint>>> =
+/// Queries currently in flight, keyed by `query_id`: what to DELETE to cancel
+/// one, and enough about it to be worth printing in the session status log.
+static API_RUNNING: LazyLock<Mutex<HashMap<String, InFlight>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Clone)]
@@ -33,8 +34,25 @@ struct Endpoint {
     api_key: String,
 }
 
+#[derive(Clone)]
+struct InFlight {
+    endpoint: Endpoint,
+    query_type: String,
+    profile_id: String,
+    started_at: std::time::Instant,
+}
+
+/// A running query, for status logging.
+#[derive(Debug, Clone)]
+pub struct RunningQueryInfo {
+    pub query_type: String,
+    pub profile_id: String,
+    pub started_at: std::time::Instant,
+}
+
 /// Resolved connection details for a wiretap profile.
 pub struct ApiProfile {
+    profile_id: String,
     base_url: String,
     api_key: String,
     database: String,
@@ -65,7 +83,7 @@ pub fn resolve(profile: &IOProfile) -> Result<ApiProfile, String> {
         .unwrap_or("wiretap")
         .to_string();
     let api_key = resolve_api_key(profile)?;
-    Ok(ApiProfile { base_url, api_key, database })
+    Ok(ApiProfile { profile_id: profile.id.clone(), base_url, api_key, database })
 }
 
 fn resolve_api_key(profile: &IOProfile) -> Result<String, String> {
@@ -120,7 +138,15 @@ async fn post_query<T: DeserializeOwned>(
     body: Value,
     query_id: &str,
 ) -> Result<T, String> {
-    API_RUNNING.lock().await.insert(query_id.to_string(), api.endpoint());
+    API_RUNNING.lock().await.insert(
+        query_id.to_string(),
+        InFlight {
+            endpoint: api.endpoint(),
+            query_type: path.trim_start_matches('/').to_string(),
+            profile_id: api.profile_id.clone(),
+            started_at: std::time::Instant::now(),
+        },
+    );
     let result = async {
         let resp = HTTP
             .post(api.db_url(path))
@@ -136,10 +162,31 @@ async fn post_query<T: DeserializeOwned>(
     result
 }
 
-/// Cancel an in-flight HTTP query. Returns true if it was a known API query.
+/// Every query currently in flight, for the session status log.
+pub async fn running_queries() -> Vec<(String, RunningQueryInfo)> {
+    API_RUNNING
+        .lock()
+        .await
+        .iter()
+        .map(|(id, q)| {
+            (
+                id.clone(),
+                RunningQueryInfo {
+                    query_type: q.query_type.clone(),
+                    profile_id: q.profile_id.clone(),
+                    started_at: q.started_at,
+                },
+            )
+        })
+        .collect()
+}
+
+/// Cancel an in-flight query. Returns true if it was a known query.
 pub async fn cancel_query(query_id: &str) -> bool {
-    let endpoint = API_RUNNING.lock().await.get(query_id).cloned();
-    let Some(ep) = endpoint else { return false };
+    let ep = match API_RUNNING.lock().await.get(query_id) {
+        Some(q) => q.endpoint.clone(),
+        None => return false,
+    };
     let _ = HTTP
         .delete(format!("{}/v1/queries/{}", ep.base_url, query_id))
         .bearer_auth(&ep.api_key)

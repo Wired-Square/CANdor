@@ -1,103 +1,36 @@
 // ui/src-tauri/src/dbquery.rs
 //
-// Database query commands for the Query app. Provides analytical queries
-// against PostgreSQL data sources to find historical patterns and changes.
+// The Query app's analytical queries against a WireTAP backend.
+//
+// Every query here is a thin Tauri command over `apiclient` — the backend owns
+// the database, and the app talks to it over HTTP. WireTAP used to also connect
+// to PostgreSQL directly, which meant two implementations of each query (one in
+// SQL here, one over the wire there) that had to agree, and a `tokio_postgres`
+// dependency for a path the backend already served. The result types below stay
+// because they are the contract both the API and the SQLite capture queries
+// (`capturequery.rs`) answer in.
 
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::sync::{Arc, LazyLock};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use tauri::AppHandle;
-use tokio::sync::Mutex;
-use tokio_postgres::{CancelToken, NoTls};
 
-use crate::credentials;
 use crate::settings::{load_settings, IOProfile};
 
-/// Information about a running query
-pub struct RunningQuery {
-    pub query_type: String,
-    pub profile_id: String,
-    pub started_at: std::time::Instant,
-    pub cancel_token: CancelToken,
-}
+pub use crate::apiclient::RunningQueryInfo;
 
-/// Simplified view of a running query for status logging (without CancelToken)
-#[derive(Debug, Clone)]
-pub struct RunningQueryInfo {
-    pub query_type: String,
-    pub profile_id: String,
-    pub started_at: std::time::Instant,
-}
-
-/// Global state for tracking running queries
-static RUNNING_QUERIES: LazyLock<Mutex<HashMap<String, Arc<RunningQuery>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// Register a query as running
-async fn register_query(id: &str, query_type: &str, profile_id: &str, cancel_token: CancelToken) {
-    let mut queries = RUNNING_QUERIES.lock().await;
-    queries.insert(
-        id.to_string(),
-        Arc::new(RunningQuery {
-            query_type: query_type.to_string(),
-            profile_id: profile_id.to_string(),
-            started_at: std::time::Instant::now(),
-            cancel_token,
-        }),
-    );
-}
-
-/// Unregister a query when complete
-async fn unregister_query(id: &str) {
-    let mut queries = RUNNING_QUERIES.lock().await;
-    queries.remove(id);
-}
-
-/// Get running queries for status logging
+/// Every query currently in flight, for the session status log.
 pub async fn get_running_queries() -> Vec<(String, RunningQueryInfo)> {
-    let queries = RUNNING_QUERIES.lock().await;
-    queries
-        .iter()
-        .map(|(k, v)| {
-            (
-                k.clone(),
-                RunningQueryInfo {
-                    query_type: v.query_type.clone(),
-                    profile_id: v.profile_id.clone(),
-                    started_at: v.started_at,
-                },
-            )
-        })
-        .collect()
+    crate::apiclient::running_queries().await
 }
 
-/// Cancel a running database query
+/// Cancel a running query.
 #[tauri::command]
 pub async fn db_cancel_query(query_id: String) -> Result<(), String> {
-    let query = {
-        let queries = RUNNING_QUERIES.lock().await;
-        queries.get(&query_id).cloned()
-    };
-
-    if let Some(query) = query {
-        tlog!("[dbquery] Cancelling query: {}", query_id);
-        query
-            .cancel_token
-            .cancel_query(NoTls)
-            .await
-            .map_err(|e| format!("Failed to cancel query: {}", e))?;
-        tlog!("[dbquery] Query cancelled: {}", query_id);
-
-        // Remove from running queries
-        unregister_query(&query_id).await;
-        Ok(())
-    } else if crate::apiclient::cancel_query(&query_id).await {
-        // In-flight query against a wiretap (HTTP) profile
-        tlog!("[dbquery] Cancelled API query: {}", query_id);
-        Ok(())
-    } else {
-        Err(format!("Query not found: {}", query_id))
+    if crate::apiclient::cancel_query(&query_id).await {
+        tlog!("[dbquery] Cancelled query: {}", query_id);
+        return Ok(());
     }
+    Err(format!("Query not found: {}", query_id))
 }
 
 /// Result of a byte change query
@@ -489,181 +422,51 @@ pub struct DatabaseActivityResult {
 }
 
 /// Build PostgreSQL connection string from profile
-fn build_connection_string(profile: &IOProfile, password: Option<String>) -> String {
-    let conn = &profile.connection;
 
-    let host = conn
-        .get("host")
-        .and_then(|v| v.as_str())
-        .unwrap_or("localhost");
-    let port = conn
-        .get("port")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(5432);
-    let database = conn
-        .get("database")
-        .and_then(|v| v.as_str())
-        .unwrap_or("wiretap");
-    let username = conn
-        .get("username")
-        .and_then(|v| v.as_str())
-        .unwrap_or("postgres");
-    let sslmode = conn
-        .get("sslmode")
-        .and_then(|v| v.as_str())
-        .unwrap_or("prefer");
+// ── Profile resolution ───────────────────────────────────────────────────────
 
-    let mut parts = vec![
-        format!("host={}", host),
-        format!("port={}", port),
-        format!("dbname={}", database),
-        format!("user={}", username),
-        format!("sslmode={}", sslmode),
-    ];
-
-    if let Some(pw) = password {
-        parts.push(format!("password={}", pw));
-    }
-
-    parts.join(" ")
-}
-
-/// Find the profile by ID from settings
 fn find_profile(settings: &crate::settings::AppSettings, profile_id: &str) -> Option<IOProfile> {
-    settings
-        .io_profiles
-        .iter()
-        .find(|p| p.id == profile_id)
-        .cloned()
+    settings.io_profiles.iter().find(|p| p.id == profile_id).cloned()
 }
 
-/// Get password for a PostgreSQL profile
-fn get_profile_password(profile: &IOProfile) -> Option<String> {
-    credentials::resolve_secret(profile, "password")
-}
-
-/// Return the profile if it is an API-backed "wiretap" profile, so callers
-/// that otherwise use `connect_profile` can dispatch to the HTTP client.
-async fn profile_if_wiretap(app: &AppHandle, profile_id: &str) -> Option<IOProfile> {
-    let settings = load_settings(app.clone()).await.ok()?;
-    find_profile(&settings, profile_id).filter(|p| p.kind == "wiretap")
-}
-
-/// Connect to a PostgreSQL profile and return a ready client. Spawns the
-/// connection driver task. Shared by the headless analysis queries.
-async fn connect_profile(
-    app: &AppHandle,
-    profile_id: &str,
-) -> Result<tokio_postgres::Client, String> {
+/// Resolve a profile id to a WireTAP backend profile.
+///
+/// A database-backed source is a `wiretap` profile and nothing else. Anything
+/// else reaching here is a caller passing the wrong profile, not a source this
+/// module should try to open.
+async fn backend_profile(app: &AppHandle, profile_id: &str) -> Result<IOProfile, String> {
     let settings = load_settings(app.clone())
         .await
         .map_err(|e| format!("Failed to load settings: {}", e))?;
     let profile = find_profile(&settings, profile_id)
         .ok_or_else(|| format!("Profile not found: {}", profile_id))?;
-    if profile.kind != "postgres" {
-        return Err("Profile is not a PostgreSQL profile".to_string());
+    if profile.kind != "wiretap" {
+        return Err(format!(
+            "Profile '{}' is a {} source, not a WireTAP backend",
+            profile.name, profile.kind
+        ));
     }
-    let conn_str = build_connection_string(&profile, get_profile_password(&profile));
-    let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
-        .await
-        .map_err(|e| format!("Failed to connect to database: {}", e))?;
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            tlog!("PostgreSQL connection error: {}", e);
-        }
-    });
-    Ok(client)
+    Ok(profile)
 }
 
-/// True when the hourly continuous aggregate (see init_schema.sql) exists on
-/// this database. Probed per connection — it is a sub-millisecond catalog
-/// lookup and keeps the app working against non-TimescaleDB databases.
-async fn rollup_available(client: &tokio_postgres::Client) -> bool {
-    client
-        .query_one(
-            "SELECT to_regclass('public.can_frame_hourly') IS NOT NULL",
-            &[],
-        )
-        .await
-        .map(|r| r.get::<_, bool>(0))
-        .unwrap_or(false)
+/// A query id for a call that did not bring one. Only queries the caller can
+/// name are cancellable, so this is a label rather than a handle.
+fn query_id_or(kind: &str, supplied: Option<String>) -> String {
+    supplied.unwrap_or_else(|| format!("{kind}_{:?}", std::time::Instant::now()))
 }
 
-fn inventory_row(r: &tokio_postgres::Row) -> (u32, bool, i64, i64, i64, u8) {
-    let id: i32 = r.get("id");
-    let extended: bool = r.get("extended");
-    let cnt: i64 = r.get("cnt");
-    let first_us: f64 = r.get("first_us");
-    let last_us: f64 = r.get("last_us");
-    let max_dlc: i32 = r.get("max_dlc");
-    (id as u32, extended, cnt, first_us as i64, last_us as i64, max_dlc as u8)
-}
+// ── Queries ──────────────────────────────────────────────────────────────────
 
-/// Per-frame-id rollup for a PostgreSQL source: (frame_id, is_extended, count,
-/// first_us, last_us, max_dlc). Time bounds are optional RFC3339 strings.
 pub async fn db_frame_inventory(
     app: &AppHandle,
     profile_id: &str,
     start_time: Option<String>,
     end_time: Option<String>,
 ) -> Result<Vec<(u32, bool, i64, i64, i64, u8)>, String> {
-    if let Some(profile) = profile_if_wiretap(app, profile_id).await {
-        return crate::apiclient::frame_inventory(&profile, start_time, end_time).await;
-    }
-    let client = connect_profile(app, profile_id).await?;
-
-    // Full-archive inventory (no time bounds) reads the hourly continuous
-    // aggregate when present — near-instant instead of scanning the raw
-    // table. Time-bounded inventories stay on the raw table for exact edges.
-    if start_time.is_none() && end_time.is_none() && rollup_available(&client).await {
-        let rows = client
-            .query(
-                "SELECT id, extended, sum(frame_count)::int8 AS cnt, \
-                 (EXTRACT(EPOCH FROM min(first_ts)) * 1000000)::float8 AS first_us, \
-                 (EXTRACT(EPOCH FROM max(last_ts)) * 1000000)::float8 AS last_us, \
-                 max(max_dlc)::int4 AS max_dlc \
-                 FROM public.can_frame_hourly \
-                 GROUP BY id, extended ORDER BY id, extended",
-                &[],
-            )
-            .await
-            .map_err(|e| format!("Inventory rollup query failed: {}", e))?;
-        return Ok(rows.iter().map(inventory_row).collect());
-    }
-
-    let mut sql = String::from(
-        "SELECT id, extended, COUNT(*)::int8 AS cnt, \
-         (EXTRACT(EPOCH FROM MIN(ts)) * 1000000)::float8 AS first_us, \
-         (EXTRACT(EPOCH FROM MAX(ts)) * 1000000)::float8 AS last_us, \
-         MAX(dlc)::int4 AS max_dlc \
-         FROM public.can_frame",
-    );
-    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
-    let mut idx = 1;
-    if start_time.is_some() || end_time.is_some() {
-        sql.push_str(" WHERE 1=1");
-    }
-    if let Some(ref s) = start_time {
-        sql.push_str(&format!(" AND ts >= (${}::text)::timestamptz", idx));
-        idx += 1;
-        params.push(s);
-    }
-    if let Some(ref e) = end_time {
-        sql.push_str(&format!(" AND ts < (${}::text)::timestamptz", idx));
-        params.push(e);
-    }
-    sql.push_str(" GROUP BY id, extended ORDER BY id, extended");
-
-    let rows = client
-        .query(sql.as_str(), &params)
-        .await
-        .map_err(|e| format!("Inventory query failed: {}", e))?;
-
-    Ok(rows.iter().map(inventory_row).collect())
+    let profile = backend_profile(app, profile_id).await?;
+    crate::apiclient::frame_inventory(&profile, start_time, end_time).await
 }
 
-/// Fetch up to `limit` raw payloads for one frame id from a PostgreSQL source,
-/// in timestamp order. Used for headless per-byte analysis.
 pub async fn db_fetch_frame_payloads(
     app: &AppHandle,
     profile_id: &str,
@@ -671,36 +474,12 @@ pub async fn db_fetch_frame_payloads(
     is_extended: Option<bool>,
     limit: u32,
 ) -> Result<Vec<Vec<u8>>, String> {
-    if let Some(profile) = profile_if_wiretap(app, profile_id).await {
-        return crate::apiclient::fetch_frame_payloads(&profile, frame_id, is_extended, limit).await;
-    }
-    let client = connect_profile(app, profile_id).await?;
-    let frame_id_i32 = frame_id as i32;
-
-    let mut sql = String::from("SELECT data_bytes FROM public.can_frame WHERE id = $1::int4");
-    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&frame_id_i32];
-    let ext_bool: bool;
-    if let Some(ext) = is_extended {
-        ext_bool = ext;
-        sql.push_str(" AND extended = $2::bool");
-        params.push(&ext_bool);
-    }
-    // Sample the most recent N (current behaviour) rather than the oldest — on a
-    // multi-month archive the first rows are a stale, biased window.
-    sql.push_str(&format!(" ORDER BY ts DESC LIMIT {}", limit));
-
-    let rows = client
-        .query(sql.as_str(), &params)
-        .await
-        .map_err(|e| format!("Payload fetch failed: {}", e))?;
-    Ok(rows.iter().map(|r| r.get::<_, Vec<u8>>("data_bytes")).collect())
+    let profile = backend_profile(app, profile_id).await?;
+    crate::apiclient::fetch_frame_payloads(&profile, frame_id, is_extended, limit).await
 }
 
-/// Query for byte changes in a specific frame
-///
-/// Returns a list of timestamps where the specified byte changed value.
-/// If `is_extended` is None, queries both standard and extended frames.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn db_query_byte_changes(
     app: AppHandle,
     profile_id: String,
@@ -712,176 +491,22 @@ pub async fn db_query_byte_changes(
     limit: Option<u32>,
     query_id: Option<String>,
 ) -> Result<ByteChangeQueryResult, String> {
-    let query_start = std::time::Instant::now();
-    let result_limit = limit.unwrap_or(10000);
-    let query_id = query_id.unwrap_or_else(|| format!("byte_changes_{}", query_start.elapsed().as_nanos()));
-
-    tlog!("[dbquery] db_query_byte_changes called with profile_id='{}', frame_id={}, byte_index={}, is_extended={:?}, limit={}",
-        profile_id, frame_id, byte_index, is_extended, result_limit);
-
-    // Load settings to get profile
-    let settings = load_settings(app).await.map_err(|e| format!("Failed to load settings: {}", e))?;
-
-    tlog!("[dbquery] Loaded settings, found {} IO profiles", settings.io_profiles.len());
-
-    let profile = find_profile(&settings, &profile_id)
-        .ok_or_else(|| format!("Profile not found: {}", profile_id))?;
-
-    tlog!("[dbquery] Found profile: id='{}', kind='{}', name='{}'",
-        profile.id, profile.kind, profile.name);
-    tlog!("[dbquery] Profile connection config: {:?}", profile.connection);
-
-    if profile.kind == "wiretap" {
-        return crate::apiclient::byte_changes(&profile, frame_id, byte_index, is_extended, start_time, end_time, limit, query_id).await;
-    }
-    if profile.kind != "postgres" {
-        return Err("Profile is not a PostgreSQL profile".to_string());
-    }
-
-    // Get password
-    let password = get_profile_password(&profile);
-    tlog!("[dbquery] Got password: {}", if password.is_some() { "yes (hidden)" } else { "no" });
-
-    let conn_str = build_connection_string(&profile, password);
-    // Log connection string but redact password
-    let safe_conn_str = conn_str.split(' ')
-        .map(|part| if part.starts_with("password=") { "password=***" } else { part })
-        .collect::<Vec<_>>()
-        .join(" ");
-    tlog!("[dbquery] Connection string: {}", safe_conn_str);
-
-    // Connect to database
-    let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
-        .await
-        .map_err(|e| {
-            tlog!("[dbquery] Connection failed: {:?}", e);
-            format!("Failed to connect to database: {}", e)
-        })?;
-
-    // Get cancel token before spawning connection handler
-    let cancel_token = client.cancel_token();
-    register_query(&query_id, "byte_changes", &profile_id, cancel_token).await;
-
-    // Spawn connection handler
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            tlog!("PostgreSQL connection error: {}", e);
-        }
-    });
-
-    // Build query - filter byte changes in SQL using get_byte_safe() for efficiency
-    // This avoids fetching all rows and comparing in Rust
-    let frame_id_i32 = frame_id as i32;
-    let byte_index_i32 = byte_index as i32;
-
-    // Build the base query that extracts and compares the specific byte in SQL
-    // Parameter indices are dynamic based on whether extended filter is included
-    let mut param_idx = 1;
-    let frame_id_param = param_idx;
-    param_idx += 1;
-
-    let mut query = format!(
-        r#"
-        WITH ordered_frames AS (
-            SELECT
-                ts,
-                public.get_byte_safe(data_bytes, ${}::int4) as curr_byte,
-                LAG(public.get_byte_safe(data_bytes, ${}::int4)) OVER (ORDER BY ts) as prev_byte
-            FROM public.can_frame
-            WHERE id = ${}::int4"#,
-        param_idx, param_idx, frame_id_param
-    );
-    let _byte_index_param = param_idx;
-    param_idx += 1;
-
-    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&frame_id_i32, &byte_index_i32];
-
-    // Only add extended filter if specified
-    let is_extended_bool: bool;
-    if let Some(ext) = is_extended {
-        is_extended_bool = ext;
-        query.push_str(&format!(" AND extended = ${}::bool", param_idx));
-        param_idx += 1;
-        params.push(&is_extended_bool);
-    }
-
-    // Use explicit text cast to help PostgreSQL type inference for timestamp conversion
-    if let Some(ref start) = start_time {
-        query.push_str(&format!(" AND ts >= (${}::text)::timestamptz", param_idx));
-        param_idx += 1;
-        params.push(start as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
-    if let Some(ref end) = end_time {
-        query.push_str(&format!(" AND ts < (${}::text)::timestamptz", param_idx));
-        params.push(end as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
-
-    // Filter to only rows where the byte actually changed (in SQL, not Rust)
-    query.push_str(&format!(
-        r#"
-            ORDER BY ts
-        )
-        SELECT
-            (EXTRACT(EPOCH FROM ts) * 1000000)::float8 as timestamp_us,
-            prev_byte,
-            curr_byte
-        FROM ordered_frames
-        WHERE prev_byte IS NOT NULL
-          AND curr_byte IS NOT NULL
-          AND prev_byte IS DISTINCT FROM curr_byte
-        ORDER BY ts
-        LIMIT {}
-        "#,
-        result_limit
-    ));
-
-    tlog!("[dbquery] Executing query:\n{}", query);
-    tlog!("[dbquery] Query params: frame_id={}, byte_index={}, is_extended={:?}, start_time={:?}, end_time={:?}",
-        frame_id_i32, byte_index_i32, is_extended, start_time, end_time);
-
-    let rows = client
-        .query(&query, &params)
-        .await
-        .map_err(|e| format!("Query failed: {}", e))?;
-
-    let rows_scanned = rows.len();
-    tlog!("[dbquery] Query returned {} change rows (filtered in SQL)", rows_scanned);
-
-    // Parse results - byte comparison already done in SQL
-    let mut results = Vec::new();
-    for row in &rows {
-        let timestamp_us: f64 = row.get("timestamp_us");
-        let prev_byte: i32 = row.get("prev_byte");
-        let curr_byte: i32 = row.get("curr_byte");
-
-        results.push(ByteChangeResult {
-            timestamp_us: timestamp_us as i64,
-            old_value: prev_byte as u8,
-            new_value: curr_byte as u8,
-        });
-    }
-
-    let execution_time_ms = query_start.elapsed().as_millis() as u64;
-    tlog!("[dbquery] byte_changes: frame=0x{:X} byte={} ext={:?} | {} changes, {}ms",
-        frame_id, byte_index, is_extended, results.len(), execution_time_ms);
-
-    unregister_query(&query_id).await;
-
-    Ok(ByteChangeQueryResult {
-        stats: QueryStats {
-            rows_scanned,
-            results_count: results.len(),
-            execution_time_ms,
-        },
-        results,
-    })
+    let profile = backend_profile(&app, &profile_id).await?;
+    crate::apiclient::byte_changes(
+        &profile,
+        frame_id,
+        byte_index,
+        is_extended,
+        start_time,
+        end_time,
+        limit,
+        query_id_or("byte_changes", query_id),
+    )
+    .await
 }
 
-/// Query for frame payload changes
-///
-/// Returns a list of timestamps where any byte in the frame's payload changed.
-/// If `is_extended` is None, queries both standard and extended frames.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn db_query_frame_changes(
     app: AppHandle,
     profile_id: String,
@@ -892,176 +517,21 @@ pub async fn db_query_frame_changes(
     limit: Option<u32>,
     query_id: Option<String>,
 ) -> Result<FrameChangeQueryResult, String> {
-    let query_start = std::time::Instant::now();
-    let result_limit = limit.unwrap_or(10000);
-    let query_id = query_id.unwrap_or_else(|| format!("frame_changes_{}", query_start.elapsed().as_nanos()));
-
-    tlog!("[dbquery] db_query_frame_changes called with profile_id='{}', frame_id={}, is_extended={:?}, limit={}",
-        profile_id, frame_id, is_extended, result_limit);
-
-    // Load settings to get profile
-    let settings = load_settings(app).await.map_err(|e| format!("Failed to load settings: {}", e))?;
-
-    let profile = find_profile(&settings, &profile_id)
-        .ok_or_else(|| format!("Profile not found: {}", profile_id))?;
-
-    tlog!("[dbquery] Found profile: id='{}', kind='{}', name='{}'",
-        profile.id, profile.kind, profile.name);
-    tlog!("[dbquery] Profile connection config: {:?}", profile.connection);
-
-    if profile.kind == "wiretap" {
-        return crate::apiclient::frame_changes(&profile, frame_id, is_extended, start_time, end_time, limit, query_id).await;
-    }
-    if profile.kind != "postgres" {
-        return Err("Profile is not a PostgreSQL profile".to_string());
-    }
-
-    // Get password
-    let password = get_profile_password(&profile);
-    tlog!("[dbquery] Got password: {}", if password.is_some() { "yes (hidden)" } else { "no" });
-
-    let conn_str = build_connection_string(&profile, password);
-    // Log connection string but redact password
-    let safe_conn_str = conn_str.split(' ')
-        .map(|part| if part.starts_with("password=") { "password=***" } else { part })
-        .collect::<Vec<_>>()
-        .join(" ");
-    tlog!("[dbquery] Connection string: {}", safe_conn_str);
-
-    // Connect to database
-    let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
-        .await
-        .map_err(|e| {
-            tlog!("[dbquery] Connection failed: {:?}", e);
-            format!("Failed to connect to database: {}", e)
-        })?;
-
-    // Get cancel token before spawning connection handler
-    let cancel_token = client.cancel_token();
-    register_query(&query_id, "frame_changes", &profile_id, cancel_token).await;
-
-    // Spawn connection handler
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            tlog!("PostgreSQL connection error: {}", e);
-        }
-    });
-
-    // Build query - filter frame changes in SQL for efficiency
-    // Only return rows where the payload differs from the previous frame
-    let frame_id_i32 = frame_id as i32;
-
-    // Build query with dynamic parameter indices
-    let mut param_idx = 1;
-    let frame_id_param = param_idx;
-    param_idx += 1;
-
-    let mut query = format!(
-        r#"
-        WITH ordered_frames AS (
-            SELECT
-                ts,
-                data_bytes,
-                LAG(data_bytes) OVER (ORDER BY ts) as prev_data
-            FROM public.can_frame
-            WHERE id = ${}::int4"#,
-        frame_id_param
-    );
-
-    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&frame_id_i32];
-
-    // Only add extended filter if specified
-    let is_extended_bool: bool;
-    if let Some(ext) = is_extended {
-        is_extended_bool = ext;
-        query.push_str(&format!(" AND extended = ${}::bool", param_idx));
-        param_idx += 1;
-        params.push(&is_extended_bool);
-    }
-
-    // Use explicit text cast to help PostgreSQL type inference for timestamp conversion
-    if let Some(ref start) = start_time {
-        query.push_str(&format!(" AND ts >= (${}::text)::timestamptz", param_idx));
-        param_idx += 1;
-        params.push(start as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
-    if let Some(ref end) = end_time {
-        query.push_str(&format!(" AND ts < (${}::text)::timestamptz", param_idx));
-        params.push(end as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
-
-    // Filter to only rows where payload changed (bytea comparison in SQL)
-    query.push_str(&format!(
-        r#"
-            ORDER BY ts
-        )
-        SELECT
-            (EXTRACT(EPOCH FROM ts) * 1000000)::float8 as timestamp_us,
-            prev_data,
-            data_bytes
-        FROM ordered_frames
-        WHERE prev_data IS NOT NULL
-          AND prev_data IS DISTINCT FROM data_bytes
-        ORDER BY ts
-        LIMIT {}
-        "#,
-        result_limit
-    ));
-
-    tlog!("[dbquery] Executing query:\n{}", query);
-    tlog!("[dbquery] Query params: frame_id={}, is_extended={:?}, start_time={:?}, end_time={:?}",
-        frame_id_i32, is_extended, start_time, end_time);
-
-    let rows = client
-        .query(&query, &params)
-        .await
-        .map_err(|e| format!("Query failed: {}", e))?;
-
-    let rows_scanned = rows.len();
-    tlog!("[dbquery] Query returned {} change rows (filtered in SQL)", rows_scanned);
-
-    // Parse results - only changed frames are returned
-    let mut results = Vec::new();
-    for row in &rows {
-        let timestamp_us: f64 = row.get("timestamp_us");
-        let prev_data: Vec<u8> = row.get("prev_data");
-        let data_bytes: Vec<u8> = row.get("data_bytes");
-
-        let changed_indices = differing_byte_indices(&prev_data, &data_bytes, None);
-
-        results.push(FrameChangeResult {
-            timestamp_us: timestamp_us as i64,
-            old_payload: prev_data,
-            new_payload: data_bytes,
-            changed_indices,
-        });
-    }
-
-    let execution_time_ms = query_start.elapsed().as_millis() as u64;
-    tlog!("[dbquery] frame_changes: frame=0x{:X} ext={:?} | {} changes, {}ms",
-        frame_id, is_extended, results.len(), execution_time_ms);
-
-    unregister_query(&query_id).await;
-
-    Ok(FrameChangeQueryResult {
-        stats: QueryStats {
-            rows_scanned,
-            results_count: results.len(),
-            execution_time_ms,
-        },
-        results,
-    })
+    let profile = backend_profile(&app, &profile_id).await?;
+    crate::apiclient::frame_changes(
+        &profile,
+        frame_id,
+        is_extended,
+        start_time,
+        end_time,
+        limit,
+        query_id_or("frame_changes", query_id),
+    )
+    .await
 }
 
-/// Query for mirror validation mismatches
-///
-/// Compares payloads between mirror and source frames at matching timestamps
-/// (within tolerance). Returns timestamps where payloads differ.
-/// If `is_extended` is None, queries both standard and extended frames.
-/// `compare_byte_indices` restricts the comparison to those payload byte
-/// indices — the mirror's inherited bytes. Omit (or pass empty) to compare
-/// the whole payload.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn db_query_mirror_validation(
     app: AppHandle,
     profile_id: String,
@@ -1075,413 +545,53 @@ pub async fn db_query_mirror_validation(
     query_id: Option<String>,
     compare_byte_indices: Option<Vec<u8>>,
 ) -> Result<MirrorValidationQueryResult, String> {
-    let query_start = std::time::Instant::now();
-    let compare = compare_index_set(compare_byte_indices);
-    let result_limit = limit.unwrap_or(10000);
-    let query_id = query_id.unwrap_or_else(|| format!("mirror_validation_{}", query_start.elapsed().as_nanos()));
-
-    tlog!("[dbquery] db_query_mirror_validation called with profile_id='{}', mirror=0x{:X}, source=0x{:X}, is_extended={:?}, tolerance={}ms, limit={}",
-        profile_id, mirror_frame_id, source_frame_id, is_extended, tolerance_ms, result_limit);
-
-    // Load settings to get profile
-    let settings = load_settings(app).await.map_err(|e| format!("Failed to load settings: {}", e))?;
-
-    let profile = find_profile(&settings, &profile_id)
-        .ok_or_else(|| format!("Profile not found: {}", profile_id))?;
-
-    tlog!("[dbquery] Found profile: id='{}', kind='{}', name='{}'",
-        profile.id, profile.kind, profile.name);
-
-    if profile.kind == "wiretap" {
-        return crate::apiclient::mirror_validation(&profile, mirror_frame_id, source_frame_id, is_extended, tolerance_ms, start_time, end_time, limit, query_id, compare).await;
-    }
-    if profile.kind != "postgres" {
-        return Err("Profile is not a PostgreSQL profile".to_string());
-    }
-
-    // Get password and connect
-    let password = get_profile_password(&profile);
-    let conn_str = build_connection_string(&profile, password);
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
-        .await
-        .map_err(|e| format!("Failed to connect to database: {}", e))?;
-
-    // Get cancel token before spawning connection handler
-    let cancel_token = client.cancel_token();
-    register_query(&query_id, "mirror_validation", &profile_id, cancel_token).await;
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            tlog!("PostgreSQL connection error: {}", e);
-        }
-    });
-
-    // Build query - join mirror and source frames by timestamp proximity
-    let mirror_id_i32 = mirror_frame_id as i32;
-    let source_id_i32 = source_frame_id as i32;
-    let tolerance_ms_i32 = tolerance_ms as i32;
-
-    // Build query with dynamic parameter indices
-    let mut param_idx = 1;
-    let mirror_id_param = param_idx;
-    param_idx += 1;
-    let source_id_param = param_idx;
-    param_idx += 1;
-    let tolerance_param = param_idx;
-    param_idx += 1;
-
-    let mut query = format!(
-        r#"
-        WITH mirror_frames AS (
-            SELECT ts, data_bytes
-            FROM public.can_frame
-            WHERE id = ${}::int4"#,
-        mirror_id_param
-    );
-
-    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![
-        &mirror_id_i32,
-        &source_id_i32,
-        &tolerance_ms_i32,
-    ];
-
-    // Only add extended filter if specified
-    let is_extended_bool: bool;
-    let extended_param: usize;
-    if let Some(ext) = is_extended {
-        is_extended_bool = ext;
-        extended_param = param_idx;
-        query.push_str(&format!(" AND extended = ${}::bool", extended_param));
-        param_idx += 1;
-        params.push(&is_extended_bool);
-    } else {
-        extended_param = 0; // Not used
-    }
-
-    // Track time param indices for reuse in source_frames CTE
-    let mut start_time_param = 0;
-    let mut end_time_param = 0;
-
-    // Add time bounds to mirror_frames CTE
-    if let Some(ref start) = start_time {
-        start_time_param = param_idx;
-        query.push_str(&format!(" AND ts >= (${}::text)::timestamptz", start_time_param));
-        param_idx += 1;
-        params.push(start as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
-    if let Some(ref end) = end_time {
-        end_time_param = param_idx;
-        query.push_str(&format!(" AND ts < (${}::text)::timestamptz", end_time_param));
-        params.push(end as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
-
-    query.push_str(&format!(
-        r#"
-        ),
-        source_frames AS (
-            SELECT ts, data_bytes
-            FROM public.can_frame
-            WHERE id = ${}::int4"#,
-        source_id_param
-    ));
-
-    // Add extended filter to source_frames if specified
-    if is_extended.is_some() {
-        query.push_str(&format!(" AND extended = ${}::bool", extended_param));
-    }
-
-    // Add same time bounds to source_frames CTE (reuse same param indices)
-    if start_time.is_some() {
-        query.push_str(&format!(" AND ts >= (${}::text)::timestamptz", start_time_param));
-    }
-    if end_time.is_some() {
-        query.push_str(&format!(" AND ts < (${}::text)::timestamptz", end_time_param));
-    }
-
-    query.push_str(&format!(
-        r#"
-        )
-        SELECT
-            (EXTRACT(EPOCH FROM m.ts) * 1000000)::float8 as mirror_ts,
-            (EXTRACT(EPOCH FROM s.ts) * 1000000)::float8 as source_ts,
-            m.data_bytes as mirror_payload,
-            s.data_bytes as source_payload
-        FROM mirror_frames m
-        JOIN source_frames s
-            ON ABS(EXTRACT(EPOCH FROM (m.ts - s.ts)) * 1000) < ${}::int4
-        WHERE m.data_bytes IS DISTINCT FROM s.data_bytes
-        ORDER BY m.ts
-        LIMIT {}
-        "#,
-        tolerance_param,
-        result_limit
-    ));
-
-    tlog!("[dbquery] Executing mirror validation query");
-
-    let rows = client
-        .query(&query, &params)
-        .await
-        .map_err(|e| format!("Query failed: {}", e))?;
-
-    let rows_scanned = rows.len();
-    tlog!("[dbquery] Query returned {} mismatch rows", rows_scanned);
-
-    // Parse results and compute mismatch indices
-    let mut results = Vec::new();
-    for row in &rows {
-        let mirror_timestamp_us: f64 = row.get("mirror_ts");
-        let source_timestamp_us: f64 = row.get("source_ts");
-        let mirror_payload: Vec<u8> = row.get("mirror_payload");
-        let source_payload: Vec<u8> = row.get("source_payload");
-
-        // The SQL only knows the payloads differ somewhere; restricting to the
-        // inherited bytes can leave nothing, in which case this row is not a
-        // mismatch at all.
-        let mismatch_indices =
-            differing_byte_indices(&mirror_payload, &source_payload, compare.as_ref());
-        if mismatch_indices.is_empty() {
-            continue;
-        }
-
-        results.push(MirrorValidationResult {
-            mirror_timestamp_us: mirror_timestamp_us as i64,
-            source_timestamp_us: source_timestamp_us as i64,
-            mirror_payload,
-            source_payload,
-            mismatch_indices,
-        });
-    }
-
-    let execution_time_ms = query_start.elapsed().as_millis() as u64;
-    tlog!("[dbquery] mirror_validation: mirror=0x{:X} source=0x{:X} ext={:?} | {} mismatches, {}ms",
-        mirror_frame_id, source_frame_id, is_extended, results.len(), execution_time_ms);
-
-    unregister_query(&query_id).await;
-
-    Ok(MirrorValidationQueryResult {
-        stats: QueryStats {
-            rows_scanned,
-            results_count: results.len(),
-            execution_time_ms,
-        },
-        results,
-    })
+    let profile = backend_profile(&app, &profile_id).await?;
+    crate::apiclient::mirror_validation(
+        &profile,
+        mirror_frame_id,
+        source_frame_id,
+        is_extended,
+        tolerance_ms,
+        start_time,
+        end_time,
+        limit,
+        query_id_or("mirror_validation", query_id),
+        compare_index_set(compare_byte_indices),
+    )
+    .await
 }
 
-/// Query pg_stat_activity for running queries and active sessions
-///
-/// Returns information about queries currently running on the database
-/// and all active sessions (connections).
 #[tauri::command]
 pub async fn db_query_activity(
     app: AppHandle,
     profile_id: String,
 ) -> Result<DatabaseActivityResult, String> {
-    tlog!("[dbquery] db_query_activity called for profile '{}'", profile_id);
-
-    // Load settings to get profile
-    let settings = load_settings(app).await.map_err(|e| format!("Failed to load settings: {}", e))?;
-
-    let profile = find_profile(&settings, &profile_id)
-        .ok_or_else(|| format!("Profile not found: {}", profile_id))?;
-
-    if profile.kind == "wiretap" {
-        return crate::apiclient::activity(&profile).await;
-    }
-    if profile.kind != "postgres" {
-        return Err("Profile is not a PostgreSQL profile".to_string());
-    }
-
-    // Get password and connect
-    let password = get_profile_password(&profile);
-    let conn_str = build_connection_string(&profile, password);
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
-        .await
-        .map_err(|e| format!("Failed to connect to database: {}", e))?;
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            tlog!("PostgreSQL connection error: {}", e);
-        }
-    });
-
-    // Get the database name from the profile for filtering
-    let database_name = profile.connection.get("database")
-        .and_then(|v| v.as_str())
-        .unwrap_or("wiretap");
-
-    // Query pg_stat_activity for this database
-    // We filter to the specific database and show both active queries and idle sessions
-    let query = r#"
-        SELECT
-            pid,
-            datname as database,
-            usename as username,
-            application_name,
-            client_addr::text,
-            state,
-            LEFT(query, 500) as query,
-            query_start::text,
-            EXTRACT(EPOCH FROM (now() - query_start))::float8 as duration_secs,
-            pg_backend_pid() = pid as is_own_connection
-        FROM pg_stat_activity
-        WHERE datname = $1
-          AND pid != pg_backend_pid()
-        ORDER BY
-            CASE WHEN state = 'active' THEN 0 ELSE 1 END,
-            query_start DESC NULLS LAST
-    "#;
-
-    let rows = client
-        .query(query, &[&database_name])
-        .await
-        .map_err(|e| format!("Query failed: {}", e))?;
-
-    let mut queries = Vec::new();
-    let mut sessions = Vec::new();
-
-    for row in &rows {
-        let state: Option<String> = row.get("state");
-        let is_active = state.as_deref() == Some("active");
-
-        let activity = DatabaseActivity {
-            pid: row.get("pid"),
-            database: row.get("database"),
-            username: row.get("username"),
-            application_name: row.get("application_name"),
-            client_addr: row.get("client_addr"),
-            state: state.clone(),
-            query: row.get("query"),
-            query_start: row.get("query_start"),
-            duration_secs: row.get("duration_secs"),
-            // Users can cancel any query in the same database they have access to
-            is_cancellable: is_active,
-        };
-
-        if is_active {
-            queries.push(activity);
-        } else {
-            sessions.push(activity);
-        }
-    }
-
-    tlog!("[dbquery] Found {} active queries, {} idle sessions for database '{}'",
-        queries.len(), sessions.len(), database_name);
-
-    Ok(DatabaseActivityResult { queries, sessions })
+    let profile = backend_profile(&app, &profile_id).await?;
+    crate::apiclient::activity(&profile).await
 }
 
-/// Cancel a running query by backend PID using pg_cancel_backend
-///
-/// This sends a SIGINT to the backend process, which will cancel the current query
-/// but keep the connection alive.
 #[tauri::command]
 pub async fn db_cancel_backend(
     app: AppHandle,
     profile_id: String,
     pid: i32,
 ) -> Result<bool, String> {
-    tlog!("[dbquery] db_cancel_backend called for pid {} on profile '{}'", pid, profile_id);
-
-    // Load settings to get profile
-    let settings = load_settings(app).await.map_err(|e| format!("Failed to load settings: {}", e))?;
-
-    let profile = find_profile(&settings, &profile_id)
-        .ok_or_else(|| format!("Profile not found: {}", profile_id))?;
-
-    if profile.kind == "wiretap" {
-        return crate::apiclient::signal_backend(&profile, pid, false).await;
-    }
-    if profile.kind != "postgres" {
-        return Err("Profile is not a PostgreSQL profile".to_string());
-    }
-
-    // Get password and connect
-    let password = get_profile_password(&profile);
-    let conn_str = build_connection_string(&profile, password);
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
-        .await
-        .map_err(|e| format!("Failed to connect to database: {}", e))?;
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            tlog!("PostgreSQL connection error: {}", e);
-        }
-    });
-
-    // Use pg_cancel_backend to cancel the query
-    // This is safer than pg_terminate_backend as it only cancels the current query
-    let row = client
-        .query_one("SELECT pg_cancel_backend($1)", &[&pid])
-        .await
-        .map_err(|e| format!("Failed to cancel backend: {}", e))?;
-
-    let cancelled: bool = row.get(0);
-    tlog!("[dbquery] pg_cancel_backend({}) returned: {}", pid, cancelled);
-
-    Ok(cancelled)
+    let profile = backend_profile(&app, &profile_id).await?;
+    crate::apiclient::signal_backend(&profile, pid, false).await
 }
 
-/// Terminate a backend session by PID using pg_terminate_backend
-///
-/// This terminates the entire connection, not just the current query.
-/// Use with caution.
 #[tauri::command]
 pub async fn db_terminate_backend(
     app: AppHandle,
     profile_id: String,
     pid: i32,
 ) -> Result<bool, String> {
-    tlog!("[dbquery] db_terminate_backend called for pid {} on profile '{}'", pid, profile_id);
-
-    // Load settings to get profile
-    let settings = load_settings(app).await.map_err(|e| format!("Failed to load settings: {}", e))?;
-
-    let profile = find_profile(&settings, &profile_id)
-        .ok_or_else(|| format!("Profile not found: {}", profile_id))?;
-
-    if profile.kind == "wiretap" {
-        return crate::apiclient::signal_backend(&profile, pid, true).await;
-    }
-    if profile.kind != "postgres" {
-        return Err("Profile is not a PostgreSQL profile".to_string());
-    }
-
-    // Get password and connect
-    let password = get_profile_password(&profile);
-    let conn_str = build_connection_string(&profile, password);
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
-        .await
-        .map_err(|e| format!("Failed to connect to database: {}", e))?;
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            tlog!("PostgreSQL connection error: {}", e);
-        }
-    });
-
-    // Use pg_terminate_backend to terminate the connection
-    let row = client
-        .query_one("SELECT pg_terminate_backend($1)", &[&pid])
-        .await
-        .map_err(|e| format!("Failed to terminate backend: {}", e))?;
-
-    let terminated: bool = row.get(0);
-    tlog!("[dbquery] pg_terminate_backend({}) returned: {}", pid, terminated);
-
-    Ok(terminated)
+    let profile = backend_profile(&app, &profile_id).await?;
+    crate::apiclient::signal_backend(&profile, pid, true).await
 }
 
-/// Query mux statistics for a multiplexed frame.
-///
-/// Fetches payloads from PostgreSQL, groups by mux selector byte, and computes
-/// per-byte and optional 16-bit word statistics for each mux case.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn db_query_mux_statistics(
     app: AppHandle,
     profile_id: String,
@@ -1495,228 +605,22 @@ pub async fn db_query_mux_statistics(
     limit: Option<u32>,
     query_id: Option<String>,
 ) -> Result<MuxStatisticsQueryResult, String> {
-    let query_start = std::time::Instant::now();
-    let result_limit = limit.unwrap_or(500_000);
-    let query_id = query_id.unwrap_or_else(|| format!("mux_stats_{}", query_start.elapsed().as_nanos()));
-
-    tlog!("[dbquery] db_query_mux_statistics: profile='{}', frame_id={}, mux_byte={}, limit={}",
-        profile_id, frame_id, mux_selector_byte, result_limit);
-
-    let settings = load_settings(app).await.map_err(|e| format!("Failed to load settings: {}", e))?;
-    let profile = find_profile(&settings, &profile_id)
-        .ok_or_else(|| format!("Profile not found: {}", profile_id))?;
-
-    if profile.kind == "wiretap" {
-        return crate::apiclient::mux_statistics(&profile, frame_id, mux_selector_byte, is_extended, include_16bit, payload_length, start_time, end_time, limit, query_id).await;
-    }
-    if profile.kind != "postgres" {
-        return Err("Profile is not a PostgreSQL profile".to_string());
-    }
-
-    let password = get_profile_password(&profile);
-    let conn_str = build_connection_string(&profile, password);
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
-        .await
-        .map_err(|e| format!("Failed to connect to database: {}", e))?;
-
-    let cancel_token = client.cancel_token();
-    register_query(&query_id, "mux_statistics", &profile_id, cancel_token).await;
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            tlog!("PostgreSQL connection error: {}", e);
-        }
-    });
-
-    // All aggregation happens in SQL — only per-case statistics cross the
-    // wire, not raw payloads. The shared source subquery samples the first
-    // `result_limit` frames in time order (deterministic across the three
-    // statements) so cost stays bounded on very busy IDs.
-    let frame_id_i32 = frame_id as i32;
-    let mux = mux_selector_byte as i32;
-    let plen = payload_length as i32;
-
-    let mut src = String::from(
-        "SELECT data_bytes FROM public.can_frame WHERE id = $1::int4",
-    );
-    let mut param_idx = 2;
-    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&frame_id_i32];
-
-    let is_extended_bool: bool;
-    if let Some(ext) = is_extended {
-        is_extended_bool = ext;
-        src.push_str(&format!(" AND extended = ${}::bool", param_idx));
-        param_idx += 1;
-        params.push(&is_extended_bool);
-    }
-
-    if let Some(ref start) = start_time {
-        src.push_str(&format!(" AND ts >= (${}::text)::timestamptz", param_idx));
-        param_idx += 1;
-        params.push(start as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
-    if let Some(ref end) = end_time {
-        src.push_str(&format!(" AND ts < (${}::text)::timestamptz", param_idx));
-        params.push(end as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
-
-    src.push_str(&format!(
-        " AND octet_length(data_bytes) > {} ORDER BY ts LIMIT {}",
-        mux, result_limit
-    ));
-
-    // Query 1: frame count per mux case
-    let count_query = format!(
-        "SELECT public.get_byte_safe(data_bytes, {mux})::int4 AS mux_value, \
-         COUNT(*)::int8 AS frame_count \
-         FROM ({src}) s GROUP BY 1 ORDER BY 1"
-    );
-
-    // Query 2: per-byte stats per mux case for bytes after the selector
-    let byte_query = format!(
-        "SELECT public.get_byte_safe(data_bytes, {mux})::int4 AS mux_value, \
-         b.idx::int4 AS byte_index, \
-         MIN(public.get_byte_safe(data_bytes, b.idx))::int4 AS min, \
-         MAX(public.get_byte_safe(data_bytes, b.idx))::int4 AS max, \
-         AVG(public.get_byte_safe(data_bytes, b.idx))::float8 AS avg, \
-         COUNT(DISTINCT public.get_byte_safe(data_bytes, b.idx))::int8 AS distinct_count, \
-         COUNT(public.get_byte_safe(data_bytes, b.idx))::int8 AS sample_count \
-         FROM ({src}) s \
-         CROSS JOIN generate_series({start_b}, {end_b}) AS b(idx) \
-         GROUP BY 1, 2 \
-         HAVING COUNT(public.get_byte_safe(data_bytes, b.idx)) > 0 \
-         ORDER BY 1, 2",
-        start_b = mux + 1,
-        end_b = plen - 1,
-    );
-
-    tlog!("[dbquery] mux_statistics byte query:\n{}", byte_query);
-
-    let count_rows = client
-        .query(&count_query, &params)
-        .await
-        .map_err(|e| {
-            let err = format!("Query failed: {}", e);
-            tlog!("[dbquery] {}", err);
-            err
-        })?;
-    let byte_rows = client
-        .query(&byte_query, &params)
-        .await
-        .map_err(|e| format!("Byte stats query failed: {}", e))?;
-
-    let mut cases: BTreeMap<u16, MuxCaseStats> = BTreeMap::new();
-    let mut total_frames: u64 = 0;
-    for row in &count_rows {
-        let mux_value: i32 = row.get("mux_value");
-        let frame_count: i64 = row.get("frame_count");
-        total_frames += frame_count as u64;
-        cases.insert(
-            mux_value as u16,
-            MuxCaseStats {
-                mux_value: mux_value as u16,
-                frame_count: frame_count as u64,
-                byte_stats: Vec::new(),
-                word16_stats: Vec::new(),
-            },
-        );
-    }
-
-    for row in &byte_rows {
-        let mux_value: i32 = row.get("mux_value");
-        if let Some(case) = cases.get_mut(&(mux_value as u16)) {
-            case.byte_stats.push(BytePositionStats {
-                byte_index: row.get::<_, i32>("byte_index") as u8,
-                min: row.get::<_, i32>("min") as u8,
-                max: row.get::<_, i32>("max") as u8,
-                avg: row.get("avg"),
-                distinct_count: row.get::<_, i64>("distinct_count") as u32,
-                sample_count: row.get::<_, i64>("sample_count") as u64,
-            });
-        }
-    }
-
-    // Query 3 (optional): 16-bit words from adjacent byte pairs, LE and BE
-    if include_16bit {
-        let word_query = format!(
-            "SELECT mux_value::int4, start_byte::int4, \
-             MIN(le_val)::int4 AS le_min, MAX(le_val)::int4 AS le_max, \
-             AVG(le_val)::float8 AS le_avg, COUNT(DISTINCT le_val)::int8 AS le_distinct, \
-             MIN(be_val)::int4 AS be_min, MAX(be_val)::int4 AS be_max, \
-             AVG(be_val)::float8 AS be_avg, COUNT(DISTINCT be_val)::int8 AS be_distinct \
-             FROM (SELECT public.get_byte_safe(data_bytes, {mux}) AS mux_value, \
-                   w.idx AS start_byte, \
-                   public.get_byte_safe(data_bytes, w.idx) | \
-                   (public.get_byte_safe(data_bytes, w.idx + 1) << 8) AS le_val, \
-                   (public.get_byte_safe(data_bytes, w.idx) << 8) | \
-                   public.get_byte_safe(data_bytes, w.idx + 1) AS be_val \
-                   FROM ({src}) s \
-                   CROSS JOIN generate_series({start_b}, {end_b}, 2) AS w(idx)) t \
-             GROUP BY 1, 2 \
-             HAVING COUNT(le_val) > 0 \
-             ORDER BY 1, 2",
-            start_b = mux + 1,
-            end_b = plen - 2,
-        );
-
-        let word_rows = client
-            .query(&word_query, &params)
-            .await
-            .map_err(|e| format!("Word stats query failed: {}", e))?;
-
-        for row in &word_rows {
-            let mux_value: i32 = row.get("mux_value");
-            if let Some(case) = cases.get_mut(&(mux_value as u16)) {
-                let start_byte = row.get::<_, i32>("start_byte") as u8;
-                case.word16_stats.push(Word16Stats {
-                    start_byte,
-                    endianness: "le".to_string(),
-                    min: row.get::<_, i32>("le_min") as u16,
-                    max: row.get::<_, i32>("le_max") as u16,
-                    avg: row.get("le_avg"),
-                    distinct_count: row.get::<_, i64>("le_distinct") as u32,
-                });
-                case.word16_stats.push(Word16Stats {
-                    start_byte,
-                    endianness: "be".to_string(),
-                    min: row.get::<_, i32>("be_min") as u16,
-                    max: row.get::<_, i32>("be_max") as u16,
-                    avg: row.get("be_avg"),
-                    distinct_count: row.get::<_, i64>("be_distinct") as u32,
-                });
-            }
-        }
-    }
-
-    // Unregister before assembling (queries are done)
-    unregister_query(&query_id).await;
-
-    let rows_scanned = total_frames as usize;
-    let result = MuxStatisticsResult {
-        mux_byte: mux_selector_byte,
-        total_frames,
-        cases: cases.into_values().collect(),
-    };
-    let elapsed = query_start.elapsed();
-
-    tlog!("[dbquery] mux_statistics: {} cases, {} total frames in {}ms",
-        result.cases.len(), result.total_frames, elapsed.as_millis());
-
-    Ok(MuxStatisticsQueryResult {
-        stats: QueryStats {
-            rows_scanned,
-            results_count: result.cases.len(),
-            execution_time_ms: elapsed.as_millis() as u64,
-        },
-        results: result,
-    })
+    let profile = backend_profile(&app, &profile_id).await?;
+    crate::apiclient::mux_statistics(
+        &profile,
+        frame_id,
+        mux_selector_byte,
+        is_extended,
+        include_16bit,
+        payload_length,
+        start_time,
+        end_time,
+        limit,
+        query_id_or("mux_statistics", query_id),
+    )
+    .await
 }
 
-/// Query for the first and last frame of a given ID, plus total count.
-///
-/// Returns the earliest payload, latest payload, their timestamps, and the
-/// total number of frames matching the filter.
 #[tauri::command]
 pub async fn db_query_first_last(
     app: AppHandle,
@@ -1727,151 +631,20 @@ pub async fn db_query_first_last(
     end_time: Option<String>,
     query_id: Option<String>,
 ) -> Result<FirstLastQueryResult, String> {
-    let query_start = std::time::Instant::now();
-    let query_id = query_id.unwrap_or_else(|| format!("first_last_{}", query_start.elapsed().as_nanos()));
-
-    tlog!("[dbquery] db_query_first_last: profile='{}', frame_id={}, is_extended={:?}",
-        profile_id, frame_id, is_extended);
-
-    // Load settings to get profile
-    let settings = load_settings(app).await.map_err(|e| format!("Failed to load settings: {}", e))?;
-    let profile = find_profile(&settings, &profile_id)
-        .ok_or_else(|| format!("Profile not found: {}", profile_id))?;
-
-    if profile.kind == "wiretap" {
-        return crate::apiclient::first_last(&profile, frame_id, is_extended, start_time, end_time, query_id).await;
-    }
-    if profile.kind != "postgres" {
-        return Err("Profile is not a PostgreSQL profile".to_string());
-    }
-
-    // Get password and connect
-    let password = get_profile_password(&profile);
-    let conn_str = build_connection_string(&profile, password);
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
-        .await
-        .map_err(|e| {
-            tlog!("[dbquery] Connection failed: {:?}", e);
-            format!("Failed to connect to database: {}", e)
-        })?;
-
-    let cancel_token = client.cancel_token();
-    register_query(&query_id, "first_last", &profile_id, cancel_token).await;
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            tlog!("PostgreSQL connection error: {}", e);
-        }
-    });
-
-    // Set application name
-    client
-        .execute("SET application_name = 'WireTAP Query'", &[])
-        .await
-        .ok();
-
-    let frame_id_i32 = frame_id as i32;
-
-    // Build WHERE clause (shared by all three queries)
-    let mut where_clause = String::from("WHERE id = $1::int4");
-    let mut param_idx = 2;
-    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&frame_id_i32];
-
-    let is_extended_bool: bool;
-    if let Some(ext) = is_extended {
-        is_extended_bool = ext;
-        where_clause.push_str(&format!(" AND extended = ${}::bool", param_idx));
-        param_idx += 1;
-        params.push(&is_extended_bool);
-    }
-
-    if let Some(ref start) = start_time {
-        where_clause.push_str(&format!(" AND ts >= (${}::text)::timestamptz", param_idx));
-        param_idx += 1;
-        params.push(start as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
-    if let Some(ref end) = end_time {
-        where_clause.push_str(&format!(" AND ts < (${}::text)::timestamptz", param_idx));
-        params.push(end as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
-
-    // Query 1: first frame
-    let first_query = format!(
-        "SELECT (EXTRACT(EPOCH FROM ts) * 1000000)::float8 as timestamp_us, data_bytes FROM public.can_frame {} ORDER BY ts ASC LIMIT 1",
-        where_clause
-    );
-
-    tlog!("[dbquery] first_last: executing first query");
-    let first_rows = client
-        .query(&first_query, &params)
-        .await
-        .map_err(|e| format!("First query failed: {}", e))?;
-
-    if first_rows.is_empty() {
-        unregister_query(&query_id).await;
-        return Err("No frames found matching the filter".to_string());
-    }
-
-    let first_timestamp_us: f64 = first_rows[0].get("timestamp_us");
-    let first_payload: Vec<u8> = first_rows[0].get("data_bytes");
-
-    // Query 2: last frame
-    let last_query = format!(
-        "SELECT (EXTRACT(EPOCH FROM ts) * 1000000)::float8 as timestamp_us, data_bytes FROM public.can_frame {} ORDER BY ts DESC LIMIT 1",
-        where_clause
-    );
-
-    tlog!("[dbquery] first_last: executing last query");
-    let last_rows = client
-        .query(&last_query, &params)
-        .await
-        .map_err(|e| format!("Last query failed: {}", e))?;
-
-    let last_timestamp_us: f64 = last_rows[0].get("timestamp_us");
-    let last_payload: Vec<u8> = last_rows[0].get("data_bytes");
-
-    // Query 3: count
-    let count_query = format!(
-        "SELECT COUNT(*) as count FROM public.can_frame {}",
-        where_clause
-    );
-
-    tlog!("[dbquery] first_last: executing count query");
-    let count_rows = client
-        .query(&count_query, &params)
-        .await
-        .map_err(|e| format!("Count query failed: {}", e))?;
-
-    let total_count: i64 = count_rows[0].get("count");
-
-    let execution_time_ms = query_start.elapsed().as_millis() as u64;
-    tlog!("[dbquery] first_last: frame=0x{:X} ext={:?} | count={}, {}ms",
-        frame_id, is_extended, total_count, execution_time_ms);
-
-    unregister_query(&query_id).await;
-
-    Ok(FirstLastQueryResult {
-        stats: QueryStats {
-            rows_scanned: 3, // 3 queries executed
-            results_count: 1,
-            execution_time_ms,
-        },
-        results: FirstLastResult {
-            first_timestamp_us: first_timestamp_us as i64,
-            first_payload,
-            last_timestamp_us: last_timestamp_us as i64,
-            last_payload,
-            total_count,
-        },
-    })
+    let profile = backend_profile(&app, &profile_id).await?;
+    crate::apiclient::first_last(
+        &profile,
+        frame_id,
+        is_extended,
+        start_time,
+        end_time,
+        query_id_or("first_last", query_id),
+    )
+    .await
 }
 
-/// Query frame frequency / interval statistics bucketed over time.
-///
-/// Fetches timestamps for the given frame ID, computes inter-frame intervals
-/// in Rust, then groups them into time buckets with min/max/avg statistics.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn db_query_frequency(
     app: AppHandle,
     profile_id: String,
@@ -1883,136 +656,22 @@ pub async fn db_query_frequency(
     limit: Option<u32>,
     query_id: Option<String>,
 ) -> Result<FrequencyQueryResult, String> {
-    let query_start = std::time::Instant::now();
-    let result_limit = limit.unwrap_or(500_000);
-    let query_id = query_id.unwrap_or_else(|| format!("frequency_{}", query_start.elapsed().as_nanos()));
-
-    tlog!("[dbquery] db_query_frequency: profile='{}', frame_id={}, bucket_size_ms={}, is_extended={:?}, limit={}",
-        profile_id, frame_id, bucket_size_ms, is_extended, result_limit);
-
-    // Load settings to get profile
-    let settings = load_settings(app).await.map_err(|e| format!("Failed to load settings: {}", e))?;
-    let profile = find_profile(&settings, &profile_id)
-        .ok_or_else(|| format!("Profile not found: {}", profile_id))?;
-
-    if profile.kind == "wiretap" {
-        return crate::apiclient::frequency(&profile, frame_id, is_extended, bucket_size_ms, start_time, end_time, limit, query_id).await;
-    }
-    if profile.kind != "postgres" {
-        return Err("Profile is not a PostgreSQL profile".to_string());
-    }
-
-    let password = get_profile_password(&profile);
-    let conn_str = build_connection_string(&profile, password);
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
-        .await
-        .map_err(|e| {
-            tlog!("[dbquery] Connection failed: {:?}", e);
-            format!("Failed to connect to database: {}", e)
-        })?;
-
-    let cancel_token = client.cancel_token();
-    register_query(&query_id, "frequency", &profile_id, cancel_token).await;
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            tlog!("PostgreSQL connection error: {}", e);
-        }
-    });
-
-    // Set application name
-    client
-        .execute("SET application_name = 'WireTAP Query'", &[])
-        .await
-        .ok();
-
-    let frame_id_i32 = frame_id as i32;
-
-    // Intervals (LAG) and bucket statistics are computed in SQL — only one
-    // row per bucket crosses the wire instead of every timestamp. The source
-    // subquery keeps the old sampling semantics (first `result_limit` frames
-    // in time order). Bucketing by trunc(timestamp_us / bucket_us) matches
-    // the previous Rust implementation exactly.
-    let mut src = String::from("SELECT ts FROM public.can_frame WHERE id = $1::int4");
-    let mut param_idx = 2;
-    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&frame_id_i32];
-
-    let is_extended_bool: bool;
-    if let Some(ext) = is_extended {
-        is_extended_bool = ext;
-        src.push_str(&format!(" AND extended = ${}::bool", param_idx));
-        param_idx += 1;
-        params.push(&is_extended_bool);
-    }
-
-    if let Some(ref start) = start_time {
-        src.push_str(&format!(" AND ts >= (${}::text)::timestamptz", param_idx));
-        param_idx += 1;
-        params.push(start as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
-    if let Some(ref end) = end_time {
-        src.push_str(&format!(" AND ts < (${}::text)::timestamptz", param_idx));
-        params.push(end as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
-
-    src.push_str(&format!(" ORDER BY ts LIMIT {}", result_limit));
-
-    let bucket_us = bucket_size_ms as i64 * 1000;
-    let query = format!(
-        "SELECT (trunc((EXTRACT(EPOCH FROM ts) * 1000000) / {bucket_us}) * {bucket_us})::float8 AS bucket_start_us, \
-         COUNT(*)::int8 AS frame_count, \
-         MIN(dt_us)::float8 AS min_interval_us, \
-         MAX(dt_us)::float8 AS max_interval_us, \
-         AVG(dt_us)::float8 AS avg_interval_us \
-         FROM (SELECT ts, EXTRACT(EPOCH FROM ts - LAG(ts) OVER (ORDER BY ts)) * 1000000 AS dt_us \
-               FROM ({src}) f) s \
-         WHERE dt_us IS NOT NULL \
-         GROUP BY 1 ORDER BY 1"
-    );
-
-    tlog!("[dbquery] frequency query:\n{}", query);
-
-    let rows = client
-        .query(&query, &params)
-        .await
-        .map_err(|e| format!("Query failed: {}", e))?;
-
-    let mut results = Vec::new();
-    let mut rows_scanned: usize = 0;
-    for row in &rows {
-        let frame_count: i64 = row.get("frame_count");
-        rows_scanned += frame_count as usize;
-        results.push(FrequencyBucket {
-            bucket_start_us: row.get::<_, f64>("bucket_start_us") as i64,
-            frame_count,
-            min_interval_us: row.get("min_interval_us"),
-            max_interval_us: row.get("max_interval_us"),
-            avg_interval_us: row.get("avg_interval_us"),
-        });
-    }
-
-    let execution_time_ms = query_start.elapsed().as_millis() as u64;
-    tlog!("[dbquery] frequency: frame=0x{:X} ext={:?} | {} buckets from {} intervals, {}ms",
-        frame_id, is_extended, results.len(), rows_scanned, execution_time_ms);
-
-    unregister_query(&query_id).await;
-
-    Ok(FrequencyQueryResult {
-        stats: QueryStats {
-            rows_scanned,
-            results_count: results.len(),
-            execution_time_ms,
-        },
-        results,
-    })
+    let profile = backend_profile(&app, &profile_id).await?;
+    crate::apiclient::frequency(
+        &profile,
+        frame_id,
+        is_extended,
+        bucket_size_ms,
+        start_time,
+        end_time,
+        limit,
+        query_id_or("frequency", query_id),
+    )
+    .await
 }
 
-/// Query byte value distribution for a specific byte position in a frame.
-///
-/// Returns the count and percentage of each distinct byte value observed
-/// at the given byte index, ordered by frequency.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn db_query_distribution(
     app: AppHandle,
     profile_id: String,
@@ -2023,140 +682,21 @@ pub async fn db_query_distribution(
     end_time: Option<String>,
     query_id: Option<String>,
 ) -> Result<DistributionQueryResult, String> {
-    let query_start = std::time::Instant::now();
-    let query_id = query_id.unwrap_or_else(|| format!("distribution_{}", query_start.elapsed().as_nanos()));
-
-    tlog!("[dbquery] db_query_distribution: profile='{}', frame_id={}, byte_index={}, is_extended={:?}",
-        profile_id, frame_id, byte_index, is_extended);
-
-    // Load settings to get profile
-    let settings = load_settings(app).await.map_err(|e| format!("Failed to load settings: {}", e))?;
-    let profile = find_profile(&settings, &profile_id)
-        .ok_or_else(|| format!("Profile not found: {}", profile_id))?;
-
-    if profile.kind == "wiretap" {
-        return crate::apiclient::distribution(&profile, frame_id, byte_index, is_extended, start_time, end_time, query_id).await;
-    }
-    if profile.kind != "postgres" {
-        return Err("Profile is not a PostgreSQL profile".to_string());
-    }
-
-    let password = get_profile_password(&profile);
-    let conn_str = build_connection_string(&profile, password);
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
-        .await
-        .map_err(|e| {
-            tlog!("[dbquery] Connection failed: {:?}", e);
-            format!("Failed to connect to database: {}", e)
-        })?;
-
-    let cancel_token = client.cancel_token();
-    register_query(&query_id, "distribution", &profile_id, cancel_token).await;
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            tlog!("PostgreSQL connection error: {}", e);
-        }
-    });
-
-    // Set application name
-    client
-        .execute("SET application_name = 'WireTAP Query'", &[])
-        .await
-        .ok();
-
-    let frame_id_i32 = frame_id as i32;
-    let byte_index_i32 = byte_index as i32;
-
-    // Build query
-    let mut param_idx = 1;
-    let frame_id_param = param_idx;
-    param_idx += 1;
-    let byte_index_param = param_idx;
-    param_idx += 1;
-
-    let mut query = format!(
-        "SELECT public.get_byte_safe(data_bytes, ${}::int4) as value, COUNT(*) as count FROM public.can_frame WHERE id = ${}::int4",
-        byte_index_param, frame_id_param
-    );
-
-    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&frame_id_i32, &byte_index_i32];
-
-    let is_extended_bool: bool;
-    if let Some(ext) = is_extended {
-        is_extended_bool = ext;
-        query.push_str(&format!(" AND extended = ${}::bool", param_idx));
-        param_idx += 1;
-        params.push(&is_extended_bool);
-    }
-
-    if let Some(ref start) = start_time {
-        query.push_str(&format!(" AND ts >= (${}::text)::timestamptz", param_idx));
-        param_idx += 1;
-        params.push(start as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
-    if let Some(ref end) = end_time {
-        query.push_str(&format!(" AND ts < (${}::text)::timestamptz", param_idx));
-        params.push(end as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
-
-    query.push_str(" GROUP BY value ORDER BY count DESC");
-
-    tlog!("[dbquery] distribution query:\n{}", query);
-
-    let rows = client
-        .query(&query, &params)
-        .await
-        .map_err(|e| format!("Query failed: {}", e))?;
-
-    let rows_scanned = rows.len();
-    tlog!("[dbquery] distribution: {} distinct values", rows_scanned);
-
-    // Parse results and compute percentages
-    let mut results: Vec<DistributionResult> = Vec::new();
-    let mut total_count: i64 = 0;
-
-    for row in &rows {
-        let value: i32 = row.get("value");
-        let count: i64 = row.get("count");
-        total_count += count;
-        results.push(DistributionResult {
-            value: value as u8,
-            count,
-            percentage: 0.0, // computed below
-        });
-    }
-
-    // Compute percentages
-    if total_count > 0 {
-        for result in &mut results {
-            result.percentage = (result.count as f64 / total_count as f64) * 100.0;
-        }
-    }
-
-    let execution_time_ms = query_start.elapsed().as_millis() as u64;
-    tlog!("[dbquery] distribution: frame=0x{:X} byte={} ext={:?} | {} values, total={}, {}ms",
-        frame_id, byte_index, is_extended, results.len(), total_count, execution_time_ms);
-
-    unregister_query(&query_id).await;
-
-    Ok(DistributionQueryResult {
-        stats: QueryStats {
-            rows_scanned,
-            results_count: results.len(),
-            execution_time_ms,
-        },
-        results,
-    })
+    let profile = backend_profile(&app, &profile_id).await?;
+    crate::apiclient::distribution(
+        &profile,
+        frame_id,
+        byte_index,
+        is_extended,
+        start_time,
+        end_time,
+        query_id_or("distribution", query_id),
+    )
+    .await
 }
 
-/// Query for gaps in frame transmission exceeding a threshold.
-///
-/// Fetches timestamps for the given frame ID, finds consecutive pairs where
-/// the interval exceeds the threshold, and returns them sorted by duration
-/// (longest gaps first).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn db_query_gap_analysis(
     app: AppHandle,
     profile_id: String,
@@ -2168,126 +708,22 @@ pub async fn db_query_gap_analysis(
     limit: Option<u32>,
     query_id: Option<String>,
 ) -> Result<GapAnalysisQueryResult, String> {
-    let query_start = std::time::Instant::now();
-    let result_limit = limit.unwrap_or(10000) as usize;
-    let query_id = query_id.unwrap_or_else(|| format!("gap_analysis_{}", query_start.elapsed().as_nanos()));
-
-    tlog!("[dbquery] db_query_gap_analysis: profile='{}', frame_id={}, threshold={}ms, is_extended={:?}",
-        profile_id, frame_id, gap_threshold_ms, is_extended);
-
-    // Load settings to get profile
-    let settings = load_settings(app).await.map_err(|e| format!("Failed to load settings: {}", e))?;
-    let profile = find_profile(&settings, &profile_id)
-        .ok_or_else(|| format!("Profile not found: {}", profile_id))?;
-
-    if profile.kind == "wiretap" {
-        return crate::apiclient::gap_analysis(&profile, frame_id, is_extended, gap_threshold_ms, start_time, end_time, limit, query_id).await;
-    }
-    if profile.kind != "postgres" {
-        return Err("Profile is not a PostgreSQL profile".to_string());
-    }
-
-    let password = get_profile_password(&profile);
-    let conn_str = build_connection_string(&profile, password);
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
-        .await
-        .map_err(|e| {
-            tlog!("[dbquery] Connection failed: {:?}", e);
-            format!("Failed to connect to database: {}", e)
-        })?;
-
-    let cancel_token = client.cancel_token();
-    register_query(&query_id, "gap_analysis", &profile_id, cancel_token).await;
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            tlog!("PostgreSQL connection error: {}", e);
-        }
-    });
-
-    // Set application name
-    client
-        .execute("SET application_name = 'WireTAP Query'", &[])
-        .await
-        .ok();
-
-    let frame_id_i32 = frame_id as i32;
-
-    // Gaps are found in SQL (LAG + threshold filter) — only the gaps that
-    // exceed the threshold cross the wire, instead of every timestamp.
-    let mut src = String::from("SELECT ts FROM public.can_frame WHERE id = $1::int4");
-    let mut param_idx = 2;
-    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&frame_id_i32];
-
-    let is_extended_bool: bool;
-    if let Some(ext) = is_extended {
-        is_extended_bool = ext;
-        src.push_str(&format!(" AND extended = ${}::bool", param_idx));
-        param_idx += 1;
-        params.push(&is_extended_bool);
-    }
-
-    if let Some(ref start) = start_time {
-        src.push_str(&format!(" AND ts >= (${}::text)::timestamptz", param_idx));
-        param_idx += 1;
-        params.push(start as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
-    if let Some(ref end) = end_time {
-        src.push_str(&format!(" AND ts < (${}::text)::timestamptz", param_idx));
-        params.push(end as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
-
-    let threshold_param = format!("{:?}", gap_threshold_ms); // f64 -> SQL literal
-    let query = format!(
-        "SELECT (EXTRACT(EPOCH FROM prev_ts) * 1000000)::float8 AS gap_start_us, \
-         (EXTRACT(EPOCH FROM ts) * 1000000)::float8 AS gap_end_us, \
-         (EXTRACT(EPOCH FROM ts - prev_ts) * 1000)::float8 AS duration_ms \
-         FROM (SELECT ts, LAG(ts) OVER (ORDER BY ts) AS prev_ts FROM ({src}) f) s \
-         WHERE prev_ts IS NOT NULL \
-         AND (EXTRACT(EPOCH FROM ts - prev_ts) * 1000)::float8 > {threshold_param} \
-         ORDER BY duration_ms DESC LIMIT {result_limit}"
-    );
-
-    tlog!("[dbquery] gap_analysis query:\n{}", query);
-
-    let rows = client
-        .query(&query, &params)
-        .await
-        .map_err(|e| format!("Query failed: {}", e))?;
-
-    let rows_scanned = rows.len();
-    let results: Vec<GapResult> = rows
-        .iter()
-        .map(|row| GapResult {
-            gap_start_us: row.get::<_, f64>("gap_start_us") as i64,
-            gap_end_us: row.get::<_, f64>("gap_end_us") as i64,
-            duration_ms: row.get("duration_ms"),
-        })
-        .collect();
-
-    let execution_time_ms = query_start.elapsed().as_millis() as u64;
-    tlog!("[dbquery] gap_analysis: frame=0x{:X} ext={:?} threshold={}ms | {} gaps found, {}ms",
-        frame_id, is_extended, gap_threshold_ms, results.len(), execution_time_ms);
-
-    unregister_query(&query_id).await;
-
-    Ok(GapAnalysisQueryResult {
-        stats: QueryStats {
-            rows_scanned,
-            results_count: results.len(),
-            execution_time_ms,
-        },
-        results,
-    })
+    let profile = backend_profile(&app, &profile_id).await?;
+    crate::apiclient::gap_analysis(
+        &profile,
+        frame_id,
+        is_extended,
+        gap_threshold_ms,
+        start_time,
+        end_time,
+        limit,
+        query_id_or("gap_analysis", query_id),
+    )
+    .await
 }
 
-/// Search for frames whose payload matches a byte pattern with a mask.
-///
-/// For each frame, checks all positions where the pattern could fit within
-/// the payload. A byte matches if `(payload[i] & mask[i]) == (pattern[i] & mask[i])`.
-/// Records matching start positions in `match_positions`.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn db_query_pattern_search(
     app: AppHandle,
     profile_id: String,
@@ -2298,147 +734,15 @@ pub async fn db_query_pattern_search(
     limit: Option<u32>,
     query_id: Option<String>,
 ) -> Result<PatternSearchQueryResult, String> {
-    let query_start = std::time::Instant::now();
-    let result_limit = limit.unwrap_or(10000) as usize;
-    let query_id = query_id.unwrap_or_else(|| format!("pattern_search_{}", query_start.elapsed().as_nanos()));
-
-    if pattern.len() != pattern_mask.len() {
-        return Err("Pattern and mask must have the same length".to_string());
-    }
-    if pattern.is_empty() {
-        return Err("Pattern must not be empty".to_string());
-    }
-
-    tlog!("[dbquery] db_query_pattern_search: profile='{}', pattern_len={}, limit={}",
-        profile_id, pattern.len(), result_limit);
-
-    // Load settings to get profile
-    let settings = load_settings(app).await.map_err(|e| format!("Failed to load settings: {}", e))?;
-    let profile = find_profile(&settings, &profile_id)
-        .ok_or_else(|| format!("Profile not found: {}", profile_id))?;
-
-    if profile.kind == "wiretap" {
-        return crate::apiclient::pattern_search(&profile, pattern, pattern_mask, start_time, end_time, limit, query_id).await;
-    }
-    if profile.kind != "postgres" {
-        return Err("Profile is not a PostgreSQL profile".to_string());
-    }
-
-    let password = get_profile_password(&profile);
-    let conn_str = build_connection_string(&profile, password);
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
-        .await
-        .map_err(|e| {
-            tlog!("[dbquery] Connection failed: {:?}", e);
-            format!("Failed to connect to database: {}", e)
-        })?;
-
-    let cancel_token = client.cancel_token();
-    register_query(&query_id, "pattern_search", &profile_id, cancel_token).await;
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            tlog!("PostgreSQL connection error: {}", e);
-        }
-    });
-
-    // Set application name
-    client
-        .execute("SET application_name = 'WireTAP Query'", &[])
-        .await
-        .ok();
-
-    // Build query — fetch all frames in the time range, filter in Rust
-    let mut param_idx = 1;
-    let mut query = String::from(
-        "SELECT (EXTRACT(EPOCH FROM ts) * 1000000)::float8 as timestamp_us, id as frame_id, extended, data_bytes FROM public.can_frame WHERE true"
-    );
-
-    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
-
-    if let Some(ref start) = start_time {
-        query.push_str(&format!(" AND ts >= (${}::text)::timestamptz", param_idx));
-        param_idx += 1;
-        params.push(start as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
-    if let Some(ref end) = end_time {
-        query.push_str(&format!(" AND ts < (${}::text)::timestamptz", param_idx));
-        params.push(end as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
-
-    query.push_str(" ORDER BY ts");
-
-    tlog!("[dbquery] pattern_search query:\n{}", query);
-
-    let rows = client
-        .query(&query, &params)
-        .await
-        .map_err(|e| format!("Query failed: {}", e))?;
-
-    let rows_scanned = rows.len();
-    tlog!("[dbquery] pattern_search: {} rows fetched, filtering in Rust", rows_scanned);
-
-    // Filter rows by pattern match
-    let pattern_len = pattern.len();
-    let mut results: Vec<PatternSearchResult> = Vec::new();
-
-    for row in &rows {
-        let timestamp_us: f64 = row.get("timestamp_us");
-        let frame_id_val: i32 = row.get("frame_id");
-        let extended: bool = row.get("extended");
-        let data_bytes: Vec<u8> = row.get("data_bytes");
-
-        if data_bytes.len() < pattern_len {
-            // Payload too short for pattern at position 0 — check all positions anyway
-            // (no positions will fit if payload < pattern)
-            continue;
-        }
-
-        // Check all positions where the pattern could fit
-        let mut match_positions: Vec<usize> = Vec::new();
-        let max_start = data_bytes.len().saturating_sub(pattern_len);
-
-        for start_pos in 0..=max_start {
-            let mut matches = true;
-            for j in 0..pattern_len {
-                if (data_bytes[start_pos + j] & pattern_mask[j]) != (pattern[j] & pattern_mask[j]) {
-                    matches = false;
-                    break;
-                }
-            }
-            if matches {
-                match_positions.push(start_pos);
-            }
-        }
-
-        if !match_positions.is_empty() {
-            results.push(PatternSearchResult {
-                timestamp_us: timestamp_us as i64,
-                frame_id: frame_id_val as u32,
-                is_extended: extended,
-                payload: data_bytes,
-                match_positions,
-            });
-
-            if results.len() >= result_limit {
-                break;
-            }
-        }
-    }
-
-    let execution_time_ms = query_start.elapsed().as_millis() as u64;
-    tlog!("[dbquery] pattern_search: pattern_len={} | {} matches from {} rows, {}ms",
-        pattern_len, results.len(), rows_scanned, execution_time_ms);
-
-    unregister_query(&query_id).await;
-
-    Ok(PatternSearchQueryResult {
-        stats: QueryStats {
-            rows_scanned,
-            results_count: results.len(),
-            execution_time_ms,
-        },
-        results,
-    })
+    let profile = backend_profile(&app, &profile_id).await?;
+    crate::apiclient::pattern_search(
+        &profile,
+        pattern,
+        pattern_mask,
+        start_time,
+        end_time,
+        limit,
+        query_id_or("pattern_search", query_id),
+    )
+    .await
 }

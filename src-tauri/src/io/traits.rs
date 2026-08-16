@@ -155,13 +155,6 @@ pub fn get_traits_for_profile_kind(kind: &str) -> InterfaceTraits {
             tx_bytes: false,
             multi_source: true,
         },
-        "postgres" => InterfaceTraits {
-            temporal_mode: TemporalMode::Recorded,
-            protocols: vec![Protocol::Can],
-            tx_frames: false,
-            tx_bytes: false,
-            multi_source: false,
-        },
         "wiretap" => InterfaceTraits {
             temporal_mode: TemporalMode::Recorded,
             protocols: vec![Protocol::Can],

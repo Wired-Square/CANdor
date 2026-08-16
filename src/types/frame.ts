@@ -16,7 +16,7 @@ export interface CANFrameDisplay extends CANFrame {
 }
 
 /**
- * Frame message from streaming sources (GVRET, PostgreSQL, Serial, etc.)
+ * Frame message from streaming sources (GVRET, WireTAP backend, Serial, etc.)
  * This is the common type used across Discovery, Decoder, and buffer storage.
  */
 export type FrameMessage = {

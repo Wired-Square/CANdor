@@ -31,13 +31,7 @@ type Props = {
 function supportsFiltering(profile: IOProfile | null): boolean {
   if (!profile) return false;
   // Serial port always supports filtering
-  if (profile.kind === "serial") return true;
-  // PostgreSQL with serial_raw source type supports filtering
-  if (profile.kind === "postgres") {
-    const sourceType = profile.connection?.source_type;
-    return sourceType === "serial_raw";
-  }
-  return false;
+  return profile.kind === "serial";
 }
 
 export default function FilterOptions({

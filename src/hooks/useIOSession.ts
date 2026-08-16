@@ -188,7 +188,7 @@ export interface UseIOSessionOptions {
   onError?: (error: string) => void;
   /** Callback when playback position updates (timestamp and frame index) */
   onTimeUpdate?: (position: PlaybackPosition) => void;
-  /** Callback when stream ends (GVRET disconnect, PostgreSQL complete, etc.) */
+  /** Callback when stream ends (GVRET disconnect, backend complete, etc.) */
   onStreamEnded?: (payload: StreamEndedInfo) => void;
   /** Callback when capture playback completes naturally (reached end of capture) */
   onStreamComplete?: () => void;
@@ -1079,7 +1079,7 @@ export function useIOSession(
         }
 
         // Reinitialize uses Rust's atomic check - if other listeners exist, it won't destroy
-        // The backend doesn't auto-start playback sources (postgres, csv) - that happens in openSession
+        // The backend doesn't auto-start playback sources (WireTAP backend, csv) - that happens in openSession
         // unless skipAutoStart is set
         await reinitializeSession(
           targetSessionId,

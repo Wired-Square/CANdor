@@ -2,8 +2,8 @@
 //
 // Backend API Source — streams historical CAN data from the WireTAP backend
 // gateway over HTTP (the GET /v1/db/{db}/frames keyset cursor) instead of a
-// direct PostgreSQL connection. The pacing / batching / emit loop mirrors
-// PostgresSource::run_postgres_stream; the only difference is the fetch path
+// direct the WireTAP backend connection. The pacing / batching / emit loop mirrors
+// the streaming loop the deleted PostgresSource used; the fetch path is HTTP
 // (HTTP cursor vs DB portal). The two loops are intentionally kept parallel
 // — a future refactor could extract the shared pacing engine (see plan).
 
@@ -29,7 +29,7 @@ pub struct BackendApiConfig {
     pub database: String,
 }
 
-/// Filtering / pacing options (parallels PostgresSourceOptions).
+/// Filtering / pacing options (pacing and time bounds for a recorded source).
 #[derive(Clone, Debug)]
 pub struct BackendApiSourceOptions {
     pub start: Option<String>,
@@ -76,7 +76,7 @@ impl IOSource for BackendApiSource {
 
         let session_id = self.reader_state.session_id.clone();
 
-        // Create capture synchronously before spawning (matches PostgresSource)
+        // Create capture synchronously before spawning (recorded sources create theirs in start())
         let _orphaned = capture_store::orphan_captures_for_session(&session_id);
         let capture_id = capture_store::create_capture(CaptureKind::Frames, session_id.clone());
         let _ = capture_store::set_capture_owner(&capture_id, &session_id);
@@ -93,7 +93,7 @@ impl IOSource for BackendApiSource {
             }
         });
         self.reader_state.mark_running(handle);
-        // app handle currently unused beyond construction parity with PostgresSource
+        // app handle currently unused beyond construction parity with other recorded sources
         let _ = &self.app;
         Ok(())
     }

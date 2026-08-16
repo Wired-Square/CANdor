@@ -211,12 +211,12 @@ interface DecoderState {
   /** Stream start time in epoch seconds (captured from first decoded signal) */
   streamStartTimeSeconds: number | null;
 
-  // Playback control (for PostgreSQL profiles)
+  // Playback control (for WireTAP backend profiles)
   playbackSpeed: PlaybackSpeed;
   currentTime: number | null;
   currentFrameIndex: number | null;
 
-  // Time range (for PostgreSQL profiles)
+  // Time range (for WireTAP backend profiles)
   startTime: string;
   endTime: string;
 

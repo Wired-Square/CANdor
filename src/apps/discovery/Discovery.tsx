@@ -742,7 +742,7 @@ function DiscoveryInner() {
 
   const protocolLabel = frames.length > 0 ? frames[0].protocol : "can";
 
-  // Non-realtime sources: recorded (postgres, csv) and capture replay
+  // Non-realtime sources: recorded (WireTAP backend, csv) and capture replay
   const isRecorded = capabilities?.traits.temporal_mode === "recorded"
     || capabilities?.traits.temporal_mode === "capture";
 

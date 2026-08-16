@@ -356,12 +356,6 @@
       "unit": "unit",
       "config": "config",
       "notSet": "(not set)"
-    },
-    "sourceTypes": {
-      "can_frame": "CAN",
-      "modbus_frame": "Modbus",
-      "serial_frame": "Serial",
-      "serial_raw": "Raw"
     }
   },
   "dialogs": {
@@ -413,7 +407,6 @@
       "gvret_usb": "GVRET USB (Serial)",
       "modbus_tcp": "Modbus TCP",
       "mqtt": "MQTT",
-      "postgres": "PostgreSQL",
       "wiretap": "WireTAP Backend",
       "serial": "Serial Port",
       "slcan": "slcan (CANable, USB-CAN)",
@@ -458,40 +451,6 @@
       "portPlaceholder": "502",
       "unitId": "Unit ID (1-247)",
       "unitIdPlaceholder": "1"
-    },
-    "postgres": {
-      "title": "PostgreSQL Connection",
-      "hostPlaceholder": "localhost",
-      "portPlaceholder": "5432",
-      "database": "Database",
-      "databasePlaceholder": "wiretap",
-      "sslMode": "SSL Mode",
-      "ssl": {
-        "disable": "Disable",
-        "allow": "Allow",
-        "prefer": "Prefer",
-        "require": "Require",
-        "verifyCa": "Verify CA",
-        "verifyFull": "Verify Full"
-      },
-      "sourceType": "Source Type",
-      "sources": {
-        "canFrame": "CAN Frames (public.can_frame)",
-        "modbusFrame": "Modbus Frames (public.modbus_frame)",
-        "serialFrame": "Serial Frames (public.serial_frame)",
-        "serialRaw": "Serial Raw (public.serial_raw)"
-      },
-      "defaultSpeed": "Default Playback Speed",
-      "speeds": {
-        "025": "0.25x",
-        "05": "0.5x",
-        "1": "1x (realtime)",
-        "2": "2x",
-        "10": "10x",
-        "30": "30x",
-        "60": "60x",
-        "noLimit": "No Limit"
-      }
     },
     "virtual": {
       "title": "Virtual Device Settings",
@@ -632,7 +591,18 @@
       "urlPlaceholder": "http://gateway.local:8423",
       "apiKey": "API Key",
       "database": "Capture Database",
-      "databasePlaceholder": "wiretap"
+      "databasePlaceholder": "wiretap",
+      "defaultSpeed": "Default Playback Speed",
+      "speeds": {
+        "025": "0.25x",
+        "05": "0.5x",
+        "1": "1x (realtime)",
+        "2": "2x",
+        "10": "10x",
+        "30": "30x",
+        "60": "60x",
+        "noLimit": "No Limit"
+      }
     }
   },
   "dashboardLayouts": {

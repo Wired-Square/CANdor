@@ -14,7 +14,7 @@ import type { SerialFrameConfig } from "../utils/frameExport";
 /**
  * Temporal mode of an interface/session.
  * - "realtime": Live streaming from hardware (GVRET, slcan, gs_usb, SocketCAN, MQTT)
- * - "recorded": Recorded playback (PostgreSQL, CSV)
+ * - "recorded": Recorded playback (WireTAP backend, CSV)
  * - "capture": Capture replay from previously captured data
  */
 export type TemporalMode = "realtime" | "recorded" | "capture";
@@ -74,11 +74,11 @@ export interface RawBytesPayload {
  * IO capabilities - what an IO device type supports.
  */
 export interface IOCapabilities {
-  /** Supports pause/resume (PostgreSQL: true, GVRET: false) */
+  /** Supports pause/resume (WireTAP backend: true, GVRET: false) */
   can_pause: boolean;
-  /** Supports time range filtering (PostgreSQL: true, GVRET: false) */
+  /** Supports time range filtering (WireTAP backend: true, GVRET: false) */
   supports_time_range: boolean;
-  /** Supports speed control (PostgreSQL: true, GVRET: false) */
+  /** Supports speed control (WireTAP backend: true, GVRET: false) */
   supports_speed_control: boolean;
   /** Supports seeking to a specific timestamp (CaptureSource: true, others: false) */
   supports_seek: boolean;
@@ -315,7 +315,7 @@ export async function stopReaderSession(sessionId: string): Promise<IOState> {
 
 /**
  * Pause a reader session.
- * Only works for readers that support pause (e.g., PostgreSQL).
+ * Only works for readers that support pause (e.g., a WireTAP backend).
  * Returns the confirmed state after the operation.
  */
 export async function pauseReaderSession(sessionId: string): Promise<IOState> {
@@ -455,7 +455,7 @@ export async function removeVirtualBus(
 
 /**
  * Update playback speed for a reader session.
- * Only works for readers that support speed control (e.g., PostgreSQL).
+ * Only works for readers that support speed control (e.g., a WireTAP backend).
  */
 export async function updateReaderSpeed(
   sessionId: string,
@@ -704,7 +704,7 @@ export function parseStateString(stateStr: string): IOStateType {
 
 /**
  * Transition an existing session to use a capture for replay.
- * This is used after a streaming source (GVRET, PostgreSQL) ends to replay captured frames.
+ * This is used after a streaming source (GVRET, the WireTAP backend) ends to replay captured frames.
  * @param sessionId The session ID
  * @param captureId The capture ID to register as session source
  * @param speed Initial playback speed (default: 1.0)
@@ -763,7 +763,7 @@ export async function sessionStopToCapture(sessionId: string): Promise<void> {
  * streaming into a fresh capture.
  *
  * Only supported for realtime devices (gvret, slcan, gs_usb, socketcan).
- * Returns an error for recorded sources (postgres, csv, mqtt).
+ * Returns an error for recorded sources (WireTAP backend, csv, mqtt).
  *
  * @param sessionId The session ID
  */

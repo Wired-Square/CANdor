@@ -3,11 +3,11 @@
 WireTAP's embedded MCP server (`src-tauri/src/mcp/`) exposes read tools that let an
 agent inspect recorded CAN data **without any view open**. Alongside the existing
 session/capture/catalog tools, these *analysis levers* run the same query engines
-that back the Query app, against **either** a SQLite capture **or** a PostgreSQL
-profile, and a catalog-coverage diff on top.
+that back the Query app, against **either** a SQLite capture **or** a WireTAP
+backend profile, and a catalog-coverage diff on top.
 
 Implementation: [src-tauri/src/analysis.rs](../src-tauri/src/analysis.rs)
-(orchestration + the pure byte-role classifier), the postgres/sqlite query backends in
+(orchestration + the pure byte-role classifier), the backend/sqlite query paths in
 [src-tauri/src/dbquery.rs](../src-tauri/src/dbquery.rs) and
 [src-tauri/src/capture_db.rs](../src-tauri/src/capture_db.rs), wired as MCP tools in
 [src-tauri/src/mcp/tools.rs](../src-tauri/src/mcp/tools.rs).
@@ -50,9 +50,9 @@ project vault (`Reference/mcp-client-setup.md`).
 Every analysis tool takes **exactly one** of:
 
 - `capture_id` — a SQLite capture (from `list_captures`), or
-- `profile_id` — a PostgreSQL profile (from `list_io_profiles`).
+- `profile_id` — a WireTAP backend profile (from `list_io_profiles`).
 
-Postgres time bounds are RFC3339 strings (`start_time` / `end_time`); for captures
+Backend time bounds are RFC3339 strings (`start_time` / `end_time`); for captures
 they are converted to the capture's microsecond timeline automatically.
 
 These are **headless** — unlike `get_decoded_signals` / `get_discovery_analysis` /
@@ -95,7 +95,7 @@ present frame — one sampling query per frame, so it's heavy on a big DB; enabl
 deliberately. `sample_limit` (default 2000) bounds that sampling.
 
 ### Exposed query engines
-The Query app's analytical engines, dispatched to postgres or capture by source:
+The Query app's analytical engines, dispatched to the backend or a capture by source:
 `query_byte_changes`, `query_frame_changes`, `query_distribution`,
 `query_gap_analysis`, `query_frequency`, `query_first_last`, `query_mux_statistics`.
 Params and result shapes match the Query app (see

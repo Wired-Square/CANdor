@@ -275,7 +275,7 @@ export interface CreateSessionOptions {
   minFrameLength?: number;
   /** Bus number override for single-bus devices (0-7) */
   busOverride?: number;
-  /** Skip auto-starting playback sources (postgres, csv) - for connect-only mode */
+  /** Skip auto-starting playback sources (WireTAP backend, csv) - for connect-only mode */
   skipAutoStart?: boolean;
   /** Modbus TCP poll groups as JSON string (catalog-derived, for modbus_tcp profiles) */
   modbusPollsJson?: string;
@@ -1092,7 +1092,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       currentEventListeners.registeredSubscribers.add(subscriberId);
     }
 
-    // Step 5.5: Start the session if it's still stopped (for playback sources like PostgreSQL, CSV)
+    // Step 5.5: Start the session if it's still stopped (for playback sources like the WireTAP backend, CSV)
     // Playback sources don't auto-start on the backend to avoid emitting frames before listeners are ready.
     // Now that event listeners are set up, we can safely start.
     // EXCEPTION 1: Capture mode should NOT auto-start - data is already in the capture store

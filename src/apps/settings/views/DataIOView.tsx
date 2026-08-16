@@ -107,26 +107,6 @@ const renderConnectionSummary = (profile: IOProfile, t: TFunction) => {
     );
   }
 
-  if (profile.kind === "postgres") {
-    const host = c.host || "localhost";
-    const port = c.port || "5432";
-    const db = c.database || "wiretap";
-    const sourceType = (c.source_type || "can_frame") as string;
-    const sourceTypeLabel = t(`dataIO.sourceTypes.${sourceType}`, sourceType);
-
-    return (
-      <div className="flex flex-wrap gap-2">
-        <SummaryBadge label={s("host")} value={host} />
-        <SummaryBadge label={s("port")} value={port} />
-        <SummaryBadge label={s("db")} value={db} />
-        <SummaryBadge label={s("source")} value={sourceTypeLabel} />
-        {sourceType === "serial_raw" && c.framing_mode && (
-          <SummaryBadge label={s("framing")} value={c.framing_mode} />
-        )}
-      </div>
-    );
-  }
-
   if (profile.kind === "wiretap") {
     const url = c.url || "http://localhost:8423";
     const db = c.database || "wiretap";

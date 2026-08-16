@@ -11,7 +11,6 @@ import type {
   IOProfile,
   ConnectionFieldValue,
   MqttConnection,
-  PostgresConnection,
   WiretapConnection,
   GvretTcpConnection,
   SlcanConnection,
@@ -295,13 +294,6 @@ function applyConnectionDefaults(profile: IOProfile): IOProfile {
       const conn: MqttConnection = { ...profile.connection };
       if (!conn.host) conn.host = 'localhost';
       if (!conn.port) conn.port = '1883';
-      return { ...profile, connection: conn };
-    }
-    case 'postgres': {
-      const conn: PostgresConnection = { ...profile.connection };
-      if (!conn.host) conn.host = 'localhost';
-      if (!conn.port) conn.port = '5432';
-      if (!conn.database) conn.database = 'wiretap';
       return { ...profile, connection: conn };
     }
     case 'wiretap': {

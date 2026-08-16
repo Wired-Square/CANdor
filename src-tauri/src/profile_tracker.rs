@@ -4,7 +4,7 @@
 // Tracks which sessions are using which profiles to prevent conflicts
 // on single-handle devices (slcan, serial).
 //
-// Multi-handle devices (GVRET, PostgreSQL, etc.) can be used by multiple
+// Multi-handle devices (GVRET, the WireTAP backend, etc.) can be used by multiple
 // sessions simultaneously - each session opens its own connection.
 
 use once_cell::sync::Lazy;

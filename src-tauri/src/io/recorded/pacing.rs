@@ -1,4 +1,4 @@
-// Shared playback pacing constants for recorded sources (capture, CSV, PostgreSQL).
+// Shared playback pacing constants for recorded sources (capture, CSV, the WireTAP backend).
 //
 // These values control how frames are batched and emitted during playback.
 // Extracted here to ensure consistent behaviour across all recorded source

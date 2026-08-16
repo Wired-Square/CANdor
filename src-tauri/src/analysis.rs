@@ -1,7 +1,7 @@
 // ui/src-tauri/src/analysis.rs
 //
 // Headless analysis levers shared by the MCP read tools. Works against either a
-// SQLite capture (`capture_id`) or a PostgreSQL profile (`profile_id`):
+// SQLite capture (`capture_id`) or a WireTAP backend profile (`profile_id`):
 //
 //   - frame_inventory   — per-frame-id rollup (count, first/last, dlc)
 //   - byte_profile      — per-byte static/counter/sensor roles for one frame
@@ -23,10 +23,10 @@ fn hex_id(id: u32, is_extended: bool) -> String {
     format!("0x{:0width$X}", id, width = width)
 }
 
-/// Where a query runs: a SQLite capture or a PostgreSQL profile.
+/// Where a query runs: a SQLite capture or a WireTAP backend profile.
 pub enum QuerySource {
     Capture(String),
-    Postgres(String),
+    Backend(String),
 }
 
 /// Resolve the source from the dual `capture_id` / `profile_id` MCP params.
@@ -36,7 +36,7 @@ pub fn resolve(
 ) -> Result<QuerySource, String> {
     match (capture_id, profile_id) {
         (Some(c), None) => Ok(QuerySource::Capture(c)),
-        (None, Some(p)) => Ok(QuerySource::Postgres(p)),
+        (None, Some(p)) => Ok(QuerySource::Backend(p)),
         (Some(_), Some(_)) => Err("Provide exactly one of capture_id / profile_id, not both".into()),
         (None, None) => Err("Provide one of capture_id or profile_id".into()),
     }
@@ -138,7 +138,7 @@ pub async fn frame_inventory(
     end_time: Option<String>,
 ) -> Result<Vec<FrameInventoryRow>, String> {
     let raw = match src {
-        QuerySource::Postgres(pid) => {
+        QuerySource::Backend(pid) => {
             crate::dbquery::db_frame_inventory(app, pid, start_time, end_time).await?
         }
         QuerySource::Capture(cid) => crate::capture_db::frame_inventory(
@@ -194,7 +194,7 @@ async fn fetch_payloads(
     sample_limit: u32,
 ) -> Result<Vec<Vec<u8>>, String> {
     match src {
-        QuerySource::Postgres(pid) => {
+        QuerySource::Backend(pid) => {
             crate::dbquery::db_fetch_frame_payloads(app, pid, frame_id, is_extended, sample_limit)
                 .await
         }

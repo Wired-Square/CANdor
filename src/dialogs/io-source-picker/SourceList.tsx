@@ -226,7 +226,7 @@ export default function SourceList({
         dotColour: "bg-[var(--text-cyan)]",
       };
     } else {
-      // Single-source session (e.g., PostgreSQL)
+      // Single-source session (e.g., a WireTAP backend)
       // Look up profile via sourceProfileIds (session IDs like t_XXXXX differ from profile IDs)
       const sourceProfileIds = session.sourceProfileIds ?? [];
       const profile = sourceProfileIds.length > 0

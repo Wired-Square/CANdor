@@ -701,7 +701,7 @@ export default function IoSourcePickerDialog({
   }, [isOpen]);
 
   // Fetch active joinable sessions when dialog opens and periodically refresh
-  // Includes multi_source sessions AND recorded sessions (like PostgreSQL)
+  // Includes multi_source sessions AND recorded sessions (like the WireTAP backend)
   // Also fetches profile usage info for showing "(in use)" indicators
   useEffect(() => {
     if (!isOpen) return;
@@ -713,7 +713,7 @@ export default function IoSourcePickerDialog({
         // Show joinable sessions:
         // - traits.multi_source: sources that can be combined (all realtime)
         // - capture: sessions switched to capture replay (e.g., stopped live sessions)
-        // - supports_time_range && !is_realtime: recorded sources like PostgreSQL
+        // - supports_time_range && !is_realtime: recorded sources like the WireTAP backend
         const joinableSessions = sessions.filter((s) =>
           s.capabilities.traits.multi_source === true ||
           s.sourceType === "capture" ||
@@ -1086,7 +1086,7 @@ export default function IoSourcePickerDialog({
     if (!isCheckedRealtime) {
       if (timeBounds.startTime) {
         // If UTC mode, the user entered UTC time - append Z
-        // If Local mode, convert to ISO with timezone offset so PostgreSQL interprets correctly
+        // If Local mode, convert to ISO with timezone offset so the backend interprets it correctly
         opts.startTime = timeBounds.timezoneMode === "utc"
           ? `${timeBounds.startTime}:00Z`
           : localToIsoWithOffset(timeBounds.startTime);
