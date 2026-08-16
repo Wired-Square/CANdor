@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use wiretap_analysis::{checksum_evidence, solve_targets, ChecksumEvidence};
 use wiretap_checksum::{
     detect_checksum, diverse_samples, solve_additive, solve_crc, AdditiveOp, CalcRange,
-    ChecksumAlgorithm, ChecksumDetectionOptions, ChecksumNote, CrcParameters, CrcSolveOptions,
-    SolvedKind, MAX_SAMPLES,
+    ChecksumAlgorithm, ChecksumCandidate, ChecksumDetectionOptions, ChecksumNote, CrcParameters,
+    CrcSolveOptions, SolveTarget, SolvedChecksum, SolvedKind, MAX_SAMPLES,
 };
 
 /// Just enough of a `FrameMessage` to group and analyse. Serde ignores the rest
@@ -29,6 +29,10 @@ pub struct DiscoveryFrame {
     #[serde(default)]
     pub is_extended: bool,
 }
+
+/// Default for [`ChecksumDiscoveryOptions::min_likeness`], shared with the MCP
+/// parameter so the two surfaces cannot drift.
+pub const DEFAULT_MIN_LIKENESS: u8 = 50;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -58,7 +62,7 @@ impl Default for ChecksumDiscoveryOptions {
             min_confidence: 35,
             positions: vec![-1, -2, -3],
             search_custom_polynomials: false,
-            min_likeness: 50,
+            min_likeness: DEFAULT_MIN_LIKENESS,
             max_candidates: 6,
         }
     }
@@ -100,6 +104,54 @@ pub struct DiscoveredChecksum {
     pub confidence: u8,
     pub notes: Vec<ChecksumNote>,
     pub equivalent_ranges: Vec<CalcRange>,
+}
+
+impl From<ChecksumCandidate> for DiscoveredChecksum {
+    fn from(c: ChecksumCandidate) -> Self {
+        Self {
+            specification: ChecksumSpecification::Named {
+                algorithm: c.algorithm,
+            },
+            position: c.position,
+            length: c.length,
+            big_endian: c.big_endian,
+            calc_start_byte: c.calc_start_byte,
+            calc_end_byte: c.calc_end_byte,
+            match_count: c.match_count,
+            total_count: c.total_count,
+            match_rate: c.match_rate,
+            confidence: c.confidence,
+            notes: c.notes,
+            equivalent_ranges: c.equivalent_ranges,
+        }
+    }
+}
+
+impl DiscoveredChecksum {
+    /// A solved configuration reproduces every sample it was verified against
+    /// or is not reported at all, so its match rate is 100 by construction
+    /// rather than by measurement.
+    fn solved(solved: SolvedChecksum, target: &SolveTarget, confidence: u8) -> Self {
+        Self {
+            specification: match solved.kind {
+                SolvedKind::Additive { op, offset } => {
+                    ChecksumSpecification::Additive { op, offset }
+                }
+                SolvedKind::Crc(parameters) => ChecksumSpecification::Crc { parameters },
+            },
+            position: target.position,
+            length: target.byte_length,
+            big_endian: target.big_endian,
+            calc_start_byte: target.calc_start_byte,
+            calc_end_byte: target.calc_end_byte,
+            match_count: solved.sample_count,
+            total_count: solved.sample_count,
+            match_rate: 100.0,
+            confidence,
+            notes: Vec::new(),
+            equivalent_ranges: Vec::new(),
+        }
+    }
 }
 
 /// What the scan found for one frame id — including when it found nothing, so
@@ -170,10 +222,14 @@ fn evidence_samples(frames: &[Vec<u8>]) -> Vec<Vec<u8>> {
 
 /// Analyse one frame id.
 ///
+/// Public so a caller that already has payloads grouped — `analysis::checksum_scan`
+/// reads them per id out of the capture — can skip flattening them only for
+/// [`discover_checksums`] to group them again.
+///
 /// Two sample sets, because the two halves want opposite things. The sweep
 /// measures a rate and needs the population; the solvers are killed only by
 /// disagreements and need distinct payloads.
-fn analyse_group(
+pub fn analyse_group(
     frame_id: u32,
     is_extended: bool,
     frames: &[Vec<u8>],
@@ -188,8 +244,6 @@ fn analyse_group(
     // polynomial search not run.
     let columns = checksum_evidence(&samples);
 
-    // The named algorithms first: scored, ranked, and already carrying the
-    // constant-column rejection and the notes that explain an empty result.
     let swept = detect_checksum(
         &samples,
         &ChecksumDetectionOptions {
@@ -204,77 +258,14 @@ fn analyse_group(
     let mut candidates: Vec<DiscoveredChecksum> = swept
         .candidates
         .into_iter()
-        .map(|c| DiscoveredChecksum {
-            specification: ChecksumSpecification::Named {
-                algorithm: c.algorithm,
-            },
-            position: c.position,
-            length: c.length,
-            big_endian: c.big_endian,
-            calc_start_byte: c.calc_start_byte,
-            calc_end_byte: c.calc_end_byte,
-            match_count: c.match_count,
-            total_count: c.total_count,
-            match_rate: c.match_rate,
-            confidence: c.confidence,
-            notes: c.notes,
-            equivalent_ranges: c.equivalent_ranges,
-        })
+        .map(DiscoveredChecksum::from)
+        .chain(solved_candidates(
+            &columns,
+            &solver_samples,
+            distinct_payloads,
+            options,
+        ))
         .collect();
-
-    let crc_options = CrcSolveOptions {
-        known_polynomials_only: !options.search_custom_polynomials,
-        max_solutions: 2,
-    };
-
-    for target in solve_targets(&columns, options.min_likeness) {
-        let likeness = columns
-            .iter()
-            .find(|c| c.position == target.position)
-            .map(|c| c.likeness)
-            .unwrap_or(0);
-        let confidence = score_solved(likeness, distinct_payloads);
-        if confidence < options.min_confidence {
-            continue;
-        }
-
-        // An offset of zero is plain XOR or Sum8, which the sweep already
-        // reported and scored — only the variants it cannot express are news.
-        let additive = solve_additive(&solver_samples, &target).filter(|s| {
-            !matches!(
-                s.kind,
-                SolvedKind::Additive {
-                    op: AdditiveOp::Xor | AdditiveOp::Sum,
-                    offset: 0
-                }
-            )
-        });
-
-        let solved = additive
-            .into_iter()
-            .chain(solve_crc(&solver_samples, &target, &crc_options));
-
-        candidates.extend(solved.map(|s| {
-            let specification = match s.kind {
-                SolvedKind::Additive { op, offset } => ChecksumSpecification::Additive { op, offset },
-                SolvedKind::Crc(parameters) => ChecksumSpecification::Crc { parameters },
-            };
-            DiscoveredChecksum {
-                specification,
-                position: target.position,
-                length: target.byte_length,
-                big_endian: target.big_endian,
-                calc_start_byte: target.calc_start_byte,
-                calc_end_byte: target.calc_end_byte,
-                match_count: s.sample_count,
-                total_count: s.sample_count,
-                match_rate: 100.0,
-                confidence,
-                notes: Vec::new(),
-                equivalent_ranges: Vec::new(),
-            }
-        }));
-    }
 
     candidates.sort_by(|a, b| {
         b.confidence
@@ -296,6 +287,61 @@ fn analyse_group(
     }
 }
 
+/// Solve the columns identification let through.
+fn solved_candidates(
+    columns: &[ChecksumEvidence],
+    solver_samples: &[Vec<u8>],
+    distinct_payloads: usize,
+    options: &ChecksumDiscoveryOptions,
+) -> Vec<DiscoveredChecksum> {
+    let crc_options = CrcSolveOptions {
+        known_polynomials_only: !options.search_custom_polynomials,
+        max_solutions: 2,
+    };
+
+    let mut solutions = Vec::new();
+
+    for target in solve_targets(columns, options.min_likeness) {
+        // A two-byte target is keyed on the lower of the pair, so take the best
+        // likeness across the bytes it actually covers rather than one end's.
+        let likeness = (0..target.byte_length as i32)
+            .filter_map(|offset| {
+                columns
+                    .iter()
+                    .find(|c| c.position == target.position + offset)
+            })
+            .map(|c| c.likeness)
+            .max()
+            .unwrap_or(0);
+
+        let confidence = score_solved(likeness, distinct_payloads);
+        if confidence < options.min_confidence {
+            continue;
+        }
+
+        // An offset of zero is plain XOR or Sum8, which the sweep already
+        // reported and scored — only the variants it cannot express are news.
+        let additive = solve_additive(solver_samples, &target).filter(|s| {
+            !matches!(
+                s.kind,
+                SolvedKind::Additive {
+                    op: AdditiveOp::Xor | AdditiveOp::Sum,
+                    offset: 0
+                }
+            )
+        });
+
+        solutions.extend(
+            additive
+                .into_iter()
+                .chain(solve_crc(solver_samples, &target, &crc_options))
+                .map(|s| DiscoveredChecksum::solved(s, &target, confidence)),
+        );
+    }
+
+    solutions
+}
+
 /// Discover checksums across every frame id in a capture.
 pub fn discover_checksums(
     frames: &[DiscoveryFrame],
@@ -308,26 +354,24 @@ pub fn discover_checksums(
 
     for frame in frames.iter().filter(|f| !f.bytes.is_empty()) {
         let key = (frame.frame_id, frame.is_extended);
-        groups.entry(key).or_insert_with(|| {
-            order.push(key);
-            Vec::new()
-        });
-        groups.get_mut(&key).expect("just inserted").push(frame.bytes.clone());
+        groups
+            .entry(key)
+            .or_insert_with(|| {
+                order.push(key);
+                Vec::new()
+            })
+            .push(frame.bytes.clone());
     }
 
     let unique_frame_ids = order.len();
-    let eligible: Vec<&(u32, bool)> = order
-        .iter()
+    let findings: Vec<FrameChecksumFinding> = order
+        .par_iter()
         .filter(|key| groups[key].len() >= options.min_samples)
-        .collect();
-    let skipped_frame_ids = unique_frame_ids - eligible.len();
-
-    let findings = eligible
-        .into_par_iter()
-        .map(|(frame_id, is_extended)| {
-            analyse_group(*frame_id, *is_extended, &groups[&(*frame_id, *is_extended)], options)
+        .map(|&(frame_id, is_extended)| {
+            analyse_group(frame_id, is_extended, &groups[&(frame_id, is_extended)], options)
         })
         .collect();
+    let skipped_frame_ids = unique_frame_ids - findings.len();
 
     ChecksumDiscoveryResult {
         findings,

@@ -474,9 +474,7 @@ impl WireTapTools {
         let src = crate::analysis::resolve(p.capture_id, p.profile_id).map_err(err)?;
         let options = crate::checksum_discovery::ChecksumDiscoveryOptions {
             search_custom_polynomials: p.search_custom_polynomials,
-            min_likeness: p
-                .min_likeness
-                .unwrap_or(crate::checksum_discovery::ChecksumDiscoveryOptions::default().min_likeness),
+            min_likeness: p.min_likeness,
             ..Default::default()
         };
         let result =

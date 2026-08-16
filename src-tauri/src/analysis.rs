@@ -237,26 +237,39 @@ pub async fn checksum_scan(
         frame_ids.map(|ids| ids.into_iter().collect());
 
     let inventory = frame_inventory(app, src, None, None).await?;
-    let mut frames = Vec::new();
+    let mut findings = Vec::new();
+    let mut frame_count = 0usize;
+    // Counts the ids actually considered, so a `frame_ids` filter does not read
+    // back as ids that were skipped for being too thin.
+    let mut unique_frame_ids = 0usize;
 
     for row in inventory {
         if wanted.as_ref().is_some_and(|w| !w.contains(&row.frame_id)) {
             continue;
         }
+        unique_frame_ids += 1;
         let payloads =
             fetch_payloads(app, src, row.frame_id, Some(row.is_extended), sample_limit).await?;
-        frames.extend(payloads.into_iter().map(|bytes| {
-            crate::checksum_discovery::DiscoveryFrame {
-                frame_id: row.frame_id,
-                bytes,
-                is_extended: row.is_extended,
-            }
-        }));
+        frame_count += payloads.len();
+        if payloads.len() < options.min_samples {
+            continue;
+        }
+        // Already grouped by the query, so hand it straight to the per-id unit
+        // rather than flattening for `discover_checksums` to regroup.
+        findings.push(crate::checksum_discovery::analyse_group(
+            row.frame_id,
+            row.is_extended,
+            &payloads,
+            &options,
+        ));
     }
 
-    Ok(crate::checksum_discovery::discover_checksums(
-        &frames, &options,
-    ))
+    Ok(crate::checksum_discovery::ChecksumDiscoveryResult {
+        skipped_frame_ids: unique_frame_ids - findings.len(),
+        findings,
+        frame_count,
+        unique_frame_ids,
+    })
 }
 
 // ── Catalog coverage ─────────────────────────────────────────────────────────

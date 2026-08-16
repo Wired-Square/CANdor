@@ -65,7 +65,8 @@ function describeSpecification(spec: ChecksumSpecification): string {
     case "additive": {
       const offset = hex(spec.offset, 2);
       if (spec.op === "negatedSum") return `${offset} − Sum`;
-      return `${spec.op === "xor" ? "XOR" : "Sum"} ${spec.op === "xor" ? "^" : "+"} ${offset}`;
+      const [name, sign] = spec.op === "xor" ? ["XOR", "^"] : ["Sum", "+"];
+      return `${name} ${sign} ${offset}`;
     }
     case "crc":
       return `CRC-${spec.width} poly ${hex(spec.polynomial, spec.width / 4)}`;
@@ -75,7 +76,6 @@ function describeSpecification(spec: ChecksumSpecification): string {
 export default function ChecksumDiscoveryResultView({ embedded = false, onClose }: Props) {
   const { t } = useTranslation("discovery");
   const results = useDiscoveryStore((s) => s.toolbox.checksumDiscoveryResults);
-  const { effective: frameIdFormat } = useFrameIdFormat();
 
   const shell = `h-full flex flex-col ${embedded ? "" : cardDefault}`;
 
@@ -127,11 +127,7 @@ export default function ChecksumDiscoveryResultView({ embedded = false, onClose 
 
       <div className="flex-1 p-4 overflow-auto space-y-3">
         {explained.map((finding) => (
-          <FrameCard
-            key={`${finding.frameId}-${finding.isExtended}`}
-            finding={finding}
-            frameIdFormat={frameIdFormat}
-          />
+          <FrameCard key={`${finding.frameId}-${finding.isExtended}`} finding={finding} />
         ))}
 
         {explained.length === 0 && (
@@ -144,20 +140,14 @@ export default function ChecksumDiscoveryResultView({ embedded = false, onClose 
         {/* Why an id came back empty is worth keeping, but 62 rows of it buries
             the answer on a bus that has no checksums at all. */}
         {unexplained.length > 0 && (
-          <UnexplainedSection findings={unexplained} frameIdFormat={frameIdFormat} />
+          <UnexplainedSection findings={unexplained} />
         )}
       </div>
     </div>
   );
 }
 
-function UnexplainedSection({
-  findings,
-  frameIdFormat,
-}: {
-  findings: FrameChecksumFinding[];
-  frameIdFormat: "hex" | "decimal";
-}) {
+function UnexplainedSection({ findings }: { findings: FrameChecksumFinding[] }) {
   const { t } = useTranslation("discovery");
   const [expanded, setExpanded] = useState(false);
 
@@ -177,11 +167,7 @@ function UnexplainedSection({
       {expanded && (
         <div className="px-3 pb-3 space-y-2">
           {findings.map((finding) => (
-            <FrameCard
-              key={`${finding.frameId}-${finding.isExtended}`}
-              finding={finding}
-              frameIdFormat={frameIdFormat}
-            />
+            <FrameCard key={`${finding.frameId}-${finding.isExtended}`} finding={finding} />
           ))}
         </div>
       )}
@@ -219,14 +205,9 @@ function Header({ onClose }: { onClose?: () => void }) {
   );
 }
 
-function FrameCard({
-  finding,
-  frameIdFormat,
-}: {
-  finding: FrameChecksumFinding;
-  frameIdFormat: "hex" | "decimal";
-}) {
+function FrameCard({ finding }: { finding: FrameChecksumFinding }) {
   const { t } = useTranslation("discovery");
+  const { effective: frameIdFormat } = useFrameIdFormat();
   const best = finding.candidates[0];
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -278,7 +259,7 @@ function FrameCard({
           </span>
         </button>
         {best && <MatchRateIcon matchRate={best.matchRate} />}
-        {finding.candidates.length > 0 && (
+        {best && (
           <button type="button" onClick={copy} title={t("checksumDiscovery.copyTooltip")}>
             {copied ? (
               <Check className={`${iconSm} ${textDataGreen}`} />
@@ -296,11 +277,17 @@ function FrameCard({
           ))}
           {/* Why nothing was found is the useful half of an empty result: not
               "no checksum" but "byte -1 never changes, byte -2 is a counter". */}
-          {finding.candidates.length === 0 && <ColumnVerdicts columns={finding.columns} />}
-          {finding.candidates.length === 0 && finding.notes.length > 0 && (
-            <p className={`text-xs ${textMuted}`}>
-              {finding.notes.map((n) => t(`serial.checksumNote.${n.code}`, n.values)).join(" • ")}
-            </p>
+          {!best && (
+            <>
+              <ColumnVerdicts columns={finding.columns} />
+              {finding.notes.length > 0 && (
+                <p className={`text-xs ${textMuted}`}>
+                  {finding.notes
+                    .map((n) => t(`serial.checksumNote.${n.code}`, n.values))
+                    .join(" • ")}
+                </p>
+              )}
+            </>
           )}
         </div>
       )}
@@ -311,6 +298,7 @@ function FrameCard({
 function CandidateRow({ candidate }: { candidate: DiscoveredChecksum }) {
   const { t } = useTranslation("discovery");
   const spec = candidate.specification;
+  const digits = spec.kind === "crc" ? spec.width / 4 : 2;
 
   return (
     <div className={`${cardDefault} p-2 space-y-1`}>
@@ -361,8 +349,8 @@ function CandidateRow({ candidate }: { candidate: DiscoveredChecksum }) {
       {spec.kind === "crc" && (
         <div className={`text-xs ${textMuted} font-mono`}>
           {t("checksumDiscovery.crcParameters", {
-            init: hex(spec.init, spec.width / 4),
-            xorOut: hex(spec.xorOut, spec.width / 4),
+            init: hex(spec.init, digits),
+            xorOut: hex(spec.xorOut, digits),
             reflect: spec.reflectIn ? t("checksumDiscovery.yes") : t("checksumDiscovery.no"),
           })}
           {spec.alternatives.length > 0 && (
@@ -371,7 +359,7 @@ function CandidateRow({ candidate }: { candidate: DiscoveredChecksum }) {
                 pairs: spec.alternatives
                   .map(
                     (a) =>
-                      `init ${hex(a.init, spec.width / 4)} / xorOut ${hex(a.xorOut, spec.width / 4)}`,
+                      `init ${hex(a.init, digits)} / xorOut ${hex(a.xorOut, digits)}`,
                   )
                   .join(", "),
               })}

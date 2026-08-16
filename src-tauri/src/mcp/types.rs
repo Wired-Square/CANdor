@@ -332,6 +332,10 @@ pub struct ByteProfileParams {
     pub sample_limit: u32,
 }
 
+fn default_min_likeness() -> u8 {
+    crate::checksum_discovery::DEFAULT_MIN_LIKENESS
+}
+
 /// Scan a source for checksums, frame id by frame id.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ChecksumScanParams {
@@ -351,8 +355,8 @@ pub struct ChecksumScanParams {
     pub search_custom_polynomials: bool,
     /// How checksum-shaped a byte must look before the solver is asked about it
     /// (0-100, default 50). Lower it to widen the search.
-    #[serde(default)]
-    pub min_likeness: Option<u8>,
+    #[serde(default = "default_min_likeness")]
+    pub min_likeness: u8,
 }
 
 /// Diff a decoder catalog against a data source + confidence rollup.
