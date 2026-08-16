@@ -132,9 +132,38 @@ docker compose exec timescaledb psql -U postgres -d wiretap \
   -c "SELECT sum(frame_count) FROM can_frame_hourly;"
 ```
 
-Then point the Pi at the gateway (`[forward]` in `wiretap-server.toml`) and add
-a **WireTAP Backend** IO profile in the desktop app (Settings → Data I/O). Once
-both read and ingest go through the gateway, retire the host PostgreSQL.
+Then point the Pi at the gateway (`[forward]` in `wiretap-server.toml`) so new
+frames land in the container rather than the old database.
+
+### Pointing the desktop app at the gateway
+
+The desktop app no longer connects to PostgreSQL directly — a database source is
+a WireTAP Backend profile and nothing else. On first launch after upgrading, any
+direct PostgreSQL profile is **removed from your settings and named in a
+notice**, and its stored password is deleted from the keychain. Nothing else is
+touched: captures, catalogues and every other profile are untouched.
+
+To replace it:
+
+1. In the admin UI, create a **`read`** API key (per user, revocable). Copy it —
+   the plaintext is shown once.
+2. In the app, **Settings → Data I/O → + Profile**, choose **WireTAP Backend**
+   and fill in:
+   - **Backend URL** — the gateway, e.g. `http://gateway.local:8423`
+   - **API Key** — the `read` key from step 1 (stored in the OS keychain)
+   - **Capture Database** — the database this profile reads, e.g. `wiretap`.
+     One profile per capture database; add several if you migrated more than one.
+3. Optionally set a **Default Playback Speed** for replay.
+
+Everything that worked against a PostgreSQL profile works against a backend
+profile: the Query app's engines, bookmarks and time ranges, replay with speed
+control, and the headless MCP analysis tools (`frame_inventory`,
+`frame_byte_profile`, `frame_checksum_scan`, `catalog_coverage`, and the
+`query_*` engines) — pass the backend profile's id as `profile_id` exactly as
+before. See [docs/mcp-analysis-tools.md](../../docs/mcp-analysis-tools.md),
+which also records how sampling differs between a capture and an archive.
+
+Once both read and ingest go through the gateway, retire the host PostgreSQL.
 
 ## Tests
 

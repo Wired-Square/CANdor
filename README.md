@@ -55,6 +55,12 @@ To use gs_usb, flash your CANable with [candleLight firmware](https://github.com
 - CSV file import
 - In-memory buffer replay
 
+> **Moving from a direct PostgreSQL source?** WireTAP no longer connects to a
+> database itself — the backend owns it, and the app authenticates with an API
+> key instead of database credentials. Existing PostgreSQL profiles are removed
+> on first launch after upgrading and named in a notice. See
+> [Migrating from direct PostgreSQL](#migrating-from-direct-postgresql).
+
 ## Tools
 
 ### [gs_usb_cli](tools/gs_usb_cli/)
@@ -84,6 +90,33 @@ A Dockerised TimescaleDB + API gateway that owns the long-term capture database,
 - Optional pgBackRest backups; an [ingest protocol](docs/ingest-protocol.md) for writing MCU firmware
 
 See [tools/wiretap-backend/README.md](tools/wiretap-backend/README.md) for setup and the archive-migration runbook.
+
+## Migrating from direct PostgreSQL
+
+Earlier versions could connect straight to a PostgreSQL server. That path is
+gone: the backend owns the database, and devices, the WireTAP Server and the
+desktop app all authenticate with API keys rather than database credentials.
+Moving across is two independent halves — the archive, and the app.
+
+**1. Move the archive.** [`migrate_to_timescale.py`](tools/wiretap-server/migrate_to_timescale.py)
+copies `public.can_frame` day-by-day from your existing database into the
+container's TimescaleDB hypertable, validating each day by row count and
+checksum, compressing as it goes. It is resumable — re-run it and finished days
+are skipped — and `--status` reports progress. A plain `pg_dump` will not do:
+the hypertable drops the legacy `row_id`/`id_hex`/`data_hex` columns, so the
+column sets do not match. Stop writes to the source first (switch the Pi to
+`[forward]` mode) so the archive is static while it copies.
+
+**2. Point the app at the gateway.** Create a `read` API key in the admin UI,
+then add a **WireTAP Backend** profile under Settings → Data I/O with the
+gateway URL, that key, and the capture database name. Any direct PostgreSQL
+profile is removed on first launch after upgrading, named in a notice, and its
+keychain password deleted; captures, catalogues and other profiles are
+untouched. Queries, bookmarks, replay and the MCP analysis tools all behave as
+they did before against the new profile.
+
+The full runbook, with commands for both halves, is in
+[tools/wiretap-backend/README.md § Migrating an existing archive](tools/wiretap-backend/README.md#migrating-an-existing-archive-into-the-container).
 
 ## Tech Stack
 
