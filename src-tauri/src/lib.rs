@@ -1359,6 +1359,7 @@ pub fn run() {
             checksums::sweep_checksum_specs_cmd,
             checksums::detect_checksum_cmd,
             checksum_discovery::discover_checksums_cmd,
+            checksum_discovery::discover_checksums_in_capture_cmd,
             // Transmit API
             transmit::get_transmit_capable_profiles,
             transmit::get_profile_usage,

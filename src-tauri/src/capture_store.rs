@@ -151,6 +151,11 @@ impl FrameSelection {
         })
     }
 
+    /// Whether one frame is selected, matched on the identity pair.
+    pub fn contains(&self, protocol: &str, frame_id: u32) -> bool {
+        self.0.get(protocol).is_some_and(|ids| ids.contains(&frame_id))
+    }
+
     /// (frame_id, protocol) pairs, sorted so the JSON payload is stable across calls.
     pub fn pairs(&self) -> Vec<(u32, &str)> {
         let mut pairs: Vec<(u32, &str)> = self

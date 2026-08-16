@@ -12,6 +12,7 @@
 
 use once_cell::sync::Lazy;
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::Serialize;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -719,19 +720,73 @@ pub fn get_frame_info(capture_id: &str) -> Result<Vec<CaptureFrameInfo>, String>
     Ok(result)
 }
 
-/// Per-frame-id rollup for a capture: (frame_id, is_extended, count, first_us,
-/// last_us, max_dlc). Optional time bounds in microseconds. Mirrors the WireTAP backend
-/// `db_frame_inventory` shape so callers can treat both sources uniformly.
+/// Format a frame id as hex with the conventional padding (3 nibbles for
+/// standard ids, 8 for extended), matching the frontend's `formatFrameId`.
+pub fn hex_id(id: u32, is_extended: bool) -> String {
+    let width = if is_extended { 8 } else { 3 };
+    format!("0x{:0width$X}", id, width = width)
+}
+
+/// One frame identity in a source, with its rollup.
+///
+/// Identity is (protocol, frame_id, is_extended): CAN `0x100` and Modbus
+/// register 256 are different frames that happen to share a number, and a
+/// standard id is not its extended namesake. This is the shape every source
+/// reports, and the one the MCP `frame_inventory` tool serialises.
+#[derive(Debug, Clone, Serialize)]
+pub struct InventoryRow {
+    pub protocol: String,
+    pub frame_id: u32,
+    pub frame_id_hex: String,
+    pub is_extended: bool,
+    pub count: i64,
+    pub first_us: i64,
+    pub last_us: i64,
+    pub max_dlc: u8,
+}
+
+impl InventoryRow {
+    pub fn new(
+        protocol: &str,
+        frame_id: u32,
+        is_extended: bool,
+        count: i64,
+        first_us: i64,
+        last_us: i64,
+        max_dlc: u8,
+    ) -> Self {
+        Self {
+            protocol: protocol.to_string(),
+            frame_id,
+            frame_id_hex: hex_id(frame_id, is_extended),
+            is_extended,
+            count,
+            first_us,
+            last_us,
+            max_dlc,
+        }
+    }
+}
+
+/// Per-frame-id rollup for a capture. Optional time bounds in microseconds.
 pub fn frame_inventory(
     capture_id: &str,
     start_us: Option<i64>,
     end_us: Option<i64>,
-) -> Result<Vec<(u32, bool, i64, i64, i64, u8)>, String> {
+) -> Result<Vec<InventoryRow>, String> {
     let guard = DB.lock().unwrap();
     let conn = guard.as_ref().ok_or("Database not initialised")?;
+    frame_inventory_with_conn(conn, capture_id, start_us, end_us)
+}
 
+fn frame_inventory_with_conn(
+    conn: &Connection,
+    capture_id: &str,
+    start_us: Option<i64>,
+    end_us: Option<i64>,
+) -> Result<Vec<InventoryRow>, String> {
     let mut sql = String::from(
-        "SELECT frame_id, is_extended, COUNT(*) AS cnt, \
+        "SELECT protocol, frame_id, is_extended, COUNT(*) AS cnt, \
          MIN(timestamp_us) AS first_us, MAX(timestamp_us) AS last_us, MAX(dlc) AS max_dlc \
          FROM frames WHERE capture_id = ?1",
     );
@@ -746,13 +801,16 @@ pub fn frame_inventory(
         sql.push_str(&format!(" AND timestamp_us < ?{}", idx));
         bind.push(Box::new(e));
     }
-    sql.push_str(" GROUP BY frame_id, is_extended ORDER BY frame_id, is_extended");
+    sql.push_str(
+        " GROUP BY protocol, frame_id, is_extended ORDER BY frame_id, protocol, is_extended",
+    );
 
     let mut stmt = conn.prepare(&sql).map_err(|e| format!("Failed to prepare: {}", e))?;
     let refs: Vec<&dyn rusqlite::types::ToSql> = bind.iter().map(|b| b.as_ref()).collect();
     let rows = stmt
         .query_map(rusqlite::params_from_iter(refs), |row| {
-            Ok((
+            Ok(InventoryRow::new(
+                &row.get::<_, String>("protocol")?,
                 row.get::<_, i64>("frame_id")? as u32,
                 row.get::<_, i64>("is_extended")? != 0,
                 row.get::<_, i64>("cnt")?,
@@ -768,6 +826,96 @@ pub fn frame_inventory(
         out.push(r.map_err(|e| format!("Failed to read row: {}", e))?);
     }
     Ok(out)
+}
+
+/// Pick at most `limit` items spread evenly across `items`.
+///
+/// Ceiling division on the step, not floor: a step of 1 over 5,001 items with a
+/// limit of 5,000 would return the first 5,000 and drop the tail, which is the
+/// same end-of-recording bias in the other direction.
+fn strided<T: Copy>(items: &[T], limit: u32) -> Vec<T> {
+    let limit = limit.max(1) as usize;
+    if items.len() <= limit {
+        return items.to_vec();
+    }
+    items.iter().step_by(items.len().div_ceil(limit)).copied().collect()
+}
+
+/// Up to `sample_limit` payloads for one frame, spread evenly across everything
+/// the capture holds for it. `protocol` is the identity's other half; `None`
+/// matches any, which is what a caller holding only a numeric id can ask for.
+/// See [`InventoryRow`] for why the pair is the identity.
+///
+/// A tail query (`ORDER BY rowid DESC LIMIT n`) confines the analysis to the end
+/// of the recording, which for anything that samples again afterwards is a
+/// different answer than striding the whole population — the two doors onto the
+/// checksum scan disagreed for exactly that reason.
+///
+/// Two passes rather than one window function. `ROW_NUMBER() OVER (ORDER BY
+/// rowid)` costs a temp b-tree sort of every matching row even though index
+/// entries within an equality span are already rowid-ordered, and that sort
+/// dominated the query — measured at 7x the cost of taking the rowids from the
+/// covering index, striding them here, and reading back only the payloads that
+/// survived. Passing `is_extended` costs a row lookup per row for the same
+/// reason (it is not in `idx_frames_capture_fid`), so callers that know a frame
+/// id is unambiguous should leave it `None`.
+pub fn sample_frame_payloads(
+    capture_id: &str,
+    protocol: Option<&str>,
+    frame_id: u32,
+    is_extended: Option<bool>,
+    sample_limit: u32,
+) -> Result<Vec<Vec<u8>>, String> {
+    let guard = DB.lock().unwrap();
+    let conn = guard.as_ref().ok_or("Database not initialised")?;
+    sample_frame_payloads_with_conn(conn, capture_id, protocol, frame_id, is_extended, sample_limit)
+}
+
+fn sample_frame_payloads_with_conn(
+    conn: &Connection,
+    capture_id: &str,
+    protocol: Option<&str>,
+    frame_id: u32,
+    is_extended: Option<bool>,
+    sample_limit: u32,
+) -> Result<Vec<Vec<u8>>, String> {
+    let mut filter = String::from("capture_id = ?1 AND frame_id = ?2");
+    let mut bind: Vec<Box<dyn rusqlite::types::ToSql>> =
+        vec![Box::new(capture_id.to_string()), Box::new(frame_id as i64)];
+    if let Some(p) = protocol {
+        filter.push_str(&format!(" AND protocol = ?{}", bind.len() + 1));
+        bind.push(Box::new(p.to_string()));
+    }
+    if let Some(ext) = is_extended {
+        filter.push_str(&format!(" AND is_extended = ?{}", bind.len() + 1));
+        bind.push(Box::new(ext as i32));
+    }
+
+    let mut stmt = conn
+        .prepare_cached(&format!("SELECT rowid FROM frames WHERE {filter} ORDER BY rowid"))
+        .map_err(|e| format!("Failed to prepare: {}", e))?;
+    let refs: Vec<&dyn rusqlite::types::ToSql> = bind.iter().map(|b| b.as_ref()).collect();
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(refs), |row| row.get::<_, i64>(0))
+        .map_err(|e| format!("Failed to query: {}", e))?;
+    let mut rowids = Vec::new();
+    for r in rows {
+        rowids.push(r.map_err(|e| format!("Failed to read row: {}", e))?);
+    }
+
+    let picked = strided(&rowids, sample_limit);
+    if picked.is_empty() {
+        return Ok(Vec::new());
+    }
+    // One bound JSON parameter rather than an interpolated list, the idiom
+    // `selection_predicate` already uses: constant SQL text so `prepare_cached`
+    // hits, and no ceiling on how many rowids a caller may ask for.
+    let json = serde_json::to_string(&picked).map_err(|e| format!("Failed to encode: {}", e))?;
+    query_payloads_with_conn(
+        conn,
+        "SELECT payload FROM frames WHERE rowid IN (SELECT value FROM json_each(?1)) ORDER BY rowid",
+        &[&json],
+    )
 }
 
 /// Find the offset (row count) for a given timestamp, optionally filtered by frame IDs.
@@ -1365,9 +1513,16 @@ pub fn query_payloads(
 ) -> Result<Vec<Vec<u8>>, String> {
     let guard = DB.lock().unwrap();
     let conn = guard.as_ref().ok_or("Database not initialised")?;
+    query_payloads_with_conn(conn, sql, params)
+}
 
+fn query_payloads_with_conn(
+    conn: &Connection,
+    sql: &str,
+    params: &[&dyn rusqlite::types::ToSql],
+) -> Result<Vec<Vec<u8>>, String> {
     let mut stmt = conn
-        .prepare(sql)
+        .prepare_cached(sql)
         .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
     let rows = stmt
@@ -1647,6 +1802,22 @@ mod tests {
         conn
     }
 
+    /// A migrated capture `c1` holding `n` CAN frames of one id, each payload
+    /// carrying its own position so a sample can be checked for spread.
+    fn can_capture_of(n: i64) -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_migrations(&mut conn).unwrap();
+        for i in 0..n {
+            conn.execute(
+                "INSERT INTO frames (capture_id, protocol, timestamp_us, frame_id, bus, dlc, payload)
+                 VALUES ('c1', 'can', ?1, 256, 0, 1, ?2)",
+                rusqlite::params![i, vec![i as u8]],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
     /// A migrated byte capture `b1` holding six bytes, plus a decoy capture whose rows
     /// must never appear in `b1`'s tail.
     fn byte_capture() -> Connection {
@@ -1749,6 +1920,89 @@ mod tests {
         assert_eq!(frames[0].protocol, "modbus");
     }
 
+    /// The bug: sampling a "frame id" pulled CAN 0x100 and Modbus register 256
+    /// into one payload set and analysed the mixture, which describes neither.
+    #[test]
+    fn sampled_payloads_do_not_cross_protocols() {
+        let conn = multi_protocol_capture();
+
+        let can = sample_frame_payloads_with_conn(&conn, "c1", Some("can"), 256, None, 100).unwrap();
+        let modbus =
+            sample_frame_payloads_with_conn(&conn, "c1", Some("modbus"), 256, None, 100).unwrap();
+
+        assert_eq!(can, vec![vec![0xAA]]);
+        assert_eq!(modbus, vec![vec![0xBB]]);
+    }
+
+    /// No protocol means any — the behaviour a caller holding only a numeric id
+    /// gets, and what the byte-profile tool defaults to.
+    #[test]
+    fn sampled_payloads_without_a_protocol_span_all_of_them() {
+        let conn = multi_protocol_capture();
+
+        let all = sample_frame_payloads_with_conn(&conn, "c1", None, 256, None, 100).unwrap();
+
+        assert_eq!(all, vec![vec![0xAA], vec![0xBB], vec![0xCC]]);
+    }
+
+    /// A capture of 100 frames sampled 10 at a time must describe the whole
+    /// recording, not its first or last tenth. A tail query returned 90..=99;
+    /// taking the first N returns 0..=9. Both are a different answer to the same
+    /// question depending on which door the caller came in.
+    #[test]
+    fn sampling_strides_the_whole_capture() {
+        let conn = can_capture_of(100);
+
+        let sampled =
+            sample_frame_payloads_with_conn(&conn, "c1", Some("can"), 256, None, 10).unwrap();
+
+        let positions: Vec<u8> = sampled.iter().map(|p| p[0]).collect();
+        assert_eq!(positions, vec![0, 10, 20, 30, 40, 50, 60, 70, 80, 90]);
+    }
+
+    /// Ceiling division on the step, not floor: a floor step of 1 over 101 rows
+    /// with a limit of 100 would return the first 100 and drop the tail.
+    #[test]
+    fn sampling_never_degenerates_into_the_first_n() {
+        let conn = can_capture_of(101);
+
+        let sampled =
+            sample_frame_payloads_with_conn(&conn, "c1", Some("can"), 256, None, 100).unwrap();
+
+        assert_eq!(sampled.first().unwrap()[0], 0);
+        assert_eq!(sampled.last().unwrap()[0], 100);
+    }
+
+    /// A limit past the population returns every payload in capture order,
+    /// rather than padding, erroring or striding something out.
+    #[test]
+    fn sampling_limit_past_the_end_returns_everything() {
+        let conn = can_capture_of(40);
+
+        let all = sample_frame_payloads_with_conn(&conn, "c1", Some("can"), 256, None, 500).unwrap();
+
+        assert_eq!(all.len(), 40);
+        assert_eq!(all.iter().map(|p| p[0]).collect::<Vec<u8>>(), (0..40u8).collect::<Vec<u8>>());
+    }
+
+    /// The inventory is what decides which groups the scan reads, so it has to
+    /// split the identity pair too — otherwise the protocol filter below it
+    /// never sees the Modbus row at all.
+    #[test]
+    fn inventory_reports_one_row_per_protocol() {
+        let conn = multi_protocol_capture();
+
+        let rows = frame_inventory_with_conn(&conn, "c1", None, None).unwrap();
+
+        let for_256: Vec<(&str, i64)> = rows
+            .iter()
+            .filter(|r| r.frame_id == 256)
+            .map(|r| (r.protocol.as_str(), r.count))
+            .collect();
+        assert_eq!(for_256, vec![("can", 1), ("modbus", 1), ("serial", 1)]);
+        assert_eq!(rows.len(), 4);
+    }
+
     /// The same numeric id under two protocols is two selectable frames, not one.
     #[test]
     fn selecting_one_id_on_two_protocols_returns_both() {
@@ -1830,6 +2084,32 @@ mod tests {
             plan.contains("COVERING INDEX idx_frames_capture_fid"),
             "filtered count should stay covering, got: {plan}"
         );
+    }
+
+    /// The rowid pass is the one that reads every row of a frame id, so it has
+    /// to stay on the index. Two things take it off: filtering on `is_extended`,
+    /// which is not in `idx_frames_capture_fid` and so forces a row lookup per
+    /// row, and a `ROW_NUMBER() OVER (ORDER BY rowid)` window, which sorts the
+    /// span into a temp b-tree even though the index already yields it ordered.
+    /// Both were measured at several times the cost of the covering plan.
+    #[test]
+    fn payload_sampling_takes_its_rowids_from_the_covering_index() {
+        let conn = multi_protocol_capture();
+
+        let plan: String = conn
+            .query_row(
+                "EXPLAIN QUERY PLAN SELECT rowid FROM frames \
+                 WHERE capture_id = ?1 AND frame_id = ?2 AND protocol = ?3 ORDER BY rowid",
+                params!["c1", 256i64, "can"],
+                |row| row.get(3),
+            )
+            .unwrap();
+
+        assert!(
+            plan.contains("COVERING INDEX idx_frames_capture_fid"),
+            "rowid pass should stay covering, got: {plan}"
+        );
+        assert!(!plan.contains("TEMP B-TREE"), "rowid pass should not sort, got: {plan}");
     }
 
     fn audit_rows(conn: &Connection) -> Vec<(i64, String)> {

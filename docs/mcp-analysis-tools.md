@@ -62,10 +62,14 @@ data store directly, so no window need be open.
 ## Tools
 
 ### `frame_inventory`
-Per-frame-id rollup: `count`, `first_us` / `last_us`, `max_dlc`, `is_extended`, with
-a `frame_id_hex`. The "what frame ids exist and how often" lever. Optional time
-bounds. **On a large archive this is a full-table GROUP BY — pass `start_time` /
-`end_time` to scope it.**
+Per-frame-id rollup: `count`, `first_us` / `last_us`, `max_dlc`, `is_extended` and
+`protocol`, with a `frame_id_hex`. The "what frame ids exist and how often" lever.
+Optional time bounds. **On a large archive this is a full-table GROUP BY — pass
+`start_time` / `end_time` to scope it.**
+
+Frame identity is **(protocol, frame_id)**: a mixed capture holds CAN `0x100` and
+Modbus register 256 under the same number, and they are separate rows. A
+WireTAP backend serves a CAN-only archive, so every row reports `"can"`.
 
 ### `frame_byte_profile`
 For one `frame_id`, classifies each payload byte over sampled frames:
@@ -76,8 +80,10 @@ For one `frame_id`, classifies each payload byte over sampled frames:
 - `sensor` — otherwise varying.
 
 This is the headless Rust equivalent of the frontend Discovery byte analysis
-(`compute_byte_profile`). `sample_limit` (default 5000) bounds the work; the **most
-recent** N frames are sampled (current behaviour, not the stale start of the archive).
+(`compute_byte_profile`). `sample_limit` (default 5000) bounds the work — see
+[Sampling](#sampling) for which frames it picks. Optional `protocol` restricts a
+frame id to one protocol; omit it and a mixed capture profiles every protocol's
+rows for that number together.
 
 ### `frame_checksum_scan`
 Finds checksums across every frame id in the source, or the `frame_ids` you name.
@@ -104,8 +110,13 @@ separately identifiable**. A recovered CRC reports one working pair plus the
 `alternatives` that fit equally well; none is more true than the others.
 
 `min_likeness` (0-100, default 50) widens or narrows what reaches the solver.
-`sample_limit` (default 5000) bounds payloads per frame id. Headless equivalent
-of Discovery's Checksum Discovery, sharing its implementation.
+`sample_limit` (default 5000) bounds payloads per frame id.
+
+**This is not merely equivalent to Discovery's Checksum Discovery — it is the same
+call.** The panel sends a capture id and its frame selection rather than the
+frames themselves, and both doors run `analysis::checksum_scan` with the same
+sampling and the same default `sample_limit`. Neither can give a different answer
+about the same capture, and neither loads the capture into the app to ask.
 
 ### `catalog_coverage`
 Parses a `catalog` (filename or display name) and diffs it against the source:
@@ -154,13 +165,31 @@ The split lets a user grant *creating new* catalogues without granting *overwrit
 existing* ones (or vice-versa). With neither granted, only `validate_catalog` is
 exposed. Changing either toggle restarts the server so the gate takes effect.
 
+## Sampling
+
+Which frames `sample_limit` picks differs by source, and the difference is
+deliberate:
+
+- **A capture** is sampled **evenly across the whole recording**. The rowids for a
+  frame id come off the covering index in order, are strided in Rust (ceiling
+  division, so the last frame is always reachable), and only the survivors read a
+  payload. A capture is bounded and local, which is what makes reading the whole
+  span affordable.
+- **A WireTAP backend** is sampled as the **most recent N**. Striding a
+  multi-month archive means a full scan where the tail query is an index seek, so
+  it reflects current behaviour rather than the archive's beginning.
+
+The consequence to remember: over a capture, an agent and the Discovery panel see
+the same sample; over an archive, the sample is the recent window.
+
 ## Scale note
 
 The reference dataset is ~12 months of CAN dumps (individual frame ids exceed 10⁸
 rows). `frame_inventory` and the per-frame samplers complete against it, but:
 
 - prefer time bounds on `frame_inventory` when you only need a window;
-- byte sampling reads the **most recent** N frames (cheap with the `(id)` / `(id, ts)`
-  indexing), so it reflects current behaviour rather than the archive's beginning;
+- **`frame_checksum_scan` against a WireTAP backend is untimed.** `sample_limit`
+  multiplies by the id count and every group is a network round trip; there is no
+  progress or cancellation. Scope it with `frame_ids` until someone measures it;
 - leave `catalog_coverage`'s `include_byte_roles` off unless you want the per-frame
   byte breakdown — the frame/confidence diff is a single aggregation and stays cheap.

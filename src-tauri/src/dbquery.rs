@@ -11,6 +11,7 @@
 
 use tauri::AppHandle;
 
+use crate::capture_db::InventoryRow;
 use crate::queryresults::*;
 use crate::settings::{load_settings, IOProfile};
 
@@ -66,12 +67,14 @@ fn query_id_or(kind: &str, supplied: Option<String>) -> String {
 
 // ── Queries ──────────────────────────────────────────────────────────────────
 
+/// Per-frame-id rollup for a WireTAP backend. Time bounds are optional
+/// RFC3339 strings.
 pub async fn db_frame_inventory(
     app: &AppHandle,
     profile_id: &str,
     start_time: Option<String>,
     end_time: Option<String>,
-) -> Result<Vec<(u32, bool, i64, i64, i64, u8)>, String> {
+) -> Result<Vec<InventoryRow>, String> {
     let profile = backend_profile(app, profile_id).await?;
     crate::apiclient::frame_inventory(&profile, start_time, end_time).await
 }

@@ -4,6 +4,7 @@
 // These call the Rust backend for checksum calculations.
 
 import { invoke } from "@tauri-apps/api/core";
+import type { ProtocolFrames } from "../utils/frameKey";
 
 // ============================================================================
 // Types
@@ -395,6 +396,27 @@ export interface ChecksumDiscoveryOptions {
   minLikeness?: number;
 }
 
+/**
+ * Scan a capture for checksums: group by frame id, then work out what explains
+ * each group.
+ *
+ * **The request is a capture id and a selection, not the frames** — Rust already
+ * has the payloads. An empty selection scans every frame the capture holds. Runs
+ * the same scan the `frame_checksum_scan` MCP tool does, so an agent and the
+ * panel cannot reach different answers about one capture.
+ */
+export async function discoverChecksumsInCapture(
+  captureId: string,
+  selection: ProtocolFrames[],
+  options: ChecksumDiscoveryOptions = {}
+): Promise<ChecksumDiscoveryResult> {
+  return invoke<ChecksumDiscoveryResult>("discover_checksums_in_capture_cmd", {
+    capture_id: captureId,
+    selection,
+    options,
+  });
+}
+
 /** Frames as the scan wants them — a `FrameMessage` already satisfies this. */
 export interface DiscoveryFrame {
   frame_id: number;
@@ -403,14 +425,9 @@ export interface DiscoveryFrame {
 }
 
 /**
- * Scan a capture for checksums: group by frame id, then work out what explains
- * each group.
- *
- * **One IPC call for the whole run.** This replaced a TypeScript loop that
- * issued one `batchTestCrc` call per polynomial — 4,080 round trips per (frame
- * id, position) for CRC-8 and 4,194,240 for CRC-16, which is why exhaustive
- * CRC-16 was never a realistic option. The polynomial search now recovers the
- * answer from residue agreement instead of enumerating init and xorOut.
+ * Scan frames the frontend holds and no capture does — client-side serial
+ * framing, and a session running without one. Everything capture-backed goes
+ * through `discoverChecksumsInCapture`; both land in the same Rust engine.
  */
 export async function discoverChecksums(
   frames: DiscoveryFrame[],

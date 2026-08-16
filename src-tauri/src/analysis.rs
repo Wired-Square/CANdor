@@ -1,14 +1,16 @@
 // ui/src-tauri/src/analysis.rs
 //
-// Headless analysis levers shared by the MCP read tools. Works against either a
-// SQLite capture (`capture_id`) or a WireTAP backend profile (`profile_id`):
+// Source-backed analysis levers. Works against either a SQLite capture
+// (`capture_id`) or a WireTAP backend (`profile_id`):
 //
 //   - frame_inventory   — per-frame-id rollup (count, first/last, dlc)
 //   - byte_profile      — per-byte static/counter/sensor roles for one frame
+//   - checksum_scan     — what explains each frame id, if anything
 //   - catalog_coverage  — diff a catalog against a source + confidence rollup
 //
-// The byte-role classifier (`compute_byte_profile`) is the headless Rust
-// equivalent of the frontend Discovery analysis — it needs no view open.
+// Most of these serve the MCP read tools and need no view open. `checksum_scan`
+// serves the Discovery panel as well, which is what stops the two from giving
+// different answers about one capture.
 
 use std::collections::{HashMap, HashSet};
 
@@ -16,12 +18,7 @@ use serde::Serialize;
 use tauri::AppHandle;
 use wiretap_catalog::model::{Confidence, Signal};
 
-/// Format a frame id as hex with the conventional padding (3 nibbles for
-/// standard ids, 8 for extended), matching the frontend's `formatFrameId`.
-fn hex_id(id: u32, is_extended: bool) -> String {
-    let width = if is_extended { 8 } else { 3 };
-    format!("0x{:0width$X}", id, width = width)
-}
+use crate::capture_db::{hex_id, InventoryRow};
 
 /// Where a query runs: a SQLite capture or a WireTAP backend profile.
 pub enum QuerySource {
@@ -43,17 +40,6 @@ pub fn resolve(
 }
 
 // ── Result types ─────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FrameInventoryRow {
-    pub frame_id: u32,
-    pub frame_id_hex: String,
-    pub is_extended: bool,
-    pub count: i64,
-    pub first_us: i64,
-    pub last_us: i64,
-    pub max_dlc: u8,
-}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ByteStat {
@@ -136,80 +122,56 @@ pub async fn frame_inventory(
     src: &QuerySource,
     start_time: Option<String>,
     end_time: Option<String>,
-) -> Result<Vec<FrameInventoryRow>, String> {
-    let raw = match src {
+) -> Result<Vec<InventoryRow>, String> {
+    match src {
         QuerySource::Backend(pid) => {
-            crate::dbquery::db_frame_inventory(app, pid, start_time, end_time).await?
+            crate::dbquery::db_frame_inventory(app, pid, start_time, end_time).await
         }
         QuerySource::Capture(cid) => crate::capture_db::frame_inventory(
             cid,
             start_time.as_deref().and_then(iso_to_micros),
             end_time.as_deref().and_then(iso_to_micros),
-        )?,
-    };
-    Ok(raw
-        .into_iter()
-        .map(|(frame_id, is_extended, count, first_us, last_us, max_dlc)| FrameInventoryRow {
-            frame_id,
-            frame_id_hex: hex_id(frame_id, is_extended),
-            is_extended,
-            count,
-            first_us,
-            last_us,
-            max_dlc,
-        })
-        .collect())
-}
-
-/// Fetch up to `sample_limit` payloads for one frame from a capture.
-fn capture_payloads(
-    capture_id: &str,
-    frame_id: u32,
-    is_extended: Option<bool>,
-    sample_limit: u32,
-) -> Result<Vec<Vec<u8>>, String> {
-    let mut sql =
-        String::from("SELECT payload FROM frames WHERE capture_id = ?1 AND frame_id = ?2");
-    let mut bind: Vec<Box<dyn rusqlite::types::ToSql>> =
-        vec![Box::new(capture_id.to_string()), Box::new(frame_id as i64)];
-    let mut idx = 3;
-    if let Some(ext) = is_extended {
-        sql.push_str(&format!(" AND is_extended = ?{}", idx));
-        bind.push(Box::new(ext as i32));
-        idx += 1;
+        ),
     }
-    // Most recent N (rowid is insertion/time order) — see db_fetch_frame_payloads.
-    sql.push_str(&format!(" ORDER BY rowid DESC LIMIT ?{}", idx));
-    bind.push(Box::new(sample_limit as i64));
-
-    let refs: Vec<&dyn rusqlite::types::ToSql> = bind.iter().map(|b| b.as_ref()).collect();
-    crate::capture_db::query_payloads(&sql, &refs)
 }
 
+/// `protocol` is the identity's other half; `None` matches any.
 async fn fetch_payloads(
     app: &AppHandle,
     src: &QuerySource,
+    protocol: Option<&str>,
     frame_id: u32,
     is_extended: Option<bool>,
     sample_limit: u32,
 ) -> Result<Vec<Vec<u8>>, String> {
     match src {
+        // No protocol and no stride: the backend serves a CAN-only archive, and a
+        // modulo window over a multi-month archive is a full scan where the
+        // tail query is an index seek. A capture is bounded and local, which is
+        // what makes striding it affordable.
         QuerySource::Backend(pid) => {
             crate::dbquery::db_fetch_frame_payloads(app, pid, frame_id, is_extended, sample_limit)
                 .await
         }
-        QuerySource::Capture(cid) => capture_payloads(cid, frame_id, is_extended, sample_limit),
+        QuerySource::Capture(cid) => crate::capture_db::sample_frame_payloads(
+            cid,
+            protocol,
+            frame_id,
+            is_extended,
+            sample_limit,
+        ),
     }
 }
 
 pub async fn byte_profile(
     app: &AppHandle,
     src: &QuerySource,
+    protocol: Option<&str>,
     frame_id: u32,
     is_extended: Option<bool>,
     sample_limit: u32,
 ) -> Result<ByteProfile, String> {
-    let payloads = fetch_payloads(app, src, frame_id, is_extended, sample_limit).await?;
+    let payloads = fetch_payloads(app, src, protocol, frame_id, is_extended, sample_limit).await?;
     let (max_len, bytes) = compute_byte_profile(&payloads);
     Ok(ByteProfile {
         frame_id,
@@ -220,58 +182,106 @@ pub async fn byte_profile(
     })
 }
 
+/// Which frames a scan covers.
+///
+/// Both variants read empty as "everything", the convention `FrameSelection`
+/// already documents — so neither door needs a third way to say "no filter".
+pub enum ScanFilter {
+    /// These ids under any protocol. What a caller holding bare numbers means,
+    /// and all a CAN-only PostgreSQL archive can be asked for.
+    Ids(Vec<u32>),
+    /// These (protocol, id) pairs — Discovery's frame selection.
+    Selection(crate::capture_store::FrameSelection),
+}
+
+impl ScanFilter {
+    fn matches(&self, protocol: &str, frame_id: u32) -> bool {
+        match self {
+            ScanFilter::Ids(ids) => ids.is_empty() || ids.contains(&frame_id),
+            ScanFilter::Selection(sel) => sel.is_empty() || sel.contains(protocol, frame_id),
+        }
+    }
+}
+
 /// Scan a whole source for checksums, frame id by frame id.
 ///
-/// The headless twin of Discovery's Checksum Discovery, reading payloads
-/// straight out of the capture or Postgres rather than having them shipped in.
-/// `frame_inventory` decides which ids exist; each is then sampled and analysed
-/// by the same `checksum_discovery` code the UI calls, so the two cannot drift.
+/// The one implementation behind both doors — Discovery's Checksum Discovery
+/// panel and the `frame_checksum_scan` MCP tool — reading payloads straight out
+/// of the capture or Postgres rather than having them shipped in over IPC.
+/// `frame_inventory` decides which frames exist; each is then sampled and
+/// analysed by the same crate code, so the two cannot give different answers
+/// about the same capture.
 pub async fn checksum_scan(
     app: &AppHandle,
     src: &QuerySource,
-    frame_ids: Option<Vec<u32>>,
+    filter: &ScanFilter,
     sample_limit: u32,
     options: wiretap_analysis::ChecksumScanOptions,
 ) -> Result<wiretap_analysis::ChecksumScanResult, String> {
-    let wanted: Option<std::collections::HashSet<u32>> =
-        frame_ids.map(|ids| ids.into_iter().collect());
-
     let inventory = frame_inventory(app, src, None, None).await?;
-    let mut findings = Vec::new();
-    let mut frame_count = 0usize;
-    // Counts the ids actually considered, so a `frame_ids` filter does not read
-    // back as ids that were skipped for being too thin.
-    let mut unique_frame_ids = 0usize;
 
-    for row in inventory {
-        if wanted.as_ref().is_some_and(|w| !w.contains(&row.frame_id)) {
-            continue;
-        }
-        unique_frame_ids += 1;
-        // Analysed as each id is fetched, so one id's payloads are resident at a
-        // time. Collecting every group first is tidier to read and holds the
-        // whole scan in memory at once — `sample_limit` and the id count are
-        // both unbounded (an MCP caller sets the first), and every payload is
-        // sampled down to 200 the moment it is analysed anyway.
-        let payloads =
-            fetch_payloads(app, src, row.frame_id, Some(row.is_extended), sample_limit).await?;
-        frame_count += payloads.len();
-        if payloads.len() < options.min_samples {
-            continue;
-        }
-        findings.push(wiretap_analysis::analyse_group(
-            wiretap_analysis::FrameKey::new(row.frame_id, row.is_extended),
-            &payloads,
-            &options,
-        ));
+    // A frame id is almost never both standard and extended, and filtering on
+    // `is_extended` takes the payload query off its covering index. Pay for it
+    // only where the inventory says the pair is genuinely ambiguous.
+    let mut seen: HashMap<(&str, u32), usize> = HashMap::new();
+    for row in &inventory {
+        *seen.entry((row.protocol.as_str(), row.frame_id)).or_default() += 1;
     }
 
-    Ok(wiretap_analysis::ChecksumScanResult {
-        skipped_frame_ids: unique_frame_ids - findings.len(),
-        findings,
-        frame_count,
-        unique_frame_ids,
-    })
+    let mut result = wiretap_analysis::ChecksumScanResult {
+        findings: Vec::new(),
+        frame_count: 0,
+        unique_frame_ids: 0,
+        skipped_frame_ids: 0,
+    };
+    // Fetched a chunk at a time so at most `SCAN_CHUNK_IDS` groups are resident
+    // — `sample_limit` and the id count are both unbounded — while `scan_groups`
+    // still gets several ids to spread across cores. One id at a time held the
+    // memory floor but cost the fan-out, which on a 60-id bus is most of the run.
+    let mut chunk: Vec<(wiretap_analysis::FrameKey, Vec<Vec<u8>>)> = Vec::new();
+
+    for row in &inventory {
+        if !filter.matches(&row.protocol, row.frame_id) {
+            continue;
+        }
+        let ambiguous = seen[&(row.protocol.as_str(), row.frame_id)] > 1;
+        let payloads = fetch_payloads(
+            app,
+            src,
+            Some(&row.protocol),
+            row.frame_id,
+            ambiguous.then_some(row.is_extended),
+            sample_limit,
+        )
+        .await?;
+        chunk.push((
+            wiretap_analysis::FrameKey::new(row.frame_id, row.is_extended),
+            payloads,
+        ));
+        if chunk.len() == SCAN_CHUNK_IDS {
+            accumulate(&mut result, wiretap_analysis::scan_groups(&chunk, &options));
+            chunk.clear();
+        }
+    }
+    if !chunk.is_empty() {
+        accumulate(&mut result, wiretap_analysis::scan_groups(&chunk, &options));
+    }
+
+    Ok(result)
+}
+
+/// Frame ids fetched before a batch is analysed. Bounds resident payloads while
+/// leaving `scan_groups` enough groups to be worth parallelising.
+const SCAN_CHUNK_IDS: usize = 16;
+
+fn accumulate(
+    total: &mut wiretap_analysis::ChecksumScanResult,
+    part: wiretap_analysis::ChecksumScanResult,
+) {
+    total.findings.extend(part.findings);
+    total.frame_count += part.frame_count;
+    total.unique_frame_ids += part.unique_frame_ids;
+    total.skipped_frame_ids += part.skipped_frame_ids;
 }
 
 // ── Catalog coverage ─────────────────────────────────────────────────────────
@@ -404,7 +414,7 @@ pub async fn catalog_coverage(
 
     // 2. Inventory the data source.
     let inventory = frame_inventory(app, src, start_time, end_time).await?;
-    let mut data_by_id: HashMap<u32, &FrameInventoryRow> = HashMap::new();
+    let mut data_by_id: HashMap<u32, &InventoryRow> = HashMap::new();
     for row in &inventory {
         // Keep the highest-count row when an id appears as both std/extended.
         data_by_id
@@ -432,10 +442,19 @@ pub async fn catalog_coverage(
         match data_by_id.get(&frame.frame_id) {
             Some(row) => {
                 let byte_roles = if include_byte_roles {
-                    let payloads =
-                        fetch_payloads(app, src, frame.frame_id, frame.is_extended, sample_limit)
-                            .await
-                            .unwrap_or_default();
+                    // `data_by_id` is keyed on the bare id, so this row is not
+                    // authoritative about protocol — asking for any keeps the
+                    // roles describing the same frames the row was counted from.
+                    let payloads = fetch_payloads(
+                        app,
+                        src,
+                        None,
+                        frame.frame_id,
+                        frame.is_extended,
+                        sample_limit,
+                    )
+                    .await
+                    .unwrap_or_default();
                     Some(compute_byte_profile(&payloads).1)
                 } else {
                     None

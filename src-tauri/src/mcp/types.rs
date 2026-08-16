@@ -286,7 +286,7 @@ pub struct OpenAppParams {
 // ── Analysis levers (work against a capture OR a WireTAP backend) ───────────
 
 fn default_sample_limit() -> u32 {
-    5000
+    crate::checksum_discovery::DEFAULT_SAMPLE_LIMIT
 }
 fn default_coverage_sample() -> u32 {
     2000
@@ -324,6 +324,10 @@ pub struct ByteProfileParams {
     pub profile_id: Option<String>,
     /// Frame id (decimal) to profile.
     pub frame_id: u32,
+    /// Restrict to one protocol ("can", "modbus", "serial"); omit for any. In a
+    /// mixed capture, omitting it profiles every protocol's rows together.
+    #[serde(default)]
+    pub protocol: Option<String>,
     /// Restrict to standard (false) or extended (true) frames; omit for both.
     #[serde(default)]
     pub is_extended: Option<bool>,

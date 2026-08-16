@@ -457,10 +457,16 @@ impl WireTapTools {
         Parameters(p): Parameters<ByteProfileParams>,
     ) -> Result<CallToolResult, McpError> {
         let src = crate::analysis::resolve(p.capture_id, p.profile_id).map_err(err)?;
-        let profile =
-            crate::analysis::byte_profile(&self.app, &src, p.frame_id, p.is_extended, p.sample_limit)
-                .await
-                .map_err(err)?;
+        let profile = crate::analysis::byte_profile(
+            &self.app,
+            &src,
+            p.protocol.as_deref(),
+            p.frame_id,
+            p.is_extended,
+            p.sample_limit,
+        )
+        .await
+        .map_err(err)?;
         ok_json(profile)
     }
 
@@ -472,13 +478,19 @@ impl WireTapTools {
         Parameters(p): Parameters<ChecksumScanParams>,
     ) -> Result<CallToolResult, McpError> {
         let src = crate::analysis::resolve(p.capture_id, p.profile_id).map_err(err)?;
+        // Every field named rather than `..Default::default()`: an option added
+        // to the crate must be a build failure here, not a setting silently
+        // unreachable from MCP.
+        let defaults = wiretap_analysis::ChecksumScanOptions::default();
         let options = wiretap_analysis::ChecksumScanOptions {
+            min_samples: defaults.min_samples,
+            positions: defaults.positions,
             search_custom_polynomials: p.search_custom_polynomials,
             min_likeness: p.min_likeness,
-            ..Default::default()
         };
+        let filter = crate::analysis::ScanFilter::Ids(p.frame_ids.unwrap_or_default());
         let result =
-            crate::analysis::checksum_scan(&self.app, &src, p.frame_ids, p.sample_limit, options)
+            crate::analysis::checksum_scan(&self.app, &src, &filter, p.sample_limit, options)
                 .await
                 .map_err(err)?;
         ok_json(result)

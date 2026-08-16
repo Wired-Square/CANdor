@@ -21,12 +21,20 @@ import {
   updateKnowledgeFromPayloadAnalysis,
 } from '../utils/decoderKnowledge';
 import type { FrameInfo } from './discoveryStore';
-import { parseFrameKey } from '../utils/frameKey';
+import { parseFrameKey, type ProtocolFrames } from '../utils/frameKey';
 import { useDiscoveryUIStore } from './discoveryUIStore';
 import { ANALYSIS_YIELD_MS } from '../constants';
 
 // Toolbox types
 export type ToolboxView = 'frames' | 'message-order' | 'changes' | 'serial-framing' | 'serial-payload' | 'checksum-discovery' | 'modbus-register-scan' | 'modbus-unit-scan';
+
+/**
+ * Where a checksum scan reads its payloads: a capture Rust can read itself, or
+ * the frames the frontend holds when nothing has written them to one.
+ */
+export type ChecksumScanSource =
+  | { captureId: string; selection: ProtocolFrames[] }
+  | { frames: FrameMessage[] };
 
 /** Tab ID and label for each analysis tool's output tab */
 export const TOOL_TAB_CONFIG: Record<string, { tabId: string; label: string }> = {
@@ -150,7 +158,7 @@ interface DiscoveryToolboxState {
   ) => Promise<SerialPayloadResult>;
 
   runChecksumDiscoveryAnalysis: (
-    frames: FrameMessage[]
+    source: ChecksumScanSource
   ) => Promise<ChecksumDiscoveryResult>;
 }
 
@@ -587,7 +595,7 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
     return serialPayloadResults;
   },
 
-  runChecksumDiscoveryAnalysis: async (frames) => {
+  runChecksumDiscoveryAnalysis: async (source) => {
     const { toolbox } = get();
 
     set((state) => ({ toolbox: { ...state.toolbox, isRunning: true } }));
@@ -595,11 +603,18 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
     // Allow React to render
     await new Promise(resolve => setTimeout(resolve, ANALYSIS_YIELD_MS));
 
-    // One IPC call for the whole scan — grouping, sampling, sweeping and
-    // solving all happen in Rust.
-    const { discoverChecksums } = await import('../api/checksums');
+    // One IPC call for the whole scan — reading, grouping, sampling, sweeping
+    // and solving all happen in Rust.
+    const { discoverChecksums, discoverChecksumsInCapture } = await import('../api/checksums');
 
-    const checksumDiscoveryResults = await discoverChecksums(frames, toolbox.checksumDiscovery);
+    const checksumDiscoveryResults =
+      'captureId' in source
+        ? await discoverChecksumsInCapture(
+            source.captureId,
+            source.selection,
+            toolbox.checksumDiscovery
+          )
+        : await discoverChecksums(source.frames, toolbox.checksumDiscovery);
 
     set((state) => ({
       toolbox: {

@@ -476,6 +476,9 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
       const { selectedFrames, captureMode, frameInfoMap } = frameStore;
       const frames = getDiscoveryFrameBuffer();
       const { framedData, isSerialMode, backendByteCount, bytesCaptureId } = serialStore;
+      // Framing applied on the client wins over the raw buffer; before any is
+      // applied the buffer is all there is.
+      const serialFrames: FrameMessage[] = framedData.length > 0 ? framedData : frames;
 
       // Handle serial framing analysis separately - only needs raw bytes
       if (toolbox.activeView === 'serial-framing') {
@@ -495,15 +498,15 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
       if (toolbox.activeView === 'serial-payload') {
         // Clear framing results so payload results are shown
         toolboxStore.setSerialFramingResults(null);
-        let serialFrames: FrameMessage[] = framedData.length > 0 ? framedData : frames;
+        let payloadFrames: FrameMessage[] = serialFrames;
 
         // If no local frames but backend buffer exists, fetch from backend
-        if (serialFrames.length === 0 && serialStore.framedCaptureId && serialStore.backendFrameCount > 0) {
+        if (payloadFrames.length === 0 && serialStore.framedCaptureId && serialStore.backendFrameCount > 0) {
           toolboxStore.setIsRunning(true);
           try {
             const { getCaptureFramesPaginatedById } = await import('../api/capture');
             const BATCH_SIZE = 50000;
-            serialFrames = [];
+            payloadFrames = [];
             let offset = 0;
             const totalCount = serialStore.backendFrameCount;
 
@@ -513,7 +516,7 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
                 offset,
                 BATCH_SIZE
               );
-              serialFrames.push(...(response.frames as FrameMessage[]));
+              payloadFrames.push(...(response.frames as FrameMessage[]));
               offset += response.frames.length;
               if (response.frames.length === 0) break; // Safety check
             }
@@ -524,8 +527,8 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
           }
         }
 
-        if (serialFrames.length === 0) return;
-        await toolboxStore.runSerialPayloadAnalysis(serialFrames);
+        if (payloadFrames.length === 0) return;
+        await toolboxStore.runSerialPayloadAnalysis(payloadFrames);
         return;
       }
 
@@ -544,18 +547,50 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
         targetKeys = selectedFrames;
       }
 
+      // The session's capture and the selection in the shape Rust wants, shared
+      // by the checksum scan below (which reads the capture in Rust) and the
+      // paging fetch after it (which does not, until the other tools follow).
+      const { useSessionStore } = await import('./sessionStore');
+      const sessionCaptureId =
+        useSessionStore.getState().sessions[uiStore.ioProfile ?? '']?.capture?.id ?? null;
+      const selection = groupKeysByProtocol(targetKeys);
+
+      if (toolbox.activeView === 'checksum-discovery') {
+        // Serial has never filtered by selection: an empty one scans the whole
+        // capture, and its frames live in a capture of their own.
+        if (isSerialMode) {
+          if (serialStore.framedCaptureId) {
+            await toolboxStore.runChecksumDiscoveryAnalysis({
+              captureId: serialStore.framedCaptureId,
+              selection: [],
+            });
+          } else if (serialFrames.length > 0) {
+            await toolboxStore.runChecksumDiscoveryAnalysis({ frames: serialFrames });
+          }
+          return;
+        }
+        // Empty means "nothing selected" here and "every frame" to the backend.
+        if (selection.length === 0) return;
+        if (sessionCaptureId) {
+          await toolboxStore.runChecksumDiscoveryAnalysis({ captureId: sessionCaptureId, selection });
+          return;
+        }
+        // Nothing has written these frames to a capture, so send what we hold.
+        const inMemory = frames.filter((f) => targetKeys.has(keyOf(f)));
+        if (inMemory.length > 0) {
+          await toolboxStore.runChecksumDiscoveryAnalysis({ frames: inMemory });
+        }
+        return;
+      }
+
       let selectedFrameData: FrameMessage[];
 
       if (isSerialMode) {
-        selectedFrameData = framedData.length > 0 ? framedData : frames;
+        selectedFrameData = serialFrames;
         if (selectedFrameData.length === 0) return;
       } else if (captureMode.enabled) {
         const { getCaptureFramesPaginatedFiltered } = await import('../api/capture');
-        const { useSessionStore } = await import('./sessionStore');
-        const sessionId = uiStore.ioProfile ?? '';
-        const captureId = useSessionStore.getState().sessions[sessionId]?.capture?.id ?? '';
-        const selection = groupKeysByProtocol(targetKeys);
-        if (selection.length === 0 || !captureId) return;
+        if (selection.length === 0 || !sessionCaptureId) return;
 
         toolboxStore.setIsRunning(true);
         await new Promise(resolve => setTimeout(resolve, 50));
@@ -565,13 +600,13 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
         let offset = 0;
 
         try {
-          const firstResponse = await getCaptureFramesPaginatedFiltered(captureId, 0, BATCH_SIZE, selection);
+          const firstResponse = await getCaptureFramesPaginatedFiltered(sessionCaptureId, 0, BATCH_SIZE, selection);
           const totalCount = firstResponse.total_count;
           selectedFrameData.push(...(firstResponse.frames as FrameMessage[]));
           offset = firstResponse.frames.length;
 
           while (offset < totalCount) {
-            const response = await getCaptureFramesPaginatedFiltered(captureId, offset, BATCH_SIZE, selection);
+            const response = await getCaptureFramesPaginatedFiltered(sessionCaptureId, offset, BATCH_SIZE, selection);
             selectedFrameData.push(...(response.frames as FrameMessage[]));
             offset += response.frames.length;
           }
@@ -591,9 +626,6 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
           break;
         case 'changes':
           await toolboxStore.runChangesAnalysis(selectedFrameData, frameInfoMap);
-          break;
-        case 'checksum-discovery':
-          await toolboxStore.runChecksumDiscoveryAnalysis(selectedFrameData);
           break;
       }
     },

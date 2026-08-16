@@ -467,11 +467,13 @@ struct InventoryEntry {
     max_dlc: u8,
 }
 
+/// The gateway serves the same CAN-only archive as a direct PostgreSQL profile,
+/// so every entry is CAN.
 pub async fn frame_inventory(
     profile: &IOProfile,
     start_time: Option<String>,
     end_time: Option<String>,
-) -> Result<Vec<(u32, bool, i64, i64, i64, u8)>, String> {
+) -> Result<Vec<crate::capture_db::InventoryRow>, String> {
     let api = resolve(profile)?;
     let mut path = String::from("/inventory");
     let mut params = Vec::new();
@@ -493,7 +495,17 @@ pub async fn frame_inventory(
     Ok(resp
         .entries
         .into_iter()
-        .map(|e| (e.frame_id, e.is_extended, e.count, e.first_us, e.last_us, e.max_dlc))
+        .map(|e| {
+            crate::capture_db::InventoryRow::new(
+                "can",
+                e.frame_id,
+                e.is_extended,
+                e.count,
+                e.first_us,
+                e.last_us,
+                e.max_dlc,
+            )
+        })
         .collect())
 }
 
