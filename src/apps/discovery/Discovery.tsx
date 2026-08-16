@@ -52,12 +52,13 @@ import { useDialogManager } from "../../hooks/useDialogManager";
 import { getFavoritesForProfile } from "../../utils/favorites";
 
 /** The protocol these frames are, for labelling and export naming. Entries without a
- *  protocol are skipped rather than counted as CAN. */
-function protocolOf(frameInfoMap: Map<string, { protocol?: string }>): string {
+ *  protocol are skipped, and no frames at all answers undefined rather than 'can' —
+ *  "nothing has arrived yet" is not evidence of CAN. */
+function protocolOf(frameInfoMap: Map<string, { protocol?: string }>): string | undefined {
   for (const info of frameInfoMap.values()) {
     if (info.protocol) return info.protocol;
   }
-  return 'can';
+  return undefined;
 }
 
 function DiscoveryInner() {
@@ -178,7 +179,7 @@ function DiscoveryInner() {
 
   const applySelectionSet = useCallback((selectionSet: SelectionSet) => {
     const uiState = useDiscoveryUIStore.getState();
-    const protocol = protocolOf(useDiscoveryFrameStore.getState().frameInfoMap);
+    const protocol = protocolOf(useDiscoveryFrameStore.getState().frameInfoMap) ?? 'can';
     useDiscoveryFrameStore.getState().applySelectionSet(
       selectionSet, protocol, uiState.setActiveSelectionSet, uiState.setSelectionSetDirty
     );
@@ -199,11 +200,9 @@ function DiscoveryInner() {
     const now = new Date();
     const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
     const timeStr = now.toTimeString().slice(0, 5).replace(':', '');
-    let protocol = protocolOf(useDiscoveryFrameStore.getState().frameInfoMap);
-    const frameBuffer = getDiscoveryFrameBuffer();
-    if (protocol === 'can' && frameBuffer.length > 0) {
-      protocol = frameBuffer[0].protocol || 'can';
-    }
+    let protocol = protocolOf(useDiscoveryFrameStore.getState().frameInfoMap)
+      ?? getDiscoveryFrameBuffer()[0]?.protocol
+      ?? 'can';
     if (useDiscoverySerialStore.getState().isSerialMode) {
       protocol = 'serial';
     }
@@ -720,9 +719,13 @@ function DiscoveryInner() {
     [frameInfoMap]
   );
 
-  // In capture mode the in-memory buffer is empty by design — rows are read from the
-  // capture — so fall back to what the capture says it holds rather than assuming CAN.
-  const protocolLabel = frames[0]?.protocol || protocolOf(frameInfoMap);
+  // Ordered by how direct the evidence is: a frame in hand, then what the capture says it
+  // holds (in capture mode the buffer is empty by design), then the session's own
+  // declaration — without that last one a Modbus session reads CAN until its first frame.
+  const protocolLabel = frames[0]?.protocol
+    || protocolOf(frameInfoMap)
+    || capabilities?.traits?.protocols?.[0]
+    || 'can';
 
   // Non-realtime sources: recorded (WireTAP backend, csv) and capture replay
   const isRecorded = capabilities?.traits.temporal_mode === "recorded"

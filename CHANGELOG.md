@@ -55,6 +55,8 @@ All notable changes to WireTAP will be documented in this file.
 
 - **Catalogue frames marked `disabled` are no longer polled.** The flag was read correctly and then ignored, so a frame you had turned off was polled anyway.
 
+- **A session waiting for its first frame no longer claims to be CAN.** Discovery labelled every source CAN until a frame arrived, so a Modbus or serial session sat under the wrong protocol for as long as the device took to answer — and a scan that drew no reply at all never corrected itself. The label now starts from what the source says it is, and narrows to what the frames actually are once they arrive.
+
 - **A silent device no longer kills a register scan.** An IO error or a timeout aborted the whole sweep, so a device that answers an unimplemented function code with silence rather than an exception ended the scan instead of narrowing it. Silence is now recorded as "this block did not respond", and after three in a row the sweep gives up on that register type and says so. Scans also gained a per-request timeout, a request budget that bounds how long one can run, repeat passes, and an optional reconnect between requests for devices that serve one conversation per socket.
 
 ### Changed
