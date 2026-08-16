@@ -1,17 +1,14 @@
 // ui/src-tauri/src/io/recorded/backend_api.rs
 //
 // Backend API Source — streams historical CAN data from the WireTAP backend
-// gateway over HTTP (the GET /v1/db/{db}/frames keyset cursor) instead of a
-// direct the WireTAP backend connection. The pacing / batching / emit loop mirrors
-// the streaming loop the deleted PostgresSource used; the fetch path is HTTP
-// (HTTP cursor vs DB portal). The two loops are intentionally kept parallel
-// — a future refactor could extract the shared pacing engine (see plan).
+// gateway over HTTP (the GET /v1/db/{db}/frames keyset cursor). This is the only
+// database-backed source; the pacing / batching / emit loop is its own, tuned for
+// frames arriving a page at a time over HTTP rather than from local storage.
 
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::collections::VecDeque;
 use std::time::Duration;
-use tauri::AppHandle;
 
 use super::base::{PlaybackControl, RecordedSourceState};
 use crate::capture_store::{self, CaptureKind};
@@ -46,7 +43,6 @@ impl Default for BackendApiSourceOptions {
 }
 
 pub struct BackendApiSource {
-    app: AppHandle,
     config: BackendApiConfig,
     options: BackendApiSourceOptions,
     reader_state: RecordedSourceState,
@@ -54,13 +50,12 @@ pub struct BackendApiSource {
 
 impl BackendApiSource {
     pub fn new(
-        app: AppHandle,
         session_id: String,
         config: BackendApiConfig,
         options: BackendApiSourceOptions,
     ) -> Self {
         let speed = options.speed;
-        Self { app, config, options, reader_state: RecordedSourceState::new(session_id, speed) }
+        Self { config, options, reader_state: RecordedSourceState::new(session_id, speed) }
     }
 }
 
@@ -93,8 +88,6 @@ impl IOSource for BackendApiSource {
             }
         });
         self.reader_state.mark_running(handle);
-        // app handle currently unused beyond construction parity with other recorded sources
-        let _ = &self.app;
         Ok(())
     }
 
@@ -283,7 +276,7 @@ fn emit_playback_position(
 }
 
 // ---------------------------------------------------------------------------
-// Stream loop (parallels run_postgres_stream)
+// Stream loop
 // ---------------------------------------------------------------------------
 
 async fn run_api_stream(

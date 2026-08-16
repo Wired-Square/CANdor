@@ -1,7 +1,7 @@
 // ui/src-tauri/src/capturequery.rs
 //
 // Query commands for running analytical queries against capture SQLite data.
-// Mirrors the the WireTAP backend query commands in dbquery.rs but operates on the
+// Mirrors the WireTAP backend query commands in dbquery.rs but operates on the
 // local capture_db instead.
 //
 // Schema changes to buffers.db MUST be recorded migrations — see
@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::capture_db;
-use crate::dbquery::{
+use crate::queryresults::{
     ByteChangeQueryResult, ByteChangeResult, DistributionQueryResult, DistributionResult,
     FirstLastQueryResult, FirstLastResult, FrameChangeQueryResult, FrameChangeResult,
     FrequencyBucket, FrequencyQueryResult, GapAnalysisQueryResult, GapResult,
@@ -266,7 +266,7 @@ pub fn capture_query_mirror_validation(
 ) -> Result<MirrorValidationQueryResult, String> {
     let query_start = std::time::Instant::now();
     let result_limit = limit.unwrap_or(10000);
-    let compare = crate::dbquery::compare_index_set(compare_byte_indices);
+    let compare = crate::queryresults::compare_index_set(compare_byte_indices);
 
     tlog!(
         "[capturequery] mirror_validation: capture_id='{}', mirror={}, source={}, tolerance_us={}, limit={}",
@@ -360,7 +360,7 @@ pub fn capture_query_mirror_validation(
         }
 
         if let Some((source_ts, source_payload)) = best_match {
-            let mismatch_indices = crate::dbquery::differing_byte_indices(
+            let mismatch_indices = crate::queryresults::differing_byte_indices(
                 mirror_payload,
                 source_payload,
                 compare.as_ref(),

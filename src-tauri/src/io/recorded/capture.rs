@@ -477,9 +477,19 @@ async fn run_capture_stream(
         metadata.as_ref().map(|m| m.name.as_str()).unwrap_or("unknown")
     );
 
-    // Streaming constants
-    use super::pacing::*;
+    // Streaming constants. Each recorded source paces itself — the backend API
+    // source buffers far less per batch because its frames arrive over HTTP.
     const CHUNK_SIZE: usize = 2000;
+    /// Frames per batch during high-speed playback (>1x).
+    const HIGH_SPEED_BATCH_SIZE: usize = 50;
+    /// Minimum inter-frame delay (ms), to avoid busy-spinning while paced.
+    const MIN_DELAY_MS: f64 = 1.0;
+    /// Interval (ms) between forced batch emissions while paced.
+    const PACING_INTERVAL_MS: u64 = 50;
+    /// Frames buffered per batch at unlimited speed (0 / instant replay).
+    const NO_LIMIT_BATCH_SIZE: usize = 1000;
+    /// Yield interval (ms) between batches at unlimited speed.
+    const NO_LIMIT_YIELD_MS: u64 = 10;
 
     let mut total_emitted = 0i64;
     let mut frame_index = 0usize;

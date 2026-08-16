@@ -286,7 +286,7 @@ Catalogue-sharing tokens are in a separate bucket (see
 Resolve secrets through **`credentials::resolve_secret(profile, field)`** — never
 re-implement the marker check. It reads the keyring when the marker is set and
 falls back to a plaintext connection value for pre-keyring profiles, so both
-shapes work at every call site (`sessions.rs` Postgres/API/MQTT branches,
+shapes work at every call site (`sessions.rs` API/MQTT branches,
 `dbquery.rs`). `apiclient.rs` uses the `has_stored_marker` predicate directly
 because it distinguishes "marker set but no entry" from "keyring error" in the
 message it returns.

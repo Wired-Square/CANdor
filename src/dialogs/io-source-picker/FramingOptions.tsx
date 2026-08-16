@@ -46,7 +46,6 @@ type Props = {
 /** Check if a profile supports framing (serial-based sources) */
 function supportsFraming(profile: IOProfile | null): boolean {
   if (!profile) return false;
-  // Serial port always supports framing
   return profile.kind === "serial";
 }
 

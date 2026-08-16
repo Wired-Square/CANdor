@@ -306,7 +306,7 @@ fn is_realtime_device(kind: &str) -> bool {
 /// This extracts the common device configuration logic used by both single-device
 /// and multi-device session creation.
 ///
-/// Returns None for non-realtime devices (postgres, mqtt, serial, capture)
+/// Returns None for non-realtime devices (wiretap, mqtt, serial, capture)
 /// which should use their direct readers instead.
 fn create_source_config_from_profile(
     profile: &IOProfile,
@@ -532,7 +532,7 @@ pub async fn create_reader_session(
     // Check if this profile is already in use (for single-handle devices)
     profile_tracker::can_use_profile(&profile.id, &profile.kind)?;
 
-    // Anonymous usage telemetry: which source kind gets started (postgres,
+    // Anonymous usage telemetry: which source kind gets started (wiretap,
     // wiretap, and any MCP-driven kind all land here).
     crate::telemetry::emit_feature_usage("io_source_start", &profile.kind);
 
@@ -600,12 +600,7 @@ pub async fn create_reader_session(
                     .unwrap_or(1000) as i32,
             };
 
-            Box::new(BackendApiSource::new(
-                app.clone(),
-                session_id.clone(),
-                config,
-                options,
-            ))
+            Box::new(BackendApiSource::new(session_id.clone(), config, options))
         }
         "modbus_tcp" => {
             let host = profile
@@ -817,7 +812,7 @@ pub async fn create_reader_session(
         }
         kind => {
             return Err(format!(
-                "Unsupported reader type '{}'. Supported: modbus_tcp, mqtt, virtual, gvret_tcp, gvret_usb, postgres, serial, slcan, socketcan, gs_usb",
+                "Unsupported reader type '{}'. Supported: modbus_tcp, mqtt, virtual, gvret_tcp, gvret_usb, wiretap, csv, serial, slcan, socketcan, gs_usb",
                 kind
             ));
         }
@@ -831,7 +826,7 @@ pub async fn create_reader_session(
     let result = create_session(app, session_id.clone(), reader, subscriber_id, app_name, None, vec![]).await;
 
     // Auto-start the session after creation (only for real-time devices)
-    // Playback sources (postgres) should NOT auto-start because frames would be emitted
+    // Playback sources should NOT auto-start because frames would be emitted
     // before the frontend has registered its listener and set up event handlers.
     // The frontend will call start_reader_session after registering the listener.
     let is_playback_source = profile.kind == "wiretap";

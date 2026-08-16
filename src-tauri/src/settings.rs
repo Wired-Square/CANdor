@@ -7,7 +7,7 @@ use tauri::{AppHandle, Manager};
 pub struct IOProfile {
     pub id: String,
     pub name: String,
-    pub kind: String, // "mqtt", "postgres", "gvret_tcp"
+    pub kind: String, // "mqtt", "wiretap", "gvret_tcp"
     pub connection: HashMap<String, serde_json::Value>,
     #[serde(default)]
     pub preferred_catalog: Option<String>,
@@ -624,17 +624,16 @@ pub async fn load_settings(app: AppHandle) -> Result<AppSettings, String> {
         // in the settings file that every picker hides and every reader rejects,
         // and say so once, because a profile disappearing silently is worse than
         // one that fails.
-        let dropped: Vec<String> = settings
-            .io_profiles
-            .iter()
-            .filter(|p| p.kind == "postgres")
-            .map(|p| p.name.clone())
-            .collect();
-        if !dropped.is_empty() {
-            for profile in settings.io_profiles.iter().filter(|p| p.kind == "postgres") {
-                let _ = crate::credentials::delete_all_credentials(&profile.id);
+        let mut dropped: Vec<String> = Vec::new();
+        settings.io_profiles.retain(|p| {
+            if p.kind != "postgres" {
+                return true;
             }
-            settings.io_profiles.retain(|p| p.kind != "postgres");
+            let _ = crate::credentials::delete_all_credentials(&p.id);
+            dropped.push(p.name.clone());
+            false
+        });
+        if !dropped.is_empty() {
             let notice = format!(
                 "Removed {} direct PostgreSQL source{} ({}). WireTAP now reaches a database \
                  through a WireTAP backend profile; add one under Settings → Data I/O.",
@@ -643,7 +642,7 @@ pub async fn load_settings(app: AppHandle) -> Result<AppSettings, String> {
                 dropped.join(", ")
             );
             tlog!("[settings] {}", notice);
-            crate::record_startup_error(notice);
+            crate::record_startup_notice(notice);
             save_settings(app.clone(), settings.clone()).await?;
         }
 

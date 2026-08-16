@@ -283,6 +283,23 @@ export function isRealtimeProfile(profile: IOProfile): boolean {
 }
 
 /**
+ * Check if a profile answers time-range queries and carries a default playback
+ * speed — what bookmarks and the Query app need.
+ *
+ * Deliberately a kind check rather than `temporalMode === "recorded"`: those
+ * coincide only because the WireTAP backend is currently the sole recorded
+ * kind. A file-backed recorded source would be recorded and not queryable.
+ */
+export function isTimeRangeCapableKind(kind: string | undefined): boolean {
+  return kind === "wiretap";
+}
+
+/** Profiles that answer time-range queries. */
+export function getTimeRangeCapableProfiles(profiles: IOProfile[]): IOProfile[] {
+  return profiles.filter((p) => isTimeRangeCapableKind(p.kind));
+}
+
+/**
  * Check if a profile supports multi-source (multi-bus) mode.
  */
 export function isMultiSourceCapable(profile: IOProfile): boolean {

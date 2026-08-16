@@ -15,7 +15,7 @@ pub mod post_session;
 pub mod traits; // InterfaceTraits validation
 pub(crate) mod types;
 
-// Recorded sources (capture, csv, postgres)
+// Recorded sources (capture, csv, WireTAP backend)
 mod recorded;
 
 // Real-time drivers
@@ -343,7 +343,7 @@ impl IOCapabilities {
         }
     }
 
-    /// Create capabilities for a recorded/replay CAN source (capture, csv, postgres).
+    /// Create capabilities for a recorded/replay CAN source (capture, csv, WireTAP backend).
     ///
     /// Defaults:
     /// - Supports pause/resume and speed control
@@ -1928,7 +1928,7 @@ fn get_rss_mb() -> Option<f64> {
 /// Log current session status (for debugging)
 async fn log_session_status() {
     let sessions = IO_SESSIONS.lock().await;
-    let running_queries = crate::dbquery::get_running_queries().await;
+    let running_queries = crate::apiclient::running_queries().await;
 
     if sessions.is_empty() && running_queries.is_empty() {
         return; // Don't log if nothing active

@@ -331,7 +331,6 @@
       "formatsNone": "none",
       "db": "db",
       "url": "url",
-      "source": "source",
       "framing": "framing",
       "timeout": "timeout",
       "baud": "baud",
@@ -421,7 +420,6 @@
     "common": {
       "host": "Host",
       "port": "Port",
-      "username": "Username",
       "usernameOptional": "Username (optional)",
       "connectionTimeout": "Connection Timeout (seconds)",
       "tcpKeepalive": "TCP Keepalive",

@@ -46,7 +46,7 @@ import CreateBookmarkDialog from "./dialogs/CreateBookmarkDialog";
 import { useSettingsStore, type SettingsSection } from "./stores/settingsStore";
 import { useSettingsForms } from "./hooks/useSettingsForms";
 import { useSettingsHandlers } from "./hooks/useSettingsHandlers";
-import { getTimeRangeCapableProfiles } from "../../utils/profileFilters";
+import { getTimeRangeCapableProfiles } from "../../utils/profileTraits";
 import { isIOS } from "../../utils/platform";
 import { onStoreChanged } from "../../api/store";
 

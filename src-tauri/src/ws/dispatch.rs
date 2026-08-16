@@ -567,7 +567,7 @@ pub async fn dispatch_command(
         name if name.starts_with("catalog.") => {
             crate::catalog::dispatch_catalog_command(name, params).await
         }
-        "app.startup_errors" => Ok(serde_json::json!(crate::startup_errors())),
+        "app.startup_notices" => Ok(serde_json::json!(crate::startup_notices())),
         _ => Err(format!("Unknown command: {op_name}")),
     }
 }

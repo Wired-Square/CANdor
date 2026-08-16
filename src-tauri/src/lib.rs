@@ -14,6 +14,7 @@ mod dashboard;
 mod checksums;
 mod credentials;
 mod dbquery;
+mod queryresults;
 mod device_scan;
 #[cfg(not(target_os = "ios"))]
 mod flashers;
@@ -37,20 +38,41 @@ use std::sync::Mutex;
 #[cfg(not(target_os = "ios"))]
 use tauri::menu::*;
 
-/// Setup-time component failures, surfaced to the UI via the
-/// `app.startup_errors` WS command — a subsystem that dies at startup must
-/// not be silent.
-static STARTUP_ERRORS: once_cell::sync::Lazy<Mutex<Vec<String>>> =
+/// Something about startup the user must be told, surfaced via the
+/// `app.startup_notices` WS command.
+///
+/// Two levels, because they read differently and must not be shown the same
+/// way: a subsystem that died is a standing failure the user has to act on; a
+/// migration that ran is finished news. Dressing the second as the first is how
+/// people learn to dismiss the banner unread.
+#[derive(Clone, serde::Serialize)]
+pub(crate) struct StartupNotice {
+    /// `"error"` or `"info"`.
+    pub level: &'static str,
+    pub message: String,
+}
+
+static STARTUP_NOTICES: once_cell::sync::Lazy<Mutex<Vec<StartupNotice>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(Vec::new()));
 
-pub(crate) fn record_startup_error(msg: String) {
-    if let Ok(mut errors) = STARTUP_ERRORS.lock() {
-        errors.push(msg);
+fn record_startup(level: &'static str, message: String) {
+    if let Ok(mut notices) = STARTUP_NOTICES.lock() {
+        notices.push(StartupNotice { level, message });
     }
 }
 
-pub(crate) fn startup_errors() -> Vec<String> {
-    STARTUP_ERRORS.lock().map(|e| e.clone()).unwrap_or_default()
+/// A subsystem is dead for this run and the user must be told.
+pub(crate) fn record_startup_error(msg: String) {
+    record_startup("error", msg);
+}
+
+/// Something changed that the user should know about; nothing is broken.
+pub(crate) fn record_startup_notice(msg: String) {
+    record_startup("info", msg);
+}
+
+pub(crate) fn startup_notices() -> Vec<StartupNotice> {
+    STARTUP_NOTICES.lock().map(|n| n.clone()).unwrap_or_default()
 }
 use tauri::{AppHandle, Emitter, Manager, State};
 #[cfg(not(target_os = "ios"))]

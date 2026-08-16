@@ -30,7 +30,6 @@ type Props = {
 /** Check if a profile supports filtering (serial-based sources) */
 function supportsFiltering(profile: IOProfile | null): boolean {
   if (!profile) return false;
-  // Serial port always supports filtering
   return profile.kind === "serial";
 }
 

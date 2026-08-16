@@ -16,7 +16,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { storeGet, storeSet } from "../api/store";
-import { getStartupErrors } from "../api/appStatus";
+import { getStartupNotices, type StartupNotice } from "../api/appStatus";
 import FlashNotification from "./FlashNotification";
 import { icon2xl } from "../styles/spacing";
 import { bgPrimary, textPrimary, textSecondary, textTertiary } from "../styles/colourTokens";
@@ -286,14 +286,14 @@ export default function MainLayout() {
   // connecting when the layout first mounts (command() rejects rather than
   // queues when disconnected). Primary window only — every window mounts a
   // MainLayout, and N copies of the same toast help nobody.
-  const [startupErrors, setStartupErrors] = useState<string[]>([]);
+  const [startupNotices, setStartupNotices] = useState<StartupNotice[]>([]);
   useEffect(() => {
     if (isDynamicWindow) return;
     let cancelled = false;
     const fetchErrors = (attempt: number) => {
-      getStartupErrors()
-        .then((errors) => {
-          if (!cancelled && errors.length > 0) setStartupErrors(errors);
+      getStartupNotices()
+        .then((notices) => {
+          if (!cancelled && notices.length > 0) setStartupNotices(notices);
         })
         .catch(() => {
           if (!cancelled && attempt < 5) {
@@ -663,14 +663,24 @@ export default function MainLayout() {
           prefixHeaderActionsComponent={PrefixHeaderActions}
         />
       </div>
-      {startupErrors.length > 0 && (
-        <FlashNotification
-          message={startupErrors.join(" — ")}
-          type="error"
-          duration={0}
-          onDismiss={() => setStartupErrors([])}
-        />
-      )}
+      {/* Failures and finished news are separate toasts: a dead subsystem stays
+          until dismissed, a completed migration reads once and goes. Joining
+          them would put "your profile was migrated" inside a red banner. */}
+      {(["error", "info"] as const).map((level) => {
+        const forLevel = startupNotices.filter((n) => n.level === level);
+        if (forLevel.length === 0) return null;
+        return (
+          <FlashNotification
+            key={level}
+            message={forLevel.map((n) => n.message).join(" — ")}
+            type={level}
+            duration={level === "error" ? 0 : 15000}
+            onDismiss={() =>
+              setStartupNotices((prev) => prev.filter((n) => n.level !== level))
+            }
+          />
+        );
+      })}
     </div>
   );
 }

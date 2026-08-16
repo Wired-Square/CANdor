@@ -425,7 +425,7 @@ impl WireTapTools {
         bridge_call("live.frameMap", p).await
     }
 
-    // ── Headless analysis levers (capture OR postgres) ───────────────────────
+    // ── Headless analysis levers (capture OR WireTAP backend) ───────────────────────
 
     #[tool(description = "Per-frame-id rollup (count, first/last timestamp, max dlc, extended) for a capture (capture_id) or WireTAP backend profile (profile_id). Headless — no view needed. Use to see which frame ids exist and how often.")]
     async fn frame_inventory(
@@ -472,7 +472,7 @@ impl WireTapTools {
         ok_json(report)
     }
 
-    // ── Exposed analytical engines (dispatch capture vs postgres) ────────────
+    // ── Exposed analytical engines (dispatch capture vs WireTAP backend) ────────────
 
     #[tool(description = "Find timestamps where one payload byte of a frame changed value. Source: capture_id or profile_id.")]
     async fn query_byte_changes(

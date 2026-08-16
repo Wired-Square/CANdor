@@ -278,7 +278,7 @@ pub struct OpenAppParams {
     pub args: Option<serde_json::Value>,
 }
 
-// ── Analysis levers (work against a capture OR a postgres profile) ───────────
+// ── Analysis levers (work against a capture OR a WireTAP backend) ───────────
 
 fn default_sample_limit() -> u32 {
     5000
@@ -293,7 +293,7 @@ fn default_bucket_ms() -> u32 {
     1000
 }
 
-/// Per-frame-id rollup (count, first/last, dlc) for a capture or postgres source.
+/// Per-frame-id rollup (count, first/last, dlc) for a capture or WireTAP backend source.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct FrameInventoryParams {
     /// Capture ID (mutually exclusive with `profile_id`).
@@ -349,7 +349,7 @@ pub struct CatalogCoverageParams {
     pub end_time: Option<String>,
 }
 
-// ── Exposed analytical engines (capture OR postgres) ─────────────────────────
+// ── Exposed analytical engines (capture OR WireTAP backend) ─────────────────────────
 
 /// Base params for a per-frame analytical query (frame_changes, first_last).
 #[derive(Debug, Deserialize, JsonSchema)]

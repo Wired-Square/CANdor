@@ -656,7 +656,7 @@ pub fn get_frame_info(capture_id: &str) -> Result<Vec<CaptureFrameInfo>, String>
 }
 
 /// Per-frame-id rollup for a capture: (frame_id, is_extended, count, first_us,
-/// last_us, max_dlc). Optional time bounds in microseconds. Mirrors the postgres
+/// last_us, max_dlc). Optional time bounds in microseconds. Mirrors the WireTAP backend
 /// `db_frame_inventory` shape so callers can treat both sources uniformly.
 pub fn frame_inventory(
     capture_id: &str,

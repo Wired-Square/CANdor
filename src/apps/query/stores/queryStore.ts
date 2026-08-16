@@ -352,7 +352,7 @@ interface QueryState {
   reset: () => void;
 
   // Queue actions
-  enqueueQuery: (sourceId: string, sourceType: "postgres" | "capture", timeBounds?: TimeBounds | null, resultLimit?: number) => string;
+  enqueueQuery: (sourceId: string, sourceType: "backend" | "capture", timeBounds?: TimeBounds | null, resultLimit?: number) => string;
   updateQueueItem: (id: string, updates: Partial<QueuedQuery>) => void;
   removeQueueItem: (id: string) => void;
   clearQueue: () => void;
@@ -473,7 +473,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     }),
 
   // Queue actions
-  enqueueQuery: (sourceId: string, sourceType: "postgres" | "capture", inputBounds?: TimeBounds | null, resultLimit?: number) => {
+  enqueueQuery: (sourceId: string, sourceType: "backend" | "capture", inputBounds?: TimeBounds | null, resultLimit?: number) => {
     const { queryType, queryParams } = get();
     const id = `query_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
@@ -496,7 +496,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       id,
       queryType,
       queryParams: { ...queryParams },
-      profileId: sourceType === "postgres" ? sourceId : "",
+      profileId: sourceType === "backend" ? sourceId : "",
       captureId: sourceType === "capture" ? sourceId : undefined,
       status: "pending",
       submittedAt: Date.now(),

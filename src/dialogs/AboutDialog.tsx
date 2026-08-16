@@ -56,7 +56,7 @@ export default function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
               <li>{t("about.features.canAnalysis")}</li>
               <li>{t("about.features.modbus")}</li>
               <li>{t("about.features.serial")}</li>
-              <li>{t("about.features.mqttthe WireTAP backend")}</li>
+              <li>{t("about.features.mqttBackend")}</li>
               <li>{t("about.features.multiSource")}</li>
               <li>{t("about.features.catalogue")}</li>
               <li>{t("about.features.transmission")}</li>

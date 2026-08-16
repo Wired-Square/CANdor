@@ -14,9 +14,9 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
 use crate::credentials::{self, get_credential};
-use crate::dbquery::{
-    ByteChangeQueryResult, DatabaseActivityResult, DistributionQueryResult, FirstLastQueryResult,
-    FrameChangeQueryResult, FrequencyQueryResult, GapAnalysisQueryResult,
+use crate::queryresults::{
+    differing_byte_indices, ByteChangeQueryResult, DatabaseActivityResult, DistributionQueryResult,
+    FirstLastQueryResult, FrameChangeQueryResult, FrequencyQueryResult, GapAnalysisQueryResult,
     MirrorValidationQueryResult, MuxStatisticsQueryResult, PatternSearchQueryResult,
 };
 use crate::settings::IOProfile;
@@ -34,12 +34,13 @@ struct Endpoint {
     api_key: String,
 }
 
+/// An in-flight query: what to DELETE to cancel it, and what to say about it.
+/// The endpoint is kept apart from the reportable half because it holds the API
+/// key, which must not reach a log line.
 #[derive(Clone)]
 struct InFlight {
     endpoint: Endpoint,
-    query_type: String,
-    profile_id: String,
-    started_at: std::time::Instant,
+    info: RunningQueryInfo,
 }
 
 /// A running query, for status logging.
@@ -142,9 +143,11 @@ async fn post_query<T: DeserializeOwned>(
         query_id.to_string(),
         InFlight {
             endpoint: api.endpoint(),
-            query_type: path.trim_start_matches('/').to_string(),
-            profile_id: api.profile_id.clone(),
-            started_at: std::time::Instant::now(),
+            info: RunningQueryInfo {
+                query_type: path.trim_start_matches('/').to_string(),
+                profile_id: api.profile_id.clone(),
+                started_at: std::time::Instant::now(),
+            },
         },
     );
     let result = async {
@@ -168,16 +171,7 @@ pub async fn running_queries() -> Vec<(String, RunningQueryInfo)> {
         .lock()
         .await
         .iter()
-        .map(|(id, q)| {
-            (
-                id.clone(),
-                RunningQueryInfo {
-                    query_type: q.query_type.clone(),
-                    profile_id: q.profile_id.clone(),
-                    started_at: q.started_at,
-                },
-            )
-        })
+        .map(|(id, q)| (id.clone(), q.info.clone()))
         .collect()
 }
 
@@ -295,7 +289,7 @@ pub async fn mirror_validation(
     // apart from `results_count`.
     if let Some(compare) = compare {
         out.results.retain_mut(|r| {
-            r.mismatch_indices = crate::dbquery::differing_byte_indices(
+            r.mismatch_indices = differing_byte_indices(
                 &r.mirror_payload,
                 &r.source_payload,
                 Some(&compare),

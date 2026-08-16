@@ -9,7 +9,7 @@ import type { CatalogMetadata } from "../../../api/catalog";
 import AppTopBar from "../../../components/AppTopBar";
 
 interface Props {
-  // IO profile selection (filtered to postgres only)
+  // IO profile selection (WireTAP backend profiles only)
   ioProfiles: IOProfile[];
   ioProfile: string | null;
   defaultReadProfileId?: string | null;

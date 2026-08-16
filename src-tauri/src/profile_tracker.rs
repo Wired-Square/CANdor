@@ -101,7 +101,7 @@ const SINGLE_HANDLE_KINDS: &[&str] = &["slcan", "serial"];
 /// Check if a profile can be used (not already in use by another session)
 ///
 /// For single-handle devices (slcan, serial), only one session is allowed.
-/// For multi-handle devices (gvret_tcp, postgres, etc.), multiple sessions are OK.
+/// For multi-handle devices (gvret_tcp, wiretap, etc.), multiple sessions are OK.
 ///
 /// Returns Ok(()) if the profile can be used, or an error message if it's in use.
 pub fn can_use_profile(profile_id: &str, profile_kind: &str) -> Result<(), String> {

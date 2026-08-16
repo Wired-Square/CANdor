@@ -4,11 +4,18 @@
 
 import { wsTransport } from "../services/wsTransport";
 
+/** Something about startup the user must be told, and how loudly. */
+export interface StartupNotice {
+  /** `"error"` — a subsystem is dead for this run; `"info"` — finished news. */
+  level: "error" | "info";
+  message: string;
+}
+
 /**
- * Failures from backend setup-time component initialisation (capture
- * database, transmit history, …). Non-empty means a subsystem is dead for
- * this run and the user must be told.
+ * Notices from backend startup: setup-time component failures (capture
+ * database, transmit history, …) at `"error"`, and completed migrations at
+ * `"info"`.
  */
-export function getStartupErrors(): Promise<string[]> {
-  return wsTransport.command("app.startup_errors", {});
+export function getStartupNotices(): Promise<StartupNotice[]> {
+  return wsTransport.command("app.startup_notices", {});
 }

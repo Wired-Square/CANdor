@@ -16,7 +16,7 @@ import { useSessionStore } from "../../stores/sessionStore";
 import { useSettingsStore } from "../settings/stores/settingsStore";
 import { buildCatalogPath } from "../../utils/catalogUtils";
 import { getIOKindLabel } from "../../utils/ioKindLabel";
-import { getTimeRangeCapableProfiles } from "../../utils/profileFilters";
+import { getTimeRangeCapableProfiles } from "../../utils/profileTraits";
 
 import { useDialogManager } from "../../hooks/useDialogManager";
 import { useQueryHandlers } from "./hooks/useQueryHandlers";
@@ -169,7 +169,7 @@ function QueryInner() {
   } = manager;
 
   // The query source is derived from the session: a capture replay sets
-  // sourceProfileId to the capture id (isCaptureMode), otherwise it's a postgres
+  // sourceProfileId to the capture id (isCaptureMode), otherwise it's a backend
   // profile. Queries target whichever is set — they are mutually exclusive.
   const captureId = isCaptureMode && isCaptureProfileId(sourceProfileId) ? sourceProfileId : null;
   const profileId = captureId ? null : sourceProfileId;
@@ -220,7 +220,7 @@ function QueryInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionCatalogPath, session.sessionId, sourceProfileId, settings?.decoder_dir]);
 
-  // Determine active source — a capture replay or a postgres profile
+  // Determine active source — a capture replay or a WireTAP backend profile
   const hasSource = !!sourceProfileId;
 
   // Load favourites when source profile changes
@@ -357,10 +357,7 @@ function QueryInner() {
     if (captureId) return [{ label: t("protocols.capture"), color: "amber" as const }];
     if (profileId) {
       const profile = (settings?.io_profiles ?? []).find((p) => p.id === profileId);
-      const label = profile?.kind === "wiretap"
-        ? getIOKindLabel("wiretap")
-        : t("protocols.postgres");
-      return [{ label, color: "blue" as const }];
+      return [{ label: getIOKindLabel(profile?.kind), color: "blue" as const }];
     }
     return [];
   }, [captureId, profileId]);

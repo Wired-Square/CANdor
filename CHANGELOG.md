@@ -6,7 +6,7 @@ All notable changes to WireTAP will be documented in this file.
 
 ### Changed
 
-- **A database-backed source is now a WireTAP backend, and only that.** WireTAP used to connect to PostgreSQL directly as well, which meant every analytical query existed twice — once as SQL in the app, once over the backend's API — and the two had to be kept saying the same thing. Everything now goes through the backend, which owns the database and authenticates with an API key rather than database credentials. If you have a direct PostgreSQL source, it is removed on upgrade and named in a notice; add a WireTAP backend profile under Settings → Data I/O in its place. Every query, replay and analysis tool works exactly as before against a backend profile.
+- **A database source is now a WireTAP backend, and only that.** Connecting straight to a PostgreSQL server is no longer offered — the backend owns the database and authenticates with an API key instead of database credentials. If you have a direct PostgreSQL source, it is removed when you upgrade and named in a notice; add a WireTAP backend profile under Settings → Data I/O in its place. Queries, replay and the analysis tools all behave as before against one.
 
 ## [0.10.2] - 2026-08-14
 

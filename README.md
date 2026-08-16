@@ -51,7 +51,6 @@ To use gs_usb, flash your CANable with [candleLight firmware](https://github.com
 ## Data Sources
 
 - Live CAN hardware (GVRET, slcan, gs_usb, SocketCAN)
-- WireTAP backend (historical replay with speed control)
 - WireTAP backend gateway (historical replay + analysis over its HTTP API, no direct database access)
 - CSV file import
 - In-memory buffer replay

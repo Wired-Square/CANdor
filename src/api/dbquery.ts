@@ -418,7 +418,7 @@ export async function queryPatternSearch(
 /**
  * Cancel a running database query.
  *
- * Sends a cancel request to the the WireTAP backend server to terminate the query.
+ * Sends a cancel request to the WireTAP backend to terminate the query.
  */
 export async function cancelQuery(queryId: string): Promise<void> {
   return invoke("db_cancel_query", { queryId });

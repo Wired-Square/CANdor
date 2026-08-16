@@ -7,7 +7,6 @@ mod backend_api;
 mod base;
 mod capture;
 mod csv;
-mod pacing;
 
 // Re-export public items
 pub use backend_api::{BackendApiConfig, BackendApiSource, BackendApiSourceOptions};

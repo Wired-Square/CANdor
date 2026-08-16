@@ -202,7 +202,7 @@ export default function QueryBuilderPanel({
     if (captureId) {
       enqueueQuery(captureId, "capture", timeBounds, limitOverride);
     } else if (profileId) {
-      enqueueQuery(profileId, "postgres", timeBounds, limitOverride);
+      enqueueQuery(profileId, "backend", timeBounds, limitOverride);
     }
   }, [profileId, captureId, timeBounds, limitOverride, enqueueQuery]);
 
