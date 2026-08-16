@@ -188,8 +188,14 @@ The reference dataset is ~12 months of CAN dumps (individual frame ids exceed 10
 rows). `frame_inventory` and the per-frame samplers complete against it, but:
 
 - prefer time bounds on `frame_inventory` when you only need a window;
-- **`frame_checksum_scan` against a WireTAP backend is untimed.** `sample_limit`
-  multiplies by the id count and every group is a network round trip; there is no
-  progress or cancellation. Scope it with `frame_ids` until someone measures it;
+- **`frame_checksum_scan` against a WireTAP backend costs seconds, not
+  milliseconds.** Measured over a live backend: all 62 ids of the Sungrow bus at
+  the default `sample_limit` of 5000 — 310,000 payloads, one round trip per id,
+  no time bounds — completed in under ~20 s of app time. The same scan over a
+  SQLite capture is single-digit milliseconds. `sample_limit` binds on every id
+  on any real archive, so the fetch dominates; the solve is CPU-local and stays
+  in the low milliseconds. There is still no progress or cancellation, so expect
+  a scan to sit there for that long, and scope it with `frame_ids` if you only
+  care about a few;
 - leave `catalog_coverage`'s `include_byte_roles` off unless you want the per-frame
   byte breakdown — the frame/confidence diff is a single aggregation and stays cheap.
