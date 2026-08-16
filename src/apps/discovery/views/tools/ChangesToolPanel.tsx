@@ -1,7 +1,8 @@
 // ui/src/apps/discovery/views/tools/ChangesToolPanel.tsx
 
 import { useDiscoveryStore } from "../../../../stores/discoveryStore";
-import { bgSurface } from "../../../../styles";
+import { toolPanelInput, toolPanelLabel } from "../../../../styles/inputStyles";
+import { textMuted } from "../../../../styles/colourTokens";
 
 export default function ChangesToolPanel() {
   const options = useDiscoveryStore((s) => s.toolbox.changes);
@@ -10,17 +11,17 @@ export default function ChangesToolPanel() {
   return (
     <div className="space-y-2 text-xs">
       <div className="space-y-1">
-        <label className="text-[color:var(--text-muted)]">Max Change Examples</label>
+        <label className={toolPanelLabel}>Max Change Examples</label>
         <input
           type="number"
           min={1}
           max={100}
           value={options.maxExamples}
           onChange={(e) => updateOptions({ maxExamples: Math.max(1, Math.min(100, Number(e.target.value) || 30)) })}
-          className={`w-full px-2 py-1 rounded border border-[color:var(--border-default)] ${bgSurface} text-[color:var(--text-primary)]`}
+          className={toolPanelInput}
         />
       </div>
-      <p className="text-[color:var(--text-muted)]">
+      <p className={textMuted}>
         Maximum unique payload samples to analyse per frame ID.
       </p>
     </div>

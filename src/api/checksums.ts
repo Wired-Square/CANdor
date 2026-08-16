@@ -352,3 +352,128 @@ export async function sweepChecksumSpecs(
   if (specs.length === 0) return { results: [] };
   return invoke<ChecksumSweepResponse>("sweep_checksum_specs_cmd", { frames, specs });
 }
+
+// ============================================================================
+// Discovery across a capture
+// ============================================================================
+
+/** The additive families the solver recognises. */
+export type AdditiveOp = "xor" | "sum" | "negatedSum";
+
+/** One conventional `init` and the `xorOut` it implies for a recovered residue. */
+export interface CrcAlternative {
+  init: number;
+  xorOut: number;
+}
+
+/**
+ * A recovered CRC.
+ *
+ * `init`/`xorOut` are the canonical pair — always exact, and for fixed-length
+ * payloads never the *only* pair that fits, which is what `alternatives` is
+ * for. Present one of them as the answer and you are guessing.
+ */
+export interface CrcParameters {
+  /** 8 or 16. */
+  width: number;
+  polynomial: number;
+  reflectIn: boolean;
+  reflectOut: boolean;
+  init: number;
+  xorOut: number;
+  /** True when the polynomial is a recognised standard. */
+  wellKnown: boolean;
+  alternatives: CrcAlternative[];
+}
+
+/**
+ * How a checksum is computed. `named` came from the scored sweep of the eleven
+ * built-in algorithms; the other two were solved, and carry parameters no fixed
+ * list can express.
+ */
+export type ChecksumSpecification =
+  | { kind: "named"; algorithm: ChecksumAlgorithm }
+  | { kind: "additive"; op: AdditiveOp; offset: number }
+  | ({ kind: "crc" } & CrcParameters);
+
+/** One configuration that explains a frame id, with the evidence for it. */
+export interface DiscoveredChecksum {
+  specification: ChecksumSpecification;
+  position: number;
+  length: number;
+  bigEndian: boolean;
+  calcStartByte: number;
+  calcEndByte: number;
+  matchCount: number;
+  totalCount: number;
+  /** 0-100 */
+  matchRate: number;
+  /** 0-100 composite score. */
+  confidence: number;
+  notes: ChecksumNote[];
+  equivalentRanges: { calcStartByte: number; calcEndByte: number }[];
+}
+
+/**
+ * What the scan found for one frame id — including when it found nothing, so
+ * the reason stays visible instead of the id vanishing from the results.
+ */
+export interface FrameChecksumFinding {
+  frameId: number;
+  isExtended: boolean;
+  frameCount: number;
+  /**
+   * Distinct payloads among them. A checksum cannot be recovered from repeats,
+   * so this — not `frameCount` — is what bounds the search.
+   */
+  distinctPayloads: number;
+  candidates: DiscoveredChecksum[];
+  notes: ChecksumNote[];
+}
+
+export interface ChecksumDiscoveryResult {
+  findings: FrameChecksumFinding[];
+  frameCount: number;
+  uniqueFrameIds: number;
+  /** Ids skipped for having fewer than `minSamples` frames. */
+  skippedFrameIds: number;
+}
+
+export interface ChecksumDiscoveryOptions {
+  /** Frames an id needs before it is worth analysing (default 10). */
+  minSamples?: number;
+  /** Percentage below which a swept candidate is discarded (default 95). */
+  minMatchRate?: number;
+  /** Confidence below which a candidate is discarded (default 35). */
+  minConfidence?: number;
+  /** Checksum offsets to try, end-relative (default [-1, -2, -3]). */
+  positions?: number[];
+  /** Recover arbitrary CRC polynomials, not only the named algorithms. */
+  searchCustomPolynomials?: boolean;
+  /** Cap on candidates reported per frame id (default 6). */
+  maxCandidates?: number;
+}
+
+/** Frames as the scan wants them — a `FrameMessage` already satisfies this. */
+export interface DiscoveryFrame {
+  frame_id: number;
+  bytes: number[];
+  is_extended?: boolean;
+}
+
+/**
+ * Scan a capture for checksums: group by frame id, then work out what explains
+ * each group.
+ *
+ * **One IPC call for the whole run.** This replaced a TypeScript loop that
+ * issued one `batchTestCrc` call per polynomial — 4,080 round trips per (frame
+ * id, position) for CRC-8 and 4,194,240 for CRC-16, which is why exhaustive
+ * CRC-16 was never a realistic option. The polynomial search now recovers the
+ * answer from residue agreement instead of enumerating init and xorOut.
+ */
+export async function discoverChecksums(
+  frames: DiscoveryFrame[],
+  options: ChecksumDiscoveryOptions = {}
+): Promise<ChecksumDiscoveryResult> {
+  return invoke<ChecksumDiscoveryResult>("discover_checksums_cmd", { frames, options });
+}

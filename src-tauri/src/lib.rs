@@ -11,6 +11,7 @@ mod catalog;
 mod catalog_share;
 mod apiclient;
 mod dashboard;
+mod checksum_discovery;
 mod checksums;
 mod credentials;
 mod dbquery;
@@ -1360,6 +1361,7 @@ pub fn run() {
             checksums::batch_test_crc_cmd,
             checksums::sweep_checksum_specs_cmd,
             checksums::detect_checksum_cmd,
+            checksum_discovery::discover_checksums_cmd,
             // Transmit API
             transmit::get_transmit_capable_profiles,
             transmit::get_profile_usage,

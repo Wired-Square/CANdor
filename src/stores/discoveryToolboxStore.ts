@@ -12,7 +12,7 @@ import type { FramingDetectionResult } from '../utils/analysis/framingDetection'
 import type {
   ChecksumDiscoveryOptions,
   ChecksumDiscoveryResult,
-} from '../utils/analysis/checksumDiscovery';
+} from '../api/checksums';
 import {
   type DecoderKnowledge,
   createEmptyKnowledge,
@@ -164,10 +164,8 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
     checksumDiscovery: {
       minSamples: 10,
       minMatchRate: 95,
-      checksumPositions: [-1, -2],
-      trySimpleFirst: true,
-      bruteForceCrc16: false,
-      maxSamplesPerFrameId: 100,
+      positions: [-1, -2, -3],
+      searchCustomPolynomials: false,
     },
     messageOrderResults: null,
     changesResults: null,
@@ -598,8 +596,9 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
     // Allow React to render
     await new Promise(resolve => setTimeout(resolve, ANALYSIS_YIELD_MS));
 
-    // Lazy load analysis module
-    const { discoverChecksums } = await import('../utils/analysis/checksumDiscovery');
+    // One IPC call for the whole scan — grouping, sampling, sweeping and
+    // solving all happen in Rust.
+    const { discoverChecksums } = await import('../api/checksums');
 
     const checksumDiscoveryResults = await discoverChecksums(frames, toolbox.checksumDiscovery);
 

@@ -7,11 +7,12 @@
 // actually has (position, length, endianness, calculation range).
 
 import { useTranslation } from "react-i18next";
-import { AlertCircle, Check, CheckCircle2 } from "lucide-react";
+import { Check } from "lucide-react";
 import type { ChecksumCandidate } from "../../../api/checksums";
 import { getAlgorithmInfo } from "../../../utils/analysis/checksums";
-import { flexRowGap2, iconLg, iconXs } from "../../../styles/spacing";
+import { flexRowGap2, iconXs } from "../../../styles/spacing";
 import { textMedium } from "../../../styles/typography";
+import { MatchRateIcon, matchRateTextClass, matchRateToneClasses } from "./checksumTone";
 
 interface ChecksumCandidateListProps {
   candidates: ChecksumCandidate[];
@@ -22,27 +23,6 @@ interface ChecksumCandidateListProps {
   onUnapply?: () => void;
   /** Collapse the list to the applied candidate only. */
   collapseWhenApplied?: boolean;
-}
-
-/** Border and background follow match rate, matching the framing-candidate cards. */
-function toneClasses(candidate: ChecksumCandidate, isApplied: boolean): string {
-  if (isApplied) {
-    return "bg-[var(--status-info-bg)] border-[color:var(--status-info-border)]";
-  }
-  if (candidate.matchRate >= 95) {
-    return "bg-[var(--status-success-bg)] border-[color:var(--status-success-border)]";
-  }
-  if (candidate.matchRate >= 80) {
-    return "bg-[var(--status-warning-bg)] border-[color:var(--status-warning-border)]";
-  }
-  return "bg-[var(--bg-surface)] border-[color:var(--border-default)]";
-}
-
-function StatusIcon({ candidate, isApplied }: { candidate: ChecksumCandidate; isApplied: boolean }) {
-  if (isApplied) return <CheckCircle2 className={`${iconLg} text-blue-500`} />;
-  if (candidate.matchRate >= 95) return <CheckCircle2 className={`${iconLg} text-green-500`} />;
-  if (candidate.matchRate >= 80) return <AlertCircle className={`${iconLg} text-yellow-500`} />;
-  return <AlertCircle className={`${iconLg} text-slate-400`} />;
 }
 
 export default function ChecksumCandidateList({
@@ -67,7 +47,7 @@ export default function ChecksumCandidateList({
         const algorithmName = getAlgorithmInfo(candidate.algorithm)?.name ?? candidate.algorithm;
 
         return (
-          <div key={index} className={`p-3 rounded-lg border ${toneClasses(candidate, isApplied)}`}>
+          <div key={index} className={`p-3 rounded-lg border ${matchRateToneClasses(candidate.matchRate, isApplied)}`}>
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1 min-w-0">
                 <div className={`${flexRowGap2} flex-wrap`}>
@@ -100,15 +80,7 @@ export default function ChecksumCandidateList({
                 </div>
 
                 <div className="text-sm text-[color:var(--text-secondary)] mt-1">
-                  <span
-                    className={
-                      candidate.matchRate >= 95
-                        ? "text-[color:var(--text-green)] font-medium"
-                        : candidate.matchRate >= 80
-                          ? "text-[color:var(--text-amber)]"
-                          : ""
-                    }
-                  >
+                  <span className={matchRateTextClass(candidate.matchRate)}>
                     {t("serialAnalysis.matchPercent", { percent: candidate.matchRate.toFixed(1) })}
                   </span>
                   <span className="mx-2 text-[color:var(--text-muted)]">|</span>
@@ -159,7 +131,7 @@ export default function ChecksumCandidateList({
                 >
                   {isApplied ? t("serialAnalysis.appliedButton") : t("serialAnalysis.applyButton")}
                 </button>
-                <StatusIcon candidate={candidate} isApplied={isApplied} />
+                <MatchRateIcon matchRate={candidate.matchRate} isApplied={isApplied} />
               </div>
             </div>
           </div>

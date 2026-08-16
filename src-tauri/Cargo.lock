@@ -8990,6 +8990,7 @@ dependencies = [
  "nusb 0.1.14",
  "nusb 0.2.3",
  "once_cell",
+ "rayon",
  "reqwest 0.12.28",
  "rmcp",
  "rumqttc",

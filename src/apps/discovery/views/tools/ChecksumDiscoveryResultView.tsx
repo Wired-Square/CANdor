@@ -1,100 +1,153 @@
 // ui/src/apps/discovery/views/tools/ChecksumDiscoveryResultView.tsx
+//
+// Results of a checksum scan, one card per frame id — including the ids where
+// nothing was found, because "no checksum here" is a finding and an id that
+// silently vanishes from the list is not.
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ShieldCheck, ChevronDown, ChevronRight, Copy, Check, X } from "lucide-react";
-import { iconXs, iconMd, iconSm, flexRowGap2, paddingCardSm } from "../../../../styles/spacing";
+import { iconXs, iconMd, iconSm, flexRowGap2 } from "../../../../styles/spacing";
 import { iconButtonDangerCompact } from "../../../../styles/buttonStyles";
-import { cardDefault } from "../../../../styles/cardStyles";
-import { caption, emptyStateContainer, emptyStateText, emptyStateHeading, emptyStateDescription } from "../../../../styles/typography";
-import { borderDivider, hoverLight, bgSurface, textPrimary, textSecondary, textMuted } from "../../../../styles";
+import { cardBase, cardDefault } from "../../../../styles/cardStyles";
+import { badgeSmallNeutral, badgeSmallSuccess } from "../../../../styles/badgeStyles";
+import {
+  emptyStateContainer,
+  emptyStateText,
+  emptyStateHeading,
+  emptyStateDescription,
+} from "../../../../styles/typography";
+import {
+  bgSurface,
+  borderDivider,
+  textDataAmber,
+  textDataGreen,
+  textMuted,
+  textPrimary,
+  textSecondary,
+} from "../../../../styles/colourTokens";
 import { useDiscoveryStore } from "../../../../stores/discoveryStore";
 import { useFrameIdFormat } from "../../../../hooks/useFrameIdFormat";
 import { formatFrameId } from "../../../../utils/frameIds";
 import { COPY_FEEDBACK_TIMEOUT_MS } from "../../../../constants";
-import type { ChecksumCandidate } from "../../../../utils/analysis/checksumDiscovery";
+import { getAlgorithmInfo } from "../../../../utils/analysis/checksums";
+import {
+  MatchRateIcon,
+  matchRateTextClass,
+  matchRateToneClasses,
+} from "../../components/checksumTone";
+import type {
+  ChecksumSpecification,
+  DiscoveredChecksum,
+  FrameChecksumFinding,
+} from "../../../../api/checksums";
 
 type Props = {
   embedded?: boolean;
   onClose?: () => void;
 };
 
+const hex = (value: number, digits: number) =>
+  `0x${value.toString(16).toUpperCase().padStart(digits, "0")}`;
+
+/**
+ * A one-line identity for a configuration.
+ *
+ * A solved checksum has no name to show, so it is described by what it does —
+ * an offset sum reads `Sum + 0xA5`, a recovered polynomial reads
+ * `CRC-8 poly 0x4D`.
+ */
+function describeSpecification(spec: ChecksumSpecification): string {
+  switch (spec.kind) {
+    case "named":
+      return getAlgorithmInfo(spec.algorithm)?.name ?? spec.algorithm;
+    case "additive": {
+      const offset = hex(spec.offset, 2);
+      if (spec.op === "negatedSum") return `${offset} − Sum`;
+      return `${spec.op === "xor" ? "XOR" : "Sum"} ${spec.op === "xor" ? "^" : "+"} ${offset}`;
+    }
+    case "crc":
+      return `CRC-${spec.width} poly ${hex(spec.polynomial, spec.width / 4)}`;
+  }
+}
+
 export default function ChecksumDiscoveryResultView({ embedded = false, onClose }: Props) {
   const { t } = useTranslation("discovery");
   const results = useDiscoveryStore((s) => s.toolbox.checksumDiscoveryResults);
   const { effective: frameIdFormat } = useFrameIdFormat();
 
+  const shell = `h-full flex flex-col ${embedded ? "" : cardDefault}`;
+
   if (!results) {
     return (
-      <div className={`h-full flex flex-col ${embedded ? "" : `${bgSurface} rounded-lg border border-[color:var(--border-default)]`}`}>
+      <div className={shell}>
         {!embedded && <Header onClose={onClose} />}
         <div className={emptyStateContainer}>
           <ShieldCheck className={`w-12 h-12 ${textMuted} mb-4`} />
           <div className={emptyStateText}>
             <p className={emptyStateHeading}>{t("checksumDiscovery.noResults")}</p>
-            <p className={emptyStateDescription}>
-              {t("checksumDiscovery.noResultsDescription")}
-            </p>
+            <p className={emptyStateDescription}>{t("checksumDiscovery.noResultsDescription")}</p>
           </div>
         </div>
       </div>
     );
   }
 
-  const { candidatesByFrameId, summary } = results;
-  const frameIds = Array.from(candidatesByFrameId.keys()).sort((a, b) => a - b);
+  const findings = [...results.findings].sort((a, b) => a.frameId - b.frameId);
+  const withChecksum = findings.filter((f) => f.candidates.length > 0).length;
 
   return (
-    <div className={`h-full flex flex-col ${embedded ? "" : `${bgSurface} rounded-lg border border-[color:var(--border-default)]`}`}>
+    <div className={shell}>
       {!embedded && <Header onClose={onClose} />}
 
-      {/* Stats Summary */}
-      <div className={`px-4 py-2 ${borderDivider} bg-[var(--bg-surface)]`}>
+      <div className={`px-4 py-2 ${borderDivider} ${bgSurface}`}>
         <div className="flex flex-wrap gap-4 text-xs">
-          <span className={textMuted}>
-            <span className={`font-medium ${textPrimary}`}>{results.frameCount.toLocaleString()}</span> {t("checksumDiscovery.framesUnit")}
-          </span>
-          <span className={textMuted}>
-            <span className={`font-medium ${textPrimary}`}>{results.uniqueFrameIds}</span> {t("checksumDiscovery.uniqueIdsUnit")}
-          </span>
-          <span className={textMuted}>
-            <span className="font-medium text-green-400">{summary.framesWithChecksum}</span> {t("checksumDiscovery.withChecksum")}
-          </span>
-          <span className={textMuted}>
-            <span className="font-medium text-amber-400">{summary.framesWithoutChecksum}</span> {t("checksumDiscovery.unknown")}
-          </span>
-          {summary.mostCommonType && (
-            <span className={textMuted}>
-              {t("checksumDiscovery.mostCommon")} <span className={`font-medium ${textPrimary}`}>{summary.mostCommonType}</span>
-            </span>
+          <Stat value={results.frameCount.toLocaleString()} label={t("checksumDiscovery.framesUnit")} />
+          <Stat value={results.uniqueFrameIds} label={t("checksumDiscovery.uniqueIdsUnit")} />
+          <Stat
+            value={withChecksum}
+            label={t("checksumDiscovery.withChecksum")}
+            tone={textDataGreen}
+          />
+          <Stat
+            value={findings.length - withChecksum}
+            label={t("checksumDiscovery.unknown")}
+            tone={textDataAmber}
+          />
+          {results.skippedFrameIds > 0 && (
+            <Stat
+              value={results.skippedFrameIds}
+              label={t("checksumDiscovery.skippedTooFewFrames")}
+            />
           )}
         </div>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 p-4 overflow-auto space-y-4">
-        {frameIds.length === 0 ? (
+      <div className="flex-1 p-4 overflow-auto space-y-3">
+        {findings.length === 0 ? (
           <div className="text-center py-8">
             <p className={`text-sm ${textSecondary}`}>{t("checksumDiscovery.noChecksumsTitle")}</p>
-            <p className={`text-xs ${textMuted} mt-1`}>
-              {t("checksumDiscovery.noChecksumsHint")}
-            </p>
+            <p className={`text-xs ${textMuted} mt-1`}>{t("checksumDiscovery.noChecksumsHint")}</p>
           </div>
         ) : (
-          frameIds.map((frameId) => {
-            const candidates = candidatesByFrameId.get(frameId)!;
-            return (
-              <FrameCard
-                key={frameId}
-                frameId={frameId}
-                candidates={candidates}
-                frameIdFormat={frameIdFormat}
-              />
-            );
-          })
+          findings.map((finding) => (
+            <FrameCard
+              key={`${finding.frameId}-${finding.isExtended}`}
+              finding={finding}
+              frameIdFormat={frameIdFormat}
+            />
+          ))
         )}
       </div>
     </div>
+  );
+}
+
+function Stat({ value, label, tone }: { value: string | number; label: string; tone?: string }) {
+  return (
+    <span className={textMuted}>
+      <span className={`font-medium ${tone ?? textPrimary}`}>{value}</span> {label}
+    </span>
   );
 }
 
@@ -103,7 +156,7 @@ function Header({ onClose }: { onClose?: () => void }) {
   return (
     <div className={`px-4 py-2 ${borderDivider} flex items-center justify-between`}>
       <div className={flexRowGap2}>
-        <ShieldCheck className={`${iconMd} text-green-400`} />
+        <ShieldCheck className={`${iconMd} ${textDataGreen}`} />
         <span className={`font-medium ${textPrimary}`}>{t("checksumDiscovery.title")}</span>
       </div>
       {onClose && (
@@ -121,215 +174,172 @@ function Header({ onClose }: { onClose?: () => void }) {
 }
 
 function FrameCard({
-  frameId,
-  candidates,
+  finding,
   frameIdFormat,
 }: {
-  frameId: number;
-  candidates: ChecksumCandidate[];
+  finding: FrameChecksumFinding;
   frameIdFormat: "hex" | "decimal";
 }) {
   const { t } = useTranslation("discovery");
+  const best = finding.candidates[0];
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const bestCandidate = candidates[0];
-
-  const handleCopy = () => {
-    const info = formatCandidateForCopy(bestCandidate);
-    navigator.clipboard.writeText(info);
+  const copy = () => {
+    const lines = finding.candidates.map(
+      (c) =>
+        `${describeSpecification(c.specification)} @ ${c.position} [${c.calcStartByte}:${c.calcEndByte}]` +
+        ` — ${c.matchRate.toFixed(1)}% (${c.matchCount}/${c.totalCount}), confidence ${c.confidence}`,
+    );
+    void navigator.clipboard.writeText(
+      `${formatFrameId(finding.frameId, frameIdFormat, finding.isExtended)}\n${lines.join("\n")}`,
+    );
     setCopied(true);
     setTimeout(() => setCopied(false), COPY_FEEDBACK_TIMEOUT_MS);
   };
 
   return (
-    <div className={cardDefault}>
-      <div
-        className={`${paddingCardSm} cursor-pointer ${hoverLight}`}
-        onClick={() => setExpanded(!expanded)}
-      >
-        <div className="flex items-center justify-between">
-          <div className={flexRowGap2}>
-            {expanded ? (
-              <ChevronDown className={`${iconSm} ${textMuted}`} />
+    <div
+      className={`${cardBase} ${matchRateToneClasses(best?.matchRate ?? 0)}`}
+    >
+      <div className="flex items-center gap-2 px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="flex items-center gap-2 flex-1 min-w-0 text-left"
+        >
+          {expanded ? <ChevronDown className={iconSm} /> : <ChevronRight className={iconSm} />}
+          <span className={`font-mono font-medium ${textPrimary}`}>
+            {formatFrameId(finding.frameId, frameIdFormat, finding.isExtended)}
+          </span>
+          {best ? (
+            <>
+              <span className={`text-sm ${textSecondary} font-mono truncate`}>
+                {describeSpecification(best.specification)}
+              </span>
+              <span className={`text-xs ${matchRateTextClass(best.matchRate)}`}>
+                {best.matchRate.toFixed(1)}%
+              </span>
+            </>
+          ) : (
+            <span className={`text-sm ${textMuted}`}>{t("checksumDiscovery.noneFound")}</span>
+          )}
+          <span className={`text-xs ${textMuted} ml-auto`}>
+            {t("checksumDiscovery.distinctOfFrames", {
+              distinct: finding.distinctPayloads,
+              frames: finding.frameCount,
+            })}
+          </span>
+        </button>
+        {best && <MatchRateIcon matchRate={best.matchRate} />}
+        {finding.candidates.length > 0 && (
+          <button type="button" onClick={copy} title={t("checksumDiscovery.copyTooltip")}>
+            {copied ? (
+              <Check className={`${iconSm} ${textDataGreen}`} />
             ) : (
-              <ChevronRight className={`${iconSm} ${textMuted}`} />
+              <Copy className={`${iconSm} ${textMuted}`} />
             )}
-            <span className={`font-mono font-medium ${textPrimary}`}>
-              {formatFrameId(frameId, frameIdFormat)}
-            </span>
-            <span className={`${caption} ${textMuted}`}>
-              {t("checksumDiscovery.samples", { count: bestCandidate.totalCount })}
-            </span>
-          </div>
-
-          <div className={flexRowGap2}>
-            <CandidateBadge candidate={bestCandidate} />
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                handleCopy();
-              }}
-              className={`p-1 rounded ${hoverLight}`}
-              title={t("checksumDiscovery.copyTooltip")}
-            >
-              {copied ? (
-                <Check className={`${iconSm} text-green-400`} />
-              ) : (
-                <Copy className={`${iconSm} ${textMuted}`} />
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* Quick summary when collapsed */}
-        {!expanded && (
-          <div className={`mt-1 text-xs ${textMuted}`}>
-            {formatCandidateSummary(bestCandidate)}
-          </div>
+          </button>
         )}
       </div>
 
-      {/* Expanded details */}
       {expanded && (
-        <div className={`px-4 pb-3 pt-1 border-t ${borderDivider}`}>
-          {candidates.map((candidate, idx) => (
-            <CandidateDetails key={idx} candidate={candidate} isFirst={idx === 0} />
+        <div className="px-3 pb-3 space-y-2">
+          {finding.candidates.map((candidate, index) => (
+            <CandidateRow key={index} candidate={candidate} />
           ))}
+          {/* Why nothing was found is the useful half of an empty result. */}
+          {finding.candidates.length === 0 && finding.notes.length > 0 && (
+            <p className={`text-xs ${textMuted}`}>
+              {finding.notes.map((n) => t(`serial.checksumNote.${n.code}`, n.values)).join(" • ")}
+            </p>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-function CandidateBadge({ candidate }: { candidate: ChecksumCandidate }) {
-  const matchPercent = Math.round(candidate.matchRate);
-  const bgColour =
-    matchPercent >= 99 ? "bg-green-600" : matchPercent >= 95 ? "bg-green-700" : "bg-amber-600";
-
-  return (
-    <span className={`px-2 py-0.5 rounded text-xs font-medium text-white ${bgColour}`}>
-      {candidate.algorithmName || candidate.type.toUpperCase()} {matchPercent}%
-    </span>
-  );
-}
-
-function CandidateDetails({ candidate, isFirst }: { candidate: ChecksumCandidate; isFirst: boolean }) {
+function CandidateRow({ candidate }: { candidate: DiscoveredChecksum }) {
   const { t } = useTranslation("discovery");
+  const spec = candidate.specification;
+
   return (
-    <div className={`py-2 ${isFirst ? "" : `border-t ${borderDivider} mt-2`}`}>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-        <div>
-          <span className={textMuted}>{t("checksumDiscovery.type")}</span>{" "}
-          <span className={textPrimary}>{candidate.algorithmName || candidate.type.toUpperCase()}</span>
-        </div>
-        <div>
-          <span className={textMuted}>{t("checksumDiscovery.match")}</span>{" "}
-          <span className={textPrimary}>
-            {t("checksumDiscovery.matchValue", { matched: candidate.matchCount, total: candidate.totalCount, percent: Math.round(candidate.matchRate) })}
+    <div className={`${cardDefault} p-2 space-y-1`}>
+      <div className="flex items-baseline gap-2 flex-wrap">
+        <span className={`font-mono text-sm ${textPrimary}`}>{describeSpecification(spec)}</span>
+        {spec.kind === "crc" && spec.wellKnown && (
+          <span className={badgeSmallSuccess}>{t("checksumDiscovery.wellKnownPolynomial")}</span>
+        )}
+        {candidate.length > 1 && (
+          <span className={`${badgeSmallNeutral} font-mono`}>
+            {candidate.bigEndian ? t("serial.bigEndianShort") : t("serial.littleEndianShort")}
           </span>
-        </div>
-        <div>
-          <span className={textMuted}>{t("checksumDiscovery.position")}</span>{" "}
-          <span className={`font-mono ${textPrimary}`}>
-            {t("checksumDiscovery.positionValue", { pos: candidate.position, count: candidate.length })}
-          </span>
-        </div>
-        <div>
-          <span className={textMuted}>{t("checksumDiscovery.endianness")}</span>{" "}
-          <span className={textPrimary}>{candidate.endianness}</span>
-        </div>
-        {candidate.polynomial !== undefined && (
-          <div>
-            <span className={textMuted}>{t("checksumDiscovery.polynomial")}</span>{" "}
-            <span className={`font-mono ${textPrimary}`}>
-              0x{candidate.polynomial.toString(16).toUpperCase().padStart(candidate.length === 1 ? 2 : 4, "0")}
-            </span>
-          </div>
         )}
-        {candidate.init !== undefined && (
-          <div>
-            <span className={textMuted}>{t("checksumDiscovery.init")}</span>{" "}
-            <span className={`font-mono ${textPrimary}`}>
-              0x{candidate.init.toString(16).toUpperCase().padStart(candidate.length === 1 ? 2 : 4, "0")}
-            </span>
-          </div>
-        )}
-        {candidate.xorOut !== undefined && (
-          <div>
-            <span className={textMuted}>{t("checksumDiscovery.xorOut")}</span>{" "}
-            <span className={`font-mono ${textPrimary}`}>
-              0x{candidate.xorOut.toString(16).toUpperCase().padStart(candidate.length === 1 ? 2 : 4, "0")}
-            </span>
-          </div>
-        )}
-        {candidate.reflect !== undefined && (
-          <div>
-            <span className={textMuted}>{t("checksumDiscovery.reflected")}</span>{" "}
-            <span className={textPrimary}>{candidate.reflect ? t("checksumDiscovery.yes") : t("checksumDiscovery.no")}</span>
-          </div>
-        )}
-        <div>
-          <span className={textMuted}>{t("checksumDiscovery.frameIdIncluded")}</span>{" "}
-          <span className={textPrimary}>{candidate.includesFrameId ? t("checksumDiscovery.yes") : t("checksumDiscovery.no")}</span>
-        </div>
-        <div>
-          <span className={textMuted}>{t("checksumDiscovery.dataRange")}</span>{" "}
-          <span className={`font-mono ${textPrimary}`}>
-            {t("checksumDiscovery.dataRangeValue", { start: candidate.dataRange.start, end: candidate.dataRange.end })}
-          </span>
-        </div>
+        <span className={`text-xs ${textSecondary}`}>
+          {t("serialAnalysis.atByte", { position: candidate.position })}
+          {candidate.length > 1 ? t("serialAnalysis.ofLength", { count: candidate.length }) : ""}
+        </span>
       </div>
+
+      <div className={`text-xs ${textSecondary}`}>
+        <span className={matchRateTextClass(candidate.matchRate)}>
+          {t("serialAnalysis.matchPercent", { percent: candidate.matchRate.toFixed(1) })}
+        </span>
+        <span className={`mx-2 ${textMuted}`}>|</span>
+        {t("serialAnalysis.matchedFrames", {
+          matched: candidate.matchCount.toLocaleString(),
+          total: candidate.totalCount.toLocaleString(),
+        })}
+        <span className={`mx-2 ${textMuted}`}>|</span>
+        {t("serialAnalysis.confidencePercent", { percent: candidate.confidence })}
+      </div>
+
+      <div className={`text-xs ${textMuted}`}>
+        {t("serialAnalysis.calcRange", {
+          start: candidate.calcStartByte,
+          end: candidate.calcEndByte,
+        })}
+        {candidate.equivalentRanges.length > 0 &&
+          ` ${t("serial.checksumEquivalentRanges", {
+            ranges: candidate.equivalentRanges
+              .map((r) => `[${r.calcStartByte}:${r.calcEndByte}]`)
+              .join(", "),
+          })}`}
+      </div>
+
+      {/* For a fixed payload length init and xorOut are not separately
+          identifiable, so the alternatives are part of the answer, not trivia. */}
+      {spec.kind === "crc" && (
+        <div className={`text-xs ${textMuted} font-mono`}>
+          {t("checksumDiscovery.crcParameters", {
+            init: hex(spec.init, spec.width / 4),
+            xorOut: hex(spec.xorOut, spec.width / 4),
+            reflect: spec.reflectIn ? t("checksumDiscovery.yes") : t("checksumDiscovery.no"),
+          })}
+          {spec.alternatives.length > 0 && (
+            <span className="block">
+              {t("checksumDiscovery.crcEquallyValid", {
+                pairs: spec.alternatives
+                  .map(
+                    (a) =>
+                      `init ${hex(a.init, spec.width / 4)} / xorOut ${hex(a.xorOut, spec.width / 4)}`,
+                  )
+                  .join(", "),
+              })}
+            </span>
+          )}
+        </div>
+      )}
+
+      {candidate.notes.length > 0 && (
+        <div className={`text-xs ${textMuted}`}>
+          {candidate.notes
+            .slice(0, 3)
+            .map((note) => t(`serial.checksumNote.${note.code}`, note.values))
+            .join(" • ")}
+        </div>
+      )}
     </div>
   );
-}
-
-function formatCandidateSummary(candidate: ChecksumCandidate): string {
-  const parts: string[] = [];
-
-  if (candidate.polynomial !== undefined) {
-    parts.push(`poly=0x${candidate.polynomial.toString(16).toUpperCase()}`);
-  }
-  if (candidate.init !== undefined && candidate.init !== 0) {
-    parts.push(`init=0x${candidate.init.toString(16).toUpperCase()}`);
-  }
-  if (candidate.xorOut !== undefined && candidate.xorOut !== 0) {
-    parts.push(`xor=0x${candidate.xorOut.toString(16).toUpperCase()}`);
-  }
-  if (candidate.reflect) {
-    parts.push("reflected");
-  }
-  if (candidate.includesFrameId) {
-    parts.push("includes frame ID");
-  }
-
-  parts.push(`pos=${candidate.position}`);
-
-  return parts.join(", ");
-}
-
-function formatCandidateForCopy(candidate: ChecksumCandidate): string {
-  const lines: string[] = [
-    `Frame ID: 0x${candidate.frameId.toString(16).toUpperCase()}`,
-    `Type: ${candidate.algorithmName || candidate.type.toUpperCase()}`,
-    `Position: byte ${candidate.position} (${candidate.length} byte${candidate.length > 1 ? "s" : ""})`,
-    `Match Rate: ${Math.round(candidate.matchRate)}% (${candidate.matchCount}/${candidate.totalCount})`,
-  ];
-
-  if (candidate.polynomial !== undefined) {
-    lines.push(`Polynomial: 0x${candidate.polynomial.toString(16).toUpperCase()}`);
-  }
-  if (candidate.init !== undefined) {
-    lines.push(`Init: 0x${candidate.init.toString(16).toUpperCase()}`);
-  }
-  if (candidate.xorOut !== undefined) {
-    lines.push(`XOR Out: 0x${candidate.xorOut.toString(16).toUpperCase()}`);
-  }
-  if (candidate.reflect !== undefined) {
-    lines.push(`Reflected: ${candidate.reflect ? "Yes" : "No"}`);
-  }
-  lines.push(`Frame ID Included: ${candidate.includesFrameId ? "Yes" : "No"}`);
-  lines.push(`Endianness: ${candidate.endianness}`);
-
-  return lines.join("\n");
 }

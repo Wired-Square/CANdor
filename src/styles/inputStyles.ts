@@ -28,6 +28,17 @@ export const inputSimple = `${inputBase} px-3 py-2 bg-[var(--bg-primary)] border
 export const toolbarSelect = "text-xs px-2 py-1 rounded border border-[color:var(--border-default)] bg-[var(--bg-surface)] text-[color:var(--text-secondary)] focus:outline-none";
 
 /**
+ * Compact field for the Discovery tool option panels
+ * Use for: the numeric options beside Run Analysis in the Analysis Tools dialog
+ */
+export const toolPanelInput = "w-full px-2 py-1 rounded border border-[color:var(--border-default)] bg-[var(--bg-surface)] text-[color:var(--text-primary)]";
+
+/**
+ * Label above a `toolPanelInput`
+ */
+export const toolPanelLabel = "text-[color:var(--text-muted)]";
+
+/**
  * Default label style - block layout with medium font
  * Use for: Settings forms, main dialogs
  */

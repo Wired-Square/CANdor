@@ -1,7 +1,7 @@
 // ui/src/apps/discovery/views/tools/MessageOrderToolPanel.tsx
 
 import { useDiscoveryStore } from "../../../../stores/discoveryStore";
-import { bgSurface } from "../../../../styles";
+import { toolPanelInput, toolPanelLabel } from "../../../../styles/inputStyles";
 
 export default function MessageOrderToolPanel() {
   const options = useDiscoveryStore((s) => s.toolbox.messageOrder);
@@ -10,7 +10,7 @@ export default function MessageOrderToolPanel() {
   return (
     <div className="space-y-2 text-xs">
       <div className="space-y-1">
-        <label className="text-[color:var(--text-muted)]">
+        <label className={toolPanelLabel}>
           Start Message ID <span className="text-[color:var(--text-muted)]">(optional)</span>
         </label>
         <input
@@ -28,7 +28,7 @@ export default function MessageOrderToolPanel() {
               }
             }
           }}
-          className={`w-full px-2 py-1 rounded border border-[color:var(--border-default)] ${bgSurface} text-[color:var(--text-primary)] font-mono`}
+          className={`${toolPanelInput} font-mono`}
         />
         <p className="text-[color:var(--text-muted)] text-[10px]">
           Leave empty to auto-detect from gap analysis
