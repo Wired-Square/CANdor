@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::checksums::crc16_modbus_checksum;
+use wiretap_checksum::algorithms::crc16_modbus_checksum;
 
 // =============================================================================
 // SLIP Constants (RFC 1055)
