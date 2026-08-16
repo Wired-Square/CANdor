@@ -464,6 +464,28 @@ impl WireTapTools {
         ok_json(profile)
     }
 
+    #[tool(
+        description = "Find checksums in a source (capture_id or profile_id), frame id by frame id. Identification runs first — a byte that changes while every other byte holds still cannot be a checksum of them — so most columns are ruled out before any algorithm is tried, and the reason is reported per byte. Survivors are matched against the eleven named algorithms and solved for sums with a constant offset; set search_custom_polynomials to also recover arbitrary CRC polynomials. Headless equivalent of Discovery's Checksum Discovery."
+    )]
+    async fn frame_checksum_scan(
+        &self,
+        Parameters(p): Parameters<ChecksumScanParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let src = crate::analysis::resolve(p.capture_id, p.profile_id).map_err(err)?;
+        let options = crate::checksum_discovery::ChecksumDiscoveryOptions {
+            search_custom_polynomials: p.search_custom_polynomials,
+            min_likeness: p
+                .min_likeness
+                .unwrap_or(crate::checksum_discovery::ChecksumDiscoveryOptions::default().min_likeness),
+            ..Default::default()
+        };
+        let result =
+            crate::analysis::checksum_scan(&self.app, &src, p.frame_ids, p.sample_limit, options)
+                .await
+                .map_err(err)?;
+        ok_json(result)
+    }
+
     #[tool(description = "Diff a decoder catalog against a data source (capture_id or profile_id): present/missing catalog frames, uncatalogued data frame ids, and a high/medium/low/unset signal confidence rollup. Set include_byte_roles=true to also sample per-byte static/varying roles for each present frame (heavier — one sampling query per frame).")]
     async fn catalog_coverage(
         &self,

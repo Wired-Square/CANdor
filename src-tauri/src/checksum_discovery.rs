@@ -254,12 +254,12 @@ fn analyse_group(
             .into_iter()
             .chain(solve_crc(&solver_samples, &target, &crc_options));
 
-        candidates.extend(solved.filter_map(|s| {
+        candidates.extend(solved.map(|s| {
             let specification = match s.kind {
                 SolvedKind::Additive { op, offset } => ChecksumSpecification::Additive { op, offset },
                 SolvedKind::Crc(parameters) => ChecksumSpecification::Crc { parameters },
             };
-            Some(DiscoveredChecksum {
+            DiscoveredChecksum {
                 specification,
                 position: target.position,
                 length: target.byte_length,
@@ -272,7 +272,7 @@ fn analyse_group(
                 confidence,
                 notes: Vec::new(),
                 equivalent_ranges: Vec::new(),
-            })
+            }
         }));
     }
 

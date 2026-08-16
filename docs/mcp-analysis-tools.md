@@ -79,6 +79,34 @@ This is the headless Rust equivalent of the frontend Discovery byte analysis
 (`compute_byte_profile`). `sample_limit` (default 5000) bounds the work; the **most
 recent** N frames are sampled (current behaviour, not the stale start of the archive).
 
+### `frame_checksum_scan`
+Finds checksums across every frame id in the source, or the `frame_ids` you name.
+
+Two passes. **Identification** first, because most bytes on a real link are not
+checksums and each one ruled out is a polynomial search not run. The decisive
+test is arithmetic rather than a threshold: a checksum is a function of the other
+bytes, so a column that changes while every other byte holds still cannot be one.
+That removes counters and timers; constant padding and sensor readings (bytes
+that sit still while the payload moves, or take far fewer values than there are
+distinct payloads) go with them. Every column comes back with its verdict, so an
+empty result reads as *"byte -1 never changes, byte -2 is a counter"* rather than
+*"nothing found"*.
+
+**Solving** then runs only on survivors: the eleven named algorithms by scored
+sweep, plus sums with a constant offset and two's-complement sums, which no fixed
+algorithm list can express. Set `search_custom_polynomials` to also recover an
+arbitrary CRC polynomial — affordable because `init` and `xorOut` are not
+searched at all. They cancel for equal-length payloads, so the answer follows
+from residue agreement.
+
+Note the consequence: for fixed-length payloads `init` and `xorOut` are **not
+separately identifiable**. A recovered CRC reports one working pair plus the
+`alternatives` that fit equally well; none is more true than the others.
+
+`min_likeness` (0-100, default 50) widens or narrows what reaches the solver.
+`sample_limit` (default 5000) bounds payloads per frame id. Headless equivalent
+of Discovery's Checksum Discovery, sharing its implementation.
+
 ### `catalog_coverage`
 Parses a `catalog` (filename or display name) and diffs it against the source:
 

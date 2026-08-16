@@ -332,6 +332,29 @@ pub struct ByteProfileParams {
     pub sample_limit: u32,
 }
 
+/// Scan a source for checksums, frame id by frame id.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ChecksumScanParams {
+    #[serde(default)]
+    pub capture_id: Option<String>,
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    /// Restrict the scan to these frame ids (decimal); omit to scan every id.
+    #[serde(default)]
+    pub frame_ids: Option<Vec<u32>>,
+    /// Max payloads to sample per frame id (default 5000).
+    #[serde(default = "default_sample_limit")]
+    pub sample_limit: u32,
+    /// Recover arbitrary CRC polynomials, not only the eleven named algorithms.
+    /// Costs a few milliseconds per candidate byte; off by default.
+    #[serde(default)]
+    pub search_custom_polynomials: bool,
+    /// How checksum-shaped a byte must look before the solver is asked about it
+    /// (0-100, default 50). Lower it to widen the search.
+    #[serde(default)]
+    pub min_likeness: Option<u8>,
+}
+
 /// Diff a decoder catalog against a data source + confidence rollup.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CatalogCoverageParams {

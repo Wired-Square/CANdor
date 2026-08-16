@@ -220,6 +220,45 @@ pub async fn byte_profile(
     })
 }
 
+/// Scan a whole source for checksums, frame id by frame id.
+///
+/// The headless twin of Discovery's Checksum Discovery, reading payloads
+/// straight out of the capture or Postgres rather than having them shipped in.
+/// `frame_inventory` decides which ids exist; each is then sampled and analysed
+/// by the same `checksum_discovery` code the UI calls, so the two cannot drift.
+pub async fn checksum_scan(
+    app: &AppHandle,
+    src: &QuerySource,
+    frame_ids: Option<Vec<u32>>,
+    sample_limit: u32,
+    options: crate::checksum_discovery::ChecksumDiscoveryOptions,
+) -> Result<crate::checksum_discovery::ChecksumDiscoveryResult, String> {
+    let wanted: Option<std::collections::HashSet<u32>> =
+        frame_ids.map(|ids| ids.into_iter().collect());
+
+    let inventory = frame_inventory(app, src, None, None).await?;
+    let mut frames = Vec::new();
+
+    for row in inventory {
+        if wanted.as_ref().is_some_and(|w| !w.contains(&row.frame_id)) {
+            continue;
+        }
+        let payloads =
+            fetch_payloads(app, src, row.frame_id, Some(row.is_extended), sample_limit).await?;
+        frames.extend(payloads.into_iter().map(|bytes| {
+            crate::checksum_discovery::DiscoveryFrame {
+                frame_id: row.frame_id,
+                bytes,
+                is_extended: row.is_extended,
+            }
+        }));
+    }
+
+    Ok(crate::checksum_discovery::discover_checksums(
+        &frames, &options,
+    ))
+}
+
 // ── Catalog coverage ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize)]
