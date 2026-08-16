@@ -124,10 +124,10 @@ failures as `IoError::DnsResolution`. New TCP transports must resolve through th
 helper — parsing `"host:port"` straight into a `SocketAddr` accepts only numeric
 IPs and rejects any DNS name with "invalid socket address syntax".
 
-MQTT and the WireTAP backend API are the exceptions: their client
-libraries (rumqttc, reqwest) resolve internally, so the helper
-cannot wrap them. None currently sets a library-level connect timeout either, so
-a DNS outage on those three can still hang.
+MQTT and the WireTAP backend API are the exceptions: their client libraries
+(rumqttc, reqwest) resolve internally, so the helper cannot wrap them. Neither
+sets a library-level connect timeout either, so a DNS outage on those two can
+still hang.
 
 **Resolve first, then connect to the returned `SocketAddr`.** Passing a
 `(host, port)` tuple to `TcpStream::connect` resolves *inside* the connect
