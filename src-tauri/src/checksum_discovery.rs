@@ -13,10 +13,11 @@
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use wiretap_analysis::{checksum_evidence, solve_targets, ChecksumEvidence};
 use wiretap_checksum::{
-    analyse_tail_columns, detect_checksum, diverse_samples, solve_additive, solve_crc, AdditiveOp,
-    CalcRange, ChecksumAlgorithm, ChecksumColumnStat, ChecksumDetectionOptions, ChecksumNote,
-    CrcParameters, CrcSolveOptions, SolveTarget, SolvedKind, MAX_SAMPLES,
+    detect_checksum, diverse_samples, solve_additive, solve_crc, AdditiveOp, CalcRange,
+    ChecksumAlgorithm, ChecksumDetectionOptions, ChecksumNote, CrcParameters, CrcSolveOptions,
+    SolvedKind, MAX_SAMPLES,
 };
 
 /// Just enough of a `FrameMessage` to group and analyse. Serde ignores the rest
@@ -42,6 +43,9 @@ pub struct ChecksumDiscoveryOptions {
     pub positions: Vec<i32>,
     /// Recover arbitrary CRC polynomials, not only the named algorithms.
     pub search_custom_polynomials: bool,
+    /// How checksum-shaped a byte column must look before the solver is asked
+    /// about it. Zero solves every column that was not rejected outright.
+    pub min_likeness: u8,
     /// Cap on candidates reported per frame id.
     pub max_candidates: usize,
 }
@@ -54,6 +58,7 @@ impl Default for ChecksumDiscoveryOptions {
             min_confidence: 35,
             positions: vec![-1, -2, -3],
             search_custom_polynomials: false,
+            min_likeness: 50,
             max_candidates: 6,
         }
     }
@@ -110,6 +115,10 @@ pub struct FrameChecksumFinding {
     /// repeats, so this is the number that actually bounds the search.
     pub distinct_payloads: usize,
     pub candidates: Vec<DiscoveredChecksum>,
+    /// What identification decided about each byte column, rejections included.
+    /// This is the useful half of an empty result: not "nothing found" but
+    /// "byte -1 never changes, byte -2 is a counter".
+    pub columns: Vec<ChecksumEvidence>,
     pub notes: Vec<ChecksumNote>,
 }
 
@@ -123,17 +132,14 @@ pub struct ChecksumDiscoveryResult {
     pub skipped_frame_ids: usize,
 }
 
-/// Solved configurations reproduce every sample or are not reported, so match
-/// rate carries no information and the score rests on how much evidence there
-/// was and whether the column looks like a checksum at all.
+/// Confidence for a solved configuration.
 ///
-/// The tiers mirror the crate's sweep scoring so swept and solved candidates
-/// sort sensibly against each other. They belong next to `score_candidate` in
-/// the crate, and should move there with the next release.
-fn score_solved(target: &SolveTarget, sample_count: usize, columns: &[ChecksumColumnStat]) -> u8 {
-    let mut score: i32 = 55;
-
-    score += match sample_count {
+/// A solve reproduces every sample or is not reported, so match rate carries no
+/// information here. What is left is how much evidence there was, and how
+/// checksum-shaped the column looked before the solver was asked — which
+/// identification has already measured, so this does not re-derive it.
+fn score_solved(likeness: u8, sample_count: usize) -> u8 {
+    let volume = match sample_count {
         n if n >= 200 => 20,
         n if n >= 50 => 15,
         n if n >= 20 => 10,
@@ -141,73 +147,7 @@ fn score_solved(target: &SolveTarget, sample_count: usize, columns: &[ChecksumCo
         _ => 0,
     };
 
-    if let Some(column) = columns.iter().find(|c| c.position == target.position) {
-        let span = column
-            .sample_count
-            .min(if target.byte_length == 2 { 65536 } else { 256 });
-        let distinct_ratio = column.distinct_values as f64 / span as f64;
-        score += match distinct_ratio {
-            r if r >= 0.5 => 15,
-            r if r >= 0.2 => 8,
-            r if r < 0.05 => -30,
-            _ => 0,
-        };
-    }
-
-    if target.calc_end_byte == target.position {
-        score += 10;
-    }
-
-    score.clamp(0, 100) as u8
-}
-
-/// The geometries worth solving for.
-///
-/// Constant columns are skipped outright — padding is not a checksum, and it is
-/// the rejection the whole design rests on. Skipping them here is also what
-/// keeps an exhaustive CRC-16 search affordable across a whole bus.
-fn solve_targets(
-    options: &ChecksumDiscoveryOptions,
-    columns: &[ChecksumColumnStat],
-    max_length: usize,
-) -> Vec<SolveTarget> {
-    let mut targets = Vec::new();
-
-    for &position in &options.positions {
-        let varies = columns
-            .iter()
-            .find(|c| c.position == position)
-            .is_some_and(|c| c.constant_value.is_none());
-        if !varies {
-            continue;
-        }
-
-        for byte_length in [1usize, 2] {
-            if position + byte_length as i32 > 0 || max_length < byte_length + 1 {
-                continue;
-            }
-            // Endianness only means something for a multi-byte checksum.
-            let endiannesses: &[bool] = if byte_length == 2 {
-                &[false, true]
-            } else {
-                &[true]
-            };
-
-            for &big_endian in endiannesses {
-                for calc_start_byte in [0, 1, 2] {
-                    targets.push(SolveTarget {
-                        position,
-                        byte_length,
-                        big_endian,
-                        calc_start_byte,
-                        calc_end_byte: position,
-                    });
-                }
-            }
-        }
-    }
-
-    targets
+    (55 + volume + likeness as i32 * 25 / 100).clamp(0, 100) as u8
 }
 
 /// Frames spread across the whole group, repeats included.
@@ -243,9 +183,10 @@ fn analyse_group(
     let solver_samples = diverse_samples(frames, MAX_SAMPLES);
     let distinct_payloads = solver_samples.len();
 
-    let depth = -options.positions.iter().copied().min().unwrap_or(-1);
-    let columns = analyse_tail_columns(&samples, depth);
-    let max_length = samples.iter().map(|f| f.len()).max().unwrap_or(0);
+    // Identification first. Most byte columns on a real link are padding,
+    // counters or sensor readings, and each one ruled out here is a whole
+    // polynomial search not run.
+    let columns = checksum_evidence(&samples);
 
     // The named algorithms first: scored, ranked, and already carrying the
     // constant-column rejection and the notes that explain an empty result.
@@ -286,8 +227,13 @@ fn analyse_group(
         max_solutions: 2,
     };
 
-    for target in solve_targets(options, &columns, max_length) {
-        let confidence = score_solved(&target, distinct_payloads, &columns);
+    for target in solve_targets(&columns, options.min_likeness) {
+        let likeness = columns
+            .iter()
+            .find(|c| c.position == target.position)
+            .map(|c| c.likeness)
+            .unwrap_or(0);
+        let confidence = score_solved(likeness, distinct_payloads);
         if confidence < options.min_confidence {
             continue;
         }
@@ -345,6 +291,7 @@ fn analyse_group(
         frame_count: frames.len(),
         distinct_payloads,
         candidates,
+        columns,
         notes: swept.notes,
     }
 }
@@ -402,6 +349,7 @@ pub fn discover_checksums_cmd(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiretap_analysis::Rejection;
     use wiretap_checksum::algorithms::{crc8_parameterised, sum8_checksum};
 
     fn frame(frame_id: u32, bytes: Vec<u8>) -> DiscoveryFrame {
@@ -539,6 +487,34 @@ mod tests {
         assert!(finding.candidates.is_empty(), "{:?}", finding.candidates);
     }
 
+    /// An empty result has to say what it decided about each byte. "Nothing
+    /// found" is not actionable; "byte -1 never changes, byte -2 is a counter"
+    /// tells you where to look next.
+    #[test]
+    fn every_byte_column_comes_back_with_a_verdict() {
+        // Byte -1 counts every frame, -3 moves once every twenty, -2 is
+        // constant. The counter therefore advances while the rest holds still,
+        // which is the shape that disqualifies it.
+        let frames: Vec<DiscoveryFrame> = (0..60u32)
+            .map(|i| frame(0x300, vec![0x10, (i / 20) as u8, 0x00, i as u8]))
+            .collect();
+
+        let finding = &discover_checksums(&frames, &Default::default()).findings[0];
+        assert!(finding.candidates.is_empty());
+
+        let verdict = |position: i32| {
+            finding
+                .columns
+                .iter()
+                .find(|c| c.position == position)
+                .unwrap_or_else(|| panic!("no verdict for byte {position}"))
+                .rejected
+        };
+
+        assert_eq!(verdict(-1), Some(Rejection::NotAFunctionOfTheOtherBytes));
+        assert_eq!(verdict(-2), Some(Rejection::Constant));
+    }
+
     #[test]
     fn reports_repeats_as_repeats_rather_than_as_evidence() {
         // 400 frames, two distinct payloads. The sample count must not read as
@@ -569,6 +545,27 @@ mod tests {
         assert_eq!(result.skipped_frame_ids, 1);
         assert_eq!(result.findings.len(), 2);
         assert_eq!(result.frame_count, 83);
+    }
+
+    /// The gate has to pay for itself. A bus of padding and counters must reach
+    /// the solver with nothing at all, which is what makes an exhaustive
+    /// polynomial search affordable across a whole capture.
+    #[test]
+    fn a_bus_with_no_checksum_offers_the_solver_nothing() {
+        let frames: Vec<DiscoveryFrame> = (0..60u32)
+            .map(|i| frame(0x301, vec![0x10, 0x00, 0x00, i as u8]))
+            .collect();
+        let finding = &discover_checksums(
+            &frames,
+            &ChecksumDiscoveryOptions {
+                search_custom_polynomials: true,
+                ..Default::default()
+            },
+        )
+        .findings[0];
+
+        assert!(finding.candidates.is_empty());
+        assert!(finding.columns.iter().all(|c| !c.is_candidate()));
     }
 
     /// Standard and extended ids sharing a number are different frames.

@@ -122,16 +122,6 @@ export async function resolveByteIndex(
 // ============================================================================
 
 /**
- * CRC parameters for parameterised calculation.
- */
-export interface CrcParameters {
-  polynomial: number;
-  init: number;
-  xorOut: number;
-  reflect: boolean;
-}
-
-/**
  * Result of batch CRC testing.
  */
 export interface BatchDiscoveryResult {
@@ -414,6 +404,37 @@ export interface DiscoveredChecksum {
   equivalentRanges: { calcStartByte: number; calcEndByte: number }[];
 }
 
+/** Why identification ruled a byte column out before the solver was asked. */
+export type ChecksumRejection =
+  | "constant"
+  | "notAFunctionOfTheOtherBytes"
+  | "tooOftenUnchanged"
+  | "tooFewTransitions"
+  | "tooFewDistinctValues";
+
+/**
+ * What identification decided about one byte column.
+ *
+ * A checksum is a function of the other bytes, so a column that changes while
+ * every other byte holds still cannot be one — that rejection is arithmetic,
+ * not a threshold. What survives is judged on how reliably it moves with the
+ * payload, and on taking roughly as many values as there are distinct payloads.
+ */
+export interface ChecksumEvidence {
+  /** End-relative index: -1 is the last byte. */
+  position: number;
+  payloadChanged: number;
+  changedWithPayload: number;
+  changedAlone: number;
+  /** `changedWithPayload / payloadChanged`. */
+  responsiveness: number;
+  entropyBits: number;
+  distinctRatio: number;
+  /** 0-100. Zero when `rejected` is set. */
+  likeness: number;
+  rejected: ChecksumRejection | null;
+}
+
 /**
  * What the scan found for one frame id — including when it found nothing, so
  * the reason stays visible instead of the id vanishing from the results.
@@ -428,6 +449,12 @@ export interface FrameChecksumFinding {
    */
   distinctPayloads: number;
   candidates: DiscoveredChecksum[];
+  /**
+   * What identification decided about each byte column. This is the useful half
+   * of an empty result: not "nothing found" but "byte -1 never changes, byte -2
+   * is a counter".
+   */
+  columns: ChecksumEvidence[];
   notes: ChecksumNote[];
 }
 
@@ -450,6 +477,11 @@ export interface ChecksumDiscoveryOptions {
   positions?: number[];
   /** Recover arbitrary CRC polynomials, not only the named algorithms. */
   searchCustomPolynomials?: boolean;
+  /**
+   * How checksum-shaped a byte column must look before the solver is asked
+   * about it (default 50). Zero solves every column not rejected outright.
+   */
+  minLikeness?: number;
   /** Cap on candidates reported per frame id (default 6). */
   maxCandidates?: number;
 }

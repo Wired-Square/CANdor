@@ -4,7 +4,7 @@
 // nothing was found, because "no checksum here" is a finding and an id that
 // silently vanishes from the list is not.
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ShieldCheck, ChevronDown, ChevronRight, Copy, Check, X } from "lucide-react";
 import { iconXs, iconMd, iconSm, flexRowGap2 } from "../../../../styles/spacing";
@@ -37,6 +37,7 @@ import {
   matchRateToneClasses,
 } from "../../components/checksumTone";
 import type {
+  ChecksumEvidence,
   ChecksumSpecification,
   DiscoveredChecksum,
   FrameChecksumFinding,
@@ -293,7 +294,9 @@ function FrameCard({
           {finding.candidates.map((candidate, index) => (
             <CandidateRow key={index} candidate={candidate} />
           ))}
-          {/* Why nothing was found is the useful half of an empty result. */}
+          {/* Why nothing was found is the useful half of an empty result: not
+              "no checksum" but "byte -1 never changes, byte -2 is a counter". */}
+          {finding.candidates.length === 0 && <ColumnVerdicts columns={finding.columns} />}
           {finding.candidates.length === 0 && finding.notes.length > 0 && (
             <p className={`text-xs ${textMuted}`}>
               {finding.notes.map((n) => t(`serial.checksumNote.${n.code}`, n.values)).join(" • ")}
@@ -385,6 +388,26 @@ function CandidateRow({ candidate }: { candidate: DiscoveredChecksum }) {
             .join(" • ")}
         </div>
       )}
+    </div>
+  );
+}
+
+function ColumnVerdicts({ columns }: { columns: ChecksumEvidence[] }) {
+  const { t } = useTranslation("discovery");
+  if (columns.length === 0) return null;
+
+  return (
+    <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs font-mono">
+      {columns.map((column) => (
+        <Fragment key={column.position}>
+          <span className={textMuted}>{t("checksumDiscovery.byte", { position: column.position })}</span>
+          <span className={column.rejected ? textMuted : textDataGreen}>
+            {column.rejected
+              ? t(`checksumDiscovery.rejected.${column.rejected}`)
+              : t("checksumDiscovery.candidateLikeness", { likeness: column.likeness })}
+          </span>
+        </Fragment>
+      ))}
     </div>
   );
 }

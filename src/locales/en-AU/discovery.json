@@ -172,6 +172,8 @@
     "byteTooltipValue": "byte[{{idx}}]: value range {{min}}–{{max}} ({{count}} unique)"
   },
   "checksumDiscovery": {
+    "byte": "byte {{position}}",
+    "candidateLikeness": "checksum-shaped ({{likeness}})",
     "close": "Close",
     "copyTooltip": "Copy checksum info",
     "crcEquallyValid": "equally valid: {{pairs}}",
@@ -189,6 +191,13 @@
     "noneFoundCount_one": "{{count}} frame ID with no checksum found",
     "noneFoundCount_other": "{{count}} frame IDs with no checksum found",
     "panelDescription": "Works out what explains each frame ID's checksum byte: the built-in algorithms, sums with a constant offset, or a recovered CRC polynomial.",
+    "rejected": {
+      "constant": "never changes — padding",
+      "notAFunctionOfTheOtherBytes": "changes on its own — a counter, not a checksum",
+      "tooOftenUnchanged": "sits still while the payload moves — a sensor reading",
+      "tooFewTransitions": "too few frames to judge",
+      "tooFewDistinctValues": "too few values for the payloads it saw"
+    },
     "searchCustomPolynomials": "Search custom polynomials",
     "searchCustomPolynomialsHint": "Recovers a CRC that is not one of the standards. Adds a few milliseconds per frame ID.",
     "skippedTooFewFrames": "skipped (too few frames)",
