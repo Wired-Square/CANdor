@@ -152,13 +152,25 @@ export interface ChecksumNote {
 /**
  * What one end-relative byte column looks like across the sample: the structural
  * evidence behind the detector's priors.
+ *
+ * The same statistics the identification pass judges a column on, because both
+ * halves now profile the columns once and share the result — a byte cannot be
+ * called padding by one and swept as a candidate by the other.
  */
-export interface ChecksumColumnStat {
+export interface ColumnStats {
   /** Negative index, e.g. -1 for the last byte. */
   position: number;
   distinctValues: number;
+  min: number;
+  max: number;
   /** Set when the column holds one value across every sampled frame. */
   constantValue: number | null;
+  /** Consecutive frame pairs in which this byte differed. */
+  changes: number;
+  /** Consecutive frame pairs the column took part in. */
+  transitions: number;
+  /** Shannon entropy of the observed values, in bits; 8.0 is a byte's most. */
+  entropyBits: number;
   sampleCount: number;
 }
 
@@ -183,7 +195,7 @@ export interface ChecksumCandidate {
 export interface ChecksumDetectionResult {
   candidates: ChecksumCandidate[];
   bestCandidate: ChecksumCandidate | null;
-  tailColumns: ChecksumColumnStat[];
+  tailColumns: ColumnStats[];
   /** Result-level explanation, including why nothing was found. */
   notes: ChecksumNote[];
 }
@@ -359,10 +371,6 @@ export interface ChecksumDiscoveryResult {
 export interface ChecksumDiscoveryOptions {
   /** Frames an id needs before it is worth analysing (default 10). */
   minSamples?: number;
-  /** Percentage below which a swept candidate is discarded (default 95). */
-  minMatchRate?: number;
-  /** Confidence below which a candidate is discarded (default 35). */
-  minConfidence?: number;
   /** Checksum offsets to try, end-relative (default [-1, -2, -3]). */
   positions?: number[];
   /** Recover arbitrary CRC polynomials, not only the named algorithms. */
@@ -370,10 +378,12 @@ export interface ChecksumDiscoveryOptions {
   /**
    * How checksum-shaped a byte column must look before the solver is asked
    * about it (default 50). Zero solves every column not rejected outright.
+   *
+   * The only sensitivity control there is. Match rate, confidence floor and the
+   * per-id candidate cap are fixed in Rust — they were reachable from no
+   * surface, and none of them is a judgement a user is placed to make.
    */
   minLikeness?: number;
-  /** Cap on candidates reported per frame id (default 6). */
-  maxCandidates?: number;
 }
 
 /** Frames as the scan wants them — a `FrameMessage` already satisfies this. */

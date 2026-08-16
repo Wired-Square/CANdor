@@ -180,10 +180,8 @@
     "crcParameters": "init {{init}} · xorOut {{xorOut}} · reflected {{reflect}}",
     "distinctOfFrames": "{{distinct}} distinct of {{frames}}",
     "framesUnit": "frames",
-    "matchThreshold": "Match threshold (%)",
-    "minSamples": "Minimum samples per frame ID",
     "no": "No",
-    "noChecksumsHint": "Try lowering the match threshold, or enable custom polynomial search.",
+    "noChecksumsHint": "Try Exhaustive sensitivity, or enable custom polynomial search.",
     "noChecksumsTitle": "No checksums detected",
     "noResults": "No results yet",
     "noResultsDescription": "Select frames and click \"Run Analysis\" to detect checksum patterns.",
@@ -200,6 +198,17 @@
     },
     "searchCustomPolynomials": "Search custom polynomials",
     "searchCustomPolynomialsHint": "Recovers a CRC that is not one of the standards. Adds a few milliseconds per frame ID.",
+    "sensitivity": "Sensitivity",
+    "sensitivityHint": {
+      "strict": "Only bytes that look strongly like a checksum are solved.",
+      "balanced": "The usual choice — bytes that plausibly carry a checksum are solved.",
+      "exhaustive": "Solves every byte that was not ruled out outright. Slower, and reports more near misses."
+    },
+    "sensitivityLevel": {
+      "strict": "Strict",
+      "balanced": "Balanced",
+      "exhaustive": "Exhaustive"
+    },
     "skippedTooFewFrames": "skipped (too few frames)",
     "title": "Checksum Discovery",
     "uniqueIdsUnit": "unique IDs",

@@ -163,8 +163,8 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
     changes: { maxExamples: 30 },
     checksumDiscovery: {
       minSamples: 10,
-      minMatchRate: 95,
       searchCustomPolynomials: false,
+      minLikeness: 50,
     },
     messageOrderResults: null,
     changesResults: null,

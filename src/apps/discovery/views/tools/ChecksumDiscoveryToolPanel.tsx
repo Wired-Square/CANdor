@@ -2,8 +2,22 @@
 
 import { useTranslation } from "react-i18next";
 import { useDiscoveryStore } from "../../../../stores/discoveryStore";
-import { toolPanelInput, toolPanelLabel } from "../../../../styles/inputStyles";
-import { textMuted, textSecondary, borderDefault } from "../../../../styles/colourTokens";
+import { toolPanelLabel } from "../../../../styles/inputStyles";
+import { textMuted, textSecondary, borderDefault, bgSurface } from "../../../../styles/colourTokens";
+
+/**
+ * How checksum-shaped a byte has to look before the solver is asked about it.
+ *
+ * This is the only control the search still needs. Minimum Samples and Match
+ * Threshold were cost knobs from when a CRC-16 sweep meant millions of IPC
+ * round trips — the search is now milliseconds, so the question stopped being
+ * "how much can I afford to look at" and became "how much noise will I read".
+ */
+const SENSITIVITY = [
+  { value: 70, key: "strict" },
+  { value: 50, key: "balanced" },
+  { value: 0, key: "exhaustive" },
+] as const;
 
 export default function ChecksumDiscoveryToolPanel() {
   const { t } = useTranslation("discovery");
@@ -13,31 +27,23 @@ export default function ChecksumDiscoveryToolPanel() {
   return (
     <div className="space-y-3 text-xs">
       <div className="space-y-1">
-        <label className={toolPanelLabel}>{t("checksumDiscovery.minSamples")}</label>
-        <input
-          type="number"
-          min={5}
-          max={50}
-          value={options.minSamples}
-          onChange={(e) =>
-            updateOptions({ minSamples: Math.max(5, Math.min(50, Number(e.target.value) || 10)) })
-          }
-          className={toolPanelInput}
-        />
-      </div>
-
-      <div className="space-y-1">
-        <label className={toolPanelLabel}>{t("checksumDiscovery.matchThreshold")}</label>
-        <input
-          type="number"
-          min={80}
-          max={100}
-          value={options.minMatchRate}
-          onChange={(e) =>
-            updateOptions({ minMatchRate: Math.max(80, Math.min(100, Number(e.target.value) || 95)) })
-          }
-          className={toolPanelInput}
-        />
+        <label className={toolPanelLabel}>{t("checksumDiscovery.sensitivity")}</label>
+        <select
+          value={options.minLikeness ?? 50}
+          onChange={(e) => updateOptions({ minLikeness: Number(e.target.value) })}
+          className={`w-full px-2 py-1 rounded border ${borderDefault} ${bgSurface} text-[color:var(--text-primary)]`}
+        >
+          {SENSITIVITY.map(({ value, key }) => (
+            <option key={key} value={value}>
+              {t(`checksumDiscovery.sensitivityLevel.${key}`)}
+            </option>
+          ))}
+        </select>
+        <span className={`block ${textMuted}`}>
+          {t(`checksumDiscovery.sensitivityHint.${
+            SENSITIVITY.find((s) => s.value === (options.minLikeness ?? 50))?.key ?? "balanced"
+          }`)}
+        </span>
       </div>
 
       <label className="flex items-start gap-2 cursor-pointer">

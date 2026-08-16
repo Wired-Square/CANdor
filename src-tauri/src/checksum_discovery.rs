@@ -13,11 +13,12 @@
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use wiretap_analysis::{checksum_evidence, solve_targets, ChecksumEvidence};
+use wiretap_analysis::{checksum_evidence_with_columns, solve_targets, ChecksumEvidence};
 use wiretap_checksum::{
-    detect_checksum, diverse_samples, solve_additive, solve_crc, AdditiveOp, CalcRange,
-    ChecksumAlgorithm, ChecksumCandidate, ChecksumDetectionOptions, ChecksumNote, CrcParameters,
-    CrcSolveOptions, SolveTarget, SolvedChecksum, SolvedKind, MAX_SAMPLES,
+    analyse_columns, detect_checksum_with_columns, diverse_samples, solve_additive, solve_crc,
+    AdditiveOp, CalcRange, ChecksumAlgorithm, ChecksumCandidate, ChecksumDetectionOptions,
+    ChecksumNote, ColumnStats, CrcParameters, CrcSolveOptions, SolvedChecksum, SolvedKind,
+    MAX_SAMPLES,
 };
 
 /// Just enough of a `FrameMessage` to group and analyse. Serde ignores the rest
@@ -34,15 +35,27 @@ pub struct DiscoveryFrame {
 /// parameter so the two surfaces cannot drift.
 pub const DEFAULT_MIN_LIKENESS: u8 = 50;
 
+/// Percentage below which a swept candidate is discarded.
+///
+/// A constant rather than an option: it was settable from neither the panel nor
+/// the MCP parameters, and it is not a judgement a user is placed to make. A
+/// checksum that reproduces 94% of a capture is not a checksum with a low score
+/// — it is the wrong answer, and `min_likeness` is the knob for widening the
+/// search.
+const MIN_MATCH_RATE: f64 = 95.0;
+
+/// Confidence below which a candidate is discarded. Unreachable as an option for
+/// the same reason as [`MIN_MATCH_RATE`].
+const MIN_CONFIDENCE: u8 = 35;
+
+/// Cap on candidates reported per frame id.
+const MAX_CANDIDATES_PER_ID: usize = 6;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ChecksumDiscoveryOptions {
     /// Frames an id needs before it is worth analysing.
     pub min_samples: usize,
-    /// Percentage below which a swept candidate is discarded.
-    pub min_match_rate: f64,
-    /// Confidence below which a candidate is discarded.
-    pub min_confidence: u8,
     /// Checksum offsets to try, end-relative.
     pub positions: Vec<i32>,
     /// Recover arbitrary CRC polynomials, not only the named algorithms.
@@ -50,20 +63,15 @@ pub struct ChecksumDiscoveryOptions {
     /// How checksum-shaped a byte column must look before the solver is asked
     /// about it. Zero solves every column that was not rejected outright.
     pub min_likeness: u8,
-    /// Cap on candidates reported per frame id.
-    pub max_candidates: usize,
 }
 
 impl Default for ChecksumDiscoveryOptions {
     fn default() -> Self {
         Self {
             min_samples: 10,
-            min_match_rate: 95.0,
-            min_confidence: 35,
             positions: vec![-1, -2, -3],
             search_custom_polynomials: false,
             min_likeness: DEFAULT_MIN_LIKENESS,
-            max_candidates: 6,
         }
     }
 }
@@ -131,7 +139,8 @@ impl DiscoveredChecksum {
     /// A solved configuration reproduces every sample it was verified against
     /// or is not reported at all, so its match rate is 100 by construction
     /// rather than by measurement.
-    fn solved(solved: SolvedChecksum, target: &SolveTarget, confidence: u8) -> Self {
+    fn solved(solved: SolvedChecksum, confidence: u8) -> Self {
+        let target = solved.target;
         Self {
             specification: match solved.kind {
                 SolvedKind::Additive { op, offset } => {
@@ -210,10 +219,15 @@ fn score_solved(likeness: u8, sample_count: usize) -> u8 {
 /// constant-column rejection rests on, and deduplicating first would leave it a
 /// single sample to judge on — which is how an all-zero frame gets reported as a
 /// flawless XOR.
+///
+/// Empties are dropped here because this is the only place that sees the raw
+/// population: `discover_checksums` filters them while grouping, but the MCP
+/// path reads payloads straight out of the capture and does not.
 fn evidence_samples(frames: &[Vec<u8>]) -> Vec<Vec<u8>> {
-    let stride = frames.len().div_ceil(MAX_SAMPLES).max(1);
-    frames
-        .iter()
+    let usable: Vec<&Vec<u8>> = frames.iter().filter(|f| !f.is_empty()).collect();
+    let stride = usable.len().div_ceil(MAX_SAMPLES).max(1);
+    usable
+        .into_iter()
         .step_by(stride)
         .take(MAX_SAMPLES)
         .cloned()
@@ -239,20 +253,29 @@ pub fn analyse_group(
     let solver_samples = diverse_samples(frames, MAX_SAMPLES);
     let distinct_payloads = solver_samples.len();
 
+    // Profiled once and handed to both halves, so identification and the sweep
+    // cannot reach different verdicts about the same byte.
+    let column_stats = analyse_columns(&samples);
+
     // Identification first. Most byte columns on a real link are padding,
     // counters or sensor readings, and each one ruled out here is a whole
     // polynomial search not run.
-    let columns = checksum_evidence(&samples);
+    let columns = checksum_evidence_with_columns(&samples, &column_stats);
 
-    let swept = detect_checksum(
+    let swept = detect_checksum_with_columns(
         &samples,
         &ChecksumDetectionOptions {
             positions: options.positions.clone(),
             lengths: Vec::new(),
+            // A CAN frame declares no header fields for Discovery to pass on —
+            // the chips that produce these are the serial view's. The 0/1/2
+            // starts `calc_ranges` always offers cover a leading id or type
+            // byte here.
             header_boundaries: Vec::new(),
-            min_match_rate: options.min_match_rate,
-            min_confidence: options.min_confidence,
+            min_match_rate: MIN_MATCH_RATE,
+            min_confidence: MIN_CONFIDENCE,
         },
+        &column_stats,
     );
 
     let mut candidates: Vec<DiscoveredChecksum> = swept
@@ -261,6 +284,7 @@ pub fn analyse_group(
         .map(DiscoveredChecksum::from)
         .chain(solved_candidates(
             &columns,
+            &column_stats,
             &solver_samples,
             distinct_payloads,
             options,
@@ -274,7 +298,7 @@ pub fn analyse_group(
             .then_with(|| a.length.cmp(&b.length))
             .then_with(|| a.calc_start_byte.cmp(&b.calc_start_byte))
     });
-    candidates.truncate(options.max_candidates);
+    candidates.truncate(MAX_CANDIDATES_PER_ID);
 
     FrameChecksumFinding {
         frame_id,
@@ -287,9 +311,74 @@ pub fn analyse_group(
     }
 }
 
+/// Two solutions that are the same answer written over different byte ranges.
+///
+/// A constant range contributes a constant, which a sum absorbs into its offset
+/// and a CRC into its `init`/`xorOut` residue — so those fields differ between
+/// them and nothing else does. They are exactly what must be ignored when asking
+/// whether two solutions agree.
+///
+/// Matched exhaustively rather than with a catch-all: a new checksum family
+/// would otherwise compile cleanly and silently stop folding.
+fn same_answer(a: &ChecksumSpecification, b: &ChecksumSpecification) -> bool {
+    use ChecksumSpecification::{Additive, Crc, Named};
+    match (a, b) {
+        (Additive { op: x, .. }, Additive { op: y, .. }) => x == y,
+        (Crc { parameters: x }, Crc { parameters: y }) => {
+            x.width == y.width
+                && x.polynomial == y.polynomial
+                && x.reflect_in == y.reflect_in
+                && x.reflect_out == y.reflect_out
+        }
+        // Only solved configurations reach the fold, and a solve never yields a
+        // named algorithm — that arm comes from the sweep, which folds its own.
+        (Named { .. }, _) | (Additive { .. }, _) | (Crc { .. }, _) => false,
+    }
+}
+
+/// Fold solutions that differ only in a range the data cannot distinguish.
+///
+/// The solver is now offered every calculation range the sweep searches, and
+/// wherever the bytes between two of those ranges are constant, *both* solve —
+/// with a different offset each time. Left alone that turns one honest answer
+/// into four candidates and makes the widened search read as noise.
+///
+/// The widest range wins and the rest become `equivalent_ranges`, the same
+/// treatment the sweep's own `collapse_equivalent` gives an ambiguous range.
+/// When only one range solves, the excluded bytes were not constant after all —
+/// and that single answer is the real one, which is the case this whole change
+/// exists to reach.
+fn collapse_solved(mut solutions: Vec<DiscoveredChecksum>) -> Vec<DiscoveredChecksum> {
+    // Widest first — lowest start, then the end furthest into the frame — so the
+    // survivor of each group is the parsimonious one.
+    solutions.sort_by(|a, b| {
+        a.calc_start_byte
+            .cmp(&b.calc_start_byte)
+            .then_with(|| b.calc_end_byte.cmp(&a.calc_end_byte))
+    });
+
+    let mut kept: Vec<DiscoveredChecksum> = Vec::new();
+    for solution in solutions {
+        match kept.iter_mut().find(|k| {
+            k.position == solution.position
+                && k.length == solution.length
+                && k.big_endian == solution.big_endian
+                && same_answer(&k.specification, &solution.specification)
+        }) {
+            Some(winner) => winner.equivalent_ranges.push(CalcRange {
+                calc_start_byte: solution.calc_start_byte,
+                calc_end_byte: solution.calc_end_byte,
+            }),
+            None => kept.push(solution),
+        }
+    }
+    kept
+}
+
 /// Solve the columns identification let through.
 fn solved_candidates(
     columns: &[ChecksumEvidence],
+    column_stats: &[ColumnStats],
     solver_samples: &[Vec<u8>],
     distinct_payloads: usize,
     options: &ChecksumDiscoveryOptions,
@@ -301,7 +390,7 @@ fn solved_candidates(
 
     let mut solutions = Vec::new();
 
-    for target in solve_targets(columns, options.min_likeness) {
+    for target in solve_targets(columns, column_stats, options.min_likeness) {
         // A two-byte target is keyed on the lower of the pair, so take the best
         // likeness across the bytes it actually covers rather than one end's.
         let likeness = (0..target.byte_length as i32)
@@ -315,7 +404,7 @@ fn solved_candidates(
             .unwrap_or(0);
 
         let confidence = score_solved(likeness, distinct_payloads);
-        if confidence < options.min_confidence {
+        if confidence < MIN_CONFIDENCE {
             continue;
         }
 
@@ -335,11 +424,11 @@ fn solved_candidates(
             additive
                 .into_iter()
                 .chain(solve_crc(solver_samples, &target, &crc_options))
-                .map(|s| DiscoveredChecksum::solved(s, &target, confidence)),
+                .map(|s| DiscoveredChecksum::solved(s, confidence)),
         );
     }
 
-    solutions
+    collapse_solved(solutions)
 }
 
 /// Discover checksums across every frame id in a capture.
@@ -484,6 +573,87 @@ mod tests {
             panic!("expected a CRC, got {:?}", best(&on, 0x102).specification);
         };
         assert_eq!(parameters.polynomial, 0x4D);
+    }
+
+    /// The capability gap this milestone closes. The type byte *varies*, so it
+    /// is not absorbed into an offset and only the range that excludes it can
+    /// reproduce the frames. The solver used to calculate from byte 0 and
+    /// nowhere else, so ticking "search custom polynomials" on a frame shaped
+    /// like this reported nothing, with no knob to turn.
+    #[test]
+    fn solves_a_checksum_that_skips_a_varying_type_byte() {
+        let frames: Vec<DiscoveryFrame> = (0..60u32)
+            .map(|i| {
+                let mut body = vec![
+                    (i % 7) as u8,
+                    (i.wrapping_mul(37) ^ 0x5A) as u8,
+                    (i.wrapping_mul(211)) as u8,
+                    0xC3,
+                    (i.wrapping_mul(7) ^ 0xF0) as u8,
+                ];
+                let checksum = sum8_checksum(&body[1..]).wrapping_add(0xA5);
+                body.push(checksum);
+                frame(0x110, body)
+            })
+            .collect();
+
+        let result = discover_checksums(&frames, &Default::default());
+        let best = best(&result, 0x110);
+
+        assert_eq!(
+            best.specification,
+            ChecksumSpecification::Additive {
+                op: AdditiveOp::Sum,
+                offset: 0xA5
+            }
+        );
+        assert_eq!(best.calc_start_byte, 1);
+        // Byte 0 moves, so no other start reproduces the data and there is
+        // nothing to be ambiguous about.
+        assert!(best.equivalent_ranges.is_empty(), "{best:?}");
+    }
+
+    /// The other half of the same change. When the excluded bytes *are*
+    /// constant every start solves — with a different offset each — because a
+    /// constant range contributes a constant. That is one answer written three
+    /// ways, and it has to come back as one candidate or the widened search
+    /// reads as noise.
+    #[test]
+    fn ranges_the_data_cannot_tell_apart_collapse_into_one_candidate() {
+        // Bytes 0 and 1 are constant; byte -2 varies, so the range's end is not
+        // ambiguous and only the start is.
+        let frames: Vec<DiscoveryFrame> = (0..60u32)
+            .map(|i| {
+                let mut body = vec![
+                    0x10,
+                    0x20,
+                    (i.wrapping_mul(37) ^ 0x5A) as u8,
+                    (i.wrapping_mul(211)) as u8,
+                    (i.wrapping_mul(7) ^ 0xF0) as u8,
+                ];
+                let checksum = sum8_checksum(&body).wrapping_add(0xA5);
+                body.push(checksum);
+                frame(0x111, body)
+            })
+            .collect();
+
+        let finding = &discover_checksums(&frames, &Default::default()).findings[0];
+        let sums: Vec<&DiscoveredChecksum> = finding
+            .candidates
+            .iter()
+            .filter(|c| matches!(c.specification, ChecksumSpecification::Additive { .. }))
+            .collect();
+
+        assert_eq!(sums.len(), 1, "one answer, reported many ways: {sums:?}");
+        // The widest range wins; the narrower ones are kept as alternatives
+        // rather than dropped, because none of them is more true than another.
+        assert_eq!(sums[0].calc_start_byte, 0);
+        let starts: Vec<i32> = sums[0]
+            .equivalent_ranges
+            .iter()
+            .map(|r| r.calc_start_byte)
+            .collect();
+        assert_eq!(starts, vec![1, 2]);
     }
 
     /// The live bug this milestone fixes. Every byte is zero, so XOR and Sum8
