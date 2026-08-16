@@ -94,7 +94,8 @@ export default function ChecksumDiscoveryResultView({ embedded = false, onClose 
   }
 
   const findings = [...results.findings].sort((a, b) => a.frameId - b.frameId);
-  const withChecksum = findings.filter((f) => f.candidates.length > 0).length;
+  const explained = findings.filter((f) => f.candidates.length > 0);
+  const unexplained = findings.filter((f) => f.candidates.length === 0);
 
   return (
     <div className={shell}>
@@ -105,12 +106,12 @@ export default function ChecksumDiscoveryResultView({ embedded = false, onClose 
           <Stat value={results.frameCount.toLocaleString()} label={t("checksumDiscovery.framesUnit")} />
           <Stat value={results.uniqueFrameIds} label={t("checksumDiscovery.uniqueIdsUnit")} />
           <Stat
-            value={withChecksum}
+            value={explained.length}
             label={t("checksumDiscovery.withChecksum")}
             tone={textDataGreen}
           />
           <Stat
-            value={findings.length - withChecksum}
+            value={unexplained.length}
             label={t("checksumDiscovery.unknown")}
             tone={textDataAmber}
           />
@@ -124,21 +125,65 @@ export default function ChecksumDiscoveryResultView({ embedded = false, onClose 
       </div>
 
       <div className="flex-1 p-4 overflow-auto space-y-3">
-        {findings.length === 0 ? (
+        {explained.map((finding) => (
+          <FrameCard
+            key={`${finding.frameId}-${finding.isExtended}`}
+            finding={finding}
+            frameIdFormat={frameIdFormat}
+          />
+        ))}
+
+        {explained.length === 0 && (
           <div className="text-center py-8">
             <p className={`text-sm ${textSecondary}`}>{t("checksumDiscovery.noChecksumsTitle")}</p>
             <p className={`text-xs ${textMuted} mt-1`}>{t("checksumDiscovery.noChecksumsHint")}</p>
           </div>
-        ) : (
-          findings.map((finding) => (
+        )}
+
+        {/* Why an id came back empty is worth keeping, but 62 rows of it buries
+            the answer on a bus that has no checksums at all. */}
+        {unexplained.length > 0 && (
+          <UnexplainedSection findings={unexplained} frameIdFormat={frameIdFormat} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UnexplainedSection({
+  findings,
+  frameIdFormat,
+}: {
+  findings: FrameChecksumFinding[];
+  frameIdFormat: "hex" | "decimal";
+}) {
+  const { t } = useTranslation("discovery");
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className={cardDefault}>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-2 w-full px-3 py-2 text-left"
+      >
+        {expanded ? <ChevronDown className={iconSm} /> : <ChevronRight className={iconSm} />}
+        <span className={`text-sm ${textSecondary}`}>
+          {t("checksumDiscovery.noneFoundCount", { count: findings.length })}
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="px-3 pb-3 space-y-2">
+          {findings.map((finding) => (
             <FrameCard
               key={`${finding.frameId}-${finding.isExtended}`}
               finding={finding}
               frameIdFormat={frameIdFormat}
             />
-          ))
-        )}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

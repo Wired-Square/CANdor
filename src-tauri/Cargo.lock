@@ -9025,8 +9025,8 @@ dependencies = [
 
 [[package]]
 name = "wiretap-catalog"
-version = "0.10.1"
-source = "git+ssh://git@github.com/Wired-Square/wiretap-lib-rs.git?tag=v0.10.1#6da9070eff75356e860a042b66897f5c66958b98"
+version = "0.10.2"
+source = "git+ssh://git@github.com/Wired-Square/wiretap-lib-rs.git?tag=v0.10.2#dbe6c7a314beb34fc3d2b672f4cc27cb089bb90c"
 dependencies = [
  "can-dbc",
  "rust_decimal",
@@ -9040,8 +9040,8 @@ dependencies = [
 
 [[package]]
 name = "wiretap-checksum"
-version = "0.10.1"
-source = "git+ssh://git@github.com/Wired-Square/wiretap-lib-rs.git?tag=v0.10.1#6da9070eff75356e860a042b66897f5c66958b98"
+version = "0.10.2"
+source = "git+ssh://git@github.com/Wired-Square/wiretap-lib-rs.git?tag=v0.10.2#dbe6c7a314beb34fc3d2b672f4cc27cb089bb90c"
 dependencies = [
  "rayon",
  "serde",
@@ -9050,8 +9050,8 @@ dependencies = [
 
 [[package]]
 name = "wiretap-decode"
-version = "0.10.1"
-source = "git+ssh://git@github.com/Wired-Square/wiretap-lib-rs.git?tag=v0.10.1#6da9070eff75356e860a042b66897f5c66958b98"
+version = "0.10.2"
+source = "git+ssh://git@github.com/Wired-Square/wiretap-lib-rs.git?tag=v0.10.2#dbe6c7a314beb34fc3d2b672f4cc27cb089bb90c"
 dependencies = [
  "rust_decimal",
  "serde",

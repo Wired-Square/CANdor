@@ -186,6 +186,8 @@
     "noResults": "No results yet",
     "noResultsDescription": "Select frames and click \"Run Analysis\" to detect checksum patterns.",
     "noneFound": "nothing explains this byte",
+    "noneFoundCount_one": "{{count}} frame ID with no checksum found",
+    "noneFoundCount_other": "{{count}} frame IDs with no checksum found",
     "panelDescription": "Works out what explains each frame ID's checksum byte: the built-in algorithms, sums with a constant offset, or a recovered CRC polynomial.",
     "searchCustomPolynomials": "Search custom polynomials",
     "searchCustomPolynomialsHint": "Recovers a CRC that is not one of the standards. Adds a few milliseconds per frame ID.",
@@ -383,21 +385,22 @@
     "checksumEquivalentRanges": "(also {{ranges}})",
     "checksumResetToDetected": "Use detected",
     "checksumNote": {
-      "noFrames": "No frames to analyse",
       "analysed": "Analysed {{frames}} frames (lengths {{minLength}}–{{maxLength}} bytes)",
-      "constantPadding": "Byte {{position}} is {{value}} in every frame — treated as padding, not checksum",
+      "columnNearlyConstant": "Checksum column takes only {{distinct}} distinct values — may be padding",
+      "columnVaries": "Checksum column takes {{distinct}} distinct values across {{samples}} frames",
       "configurationsTested": "Tested {{specs}} configurations across {{algorithms}} algorithms",
+      "constantExcluded": "Constant {{value}} before the checksum excluded",
+      "constantPadding": "Byte {{position}} is {{value}} in every frame — treated as padding, not checksum",
+      "constantPaddingRun": "Bytes {{from}} to {{to}} are {{value}} in every frame — treated as padding, not checksum",
+      "fewSamples": "Only {{count}} samples — weak evidence",
+      "highByteConstant": "High byte of the checksum never changes — may be a 1-byte checksum",
       "matchesAll": "Matches all {{count}} frames",
       "matchesSome": "Matches {{matched}} of {{total}} frames",
-      "fewSamples": "Only {{count}} samples — weak evidence",
-      "columnVaries": "Checksum column takes {{distinct}} distinct values across {{samples}} frames",
-      "columnNearlyConstant": "Checksum column takes only {{distinct}} distinct values — may be padding",
-      "startsAfterHeader": "Calculation starts after a declared header field (byte {{byte}})",
-      "constantExcluded": "Constant {{value}} before the checksum excluded",
-      "shortRange": "Calculation covers fewer than 2 bytes",
-      "highByteConstant": "High byte of the checksum never changes — may be a 1-byte checksum",
+      "noFrames": "No frames to analyse",
+      "noneButLastByteVaries": "No known algorithm reproduced the checksum. The last byte does vary ({{distinct}} distinct values across {{frames}} frames), which is consistent with a checksum, so the algorithm may be one not built in — try Checksum Discovery to brute-force CRC polynomials, or configure it manually below.",
       "noneLastByteConstant": "No checksum found. The last byte is {{value}} in all {{frames}} frames, so it is unlikely to be a checksum at all — try another position, or check the framing.",
-      "noneButLastByteVaries": "No known algorithm reproduced the checksum. The last byte does vary ({{distinct}} distinct values across {{frames}} frames), which is consistent with a checksum, so the algorithm may be one not built in — try Checksum Discovery to brute-force CRC polynomials, or configure it manually below."
+      "shortRange": "Calculation covers fewer than 2 bytes",
+      "startsAfterHeader": "Calculation starts after a declared header field (byte {{byte}})"
     }
   }
 }

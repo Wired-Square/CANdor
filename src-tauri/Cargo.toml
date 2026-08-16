@@ -93,10 +93,10 @@ framelink = { git = "ssh://git@github.com/Wired-Square/framelink-rs.git", branch
 # CAN, Serial and Modbus; shared with the ESS add-on. Pinned by tag; a local
 # `.cargo/config.toml` paths override points at a sibling checkout for the dev
 # loop (same pattern as framelink).
-wiretap-catalog = { git = "ssh://git@github.com/Wired-Square/wiretap-lib-rs.git", tag = "v0.10.1" }
+wiretap-catalog = { git = "ssh://git@github.com/Wired-Square/wiretap-lib-rs.git", tag = "v0.10.2" }
 # Checksum algorithms plus the detection engine and the solvers. Same workspace,
 # same tag — one release covers every crate in it.
-wiretap-checksum = { git = "ssh://git@github.com/Wired-Square/wiretap-lib-rs.git", tag = "v0.10.1" }
+wiretap-checksum = { git = "ssh://git@github.com/Wired-Square/wiretap-lib-rs.git", tag = "v0.10.2" }
 # Desktop-only dependencies (serial/USB/keepawake not available on iOS)
 [target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
 serialport = "4.3"
