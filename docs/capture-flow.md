@@ -238,6 +238,13 @@ A discovery sweep owns a Frames capture like any other source, which is what
 makes its results analysable, exportable and pageable rather than a throwaway
 list in a panel.
 
+A sweep launched from Discovery usually **stops the session it is scanning**
+first, to free a device that serves one Modbus conversation at a time (see
+[session-flow.md](session-flow.md) § Modbus discovery). So one sweep touches two
+captures: the target's is finalised by the stop, and the sweep's own is created
+when it starts. `resume_session_to_live` afterwards gives the target a *new*
+capture rather than reopening the finalised one.
+
 ```
 create_modbus_scan_session(session_id, job)   // creates the session STOPPED
   └─ (frontend subscribes / joins)

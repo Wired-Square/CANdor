@@ -17,7 +17,13 @@ export interface SessionShape {
   isSerialMode: boolean;
   /** The session's protocol is serial, however it delivers its data. */
   isSerialProtocol: boolean;
-  isModbusProfile: boolean;
+  /**
+   * A live Modbus session — the device the sweeps run against.
+   *
+   * Not merely "a Modbus profile is configured": the sweeps scan the session's
+   * own device, so a device you have no session for is out of their scope.
+   */
+  hasLiveModbusSession: boolean;
 }
 
 export interface ToolDataCounts {
@@ -44,7 +50,7 @@ export function toolNeeds(tool: ToolRequirements): ToolNeeds {
  */
 export function isToolApplicable(tool: ToolRequirements, session: SessionShape): boolean {
   switch (toolNeeds(tool)) {
-    case 'modbus': return session.isModbusProfile;
+    case 'modbus': return session.hasLiveModbusSession;
     case 'serial-bytes': return session.isSerialMode;
     case 'serial-frames': return session.isSerialProtocol || session.isSerialMode;
     // Frame tools are meaningless while a serial source is still an unframed stream.
@@ -58,7 +64,8 @@ export function hasToolData(
   counts: ToolDataCounts
 ): boolean {
   switch (toolNeeds(tool)) {
-    case 'modbus': return session.isModbusProfile;
+    // No frame threshold: a sweep produces the data, it doesn't consume it.
+    case 'modbus': return session.hasLiveModbusSession;
     case 'serial-bytes': return counts.serialBytesCount > 0;
     case 'serial-frames': return counts.serialFrameCount > 0;
     case 'frames': return counts.frameCount > 0;

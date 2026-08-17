@@ -337,7 +337,7 @@
       }
     },
     "disabledReasons": {
-      "modbusProfile": "Requires a Modbus TCP profile",
+      "modbusSession": "Open a Modbus session first — these scan the connected device",
       "noFrames": "No frames discovered",
       "noBytes": "No raw bytes captured",
       "needFraming": "Apply framing first to get frames"

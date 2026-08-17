@@ -5,9 +5,7 @@ import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { iconSm } from "../../../../styles/spacing";
 import { borderDefault, textMuted } from "../../../../styles";
-import ModbusConnectionFields, {
-  type ModbusConnection,
-} from "../../../../components/modbus/ModbusConnectionFields";
+import ModbusTargetSummary from "../../../../components/modbus/ModbusTargetSummary";
 import {
   CheckboxRow,
   FieldRow,
@@ -20,18 +18,25 @@ import {
   MODBUS_SCAN_DEFAULTS,
   maxChunkFor,
 } from "../../../../components/modbus/modbusScanDefaults";
-import { useModbusTarget } from "../../../../components/modbus/useModbusTarget";
+import type { ModbusSessionTarget } from "../../../../utils/modbusProfiles";
 import type { ModbusScanConfig, ModbusRegisterType } from "../../../../api/io";
 
 type Props = {
-  /** The live session's Modbus device, when there is one. */
-  connection?: ModbusConnection | null;
-  onStartScan: (config: ModbusScanConfig) => void;
+  /** The device this sweep runs against — the current session's. */
+  target: ModbusSessionTarget;
+  onStartScan: (config: ModbusScanConfig, stopSession: boolean) => void;
 };
 
-export default function ModbusRegisterScanPanel({ connection, onStartScan }: Props) {
+export default function ModbusRegisterScanPanel({ target, onStartScan }: Props) {
   const { t } = useTranslation("discovery");
-  const target = useModbusTarget(connection);
+
+  // The address comes from the session, but the slave does not: a unit-id sweep
+  // exists to find *other* slaves behind one host:port, and you need to be able
+  // to sweep the one it finds.
+  const [unitId, setUnitId] = useState(target.unit_id);
+  // Most devices serve one Modbus conversation at a time, and pausing keeps the
+  // socket — only stopping frees it. Default to handing the device over.
+  const [stopSession, setStopSession] = useState(true);
 
   const [registerType, setRegisterType] = useState<ModbusRegisterType>(
     MODBUS_SCAN_DEFAULTS.registerType
@@ -76,10 +81,10 @@ export default function ModbusRegisterScanPanel({ connection, onStartScan }: Pro
   const isValid = startRegister <= endRegister && chunkSize > 0 && !overRegisterCap;
 
   const handleStart = () => {
+    // No host/port: Rust resolves them from the session, so the sweep cannot
+    // drift from the device named on screen.
     onStartScan({
-      host: target.connection.host,
-      port: target.connection.port,
-      unit_id: target.connection.unit_id,
+      unit_id: unitId,
       register_type: registerType,
       start_register: startRegister,
       end_register: endRegister,
@@ -92,16 +97,15 @@ export default function ModbusRegisterScanPanel({ connection, onStartScan }: Pro
       max_requests: maxRequests,
       repeat,
       repeat_delay_ms: repeatDelayMs,
-    });
+    }, stopSession);
   };
 
   return (
     <div className="space-y-3 text-xs">
-      <ModbusConnectionFields
-        value={target.connection}
-        onChange={target.setConnection}
-        profileId={target.profileId}
-        onProfileChange={target.selectProfile}
+      <ModbusTargetSummary
+        target={target}
+        stopSession={stopSession}
+        onStopSessionChange={setStopSession}
       />
 
       <FieldRow>
@@ -115,6 +119,13 @@ export default function ModbusRegisterScanPanel({ connection, onStartScan }: Pro
             { value: "coil", label: t("modbusRegister.coilFc") },
             { value: "discrete", label: t("modbusRegister.discreteFc") },
           ]}
+        />
+        <NumberField
+          label={t("modbusRegister.unitId")}
+          value={unitId}
+          onChange={setUnitId}
+          min={MODBUS_SCAN_BOUNDS.unitId.min}
+          max={MODBUS_SCAN_BOUNDS.unitId.max}
         />
         <NumberField
           label={t("modbusRegister.startRegister")}
@@ -224,8 +235,8 @@ export default function ModbusRegisterScanPanel({ connection, onStartScan }: Pro
 
       <p className={`${textMuted} pt-2 border-t ${borderDefault}`}>
         {t("modbusRegister.scanDescription", {
-          host: target.connection.host,
-          port: target.connection.port,
+          device: target.name,
+          unit: unitId,
           type: registerType,
           start: startRegister,
           end: endRegister,

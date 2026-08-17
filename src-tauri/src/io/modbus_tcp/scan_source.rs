@@ -94,6 +94,28 @@ impl ScanJob {
         }
     }
 
+    /// Point this job at a device resolved from elsewhere — the Discovery tools
+    /// scan the current session's device rather than an address you type.
+    ///
+    /// Address only. The slave is the caller's: a register sweep may deliberately
+    /// target a unit other than the session's — that is what the unit-id sweep
+    /// finds them for — and a unit-id sweep supplies its own.
+    ///
+    /// Retargeting happens before `endpoint()` is ever read, which is what keeps
+    /// `endpoint()` infallible and sync for the contention registry.
+    pub fn retarget(&mut self, host: String, port: u16) {
+        match self {
+            ScanJob::Registers { config } => {
+                config.host = host;
+                config.port = port;
+            }
+            ScanJob::UnitIds { config } => {
+                config.host = host;
+                config.port = port;
+            }
+        }
+    }
+
     fn describe(&self) -> String {
         match self {
             ScanJob::Registers { config } => format!(
@@ -254,5 +276,55 @@ impl IOSource for ModbusScanSource {
 
     fn source_type(&self) -> &'static str {
         "modbus_scan"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn register_job() -> ScanJob {
+        serde_json::from_str(
+            r#"{"kind":"registers","config":{"host":"127.0.0.1","port":502,"unit_id":1,
+                "register_type":"holding","start_register":0,"end_register":9,
+                "chunk_size":10,"inter_request_delay_ms":50}}"#,
+        )
+        .unwrap()
+    }
+
+    fn unit_job() -> ScanJob {
+        serde_json::from_str(
+            r#"{"kind":"unit_ids","config":{"host":"127.0.0.1","port":502,
+                "start_unit_id":1,"end_unit_id":5,"test_register":0,
+                "register_type":"holding","inter_request_delay_ms":50}}"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn retargeting_moves_the_address_but_never_the_slave() {
+        // The caller's unit is deliberate — a register sweep may target a slave
+        // the unit-id sweep just found, not the session's own.
+        let mut job = register_job();
+        job.retarget("10.0.1.50".into(), 5020);
+        assert_eq!(job.endpoint(), "10.0.1.50:5020");
+        match job {
+            ScanJob::Registers { config } => assert_eq!(config.unit_id, 1),
+            _ => panic!("kind changed"),
+        }
+    }
+
+    #[test]
+    fn retargeting_a_unit_sweep_leaves_its_range_alone() {
+        let mut job = unit_job();
+        job.retarget("10.0.1.50".into(), 5020);
+        assert_eq!(job.endpoint(), "10.0.1.50:5020");
+        match job {
+            ScanJob::UnitIds { config } => {
+                assert_eq!(config.start_unit_id, 1);
+                assert_eq!(config.end_unit_id, 5);
+            }
+            _ => panic!("kind changed"),
+        }
     }
 }

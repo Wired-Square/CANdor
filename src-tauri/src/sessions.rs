@@ -2432,11 +2432,55 @@ pub fn set_wake_settings(prevent_idle_sleep: bool, keep_display_awake: bool) {
 // Modbus Scanning
 // ============================================================================
 
+/// Find a live session already polling this `host:port`, so a sweep can name the
+/// conflict instead of quietly contending for the socket.
+///
+/// `scan_holding` only sees other *sweeps*; this sees pollers, which is the case
+/// that matters now that the Discovery tools only appear during a live session.
+async fn endpoint_in_use_by_poller(
+    settings: &crate::settings::AppSettings,
+    endpoint: &str,
+    exclude: &[&str],
+) -> Option<(String, String)> {
+    for info in crate::io::list_sessions().await {
+        // A paused poller still holds its socket — pause stops requests, not the
+        // connection — so it contends exactly as a running one does.
+        let holds_socket = matches!(
+            info.state,
+            crate::io::IOState::Running | crate::io::IOState::Paused
+        );
+        if exclude.contains(&info.session_id.as_str()) || !holds_socket {
+            continue;
+        }
+        let Some(profile) = crate::io::modbus_tcp::session_modbus_profile(settings, &info.session_id)
+        else {
+            continue;
+        };
+        let (host, port, _) = crate::io::modbus_endpoint(profile);
+        if format!("{host}:{port}") == endpoint {
+            return Some((info.session_id.clone(), profile.name.clone()));
+        }
+    }
+    None
+}
+
 /// Probe which read function codes a device answers, before sweeping anything.
+///
+/// `target_session_id` names a live Modbus session to take the address from, so
+/// the Discovery tool probes whatever the session is talking to. Only four
+/// requests per unit, so this never stops the session for them — a stop/resume
+/// cycle would cost far more than the probe does.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn modbus_probe_function_codes(
-    config: crate::io::FcProbeConfig,
+    app: tauri::AppHandle,
+    mut config: crate::io::FcProbeConfig,
+    target_session_id: Option<String>,
 ) -> Result<Vec<crate::io::FcProbeEntry>, String> {
+    if let Some(sid) = &target_session_id {
+        let (host, port, _) = crate::io::session_modbus_endpoint(&app, sid)?;
+        config.host = host;
+        config.port = port;
+    }
     // At most four requests per unit, so there is nothing worth cancelling.
     let cancel = Arc::new(AtomicBool::new(false));
     crate::io::modbus_tcp::scanner::probe_function_codes(config, cancel).await
@@ -2457,11 +2501,29 @@ pub async fn modbus_probe_function_codes(
 pub async fn create_modbus_scan_session(
     app: tauri::AppHandle,
     session_id: String,
-    job: crate::io::ScanJob,
+    mut job: crate::io::ScanJob,
     profile_id: Option<String>,
     subscriber_id: Option<String>,
     app_name: Option<String>,
+    target_session_id: Option<String>,
+    stop_target: Option<bool>,
+    allow_contention: Option<bool>,
 ) -> Result<IOCapabilities, String> {
+    // Resolve, then refuse, then stop — in that order, and all inside one command.
+    //
+    // Resolution must precede the stop because stopping swaps a session's profile
+    // ids for its capture id (`replace_session_profiles` inside
+    // `stop_and_switch_to_capture`), leaving it unable to name its own device.
+    // The refusals must also precede it, or a rejected sweep would leave the
+    // caller's session stopped for a scan that never ran.
+    let settings = crate::settings::load_settings_sync(&app)?;
+    if let Some(sid) = &target_session_id {
+        let (host, port, _) = crate::io::modbus_tcp::session_modbus_profile(&settings, sid)
+            .map(crate::io::modbus_endpoint)
+            .ok_or_else(|| format!("Session '{sid}' has no Modbus source profile"))?;
+        job.retarget(host, port);
+    }
+
     // A sweep opens its own connection. Devices that serve one Modbus
     // conversation at a time — the cheap stacks this feature exists for — break
     // when a second one arrives, and pausing a poller doesn't help because it
@@ -2473,6 +2535,30 @@ pub async fn create_modbus_scan_session(
                 "A Modbus scan of {} is already running as session '{}' — stop it first.",
                 endpoint, holder
             ));
+        }
+    }
+
+    if !allow_contention.unwrap_or(false) {
+        // The target is excluded: it is about to be handed over, so it is not the
+        // conflict. Anything *else* on that endpoint still is.
+        let exclude: Vec<&str> = std::iter::once(session_id.as_str())
+            .chain(target_session_id.as_deref())
+            .collect();
+        if let Some((holder, name)) =
+            endpoint_in_use_by_poller(&settings, &endpoint, &exclude).await
+        {
+            return Err(format!(
+                "{name} is being polled by session '{holder}' — that device may only serve one \
+                 Modbus connection at a time. Stop that session, or re-run allowing contention."
+            ));
+        }
+    }
+
+    if stop_target.unwrap_or(false) {
+        if let Some(sid) = &target_session_id {
+            // Stop, not pause: pause halts requests but keeps the socket, which is
+            // exactly what a single-connection device needs released.
+            session_stop_to_capture(app.clone(), sid.clone()).await?;
         }
     }
 

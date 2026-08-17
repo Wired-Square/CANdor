@@ -205,11 +205,8 @@ async fn connect_session_modbus(
     app: &tauri::AppHandle,
     session_id: &str,
 ) -> Result<tokio_modbus::client::Context, McpError> {
-    let profile_id = crate::sessions::get_session_profile_ids(session_id)
-        .into_iter()
-        .next()
-        .ok_or_else(|| err(format!("Session '{session_id}' has no source profile")))?;
-    let (host, port, unit_id) = modbus_endpoint_of(app, &profile_id)?;
+    let (host, port, unit_id) =
+        crate::io::session_modbus_endpoint(app, session_id).map_err(err)?;
     let addr = crate::io::net::resolve_host_port(&host, port)
         .await
         .map_err(|e| err(e.user_message()))?;
@@ -267,6 +264,14 @@ impl WireTapTools {
             None,
             Some("mcp".to_string()),
             Some("mcp".to_string()),
+            // MCP names its own device and manages its own sessions, so it neither
+            // retargets nor stops one. It opts out of the poller check to keep the
+            // agent's behaviour exactly as it was: an agent sweeping a device that
+            // something else is polling may well be doing so deliberately, and it
+            // has no parameter to override a refusal with.
+            None,
+            None,
+            Some(true),
         )
         .await
         .map_err(err)?;

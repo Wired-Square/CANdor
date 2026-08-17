@@ -25,6 +25,7 @@ import ModbusRegisterScanPanel from "../apps/discovery/views/tools/ModbusRegiste
 import ModbusUnitIdScanPanel from "../apps/discovery/views/tools/ModbusUnitIdScanPanel";
 import ModbusFunctionCodePanel from "../apps/discovery/views/tools/ModbusFunctionCodePanel";
 import type { ModbusScanConfig, UnitIdScanConfig } from "../api/io";
+import type { ModbusSessionTarget } from "../utils/modbusProfiles";
 import {
   toolNeeds,
   isToolApplicable,
@@ -77,14 +78,15 @@ type Props = {
   serialFrameCount?: number;
   /** Number of raw serial bytes available (before framing) */
   serialBytesCount?: number;
-  /** True when active profile is modbus_tcp */
-  isModbusProfile?: boolean;
-  /** Connection details from the active modbus profile */
-  modbusConnection?: { host: string; port: number; unit_id: number } | null;
+  /**
+   * The device the sweeps scan — the current Modbus session's. Null when there
+   * is no live Modbus session, which is also what withholds the Modbus tools.
+   */
+  modbusTarget?: ModbusSessionTarget | null;
   /** Called when a modbus register scan should start */
-  onStartModbusScan?: (config: ModbusScanConfig) => void;
+  onStartModbusScan?: (config: ModbusScanConfig, stopSession: boolean) => void;
   /** Called when a modbus unit ID scan should start */
-  onStartModbusUnitIdScan?: (config: UnitIdScanConfig) => void;
+  onStartModbusUnitIdScan?: (config: UnitIdScanConfig, stopSession: boolean) => void;
 };
 
 function getSelectionText(
@@ -117,8 +119,7 @@ export default function ToolboxDialog({
   isFilteredView = false,
   serialFrameCount = 0,
   serialBytesCount = 0,
-  isModbusProfile = false,
-  modbusConnection,
+  modbusTarget,
   onStartModbusScan,
   onStartModbusUnitIdScan,
 }: Props) {
@@ -131,7 +132,11 @@ export default function ToolboxDialog({
 
   const activeTool = activeView !== "frames" ? activeView : null;
 
-  const session: SessionShape = { isSerialMode, isSerialProtocol, isModbusProfile };
+  const session: SessionShape = {
+    isSerialMode,
+    isSerialProtocol,
+    hasLiveModbusSession: modbusTarget != null,
+  };
   const counts: ToolDataCounts = { frameCount, serialFrameCount, serialBytesCount };
 
   const availableTools = tools.filter((tool) => isToolApplicable(tool, session));
@@ -153,7 +158,7 @@ export default function ToolboxDialog({
   const getDisabledReason = (tool: ToolConfig): string | null => {
     switch (toolNeeds(tool)) {
       case 'modbus':
-        return isModbusProfile ? null : t("toolbox.disabledReasons.modbusProfile");
+        return modbusTarget ? null : t("toolbox.disabledReasons.modbusSession");
       case 'serial-bytes':
         return serialBytesCount === 0 ? t("toolbox.disabledReasons.noBytes") : null;
       case 'serial-frames':
@@ -185,13 +190,13 @@ export default function ToolboxDialog({
     }
   };
 
-  const handleStartModbusScan = (config: ModbusScanConfig) => {
-    onStartModbusScan?.(config);
+  const handleStartModbusScan = (config: ModbusScanConfig, stopSession: boolean) => {
+    onStartModbusScan?.(config, stopSession);
     onClose();
   };
 
-  const handleStartModbusUnitIdScan = (config: UnitIdScanConfig) => {
-    onStartModbusUnitIdScan?.(config);
+  const handleStartModbusUnitIdScan = (config: UnitIdScanConfig, stopSession: boolean) => {
+    onStartModbusUnitIdScan?.(config, stopSession);
     onClose();
   };
 
@@ -203,7 +208,7 @@ export default function ToolboxDialog({
         {/* Header */}
         <div className={`${paddingCard} flex items-center justify-between border-b ${borderDefault}`}>
           <h2 className={h3}>
-            {isModbusProfile ? t("toolbox.titleAnalysisAndScanning") : t("toolbox.titleAnalysis")}
+            {modbusTarget ? t("toolbox.titleAnalysisAndScanning") : t("toolbox.titleAnalysis")}
           </h2>
           <button
             onClick={onClose}
@@ -261,20 +266,24 @@ export default function ToolboxDialog({
               {activeTool === "checksum-discovery" && <ChecksumDiscoveryToolPanel />}
               {activeTool === "serial-framing" && <SerialFramingToolPanel bytesCount={serialBytesCount} />}
               {activeTool === "serial-payload" && <SerialPayloadToolPanel framesCount={serialFrameCount} />}
-              {activeTool === "modbus-function-codes" && (
-                <ModbusFunctionCodePanel connection={modbusConnection} />
-              )}
-              {activeTool === "modbus-register-scan" && (
-                <ModbusRegisterScanPanel
-                  connection={modbusConnection}
-                  onStartScan={handleStartModbusScan}
-                />
-              )}
-              {activeTool === "modbus-unit-scan" && (
-                <ModbusUnitIdScanPanel
-                  connection={modbusConnection}
-                  onStartScan={handleStartModbusUnitIdScan}
-                />
+              {modbusTarget && (
+                <>
+                  {activeTool === "modbus-function-codes" && (
+                    <ModbusFunctionCodePanel target={modbusTarget} />
+                  )}
+                  {activeTool === "modbus-register-scan" && (
+                    <ModbusRegisterScanPanel
+                      target={modbusTarget}
+                      onStartScan={handleStartModbusScan}
+                    />
+                  )}
+                  {activeTool === "modbus-unit-scan" && (
+                    <ModbusUnitIdScanPanel
+                      target={modbusTarget}
+                      onStartScan={handleStartModbusUnitIdScan}
+                    />
+                  )}
+                </>
               )}
             </div>
           )}

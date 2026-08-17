@@ -5,25 +5,26 @@ import { useTranslation } from "react-i18next";
 import { Info } from "lucide-react";
 import { iconSm } from "../../../../styles/spacing";
 import { borderDefault, textMuted } from "../../../../styles";
-import ModbusConnectionFields, {
-  type ModbusConnection,
-} from "../../../../components/modbus/ModbusConnectionFields";
+import ModbusTargetSummary from "../../../../components/modbus/ModbusTargetSummary";
 import { FieldRow, NumberField, RunButton, SelectField } from "../../../../components/modbus/ModbusFields";
 import {
   MODBUS_SCAN_BOUNDS,
   MODBUS_SCAN_DEFAULTS,
 } from "../../../../components/modbus/modbusScanDefaults";
-import { useModbusTarget } from "../../../../components/modbus/useModbusTarget";
+import type { ModbusSessionTarget } from "../../../../utils/modbusProfiles";
 import type { UnitIdScanConfig, ModbusRegisterType } from "../../../../api/io";
 
 type Props = {
-  connection?: ModbusConnection | null;
-  onStartScan: (config: UnitIdScanConfig) => void;
+  /** The device this sweep runs against — the current session's. */
+  target: ModbusSessionTarget;
+  onStartScan: (config: UnitIdScanConfig, stopSession: boolean) => void;
 };
 
-export default function ModbusUnitIdScanPanel({ connection, onStartScan }: Props) {
+export default function ModbusUnitIdScanPanel({ target, onStartScan }: Props) {
   const { t } = useTranslation("discovery");
-  const target = useModbusTarget(connection);
+
+  // See ModbusRegisterScanPanel: stopping is what frees a single-conversation device.
+  const [stopSession, setStopSession] = useState(true);
 
   const [startUnitId, setStartUnitId] = useState(1);
   const [endUnitId, setEndUnitId] = useState(247);
@@ -33,29 +34,26 @@ export default function ModbusUnitIdScanPanel({ connection, onStartScan }: Props
   const [timeoutMs, setTimeoutMs] = useState(MODBUS_SCAN_DEFAULTS.timeoutMs);
 
   const handleStart = () => {
+    // The sweep supplies its own unit ids; Rust supplies the address from the
+    // session. Nothing here names a device.
     onStartScan({
-      host: target.connection.host,
-      port: target.connection.port,
       start_unit_id: startUnitId,
       end_unit_id: endUnitId,
       test_register: testRegister,
       register_type: registerType,
       inter_request_delay_ms: delayMs,
       timeout_ms: timeoutMs,
-    });
+    }, stopSession);
   };
 
   const isValid = startUnitId <= endUnitId;
 
   return (
     <div className="space-y-3 text-xs">
-      {/* The sweep supplies its own unit ids, so the target only needs an address. */}
-      <ModbusConnectionFields
-        value={target.connection}
-        onChange={target.setConnection}
-        profileId={target.profileId}
-        onProfileChange={target.selectProfile}
-        showUnitId={false}
+      <ModbusTargetSummary
+        target={target}
+        stopSession={stopSession}
+        onStopSessionChange={setStopSession}
       />
 
       <FieldRow>
@@ -133,8 +131,7 @@ export default function ModbusUnitIdScanPanel({ connection, onStartScan }: Props
 
       <p className={`${textMuted} pt-2 border-t ${borderDefault}`}>
         {t("modbusUnitId.scanDescription", {
-          host: target.connection.host,
-          port: target.connection.port,
+          device: target.name,
           start: startUnitId,
           end: endUnitId,
           type: registerType,

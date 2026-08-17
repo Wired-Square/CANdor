@@ -34,6 +34,41 @@ pub fn modbus_endpoint(profile: &crate::settings::IOProfile) -> (String, u16, u8
     )
 }
 
+/// The session's first *Modbus* source profile — not simply its first, since a
+/// multi-source session may list a CAN source ahead of the Modbus one.
+///
+/// Takes already-loaded settings so a caller checking several sessions reads the
+/// settings file once.
+///
+/// Call this **before** stopping the session. Stopping swaps a session's profile
+/// ids for its capture id (`replace_session_profiles` in `stop_and_switch_to_capture`),
+/// so a stopped session resolves to a capture and no longer names its device.
+pub fn session_modbus_profile<'a>(
+    settings: &'a crate::settings::AppSettings,
+    session_id: &str,
+) -> Option<&'a crate::settings::IOProfile> {
+    crate::sessions::get_session_profile_ids(session_id)
+        .iter()
+        .find_map(|id| {
+            settings
+                .io_profiles
+                .iter()
+                .find(|p| &p.id == id && p.kind == "modbus_tcp")
+        })
+}
+
+/// Resolve the Modbus device behind a session, for tools that scan "whatever this
+/// session is talking to" rather than an address the user typed.
+pub fn session_modbus_endpoint(
+    app: &tauri::AppHandle,
+    session_id: &str,
+) -> Result<(String, u16, u8), String> {
+    let settings = crate::settings::load_settings_sync(app)?;
+    session_modbus_profile(&settings, session_id)
+        .map(modbus_endpoint)
+        .ok_or_else(|| format!("Session '{session_id}' has no Modbus source profile"))
+}
+
 /// Map the catalogue crate's register type onto the IO layer's enum.
 fn map_register_type(rt: wiretap_catalog::modbus::RegisterType) -> RegisterType {
     use wiretap_catalog::modbus::RegisterType as Cat;

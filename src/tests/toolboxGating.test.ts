@@ -22,7 +22,7 @@ const modbusScan: ToolRequirements = { modbusRequires: true };
 const session = (over: Partial<SessionShape> = {}): SessionShape => ({
   isSerialMode: false,
   isSerialProtocol: false,
-  isModbusProfile: false,
+  hasLiveModbusSession: false,
   ...over,
 });
 
@@ -77,11 +77,17 @@ describe("isToolApplicable", () => {
   });
 
   it("leaves a modbus session exactly as it was", () => {
-    const modbus = session({ isModbusProfile: true });
+    const modbus = session({ hasLiveModbusSession: true });
     expect(isToolApplicable(modbusScan, modbus)).toBe(true);
     expect(isToolApplicable(frameOrder, modbus)).toBe(true);
     expect(isToolApplicable(serialFraming, modbus)).toBe(false);
     expect(isToolApplicable(serialPayload, modbus)).toBe(false);
+  });
+
+  it("withholds the modbus tools when no Modbus session is live", () => {
+    // The sweeps scan the session's own device, so without one there is nothing
+    // for them to point at — having a Modbus profile configured is not enough.
+    expect(isToolApplicable(modbusScan, session())).toBe(false);
   });
 });
 
@@ -105,8 +111,10 @@ describe("hasToolData", () => {
     expect(hasToolData(frameOrder, session(), counts)).toBe(false);
   });
 
-  it("enables the modbus tools on the profile, which has no count", () => {
-    expect(hasToolData(modbusScan, session({ isModbusProfile: true }), counts)).toBe(true);
+  it("enables the modbus tools on the live session, with no frames needed", () => {
+    // A sweep produces frames rather than consuming them, so a session that has
+    // captured nothing yet must still be able to run one.
+    expect(hasToolData(modbusScan, session({ hasLiveModbusSession: true }), counts)).toBe(true);
     expect(hasToolData(modbusScan, session(), counts)).toBe(false);
   });
 });

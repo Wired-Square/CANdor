@@ -8,19 +8,17 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { borderDefault, textMuted, textPrimary, textSecondary } from "../../../../styles";
-import ModbusConnectionFields, {
-  type ModbusConnection,
-} from "../../../../components/modbus/ModbusConnectionFields";
+import ModbusTargetSummary from "../../../../components/modbus/ModbusTargetSummary";
 import { FieldRow, NumberField, RunButton, TextField } from "../../../../components/modbus/ModbusFields";
 import {
   MODBUS_SCAN_BOUNDS,
   MODBUS_SCAN_DEFAULTS,
 } from "../../../../components/modbus/modbusScanDefaults";
-import { useModbusTarget } from "../../../../components/modbus/useModbusTarget";
+import type { ModbusSessionTarget } from "../../../../utils/modbusProfiles";
 import { probeModbusFunctionCodes, type FcProbeEntry, type FcVerdict } from "../../../../api/io";
 
 type Props = {
-  connection?: ModbusConnection | null;
+  target: ModbusSessionTarget;
 };
 
 /** Verdict → a short label plus the colour that carries the meaning. */
@@ -42,11 +40,12 @@ function verdictLabel(v: FcVerdict, t: (k: string) => string): { text: string; c
   }
 }
 
-export default function ModbusFunctionCodePanel({ connection }: Props) {
+export default function ModbusFunctionCodePanel({ target }: Props) {
   const { t } = useTranslation("discovery");
-  const target = useModbusTarget(connection);
 
-  const [unitIdsText, setUnitIdsText] = useState("1, 0, 255, 2, 3");
+  // Lead with the session's own unit — the one you actually care about — then the
+  // usual suspects for a gateway fronting more than one slave.
+  const [unitIdsText, setUnitIdsText] = useState(`${target.unit_id}, 0, 255`);
   const [testRegister, setTestRegister] = useState(0);
   const [timeoutMs, setTimeoutMs] = useState(MODBUS_SCAN_DEFAULTS.timeoutMs);
   const [results, setResults] = useState<FcProbeEntry[] | null>(null);
@@ -63,13 +62,16 @@ export default function ModbusFunctionCodePanel({ connection }: Props) {
     setError(null);
     try {
       setResults(
-        await probeModbusFunctionCodes({
-          host: target.connection.host,
-          port: target.connection.port,
-          unit_ids: unitIds,
-          test_register: testRegister,
-          timeout_ms: timeoutMs,
-        })
+        // No address: Rust takes it from the session, so the device probed is
+        // always the device named above.
+        await probeModbusFunctionCodes(
+          {
+            unit_ids: unitIds,
+            test_register: testRegister,
+            timeout_ms: timeoutMs,
+          },
+          target.sessionId
+        )
       );
     } catch (e) {
       setError(String(e));
@@ -89,13 +91,7 @@ export default function ModbusFunctionCodePanel({ connection }: Props) {
 
   return (
     <div className="space-y-3 text-xs">
-      <ModbusConnectionFields
-        value={target.connection}
-        onChange={target.setConnection}
-        profileId={target.profileId}
-        onProfileChange={target.selectProfile}
-        showUnitId={false}
-      />
+      <ModbusTargetSummary target={target} />
 
       <FieldRow>
         <TextField

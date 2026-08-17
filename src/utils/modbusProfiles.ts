@@ -3,15 +3,10 @@
 // Small predicates over IO profiles that several apps need when deciding
 // whether Modbus polling applies to a session.
 
-import { useMemo } from "react";
 import { useSettingsStore } from "../apps/settings/stores/settingsStore";
-import type { IOProfile } from "../settings/appSettings";
 
 /** The profile kind that carries Modbus polling. */
 const MODBUS_PROFILE_KIND = "modbus_tcp";
-
-/** A Modbus profile, narrowed out of the profile-kind union. */
-export type ModbusProfile = Extract<IOProfile, { kind: "modbus_tcp" }>;
 
 /**
  * Just enough of a profile to read an address off it.
@@ -37,36 +32,32 @@ export function anyModbusProfile(profileIds: string[]): boolean {
   return profileIds.some((id) => profiles.find((p) => p.id === id)?.kind === MODBUS_PROFILE_KIND);
 }
 
-function isModbusProfile(p: IOProfile): p is ModbusProfile {
-  return p.kind === MODBUS_PROFILE_KIND;
-}
-
-/**
- * Every configured Modbus profile. Imperative, for one-shot reads inside
- * callbacks and state initialisers — use `useModbusProfiles` to render from.
- */
-export function modbusProfiles(): ModbusProfile[] {
-  return useSettingsStore.getState().ioProfiles.profiles.filter(isModbusProfile);
-}
-
-/**
- * The reactive form, for anything that renders a profile list or gates on one.
- *
- * Both the tool gate and the target picker must read this same store: when they
- * came from different sources, Discovery could decide the Modbus tools were
- * available while the picker beside them had nothing to offer.
- */
-export function useModbusProfiles(): ModbusProfile[] {
-  const profiles = useSettingsStore((s) => s.ioProfiles.profiles);
-  return useMemo(() => profiles.filter(isModbusProfile), [profiles]);
-}
-
-/** Host/port/unit from a Modbus profile's connection map, with the usual defaults. */
-export function modbusConnectionOf(profile: HasModbusConnection | undefined | null): {
+/** A Modbus device address. */
+export interface ModbusConnection {
   host: string;
   port: number;
   unit_id: number;
-} {
+}
+
+/**
+ * The device a Discovery sweep runs against: the current Modbus session's own.
+ *
+ * The scans no longer take a typed-in address — they scan what the session is
+ * connected to — so they need the session and profile ids as well as the address
+ * itself. The address is carried for display; the backend re-resolves it from
+ * `sessionId` so the two cannot drift.
+ */
+export interface ModbusSessionTarget extends ModbusConnection {
+  sessionId: string;
+  profileId: string;
+  /** Profile display name, for naming the device on screen. */
+  name: string;
+}
+
+/** Host/port/unit from a Modbus profile's connection map, with the usual defaults. */
+export function modbusConnectionOf(
+  profile: HasModbusConnection | undefined | null
+): ModbusConnection {
   return {
     host: String(profile?.connection?.host ?? "127.0.0.1"),
     port: Number(profile?.connection?.port) || 502,

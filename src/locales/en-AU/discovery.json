@@ -45,7 +45,8 @@
   "errors": {
     "scanTitle": "Scan Error",
     "modbusRegisterScanMessage": "An error occurred during Modbus register scan.",
-    "modbusUnitScanMessage": "An error occurred during Modbus unit ID scan."
+    "modbusUnitScanMessage": "An error occurred during Modbus unit ID scan.",
+    "modbusResumeMessage": "Could not resume polling on the device the sweep stopped."
   },
   "speedChangeDialog": {
     "title": "Change Speed Mode?",
@@ -235,16 +236,17 @@
     "coilFc": "Coil (FC 1)",
     "discreteFc": "Discrete (FC 2)",
     "delayMs": "Delay (ms)",
-    "scanDescription": "Scans {{host}}:{{port}} for active unit IDs {{start}}–{{end}}. Devices supporting FC43 will show vendor, product, and revision details. Others are detected via {{type}} register {{register}}.",
+    "scanDescription": "Scans {{device}} for active unit IDs {{start}}–{{end}}. Devices supporting FC43 will show vendor, product, and revision details. Others are detected via {{type}} register {{register}}.",
     "runScan": "Run Scan"
   },
   "modbusRegister": {
     "registerType": "Register Type",
+    "unitId": "Unit ID",
     "startRegister": "Start Register",
     "endRegister": "End Register",
     "chunkSize": "Chunk Size",
     "delayMs": "Delay (ms)",
-    "scanDescription": "Scans {{host}}:{{port}} for {{type}} registers {{start}}–{{end}}. Discovered registers will appear in the frame picker.",
+    "scanDescription": "Scans {{device}} for {{type}} registers {{start}}–{{end}} on unit {{unit}}. Discovered registers will appear in the frame picker.",
     "runScan": "Run Scan",
     "holdingFc": "Holding (FC 3)",
     "inputFc": "Input (FC 4)",
@@ -274,6 +276,7 @@
     "scanning": "Scanning...",
     "noResults": "No results found",
     "cancel": "Cancel",
+    "resumePolling": "Resume polling on {{device}}",
     "close": "Close",
     "tableUnitId": "Unit ID",
     "tableVendor": "Vendor",
@@ -445,12 +448,11 @@
       "startsAfterHeader": "Calculation starts after a declared header field (byte {{byte}})"
     }
   },
-  "modbusConnection": {
-    "profile": "Device",
-    "manualEntry": "Enter an address…",
-    "host": "Host",
-    "port": "Port",
-    "unitId": "Unit ID"
+  "modbusTarget": {
+    "device": "Device",
+    "unit": "unit {{unit}}",
+    "stopSession": "Stop polling on {{device}} for the sweep",
+    "stopSessionHint": "Most devices serve one Modbus conversation at a time. Leave this off only for a gateway that accepts several connections."
   },
   "modbusFc": {
     "unitIds": "Unit IDs",
@@ -467,6 +469,6 @@
     "exception": "Exception",
     "silent": "Silent",
     "hintFound": "An exception means the device serves that function code and the address was simply wrong — worth sweeping. Silent usually means the function code isn't implemented at all.",
-    "hintNothing": "Nothing answered. Check the host, port and unit ID, or raise the timeout."
+    "hintNothing": "Nothing answered. The device may serve only one Modbus connection at a time — stop the session and try again — or raise the timeout."
   }
 }

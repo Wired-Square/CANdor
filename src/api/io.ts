@@ -1576,8 +1576,14 @@ export type ModbusRegisterType = 'holding' | 'input' | 'coil' | 'discrete';
  * see `modbusScanDefaults.ts` for the values and the reasoning behind them.
  */
 export interface ModbusScanConfig {
-  host: string;
-  port: number;
+  /**
+   * Address fields are optional: the Discovery tools name a session via
+   * `targetSessionId` and let Rust resolve the device, so the two cannot drift.
+   * Supply them only when scanning a device you have no session for.
+   */
+  host?: string;
+  port?: number;
+  /** The slave to sweep. Always the caller's choice — Rust never overrides it. */
   unit_id: number;
   register_type: ModbusRegisterType;
   start_register: number;
@@ -1605,8 +1611,9 @@ export interface ModbusScanConfig {
 
 /** Configuration for unit ID scanning. */
 export interface UnitIdScanConfig {
-  host: string;
-  port: number;
+  /** Optional — see `ModbusScanConfig`. */
+  host?: string;
+  port?: number;
   start_unit_id: number;
   end_unit_id: number;
   test_register: number;
@@ -1651,22 +1658,6 @@ export interface ScanCompletePayload {
   devices: DeviceInfoEntry[];
 }
 
-/** Scan a range of Modbus registers to discover which ones exist. */
-export async function startModbusScan(
-  config: ModbusScanConfig,
-  sessionId?: string
-): Promise<ScanCompletePayload> {
-  return invoke("modbus_scan_registers", { config, session_id: sessionId ?? null });
-}
-
-/** Scan for active Modbus unit IDs on the network. */
-export async function startModbusUnitIdScan(
-  config: UnitIdScanConfig,
-  sessionId?: string
-): Promise<ScanCompletePayload> {
-  return invoke("modbus_scan_unit_ids", { config, session_id: sessionId ?? null });
-}
-
 // ============================================================================
 // Scan sessions
 // ============================================================================
@@ -1689,7 +1680,25 @@ export type ScanJob =
 export async function createModbusScanSession(
   sessionId: string,
   job: ScanJob,
-  options?: { profileId?: string; subscriberId?: string; appName?: string }
+  options?: {
+    profileId?: string;
+    subscriberId?: string;
+    appName?: string;
+    /**
+     * A live Modbus session whose device to sweep. Rust resolves the address from
+     * it, so the sweep and the name on screen cannot disagree.
+     */
+    targetSessionId?: string;
+    /**
+     * Stop that session first, freeing its socket. Most devices serve one Modbus
+     * conversation at a time, and pausing keeps the socket — only stopping frees
+     * it. Rust stops it *after* resolving the address, because stopping is what
+     * makes a session stop naming its device.
+     */
+    stopTarget?: boolean;
+    /** Sweep anyway when something else is polling the device. */
+    allowContention?: boolean;
+  }
 ): Promise<IOCapabilities> {
   return invoke("create_modbus_scan_session", {
     session_id: sessionId,
@@ -1697,6 +1706,9 @@ export async function createModbusScanSession(
     profile_id: options?.profileId ?? null,
     subscriber_id: options?.subscriberId ?? null,
     app_name: options?.appName ?? null,
+    target_session_id: options?.targetSessionId ?? null,
+    stop_target: options?.stopTarget ?? null,
+    allow_contention: options?.allowContention ?? null,
   });
 }
 
@@ -1728,8 +1740,9 @@ export interface FcProbeEntry {
 }
 
 export interface FcProbeConfig {
-  host: string;
-  port: number;
+  /** Optional — see `ModbusScanConfig`. */
+  host?: string;
+  port?: number;
   /** Slave addresses to try. Defaults to [1, 0, 255, 2, 3] in Rust. */
   unit_ids?: number[];
   /** Address read on each function code (default 0). */
@@ -1747,9 +1760,13 @@ export interface FcProbeConfig {
  * whole timeout budget for nothing.
  */
 export async function probeModbusFunctionCodes(
-  config: FcProbeConfig
+  config: FcProbeConfig,
+  targetSessionId?: string
 ): Promise<FcProbeEntry[]> {
-  return invoke("modbus_probe_function_codes", { config });
+  return invoke("modbus_probe_function_codes", {
+    config,
+    target_session_id: targetSessionId ?? null,
+  });
 }
 
 // ============================================================================

@@ -72,7 +72,7 @@ type Props = {
   onUndoFraming?: () => void;
 
   /** Whether the active profile is Modbus TCP (enables scan tools without data) */
-  isModbusProfile?: boolean;
+  isModbusSession?: boolean;
 
   // Buffer actions
   /** Whether the session is in buffer replay mode */
@@ -125,7 +125,7 @@ export default function DiscoveryTopBar({
   framingAccepted = false,
   serialActiveTab = 'raw',
   onUndoFraming,
-  isModbusProfile = false,
+  isModbusSession = false,
   isCaptureMode = false,
   capturePersistent = false,
   onToggleCapturePin,
@@ -239,9 +239,9 @@ export default function DiscoveryTopBar({
       {/* Toolbox button */}
       <button
         onClick={onOpenToolbox}
-        disabled={!hasFrames && !isModbusProfile}
+        disabled={!hasFrames && !isModbusSession}
         className={buttonBase}
-        title={isModbusProfile ? t("topBar.scanningTools") : t("topBar.analysisTools")}
+        title={isModbusSession ? t("topBar.scanningTools") : t("topBar.analysisTools")}
       >
         <Wrench className={`${iconSm} flex-shrink-0`} />
         <span>{t("topBar.toolsLabel")}</span>

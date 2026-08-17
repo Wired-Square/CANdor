@@ -32,6 +32,16 @@ type Props = {
   results: ModbusScanResults;
   onClose: () => void;
   onCancel?: () => void;
+  /**
+   * Put the device back on the bus. A sweep frees the socket by stopping the
+   * session that was polling it, and without a way back that would be a one-way
+   * door — you would have to rebuild the source by hand.
+   *
+   * Takes the session id rather than reading it back from the store: both scan
+   * tabs render this view, so only the tab holding the button knows which of
+   * them stopped a session.
+   */
+  onResumePolling?: (polledSessionId: string) => void;
 };
 
 /** One discovered address and its most recent value. */
@@ -40,9 +50,15 @@ type ScanRow = { address: number; bytes: number[]; bus: number };
 const th = (muted: string) => `text-left px-3 py-1.5 ${muted} font-medium`;
 const td = (tone: string) => `px-3 py-1 ${tone} font-mono`;
 
-export default function ModbusScanResultView({ results, onClose, onCancel }: Props) {
+export default function ModbusScanResultView({
+  results,
+  onClose,
+  onCancel,
+  onResumePolling,
+}: Props) {
   const { t } = useTranslation("discovery");
-  const { scanType, isScanning, progress, deviceInfo, notes } = results;
+  const { scanType, isScanning, progress, deviceInfo, notes, polledSessionId, polledProfileName } =
+    results;
   const hasDeviceInfo = deviceInfo.size > 0;
 
   const [wordOrder, setWordOrder] = useState<WordOrder>("big");
@@ -131,6 +147,14 @@ export default function ModbusScanResultView({ results, onClose, onCancel }: Pro
               className={`px-2 py-0.5 rounded hover:bg-red-600 hover:text-white transition-colors ${textMuted}`}
             >
               {t("modbusScan.cancel")}
+            </button>
+          )}
+          {!isScanning && onResumePolling && polledSessionId && polledProfileName && (
+            <button
+              onClick={() => onResumePolling(polledSessionId)}
+              className="px-2 py-0.5 rounded bg-purple-600 hover:bg-purple-700 text-white transition-colors"
+            >
+              {t("modbusScan.resumePolling", { device: polledProfileName })}
             </button>
           )}
           {!isScanning && (

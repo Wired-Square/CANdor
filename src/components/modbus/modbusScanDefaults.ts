@@ -74,10 +74,3 @@ export const MODBUS_SCAN_BOUNDS = {
   repeat: { min: 1, max: 20 },
   repeatDelayMs: { min: 0, max: 600000 },
 } as const;
-
-/** Default connection when there's no profile to seed from. */
-export const MODBUS_DEFAULT_CONNECTION = {
-  host: "127.0.0.1",
-  port: 502,
-  unit_id: 1,
-} as const;

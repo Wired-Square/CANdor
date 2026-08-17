@@ -97,6 +97,17 @@ export type ModbusScanResults = {
   notes: string[];
   /** The scan's own session — what its progress subscription is keyed on. */
   sessionId: string | null;
+  /**
+   * The session that was polling the device when the sweep started, so the
+   * results view can offer to put it back.
+   *
+   * Snapshotted rather than looked up later: once the sweep starts, the app's
+   * current session is the scan's own, and the polled one is only reachable by
+   * the id captured here. Rust keeps that session's source config — poll plan
+   * included — so resuming it restores the polling, not merely the connection.
+   */
+  polledSessionId: string | null;
+  polledProfileName: string | null;
 };
 
 type ModbusScanKey = 'modbusRegisterScanResults' | 'modbusUnitIdScanResults';
@@ -141,7 +152,13 @@ interface DiscoveryToolboxState {
   setSerialFramingResults: (results: SerialFramingResult | null) => void;
   setSerialPayloadResults: (results: SerialPayloadResult | null) => void;
   setChecksumDiscoveryResults: (results: ChecksumDiscoveryResult | null) => void;
-  startModbusScan: (scanType: 'register' | 'unit-id', sessionId: string) => void;
+  startModbusScan: (
+    scanType: 'register' | 'unit-id',
+    sessionId: string,
+    /** The session that was polling the device, for the resume affordance. */
+    polledSessionId?: string,
+    polledProfileName?: string,
+  ) => void;
   setModbusScanDevices: (devices: Array<{ unit_id: number; vendor?: string | null; product_code?: string | null; revision?: string | null }>) => void;
   updateModbusScanProgress: (
     progress: { current: number; total: number; found_count: number; pass: number; total_passes: number },
@@ -291,7 +308,7 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
     }));
   },
 
-  startModbusScan: (scanType, sessionId) => {
+  startModbusScan: (scanType, sessionId, polledSessionId, polledProfileName) => {
     const tabKey = scanType === 'register' ? 'modbus-register-scan' : 'modbus-unit-scan';
     set((state) => ({
       toolbox: {
@@ -303,6 +320,8 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
           deviceInfo: new Map(),
           notes: [],
           sessionId,
+          polledSessionId: polledSessionId ?? null,
+          polledProfileName: polledProfileName ?? null,
         },
       },
     }));

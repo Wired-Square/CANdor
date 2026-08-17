@@ -62,7 +62,8 @@ pub use codec::{SocketCanCodec, SocketCanEncodedFrame};
 pub use gs_usb::GsUsbConfig;
 pub use gvret::{BusMapping, GvretDeviceInfo, probe_gvret_tcp};
 pub use modbus_tcp::{
-    build_polls_from_catalog, build_polls_from_ranges, modbus_endpoint, ModbusRange, ModbusRangeSpec,
+    build_polls_from_catalog, build_polls_from_ranges, modbus_endpoint, session_modbus_endpoint,
+    ModbusRange, ModbusRangeSpec,
     ModbusTcpConfig, ModbusTcpSource, PollGroup, RegisterType,
     ModbusScanConfig, ScanCompletePayload, UnitIdScanConfig,
     FcProbeConfig, FcProbeEntry, ModbusScanSource, ScanJob,

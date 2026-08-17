@@ -434,11 +434,40 @@ MCP is the exception, and deliberately: it is in-process Rust rather than a
 WebSocket client, so it reads the same state from the store and waits for a
 sweep's summary through `await_scan_result`.
 
-**Connection contention.** A sweep opens its own connection. Pausing a running
-poller does *not* free the device — pause stops requests but keeps the socket —
-so on a device that serves one conversation per socket the polling session must
-be stopped for the duration. Routing a sweep through a running source's
-connection would avoid this and is not implemented.
+**Connection contention.** A sweep opens its own connection, and since the
+Discovery tools are only offered *during* a live Modbus session, that second
+connection is the normal case rather than an edge one. Pausing a running poller
+does *not* free the device — pause stops requests but keeps the socket — so on a
+device that serves one conversation per socket the polling session must be
+stopped for the duration. Routing a sweep through a running source's connection
+would avoid this and is not implemented: the poll loop's `Arc<Mutex<Context>>` is
+a local inside `start()`, reachable from no registry, and sharing it would let a
+scan timeout's reconnect swap the socket under the poll tasks.
+
+So the app does the stopping. The sweep panels carry a **Stop polling for the
+sweep** checkbox, on by default; `create_modbus_scan_session` takes
+`target_session_id` and `stop_target` and does the whole sequence itself, in this
+order:
+
+1. **Resolve** the device from the target session — necessarily first, because
+   `stop_and_switch_to_capture` replaces a session's profile ids with its capture
+   id, so a stopped session can no longer name its own device.
+2. **Refuse** — `scan_holding` for a competing sweep, then
+   `endpoint_in_use_by_poller` for a competing poller (the target itself is
+   excluded, since it is about to be handed over). Both precede the stop, so a
+   rejected sweep cannot leave the caller's session stopped for a scan that never
+   ran.
+3. **Stop** the target, freeing the socket.
+4. **Create** the scan session.
+
+Keeping all four inside one command is what makes that order unloseable.
+`resume_session_to_live` puts the session back afterwards, poll plan included,
+from the source config Rust kept.
+
+`endpoint_in_use_by_poller` counts a **paused** session as holding the device,
+not just a running one — pause stops requests and keeps the socket, so a paused
+poller contends exactly as a live one does. `scan_holding` only ever saw other
+*sweeps*.
 
 ---
 

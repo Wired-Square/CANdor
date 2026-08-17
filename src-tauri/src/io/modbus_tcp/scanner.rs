@@ -162,11 +162,17 @@ fn default_repeat_delay_ms() -> u64 {
 /// that only knows the original fields still deserialises.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModbusScanConfig {
-    /// Server hostname or IP
+    /// Server hostname or IP. Defaulted rather than required because a caller may
+    /// name a session instead and let the command resolve the device; the command
+    /// errors when that resolution fails, so the default is a backstop, never a
+    /// silent fallback to localhost.
+    #[serde(default = "default_host")]
     pub host: String,
     /// Server port (default 502)
+    #[serde(default = "default_port")]
     pub port: u16,
     /// Modbus unit/slave ID (1-247)
+    #[serde(default = "default_unit_id")]
     pub unit_id: u8,
     /// Register type to scan
     pub register_type: RegisterType,
@@ -212,9 +218,11 @@ pub struct ModbusScanConfig {
 /// Configuration for unit ID scanning
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UnitIdScanConfig {
-    /// Server hostname or IP
+    /// Server hostname or IP. See `ModbusScanConfig::host`.
+    #[serde(default = "default_host")]
     pub host: String,
     /// Server port (default 502)
+    #[serde(default = "default_port")]
     pub port: u16,
     /// First unit ID to scan (default 1)
     pub start_unit_id: u8,
@@ -235,7 +243,10 @@ pub struct UnitIdScanConfig {
 /// Configuration for the function-code probe.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FcProbeConfig {
+    /// Server hostname or IP. See `ModbusScanConfig::host`.
+    #[serde(default = "default_host")]
     pub host: String,
+    #[serde(default = "default_port")]
     pub port: u16,
     /// Slave addresses to try. Defaults to the common suspects.
     #[serde(default = "default_probe_units")]
@@ -251,6 +262,18 @@ pub struct FcProbeConfig {
 
 fn default_probe_units() -> Vec<u8> {
     vec![1, 0, 255, 2, 3]
+}
+
+fn default_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_port() -> u16 {
+    502
+}
+
+fn default_unit_id() -> u8 {
+    1
 }
 
 // ============================================================================
@@ -1041,6 +1064,34 @@ pub async fn probe_function_codes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_config_without_an_address_falls_back_to_the_documented_defaults() {
+        // The Discovery tools name a session instead of an address, so the address
+        // fields are absent from the payload entirely.
+        let cfg: ModbusScanConfig = serde_json::from_str(
+            r#"{"register_type":"holding","start_register":0,"end_register":9,
+                "chunk_size":10,"inter_request_delay_ms":50}"#,
+        )
+        .expect("a config with no address should still deserialise");
+        assert_eq!(cfg.host, "127.0.0.1");
+        assert_eq!(cfg.port, 502);
+        assert_eq!(cfg.unit_id, 1);
+    }
+
+    #[test]
+    fn an_explicit_address_still_wins_over_the_defaults() {
+        // MCP keeps sending an explicit address; defaulting must not touch it.
+        let cfg: ModbusScanConfig = serde_json::from_str(
+            r#"{"host":"10.0.1.50","port":5020,"unit_id":7,"register_type":"input",
+                "start_register":0,"end_register":9,"chunk_size":10,
+                "inter_request_delay_ms":50}"#,
+        )
+        .expect("an explicit address should deserialise unchanged");
+        assert_eq!(cfg.host, "10.0.1.50");
+        assert_eq!(cfg.port, 5020);
+        assert_eq!(cfg.unit_id, 7);
+    }
 
     #[test]
     fn contiguous_addresses_collapse_into_one_block() {

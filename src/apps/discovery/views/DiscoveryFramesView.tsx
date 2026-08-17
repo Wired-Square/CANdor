@@ -104,6 +104,8 @@ type Props = {
 
   /** Called to cancel a running modbus scan */
   onCancelScan?: () => void;
+  /** Restore the Modbus session a sweep stopped to free the device. */
+  onResumePolling?: (polledSessionId: string) => void;
 
   /** Whether to use local timezone for time display */
   useLocalTimezone?: boolean;
@@ -148,6 +150,7 @@ function DiscoveryFramesView({
   isStreamPaused = false,
   onResumeStream,
   onCancelScan,
+  onResumePolling,
   useLocalTimezone = false,
 }: Props) {
   const { t } = useTranslation("discovery");
@@ -1043,6 +1046,7 @@ function DiscoveryFramesView({
           results={toolboxResults.modbusRegisterScanResults}
           onClose={() => handleTabClose(TOOL_TAB_CONFIG['modbus-register-scan'].tabId)}
           onCancel={onCancelScan}
+          onResumePolling={onResumePolling}
         />
       )}
 
@@ -1051,6 +1055,7 @@ function DiscoveryFramesView({
           results={toolboxResults.modbusUnitIdScanResults}
           onClose={() => handleTabClose(TOOL_TAB_CONFIG['modbus-unit-scan'].tabId)}
           onCancel={onCancelScan}
+          onResumePolling={onResumePolling}
         />
       )}
     </AppTabView>
