@@ -969,6 +969,18 @@ pub fn get_capture_frames(id: &str) -> Option<Vec<FrameMessage>> {
     capture_db::get_all_frames(id).ok()
 }
 
+/// The newest frame per identity in a frame capture. See `capture_db::get_latest_frames`.
+pub fn get_capture_latest_frames(id: &str) -> Option<Vec<FrameMessage>> {
+    let registry = CAPTURE_REGISTRY.read().unwrap();
+    let cap = registry.captures.get(id)?;
+    if cap.metadata.kind != CaptureKind::Frames {
+        return None;
+    }
+    drop(registry);
+
+    capture_db::get_latest_frames(id).ok()
+}
+
 /// Get a page of frames from a specific capture.
 /// Returns (frames, buffer_indices, total_count).
 pub fn get_capture_frames_paginated(id: &str, offset: usize, limit: usize) -> (Vec<FrameMessage>, Vec<usize>, usize) {

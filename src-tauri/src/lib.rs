@@ -1314,6 +1314,7 @@ pub fn run() {
             captures::get_capture_frames_paginated_by_id,
             captures::get_capture_frames_tail,
             captures::get_capture_frame_info,
+            captures::get_capture_latest_frames,
             captures::find_capture_offset_for_timestamp,
             captures::search_capture_frames,
             // Multi-capture registry API

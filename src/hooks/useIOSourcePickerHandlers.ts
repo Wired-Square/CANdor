@@ -6,6 +6,7 @@
 
 import { useCallback } from "react";
 import type { UseIOSessionManagerResult, LoadOptions as ManagerLoadOptions } from "./useIOSessionManager";
+import { buildModbusPollsFromRanges, type ModbusRangeSpec } from "../api/io";
 import { withAppError } from "../utils/appError";
 
 /** Options passed from IoSourcePickerDialog */
@@ -29,6 +30,8 @@ export interface DialogLoadOptions {
   perInterfaceFraming?: Map<string, import("../dialogs/io-source-picker").InterfaceFramingConfig>;
   /** Catalogue path to attach to the new session (decoder picker) */
   catalogPath?: string | null;
+  /** Address ranges a Modbus session should poll, when no catalogue supplies a poll set */
+  modbusRanges?: ModbusRangeSpec;
 }
 
 /** Configuration for the IO picker handlers hook */
@@ -116,7 +119,22 @@ export function useIOSourcePickerHandlers({
           // Merge AFTER onBeforeStart so app-specific setup it performs (e.g.
           // loading a Modbus catalogue to build poll groups) is reflected in the
           // merged options — the session then starts WITH polls, not pollless.
-          const mergedOptions = mergeOptions ? mergeOptions(options, profileIds) : options;
+          let mergedOptions: ManagerLoadOptions = mergeOptions
+            ? mergeOptions(options, profileIds)
+            : options;
+
+          // Turn a picked address range into poll groups. Rust does the chunking.
+          //
+          // A range beats a catalogue, matching `mcp::session::open`: ticking the
+          // box is an explicit act, and re-reading a span a catalogue already
+          // covers is exactly how you check a catalogue you suspect is
+          // incomplete. Answering this differently in the UI than over MCP would
+          // make the same session poll different registers depending on who
+          // opened it.
+          if (options.modbusRanges) {
+            const polls = await buildModbusPollsFromRanges(options.modbusRanges);
+            mergedOptions = { ...mergedOptions, modbusPollsJson: JSON.stringify(polls) };
+          }
 
           if (closeDialogFlag) {
             await watchSource(profileIds, mergedOptions);

@@ -5,7 +5,7 @@
 // that needs the same value shown several ways at once — which is exactly what
 // the throwaway scripts this feature replaces printed.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { X } from "lucide-react";
 import type { ModbusScanResults } from "../../../../stores/discoveryToolboxStore";
@@ -18,11 +18,14 @@ import {
   borderDefault,
   emptyStateContainer,
   emptyStateText,
+  resultCell as td,
+  resultHeaderCell as th,
   textMuted,
   textPrimary,
   textSecondary,
 } from "../../../../styles";
 import { iconSm } from "../../../../styles/spacing";
+import { getCaptureLatestFrames } from "../../../../api/capture";
 import { bytesToHex } from "../../../../utils/byteUtils";
 import { parseFrameKey } from "../../../../utils/frameKey";
 import { interpretPair, interpretRegister, type WordOrder } from "../../../../utils/modbusValues";
@@ -30,61 +33,112 @@ import CheckboxField from "../../../../components/forms/CheckboxField";
 
 type Props = {
   results: ModbusScanResults;
+  /** The session Discovery is showing, to tell "my frames" from a later sweep's. */
+  currentSessionId: string;
   onClose: () => void;
   onCancel?: () => void;
-  /**
-   * Put the device back on the bus. A sweep frees the socket by stopping the
-   * session that was polling it, and without a way back that would be a one-way
-   * door — you would have to rebuild the source by hand.
-   *
-   * Takes the session id rather than reading it back from the store: both scan
-   * tabs render this view, so only the tab holding the button knows which of
-   * them stopped a session.
-   */
-  onResumePolling?: (polledSessionId: string) => void;
 };
 
 /** One discovered address and its most recent value. */
 type ScanRow = { address: number; bytes: number[]; bus: number };
 
-const th = (muted: string) => `text-left px-3 py-1.5 ${muted} font-medium`;
-const td = (tone: string) => `px-3 py-1 ${tone} font-mono`;
+const EMPTY_ROWS = new Map<number, ScanRow>();
+
+/** The Modbus registers currently in the shared frame store, newest value per address. */
+function liveModbusRows(): Map<number, ScanRow> {
+  const byAddress = new Map<number, ScanRow>();
+  for (const [key, data] of getLastFrameDataMap()) {
+    const { protocol, frameId } = parseFrameKey(key);
+    if (protocol !== "modbus") continue;
+    byAddress.set(frameId, { address: frameId, bytes: data.bytes, bus: data.bus });
+  }
+  return byAddress;
+}
+
 
 export default function ModbusScanResultView({
   results,
+  currentSessionId,
   onClose,
   onCancel,
-  onResumePolling,
 }: Props) {
   const { t } = useTranslation("discovery");
-  const { scanType, isScanning, progress, deviceInfo, notes, polledSessionId, polledProfileName } =
-    results;
+  const { scanType, isScanning, progress, deviceInfo, notes, sessionId, captureId } = results;
   const hasDeviceInfo = deviceInfo.size > 0;
 
   const [wordOrder, setWordOrder] = useState<WordOrder>("big");
   const [showWide, setShowWide] = useState(false);
 
-  // Discovery joins the scan session, so its frames stream into the shared
-  // frame store like any other source's — and the store already keeps the
-  // latest value per frame key, maintained incrementally on each flush. Reading
-  // that is free; re-querying the capture would refetch every row twice a second
-  // to rebuild the same map, while contending with the sweep still writing to it.
-  const frameVersion = useDiscoveryFrameStore((s) => s.frameVersion);
+  /**
+   * Whose frames are in the shared store right now.
+   *
+   * While Discovery is joined to this sweep, its registers stream into the
+   * shared frame store like any other source's, and the store already keeps the
+   * latest value per key, maintained incrementally on each flush — reading that
+   * is free, and it is what makes the table fill live. Start a second sweep and
+   * the store is cleared and refilled with *that* one's registers, so this tab
+   * has to fall back to the capture it wrote, or it would silently show the
+   * newer sweep's values under the older sweep's heading.
+   */
+  const isLive = sessionId === currentSessionId;
+  // Subscribed only while this sweep owns the frame store. A finished tab that
+  // kept the subscription would rebuild its whole table on every flush of an
+  // unrelated session, twice a second, for a result that cannot change.
+  const frameVersion = useDiscoveryFrameStore((s) => (isLive ? s.frameVersion : 0));
+  const [captured, setCaptured] = useState<Map<number, ScanRow>>(EMPTY_ROWS);
+
+  useEffect(() => {
+    if (isLive || !captureId) return;
+    let cancelled = false;
+    // One row per register, reduced in SQLite: a sweep writes each register once
+    // *per pass*, so asking for every row would ship 20× the data for the same
+    // table. See `getCaptureLatestFrames`.
+    getCaptureLatestFrames(captureId)
+      .then((frames) => {
+        if (cancelled) return;
+        setCaptured(
+          new Map(frames.map((f) => [f.frame_id, { address: f.frame_id, bytes: f.bytes, bus: f.bus }]))
+        );
+      })
+      .catch(() => {
+        // A capture that has been cleaned up leaves the tab empty, not broken.
+        if (!cancelled) setCaptured(EMPTY_ROWS);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isLive, captureId]);
 
   // A repeated sweep writes each register once per pass; the table shows the
   // current value, and what changed between passes is the Changes tool's job.
   const { rows, byAddress } = useMemo(() => {
-    const byAddress = new Map<number, ScanRow>();
-    for (const [key, data] of getLastFrameDataMap()) {
-      const { protocol, frameId } = parseFrameKey(key);
-      if (protocol !== "modbus") continue;
-      byAddress.set(frameId, { address: frameId, bytes: data.bytes, bus: data.bus });
-    }
+    const byAddress = isLive ? liveModbusRows() : captured;
     const rows = [...byAddress.values()].sort((a, b) => a.address - b.address);
     return { rows, byAddress };
     // frameVersion is the store's reactivity counter for its mutable buffers.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frameVersion]);
+  }, [frameVersion, isLive, captured]);
+
+  // One line whichever phase the sweep is in. Before the first progress tick it
+  // is empty — the tab opens with the sweep, so the table's own placeholder is
+  // what speaks until the device answers.
+  const status = !isScanning
+    ? `${scanType === "register"
+        ? t("modbusScan.registersFound", { count: rows.length })
+        : t("modbusScan.devicesFound", { count: rows.length })}${
+        hasDeviceInfo ? ` ${t("modbusScan.identified", { count: deviceInfo.size })}` : ""
+      }`
+    : progress
+      ? `${t("modbusScan.scanningProgress", {
+          current: progress.current,
+          total: progress.total,
+          found: progress.found_count,
+        })}${
+          progress.total_passes > 1
+            ? ` ${t("modbusScan.passOf", { pass: progress.pass, total: progress.total_passes })}`
+            : ""
+        }`
+      : "";
 
   return (
     <div className={`flex flex-col h-full ${bgDataView}`}>
@@ -96,28 +150,7 @@ export default function ModbusScanResultView({
               ? t("modbusScan.registerScanTitle")
               : t("modbusScan.unitIdScanTitle")}
           </h3>
-          {isScanning && progress && (
-            <span className={`text-xs ${textMuted}`}>
-              {t("modbusScan.scanningProgress", {
-                current: progress.current,
-                total: progress.total,
-                found: progress.found_count,
-              })}
-              {progress.total_passes > 1 &&
-                ` ${t("modbusScan.passOf", {
-                  pass: progress.pass,
-                  total: progress.total_passes,
-                })}`}
-            </span>
-          )}
-          {!isScanning && (
-            <span className={`text-xs ${textMuted}`}>
-              {scanType === "register"
-                ? t("modbusScan.registersFound", { count: rows.length })
-                : t("modbusScan.devicesFound", { count: rows.length })}
-              {hasDeviceInfo && ` ${t("modbusScan.identified", { count: deviceInfo.size })}`}
-            </span>
-          )}
+          <span className={`text-xs ${textMuted}`}>{status}</span>
         </div>
         <div className="flex items-center gap-3 text-xs">
           {scanType === "register" && rows.length > 0 && (
@@ -147,14 +180,6 @@ export default function ModbusScanResultView({
               className={`px-2 py-0.5 rounded hover:bg-red-600 hover:text-white transition-colors ${textMuted}`}
             >
               {t("modbusScan.cancel")}
-            </button>
-          )}
-          {!isScanning && onResumePolling && polledSessionId && polledProfileName && (
-            <button
-              onClick={() => onResumePolling(polledSessionId)}
-              className="px-2 py-0.5 rounded bg-purple-600 hover:bg-purple-700 text-white transition-colors"
-            >
-              {t("modbusScan.resumePolling", { device: polledProfileName })}
             </button>
           )}
           {!isScanning && (
@@ -191,18 +216,22 @@ export default function ModbusScanResultView({
         {rows.length === 0 ? (
           <div className={emptyStateContainer}>
             <p className={emptyStateText}>
-              {isScanning ? t("modbusScan.scanning") : t("modbusScan.noResults")}
+              {!isScanning
+                ? t("modbusScan.noResults")
+                : progress
+                  ? t("modbusScan.scanning")
+                  : t("modbusScan.connecting")}
             </p>
           </div>
         ) : scanType === "unit-id" ? (
           <table className="w-full text-xs">
             <thead className={`sticky top-0 ${bgDataView}`}>
               <tr className={`border-b ${borderDefault}`}>
-                <th className={th(textMuted)}>{t("modbusScan.tableUnitId")}</th>
-                <th className={th(textMuted)}>{t("modbusScan.tableVendor")}</th>
-                <th className={th(textMuted)}>{t("modbusScan.tableProduct")}</th>
-                <th className={th(textMuted)}>{t("modbusScan.tableRevision")}</th>
-                <th className={th(textMuted)}>{t("modbusScan.tableData")}</th>
+                <th className={th}>{t("modbusScan.tableUnitId")}</th>
+                <th className={th}>{t("modbusScan.tableVendor")}</th>
+                <th className={th}>{t("modbusScan.tableProduct")}</th>
+                <th className={th}>{t("modbusScan.tableRevision")}</th>
+                <th className={th}>{t("modbusScan.tableData")}</th>
               </tr>
             </thead>
             <tbody>
@@ -229,16 +258,16 @@ export default function ModbusScanResultView({
           <table className="w-full text-xs">
             <thead className={`sticky top-0 ${bgDataView}`}>
               <tr className={`border-b ${borderDefault}`}>
-                <th className={th(textMuted)}>{t("modbusScan.tableRegister")}</th>
-                <th className={th(textMuted)}>{t("modbusScan.tableHex")}</th>
-                <th className={th(textMuted)}>{t("modbusScan.tableU16")}</th>
-                <th className={th(textMuted)}>{t("modbusScan.tableS16")}</th>
-                <th className={th(textMuted)}>{t("modbusScan.tableAscii")}</th>
+                <th className={th}>{t("modbusScan.tableRegister")}</th>
+                <th className={th}>{t("modbusScan.tableHex")}</th>
+                <th className={th}>{t("modbusScan.tableU16")}</th>
+                <th className={th}>{t("modbusScan.tableS16")}</th>
+                <th className={th}>{t("modbusScan.tableAscii")}</th>
                 {showWide && (
                   <>
-                    <th className={th(textMuted)}>{t("modbusScan.tableU32")}</th>
-                    <th className={th(textMuted)}>{t("modbusScan.tableS32")}</th>
-                    <th className={th(textMuted)}>{t("modbusScan.tableF32")}</th>
+                    <th className={th}>{t("modbusScan.tableU32")}</th>
+                    <th className={th}>{t("modbusScan.tableS32")}</th>
+                    <th className={th}>{t("modbusScan.tableF32")}</th>
                   </>
                 )}
               </tr>

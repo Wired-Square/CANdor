@@ -4,27 +4,23 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Info } from "lucide-react";
 import { iconSm } from "../../../../styles/spacing";
-import { borderDefault, textMuted } from "../../../../styles";
-import ModbusTargetSummary from "../../../../components/modbus/ModbusTargetSummary";
-import { FieldRow, NumberField, RunButton, SelectField } from "../../../../components/modbus/ModbusFields";
+import { textMuted } from "../../../../styles";
+import ModbusConnectionFields from "../../../../components/modbus/ModbusConnectionFields";
+import { useModbusTarget } from "../../../../components/modbus/useModbusTarget";
+import { FieldRow, NumberField, RunButton, ScanNote, SelectField, registerTypeOptions } from "../../../../components/modbus/ModbusFields";
 import {
   MODBUS_SCAN_BOUNDS,
   MODBUS_SCAN_DEFAULTS,
 } from "../../../../components/modbus/modbusScanDefaults";
-import type { ModbusSessionTarget } from "../../../../utils/modbusProfiles";
 import type { UnitIdScanConfig, ModbusRegisterType } from "../../../../api/io";
 
 type Props = {
-  /** The device this sweep runs against — the current session's. */
-  target: ModbusSessionTarget;
-  onStartScan: (config: UnitIdScanConfig, stopSession: boolean) => void;
+  onStartScan: (config: UnitIdScanConfig) => void;
 };
 
-export default function ModbusUnitIdScanPanel({ target, onStartScan }: Props) {
+export default function ModbusUnitIdScanPanel({ onStartScan }: Props) {
   const { t } = useTranslation("discovery");
-
-  // See ModbusRegisterScanPanel: stopping is what frees a single-conversation device.
-  const [stopSession, setStopSession] = useState(true);
+  const target = useModbusTarget();
 
   const [startUnitId, setStartUnitId] = useState(1);
   const [endUnitId, setEndUnitId] = useState(247);
@@ -34,27 +30,23 @@ export default function ModbusUnitIdScanPanel({ target, onStartScan }: Props) {
   const [timeoutMs, setTimeoutMs] = useState(MODBUS_SCAN_DEFAULTS.timeoutMs);
 
   const handleStart = () => {
-    // The sweep supplies its own unit ids; Rust supplies the address from the
-    // session. Nothing here names a device.
     onStartScan({
+      host: target.connection.host,
+      port: target.connection.port,
       start_unit_id: startUnitId,
       end_unit_id: endUnitId,
       test_register: testRegister,
       register_type: registerType,
       inter_request_delay_ms: delayMs,
       timeout_ms: timeoutMs,
-    }, stopSession);
+    });
   };
 
-  const isValid = startUnitId <= endUnitId;
+  const isValid = target.hasAddress && startUnitId <= endUnitId;
 
   return (
     <div className="space-y-3 text-xs">
-      <ModbusTargetSummary
-        target={target}
-        stopSession={stopSession}
-        onStopSessionChange={setStopSession}
-      />
+      <ModbusConnectionFields target={target} showUnitId={false} />
 
       <FieldRow>
         <NumberField
@@ -102,12 +94,7 @@ export default function ModbusUnitIdScanPanel({ target, onStartScan }: Props) {
             label={t("modbusUnitId.type")}
             value={registerType}
             onChange={setRegisterType}
-            options={[
-              { value: "holding", label: t("modbusUnitId.holdingFc") },
-              { value: "input", label: t("modbusUnitId.inputFc") },
-              { value: "coil", label: t("modbusUnitId.coilFc") },
-              { value: "discrete", label: t("modbusUnitId.discreteFc") },
-            ]}
+            options={registerTypeOptions(t)}
           />
         </FieldRow>
       </div>
@@ -129,7 +116,7 @@ export default function ModbusUnitIdScanPanel({ target, onStartScan }: Props) {
         />
       </FieldRow>
 
-      <p className={`${textMuted} pt-2 border-t ${borderDefault}`}>
+      <ScanNote ready={target.hasAddress}>
         {t("modbusUnitId.scanDescription", {
           device: target.name,
           start: startUnitId,
@@ -137,7 +124,7 @@ export default function ModbusUnitIdScanPanel({ target, onStartScan }: Props) {
           type: registerType,
           register: testRegister,
         })}
-      </p>
+      </ScanNote>
 
       <RunButton label={t("modbusUnitId.runScan")} onClick={handleStart} disabled={!isValid} />
     </div>

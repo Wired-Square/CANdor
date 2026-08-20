@@ -402,14 +402,46 @@ Three operations, in the order you'd use them against an unknown device:
 |------|-------------|-----------------|
 | Probe | `modbus_probe_function_codes` | Which of FC01–FC04 does this device answer? |
 | Sweep | `create_modbus_scan_session` → `ScanJob::Registers` | Which addresses exist? |
-| Poll  | `open_session` with `register_ranges` | Which of them change? |
+| Poll  | The picker's **Poll a register range**, or `open_session` with `register_ranges` | Which of them change? |
 
 The probe is a plain call — at most four requests per unit, no frames, no
-capture. The sweeps are sessions (`ModbusScanSource`), because owning a session
+capture — so its verdict table lives in the toolbox store rather than arriving
+through the frame path. It still opens a results tab like every other tool: a
+verdict you read against the sweep you run next is not something to lose by
+closing the dialog it was launched from. The sweeps are sessions
+(`ModbusScanSource`), because owning a session
 is what gets them a capture, the analysis tools, capture paging and
 cancel-as-`stop_session`. The session id *is* the scan id, so sweeps against
 different devices run concurrently; what cannot overlap is two sweeps of the same
 `host:port`, which `create_modbus_scan_session` refuses by name.
+
+All three take the device from a picker rather than from a session — see
+*Connection contention* below for why they run with no source selected.
+
+**Polling needs a poll set, and a catalogue is not the only way to author one.**
+`modbus_polls_from_ranges` turns "read these addresses this often" into poll
+groups, chunked and clamped to the protocol maximum per register type. The IO
+source picker offers it for the selected Modbus source (`ModbusPollConfig` → the
+picker's `modbusRanges`, built into `modbusPollsJson` in
+`useIOSourcePickerHandlers` before the watch starts), which is what lets
+Discovery open a Modbus session that actually reads something — a catalogue is
+loaded only by the Decoder. It is off by default: enabling it puts continuous
+traffic on someone's device. The control is session-level because
+`modbusPollsJson` is: one poll plan is injected into every Modbus source in the
+session, so a per-row control would promise a per-device plan the session cannot
+keep. It carries the profile's unit id, since the poll loop sets the slave per
+request and a spec that omits it silently reads unit 1.
+
+**A range beats a catalogue** when both are present, in the UI and over MCP alike
+(`mcp::session::open`): ticking the box is an explicit act, and re-reading a span
+the catalogue already covers is how you check a catalogue you suspect is
+incomplete. The two agreeing is the point — the same session should not poll
+different registers depending on who opened it.
+
+The interval is validated in `build_polls_from_ranges` rather than at each
+caller. A zero interval is not a fast poll but a panic: `Cadence` hands it to
+`tokio::time::interval`, which rejects a zero period — inside a detached poll
+task, where it would take the source down with no diagnosis.
 
 The distinction the probe draws is the load-bearing one. A Modbus **exception**
 proves the device implements that function code and the address was simply wrong;
@@ -430,44 +462,160 @@ clearing the scan-state store can no longer strand a reader that arrived late.
 It was previously a Tauri event carrying nothing, answered by a command
 round-trip.
 
+**The results tab is opened once the session exists, not before.** Discovery's
+`runModbusScan` creates the scan session, joins it, and only then calls
+`startModbusScan`. The store record *is* the tab, so a sweep the backend refuses
+would otherwise leave an empty one behind. (Until `ownsData` landed there was a
+second reason: joining runs `onBeforeWatch`, which cleared every tool result
+including the sweep's own — that is no longer true.)
+
+**Scan tabs accumulate; analysis tabs do not.** `TOOL_TAB_CONFIG` marks the three
+Modbus tools `ownsData`, and `clearAnalysisResults` skips those — so working
+through a device leaves probe, unit scan and register sweep tabs side by side
+instead of each one wiping the last. The distinction is real rather than a
+convenience: an analysis tool describes the frames on screen and is invalidated
+by dropping the source, whereas a sweep went and got its own answer.
+
+That is only safe because each tab can find its own rows. `ModbusScanResultView`
+reads the shared frame store **only while its own sweep is the session on
+screen** (`sessionId === currentSessionId`), which is what fills it live and
+costs nothing — and it subscribes to `frameVersion` only then, so a finished tab
+does not rebuild itself on another session's flushes. Start a second sweep and
+the store is cleared and refilled with that one's registers, so the older tab
+falls back to `captureId` and asks for `get_capture_latest_frames` — one row per
+`(protocol, frame_id)`, reduced in SQLite next to `get_frame_info`, which already
+groups the same way. That matters because a sweep writes each register once *per
+pass*: a 20-pass sweep of 4096 registers is ~80k rows for a table of 4096, and
+reading them all to keep the last of each ships 20× the data for the same answer. Without the fallback the older tab would keep its heading
+and silently show the newer sweep's values.
+
+**`capture_id` rides `ModbusScanState`** rather than being read off whichever
+session Discovery is joined to. The capture is created in
+`ModbusScanSource::start`, which runs *after* the subscriber attaches, so
+registration cannot report it — and observing it from the session only works
+while someone is still watching, which is exactly not the case for a tab that has
+to outlive the sweep. Sending it on every tick means the first progress message
+settles it.
+
+A scan result therefore keeps its `sessionId` for life; `isScanning` is what
+bounds the progress subscription and what Cancel targets.
+
+The ordering only holds because of `markSessionSwitch` (§ App cleanup on
+teardown). Joining the scan session is what empties the poller session, and its
+`destroyed` arrives *after* the tab has been opened — so without that guard a
+second, asynchronous `onBeforeWatch` would clear the tab all over again.
+
 MCP is the exception, and deliberately: it is in-process Rust rather than a
 WebSocket client, so it reads the same state from the store and waits for a
 sweep's summary through `await_scan_result`.
 
-**Connection contention.** A sweep opens its own connection, and since the
-Discovery tools are only offered *during* a live Modbus session, that second
-connection is the normal case rather than an edge one. Pausing a running poller
-does *not* free the device — pause stops requests but keeps the socket — so on a
-device that serves one conversation per socket the polling session must be
-stopped for the duration. Routing a sweep through a running source's connection
-would avoid this and is not implemented: the poll loop's `Arc<Mutex<Context>>` is
-a local inside `start()`, reachable from no registry, and sharing it would let a
-scan timeout's reconnect swap the socket under the poll tasks.
+**Connection contention.** A sweep opens its own connection. Routing it through
+a running source's connection would avoid that and is not implemented: the poll
+loop's `Arc<Mutex<Context>>` is a local inside `start()`, reachable from no
+registry, and sharing it would let a scan timeout's reconnect swap the socket
+under the poll tasks.
 
-So the app does the stopping. The sweep panels carry a **Stop polling for the
-sweep** checkbox, on by default; `create_modbus_scan_session` takes
-`target_session_id` and `stop_target` and does the whole sequence itself, in this
-order:
+**The tools run from "No source", and are withheld while any source is
+selected.** `SessionShape.hasSource` is the whole condition
+(`toolboxGating.ts`), and it is not Modbus-specific: a CAN or serial session
+withholds them just as a Modbus one does. Three things make that the right shape
+rather than a restriction:
+
+- A sweep **names its own device**. `ModbusConnectionFields` picks a saved
+  profile or takes a typed address, and `create_modbus_scan_session` needs
+  neither a session nor a catalogue — so there is nothing a session could supply.
+- A sweep **takes the view over**: Discovery joins the scan session to show the
+  results. Joining is what empties and destroys whichever session was selected
+  (see § App cleanup on teardown), so a sweep launched from a live session
+  silently kills it.
+- Nothing else can be holding the device, because this app is holding nothing.
+  `endpoint_in_use_by_poller` still refuses a sweep when *another* app polls the
+  same endpoint — that refusal is by name, and it is the only contention check
+  that has to survive.
+
+A sweep's own session is exempt (`isModbusScanSession`, on the `m_scan`
+session-id prefix). Chaining probe → unit scan → register sweep is how an unknown
+device gets worked out, and each answer aims the next; making the results tab
+withhold the tool that produced it would break the loop it exists to serve.
+
+Two consequences worth knowing. The **Tools button itself is never disabled** —
+at "No source" with no frames the Modbus tools are still runnable, so a greyed
+button would hide the one thing the toolbox has to offer. And the top bar's poll
+switch (`useModbusPollControl` → `pause_source_polling`) is now **only** a
+session control: it pauses and resumes the selected Modbus session's poller and
+gates nothing. Pausing stops requests but keeps the socket; only stopping the
+session frees it.
+
+`create_modbus_scan_session` still takes `target_session_id`, `stop_target` and
+`allow_contention`, and does the whole sequence itself, in this order:
 
 1. **Resolve** the device from the target session — necessarily first, because
    `stop_and_switch_to_capture` replaces a session's profile ids with its capture
    id, so a stopped session can no longer name its own device.
 2. **Refuse** — `scan_holding` for a competing sweep, then
-   `endpoint_in_use_by_poller` for a competing poller (the target itself is
-   excluded, since it is about to be handed over). Both precede the stop, so a
+   `endpoint_in_use_by_poller` for a competing poller. The target is excluded by
+   name: the caller has already dealt with it. Both precede any stop, so a
    rejected sweep cannot leave the caller's session stopped for a scan that never
    ran.
-3. **Stop** the target, freeing the socket.
+3. **Stop** the target, freeing the socket — only when `stop_target` is set.
 4. **Create** the scan session.
 
 Keeping all four inside one command is what makes that order unloseable.
-`resume_session_to_live` puts the session back afterwards, poll plan included,
-from the source config Rust kept.
+
+**`target_session_id` and `stop_target` currently have no caller.** Discovery
+passes neither — it runs from "No source", so there is no target session to
+resolve, stop or exclude — and MCP passes `None, None, Some(true)`, naming its
+own device and opting out of the poller check because an agent has no way to
+answer a refusal. So `allow_contention` is the only one of the three that is
+live, and the retarget/stop branches are reachable capability with nobody
+exercising it. Either give them a caller or delete them; don't let this
+paragraph go on implying one exists.
 
 `endpoint_in_use_by_poller` counts a **paused** session as holding the device,
 not just a running one — pause stops requests and keeps the socket, so a paused
 poller contends exactly as a live one does. `scan_holding` only ever saw other
 *sweeps*.
+
+Once a sweep starts, Discovery joins the scan session, which reports
+`Protocol::Modbus` too — so from then on the app's "current Modbus device" is the
+sweep, not the poller. The frontend latches the last non-sweep Modbus target, and
+the poll switch addresses that latch rather than the current session, so it does
+not start driving the sweep it is sitting beside.
+
+**A broker session tells the truth about having stopped.** The gate reads
+`isStreaming`, so the backend has to be honest about when a session stopped
+running, and it was not: `IOBrokerSource.state` was set `Running` at start and
+never written again, and `StreamEnded` rides the *session* channel. A Modbus
+source with no poll groups ends within a millisecond of session creation —
+reliably *before* the frontend subscribes to that channel — so the push was
+missed and the state went on saying "running" forever.
+
+Two pieces close it, and neither is a new event. An `ended: Arc<AtomicBool>` is
+set where the merge task *returns* — in the spawn wrapper, not at the end of the
+body, so an early return covers too — and `state()` reports `Stopped` when it is
+set. That follows the `fatal_error` field beside it, and `CaptureSource`'s
+`completed_flag`, which solve the same problem the same way. Then
+`registerSessionSubscriber`'s reported state is adopted by the multi-source
+create and join paths, which had been discarding it: registration is the first
+moment a subscriber exists, so its answer is the one that cannot be missed.
+A push nobody is listening for wants a pull at the point of listening, not a
+second broadcast.
+
+**The paused flag is the frontend's, and that is the weak point.** Per-source
+pause is write-only: the broker's `source_pause_flags` is a local in the detached
+merge task, reachable one way through `MergeCommand` and readable from nowhere —
+the same "local inside `start()`, no registry" shape as the poll socket above. So
+`useModbusPollControl` holds `isPolling` as optimistic React state, seeded `true`
+and reset whenever the session or profile changes (without that reset it outlives
+what it describes: pause device A, switch to device B, and the switch still reads
+paused over a device that is polling).
+
+One consequence worth knowing before relying on it: it is per-component, so two
+panels on one session each keep their own copy and a reload starts again at
+"polling". Making `ActiveSessionInfo` carry the paused source ids would fix that
+and let a sweep's refusal check "is the target actually paused" in Rust rather
+than trusting the UI. See the register for the sizing — the stakes dropped when
+the switch stopped gating the tools.
 
 ---
 
@@ -515,6 +663,31 @@ Apps should make their reset a single store write. Discovery's
 `resetDiscoveryView` calls `clearAll()` for exactly this reason: clearing
 frames and the frame picker separately produces a render in between where rows
 exist but the picker already reads 0/0.
+
+**A reset only ever applies to one session.** Registering on a new session makes
+Rust tear the old one down (`teardown_session_if_empty(prev, true)`,
+[io/mod.rs](../src-tauri/src/io/mod.rs)) and broadcast `destroyed` with
+`reset: true`. That event lands a few milliseconds *after* the switch returned
+and set the new session id, and `useIOSession`'s lifecycle listener is
+registered per session id behind an `await listen(...)` — so the departing
+session's listener is still live to receive it. Left alone, the old session's
+teardown reset the one just joined: a Modbus sweep used to land the app on
+"No source" with its results tab gone.
+
+`useIOSession` therefore keeps `abandonedSessionRef` — the session this hook
+moved off — and a `destroyed` naming it gets the store cleanup but never reaches
+`onDestroyed`. **`markSessionSwitch` is what stamps it, and every path that
+moves an app to a different session must call it before the backend call**,
+because the registration is what triggers the old session's teardown.
+`reinitialize` stamps for itself, which covers watch, load, connect-only and
+jump-to-bookmark in one place; `useIOSessionManager` stamps the two that bypass
+it (`startMultiBusSession` and `joinExistingSession`). `selectProfile` needs no
+stamp — it sets the profile and lets the effect re-register the listener before
+`openSession` runs.
+
+The ref names the session *left*, not the one held, so a path that never stamps
+degrades to the old behaviour rather than stranding the app on a session that is
+genuinely gone.
 
 ### Leave session — per-app detach to a snapshot
 

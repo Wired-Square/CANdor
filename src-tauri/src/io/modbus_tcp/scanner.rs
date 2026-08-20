@@ -49,6 +49,15 @@ pub struct ModbusScanState {
     pub device_info: Vec<DeviceInfoPayload>,
     /// Diagnoses worth surfacing, e.g. a function code that never answered.
     pub notes: Vec<String>,
+    /// The capture this sweep is filling.
+    ///
+    /// Sent with every tick because the UI needs it long after the sweep: a
+    /// results tab reads its own capture once a later sweep owns the frame
+    /// store. Registration cannot supply it — the capture is created in
+    /// `ModbusScanSource::start`, which runs after the subscriber attaches —
+    /// so the first progress tick is the earliest it can be known, and it must
+    /// not depend on anyone still watching when the sweep ends.
+    pub capture_id: Option<String>,
 }
 
 static SCAN_STATES: Lazy<RwLock<HashMap<String, ModbusScanState>>> =
@@ -413,6 +422,7 @@ impl ProgressReporter {
             progress: self.last.clone(),
             device_info: self.device_info.clone(),
             notes: self.notes.clone(),
+            capture_id: crate::capture_store::get_session_frame_capture_id(sid),
         };
         // Push the state on the session channel, and keep it in the store for
         // MCP, which is in-process Rust and cannot subscribe to the socket.

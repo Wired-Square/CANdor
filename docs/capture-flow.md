@@ -146,6 +146,7 @@ through the streaming loop.
 | `list_orphaned_captures()` | Captures with no owning session — pickable as standalone sources. |
 | `get_capture_metadata(id)` | Single capture metadata. |
 | `get_capture_frames(id)` / `_paginated` / `_paginated_filtered` / `_tail` | Read frame data. |
+| `get_capture_latest_frames(id)` | The newest frame per `(protocol, frame_id)` — "the current value of each thing" rather than the history. |
 | `get_capture_bytes(id)` / `_paginated` | Read byte data. |
 | `find_capture_offset_for_timestamp(...)` / `find_capture_bytes_offset_for_timestamp_by_id(...)` | Seek helpers. |
 | `get_capture_count(id)` / `get_capture_kind(id)` / `has_any_data()` | Misc. |
@@ -238,12 +239,15 @@ A discovery sweep owns a Frames capture like any other source, which is what
 makes its results analysable, exportable and pageable rather than a throwaway
 list in a panel.
 
-A sweep launched from Discovery usually **stops the session it is scanning**
-first, to free a device that serves one Modbus conversation at a time (see
-[session-flow.md](session-flow.md) § Modbus discovery). So one sweep touches two
-captures: the target's is finalised by the stop, and the sweep's own is created
-when it starts. `resume_session_to_live` afterwards gives the target a *new*
-capture rather than reopening the finalised one.
+A sweep launched from Discovery touches one capture — its own. The tools run
+from "No source" (see [session-flow.md](session-flow.md) § Modbus discovery), so
+there is no session being scanned and nothing to stop or resume.
+
+`stop_target` is still on `create_modbus_scan_session` for callers that name a
+live session and want the device released outright, MCP among them. That path
+touches two captures: the target's is finalised by the stop, and
+`resume_session_to_live` afterwards gives it a *new* capture rather than
+reopening the finalised one.
 
 ```
 create_modbus_scan_session(session_id, job)   // creates the session STOPPED
@@ -268,6 +272,13 @@ number, `dlc` 2). That granularity is what lets the Payload Changes tool answer
 "which *register* moved" across a repeated sweep. Catalogue-driven polling keeps
 the opposite shape — one frame per poll group — because a catalogue's signals are
 bit offsets into the whole block and would decode to nonsense if split.
+
+**A sweep writes each register once per pass, which is why
+`get_capture_latest_frames` exists.** At the caps a 20-pass sweep of 4096
+registers is ~80k rows for a results table of 4096 values, so the scan view asks
+for the newest row per identity and lets SQLite do the reduction — the same
+`GROUP BY protocol, frame_id` that `get_frame_info` already uses. Reading the lot
+and keeping the last of each is the same answer for twenty times the IPC.
 
 ### Import flows
 
@@ -342,6 +353,7 @@ TypeScript wrappers mirror the session-scoped API:
 | `listCaptures()` / `listOrphanedCaptures()` | `list_captures` / `list_orphaned_captures` |
 | `getCaptureMetadata(id)` | `get_capture_metadata` |
 | `getCaptureFrames(id, offset, limit)` | `get_capture_frames_paginated` |
+| `getCaptureLatestFrames(id)` | `get_capture_latest_frames` |
 | `renameCapture(id, name)` | `rename_capture` |
 | `setCapturePersistent(id, pinned)` | `set_capture_persistent` |
 | `deleteCapture(id)` / `clearCaptureData(id)` | `delete_capture` / `clear_capture` |

@@ -8,7 +8,6 @@
     "decoderKnowledge": "View decoder knowledge",
     "undoFraming": "Undo framing acceptance",
     "scanningTools": "Scanning & analysis tools",
-    "analysisTools": "Analysis tools",
     "toolsLabel": "Tools"
   },
   "tabs": {
@@ -45,8 +44,7 @@
   "errors": {
     "scanTitle": "Scan Error",
     "modbusRegisterScanMessage": "An error occurred during Modbus register scan.",
-    "modbusUnitScanMessage": "An error occurred during Modbus unit ID scan.",
-    "modbusResumeMessage": "Could not resume polling on the device the sweep stopped."
+    "modbusUnitScanMessage": "An error occurred during Modbus unit ID scan."
   },
   "speedChangeDialog": {
     "title": "Change Speed Mode?",
@@ -231,27 +229,26 @@
     "fallbackProbe": "Fallback register probe",
     "register": "Register",
     "type": "Type",
-    "holdingFc": "Holding (FC 3)",
-    "inputFc": "Input (FC 4)",
-    "coilFc": "Coil (FC 1)",
-    "discreteFc": "Discrete (FC 2)",
     "delayMs": "Delay (ms)",
     "scanDescription": "Scans {{device}} for active unit IDs {{start}}–{{end}}. Devices supporting FC43 will show vendor, product, and revision details. Others are detected via {{type}} register {{register}}.",
     "runScan": "Run Scan"
   },
+  "modbusConnection": {
+    "profile": "Device",
+    "custom": "Custom",
+    "host": "Host",
+    "port": "Port",
+    "unitId": "Unit ID",
+    "needHost": "Enter a host address to scan."
+  },
   "modbusRegister": {
     "registerType": "Register Type",
-    "unitId": "Unit ID",
     "startRegister": "Start Register",
     "endRegister": "End Register",
     "chunkSize": "Chunk Size",
     "delayMs": "Delay (ms)",
     "scanDescription": "Scans {{device}} for {{type}} registers {{start}}–{{end}} on unit {{unit}}. Discovered registers will appear in the frame picker.",
     "runScan": "Run Scan",
-    "holdingFc": "Holding (FC 3)",
-    "inputFc": "Input (FC 4)",
-    "coilFc": "Coil (FC 1)",
-    "discreteFc": "Discrete (FC 2)",
     "passes": "Passes",
     "passGapMs": "Gap between passes (ms)",
     "passesHint": "Each register is read once per pass. Run the Payload Changes tool afterwards to see which ones moved — those are live telemetry rather than static configuration.",
@@ -274,9 +271,9 @@
     "devicesFound_other": "{{count}} devices found",
     "identified": "({{count}} identified via FC43)",
     "scanning": "Scanning...",
+    "connecting": "Connecting to device...",
     "noResults": "No results found",
     "cancel": "Cancel",
-    "resumePolling": "Resume polling on {{device}}",
     "close": "Close",
     "tableUnitId": "Unit ID",
     "tableVendor": "Vendor",
@@ -448,18 +445,17 @@
       "startsAfterHeader": "Calculation starts after a declared header field (byte {{byte}})"
     }
   },
-  "modbusTarget": {
-    "device": "Device",
-    "unit": "unit {{unit}}",
-    "stopSession": "Stop polling on {{device}} for the sweep",
-    "stopSessionHint": "Most devices serve one Modbus conversation at a time. Leave this off only for a gateway that accepts several connections."
+  "modbusPoll": {
+    "pause": "Pause polling",
+    "resume": "Resume polling",
+    "pauseTitle": "Stop polling {{device}} and hand it to the scanning tools",
+    "resumeTitle": "Start polling {{device}} again"
   },
   "modbusFc": {
     "unitIds": "Unit IDs",
     "testRegister": "Test address",
     "description": "Reads one address on each of the four read function codes, for {{count}} unit(s) — {{requests}} requests in total.",
     "runProbe": "Run Probe",
-    "probing": "Probing…",
     "unit": "Unit",
     "holding": "Holding",
     "input": "Input",
@@ -469,6 +465,9 @@
     "exception": "Exception",
     "silent": "Silent",
     "hintFound": "An exception means the device serves that function code and the address was simply wrong — worth sweeping. Silent usually means the function code isn't implemented at all.",
-    "hintNothing": "Nothing answered. The device may serve only one Modbus connection at a time — stop the session and try again — or raise the timeout."
+    "hintNothing": "Nothing answered. Another client may hold the device — most serve one Modbus connection at a time — or the address is wrong, or the timeout too short.",
+    "title": "Function Code Probe",
+    "probingDevice": "probing {{device}}…",
+    "close": "Close"
   }
 }

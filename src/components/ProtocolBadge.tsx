@@ -74,7 +74,7 @@ export default function ProtocolBadge({
     ? "CAN"
     : canTransmitSerial
       ? "Serial"
-      : label ?? "CAN";
+      : label ?? "—";
 
   return (
     <button

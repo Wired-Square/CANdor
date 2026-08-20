@@ -35,6 +35,7 @@ import {
   getStateType,
   type IOCapabilities,
   type IOStateType,
+  type IOState,
   type StreamEndedInfo,
   type SessionSuspendedPayload,
   type SessionSwitchedToCapturePayload,
@@ -1062,15 +1063,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
       // Only set up Tauri listeners if we don't have any yet
       if (eventListeners.unlistenFunctions.length === 0) {
-        const updateSession = (id: string, updates: Partial<Session>) => {
-          set((s) => ({
-            sessions: {
-              ...s.sessions,
-              [id]: s.sessions[id] ? { ...s.sessions[id], ...updates } : s.sessions[id],
-            },
-          }));
-        };
-
         eventListeners.unlistenFunctions = await setupSessionEventSubscribers(
           sessionId,
           eventListeners,
@@ -2146,8 +2138,43 @@ export interface CreateMultiSourceOptions {
 }
 
 /**
- * Result of creating or joining a multi-source session.
+ * Patch one session record in place, ignoring a session that is not in the store.
+ *
+ * Hoisted because three call sites had grown their own byte-identical copy — the
+ * "absent record is a no-op" half is the part worth having in one place.
  */
+function updateSession(id: string, updates: Partial<Session>): void {
+  useSessionStore.setState((s) => ({
+    sessions: {
+      ...s.sessions,
+      [id]: s.sessions[id] ? { ...s.sessions[id], ...updates } : s.sessions[id],
+    },
+  }));
+}
+
+/**
+ * Adopt the state registration reports onto the session record.
+ *
+ * A source can end between session creation and registration — a Modbus source
+ * with no poll groups does it within a millisecond — and `StreamEnded` rides the
+ * session channel, which nothing has subscribed to yet. Registration is the
+ * first moment a subscriber exists, so its answer is the one that cannot be
+ * missed.
+ *
+ * A no-op when the record has not been created yet: `useIOSession` pulls the
+ * state again once it has, so this is the early half of a belt-and-braces pair,
+ * not the only reader.
+ */
+function applyRegisteredState(sessionId: string, state: IOState | undefined): void {
+  if (!state) return;
+  const ioState = getStateType(state);
+  // Guarded: registration usually reports the state the store already holds, and
+  // an unconditional write would notify every subscriber for nothing.
+  if (useSessionStore.getState().sessions[sessionId]?.ioState === ioState) return;
+  updateSession(sessionId, { ioState });
+}
+
+/** Result of creating or joining a multi-source session. */
 export interface MultiSourceSessionResult {
   /** The session ID */
   sessionId: string;
@@ -2249,6 +2276,7 @@ export async function createAndStartMultiSourceSession(
   if (regResult.startup_error) {
     useSessionStore.getState().showAppError("Stream Error", "An error occurred while starting the session.", regResult.startup_error);
   }
+  applyRegisteredState(sessionId, regResult.state);
 
   // Set up event listeners and heartbeat interval
   // This is needed because useIOSession's effect may skip setup when the session ID changes
@@ -2279,15 +2307,6 @@ export async function createAndStartMultiSourceSession(
     eventListeners = useSessionStore.getState()._eventListeners[sessionId]!;
 
     if (eventListeners.unlistenFunctions.length === 0) {
-      const updateSession = (id: string, updates: Partial<Session>) => {
-        useSessionStore.setState((s) => ({
-          sessions: {
-            ...s.sessions,
-            [id]: s.sessions[id] ? { ...s.sessions[id], ...updates } : s.sessions[id],
-          },
-        }));
-      };
-
       eventListeners.unlistenFunctions = await setupSessionEventSubscribers(
         sessionId,
         eventListeners,
@@ -2357,6 +2376,7 @@ export async function joinMultiSourceSession(
   if (regResult.startup_error) {
     useSessionStore.getState().showAppError("Stream Error", "An error occurred while starting the session.", regResult.startup_error);
   }
+  applyRegisteredState(sessionId, regResult.state);
 
   // Set up event listeners and heartbeat interval if not already set up
   const store = useSessionStore.getState();
@@ -2385,15 +2405,6 @@ export async function joinMultiSourceSession(
     eventListeners = useSessionStore.getState()._eventListeners[sessionId]!;
 
     if (eventListeners.unlistenFunctions.length === 0) {
-      const updateSession = (id: string, updates: Partial<Session>) => {
-        useSessionStore.setState((s) => ({
-          sessions: {
-            ...s.sessions,
-            [id]: s.sessions[id] ? { ...s.sessions[id], ...updates } : s.sessions[id],
-          },
-        }));
-      };
-
       eventListeners.unlistenFunctions = await setupSessionEventSubscribers(
         sessionId,
         eventListeners,

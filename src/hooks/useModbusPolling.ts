@@ -9,15 +9,18 @@
 // single-connection device ends up with two rival clients. This hook owns those
 // rules.
 //
+// The switch itself lives in `useModbusPollControl`, which Discovery uses on its
+// own: it wants the device to stop talking, not a poll set to manage.
+//
 // Where the poll groups come from is deliberately the caller's business — the
-// Decoder builds them from a catalogue, and a range spec would work as well —
-// but the Decoder is currently its only consumer. Discovery's range-derived
-// live polling is built end to end in Rust and reachable over MCP; what it does
-// not yet have is a UI entry point that feeds `pollsJson` from a range.
+// Decoder builds them from a catalogue, the IO source picker builds them from an
+// address range (`ModbusPollConfig` → `useIOSourcePickerHandlers`) — but the
+// Decoder is this hook's only consumer, because it is the only one that has to
+// *re*build a poll set after the session has started.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { pauseSourcePolling, resumeSourcePolling } from "../api/io";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { tlog } from "../api/settings";
+import { useModbusPollControl } from "./useModbusPollControl";
 import { anyModbusProfile } from "../utils/modbusProfiles";
 import type { ModbusPollGroup } from "../api/catalog";
 import type { PlaybackSpeed } from "../components/TimeController";
@@ -67,8 +70,6 @@ export function useModbusPolling({
   playbackSpeed,
   watchSource,
 }: UseModbusPollingOptions): UseModbusPollingApi {
-  const [isPolling, setIsPolling] = useState(true);
-
   // Track the last-used source profile ids so polling can restart after a stop,
   // when the manager has already cleared the live ones.
   const lastProfileIdsRef = useRef<string[]>([]);
@@ -94,6 +95,11 @@ export function useModbusPolling({
   const sourceProfileForPolling =
     ioProfiles.length > 0 ? ioProfiles[0] : sourceProfileId ?? lastProfileIdsRef.current[0] ?? null;
 
+  const { isPolling, pausePolling, resumePolling } = useModbusPollControl({
+    sessionId,
+    profileId: sourceProfileForPolling,
+  });
+
   const pollProfileIds = resolveProfileIds();
 
   // The Modbus toolbar is driven by the loaded *catalogue*'s protocol, which lags a
@@ -106,11 +112,6 @@ export function useModbusPolling({
   const targetsModbus = anyModbusProfile(pollProfileIds);
   const pollsApplyToSession = !(isStreaming && !targetsModbus);
   const canStartPolling = pollsJson !== null && targetsModbus;
-
-  // Reset to "polling" whenever a stream (re)starts.
-  useEffect(() => {
-    if (isStreaming) setIsPolling(true);
-  }, [isStreaming]);
 
   const reconnectWithPolls = useCallback(async () => {
     const profileIds = resolveProfileIds();
@@ -136,20 +137,6 @@ export function useModbusPolling({
       tlog.info(`[useModbusPolling] Modbus reconnect failed: ${e}`);
     }
   }, [resolveProfileIds, watchSource, sessionId]);
-
-  const pausePolling = useCallback(() => {
-    if (!sessionId || !sourceProfileForPolling) return;
-    pauseSourcePolling(sessionId, sourceProfileForPolling)
-      .then(() => setIsPolling(false))
-      .catch((e: unknown) => tlog.info(`[useModbusPolling] Pause polling failed: ${e}`));
-  }, [sessionId, sourceProfileForPolling]);
-
-  const resumePolling = useCallback(() => {
-    if (!sessionId || !sourceProfileForPolling) return;
-    resumeSourcePolling(sessionId, sourceProfileForPolling)
-      .then(() => setIsPolling(true))
-      .catch((e: unknown) => tlog.info(`[useModbusPolling] Resume polling failed: ${e}`));
-  }, [sessionId, sourceProfileForPolling]);
 
   // Reconnect when the poll set changes mid-stream (a catalogue swap, or a new
   // discovery range). Only while streaming — otherwise the next start picks the

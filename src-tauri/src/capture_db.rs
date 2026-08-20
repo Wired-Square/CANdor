@@ -1146,6 +1146,39 @@ pub fn get_all_frames(capture_id: &str) -> Result<Vec<FrameMessage>, String> {
     Ok(frames)
 }
 
+/// The newest frame per identity in a capture — one row per `(protocol, frame_id)`.
+///
+/// For a Modbus sweep this is the whole point: the scanner writes every register
+/// once per pass, so a 20-pass sweep of 4096 registers is ~80k rows for a result
+/// that is 4096 values. Reading them all and keeping the last of each is the same
+/// answer for 20× the rows over IPC, so the reduction belongs here, next to
+/// `get_frame_info`, which already groups the same way.
+pub fn get_latest_frames(capture_id: &str) -> Result<Vec<FrameMessage>, String> {
+    let guard = DB.lock().unwrap();
+    let conn = guard.as_ref().ok_or("Database not initialised")?;
+
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT rowid, protocol, timestamp_us, frame_id, bus, dlc, payload, is_extended, is_fd, source_address, incomplete, direction
+             FROM frames
+             WHERE rowid IN (
+                 SELECT MAX(rowid) FROM frames WHERE capture_id = ?1 GROUP BY protocol, frame_id
+             )
+             ORDER BY frame_id",
+        )
+        .map_err(|e| format!("Failed to prepare: {}", e))?;
+
+    let rows = stmt
+        .query_map(params![capture_id], |row| row_to_frame(row))
+        .map_err(|e| format!("Failed to query: {}", e))?;
+
+    let mut frames = Vec::new();
+    for row in rows {
+        frames.push(row.map_err(|e| format!("Failed to read row: {}", e))?);
+    }
+    Ok(frames)
+}
+
 // ============================================================================
 // Capture Reader Streaming (chunked reads for playback)
 // ============================================================================

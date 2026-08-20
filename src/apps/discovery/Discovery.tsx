@@ -15,15 +15,20 @@ import { selectionSetKeys, type SelectionSet } from "../../utils/selectionSets";
 import { useDiscoveryFrameStore, getDiscoveryFrameBuffer } from "../../stores/discoveryFrameStore";
 import { useDiscoveryUIStore } from "../../stores/discoveryUIStore";
 import { useDiscoverySerialStore } from "../../stores/discoverySerialStore";
-import { useDiscoveryToolboxStore } from "../../stores/discoveryToolboxStore";
+import { runningModbusScan, useDiscoveryToolboxStore } from "../../stores/discoveryToolboxStore";
 import { useShallow } from "zustand/react/shallow";
 import { useDiscoveryHandlers } from "./hooks/useDiscoveryHandlers";
 import { useModbusScanSync } from "./hooks/useModbusScanSync";
-import type { StreamEndedInfo, PlaybackPosition, ModbusScanConfig, UnitIdScanConfig } from '../../api/io';
-import { createModbusScanSession, startReaderSession, stopReaderSession, resumeSessionToLive } from '../../api/io';
+import type { StreamEndedInfo, PlaybackPosition, FcProbeConfig, ModbusScanConfig, UnitIdScanConfig } from '../../api/io';
+import { createModbusScanSession, probeModbusFunctionCodes, startReaderSession, stopReaderSession } from '../../api/io';
 import type { ScanJob } from '../../api/io';
 import type { ModbusExportConfig } from '../../utils/frameExport';
-import { modbusConnectionOf, type ModbusSessionTarget } from '../../utils/modbusProfiles';
+import {
+  MODBUS_SCAN_SESSION_PREFIX,
+  isModbusScanSession,
+  type ModbusPollerRef,
+} from '../../utils/modbusProfiles';
+import { useModbusPollControl } from '../../hooks/useModbusPollControl';
 import { REALTIME_CLOCK_INTERVAL_MS } from "../../constants";
 import AppLayout from "../../components/AppLayout";
 import DiscoveryTopBar from "./views/DiscoveryTopBar";
@@ -513,23 +518,18 @@ function DiscoveryInner() {
     reinitialize,
   } = session;
 
-  // The device the Modbus sweeps run against: the current session's own.
-  //
-  // The tools used to be offered whenever any Modbus profile was configured, on
-  // the reasoning that they only needed an address you could type. They now scan
-  // the session's device instead — nothing is typed — so a device you have no
-  // session for is out of their scope, and the gate is the session's own
-  // Rust-authoritative protocol, exactly as the serial tools already do it.
+  // The Modbus session on screen, if this is one — the poll switch's subject.
+  // The scan tools take no address from here; they name their own device.
   //
   // Resolve the profile the way useModbusPolling does. `ioProfiles`
   // (multiBusProfiles) is empty for a single-source watch and for a session
   // joined without source ids, and `ioProfile` holds the *session* id, not a
   // profile id — reading only the first of those was why a single-source Modbus
   // session silently fell back to some other configured profile's address.
-  const modbusTarget = useMemo<ModbusSessionTarget | null>(() => {
-    // Liveness is part of resolution, not a separate flag: a target only exists
-    // while a Modbus session is on the other end. A stopped session reports
-    // capture traits (CAN), so this goes null exactly when the device goes away.
+  const modbusTarget = useMemo<ModbusPollerRef | null>(() => {
+    // Resolution answers "which session", not "is anyone reading it" — a session
+    // whose source ended keeps its Modbus capabilities, so this stays non-null
+    // while nothing polls. `live` below is what answers the second half.
     if (!sessionId || !settings?.io_profiles) return null;
     if (!capabilities?.traits?.protocols?.includes("modbus")) return null;
     const candidates = ioProfiles.length > 0 ? ioProfiles : sourceProfileId ? [sourceProfileId] : [];
@@ -538,15 +538,45 @@ function DiscoveryInner() {
         (p: import("../../types/common").IOProfile) => p.id === profileId
       );
       if (profile?.kind !== 'modbus_tcp') continue;
-      return {
-        ...modbusConnectionOf(profile),
-        sessionId,
-        profileId,
-        name: profile.name || profileId,
-      };
+      return { sessionId, profileId, name: profile.name || profileId };
     }
     return null;
   }, [ioProfiles, sourceProfileId, sessionId, settings?.io_profiles, capabilities?.traits?.protocols]);
+
+  const onScanSession = isModbusScanSession(sessionId);
+
+  // The session whose poller the top-bar switch drives, and whether it is
+  // actually polling — one fact, so one piece of state.
+  //
+  // Not `modbusTarget` directly: starting a sweep joins its scan session, which
+  // reports Modbus too, so from then on `modbusTarget` names the sweep rather
+  // than the device's poller. Hold the last real poller instead, so the switch
+  // keeps meaning the same thing while a sweep's results are on screen.
+  //
+  // `live` is not a formality: a Modbus source with no poll groups refuses to
+  // start, ends its stream at once (`no_polls`) and never opens a connection —
+  // so the switch must not offer to pause what was never polling.
+  const [poller, setPoller] = useState<{ session: ModbusPollerRef; live: boolean } | null>(null);
+  useEffect(() => {
+    if (onScanSession) return;
+    setPoller(modbusTarget ? { session: modbusTarget, live: isStreaming } : null);
+  }, [modbusTarget, onScanSession, isStreaming]);
+
+  const {
+    isPolling: pollingRequested,
+    pausePolling: pauseModbusPolling,
+    resumePolling: resumeModbusPolling,
+  } = useModbusPollControl({
+    sessionId: poller?.session.sessionId ?? null,
+    profileId: poller?.session.profileId ?? null,
+  });
+
+  // What withholds the scan tools. A sweep names its own device and takes the
+  // view over to show the results, so it wants no source selected — and joining
+  // its session would destroy whichever one was. Its own sweeps are exempt:
+  // chaining probe → unit scan → register sweep is how an unknown device gets
+  // worked out, and each answer aims the next.
+  const hasSource = Boolean(sessionId) && !onScanSession;
 
   // Note: isStreaming, isPaused, isStopped, isRealtime are now provided by useIOSessionManager
 
@@ -736,10 +766,14 @@ function DiscoveryInner() {
   // Ordered by how direct the evidence is: a frame in hand, then what the capture says it
   // holds (in capture mode the buffer is empty by design), then the session's own
   // declaration — without that last one a Modbus session reads CAN until its first frame.
+  //
+  // No default: with no source and no frames there is no protocol, and the `|| 'can'` that
+  // used to sit here made a Function Code Probe against a Modbus device label itself CAN.
+  // What an open tool tab implies is the frames view's business, not this value's — it also
+  // names export files, which want the data's protocol and not the tab's.
   const protocolLabel = frames[0]?.protocol
     || protocolOf(frameInfoMap)
-    || capabilities?.traits?.protocols?.[0]
-    || 'can';
+    || capabilities?.traits?.protocols?.[0];
 
   // Non-realtime sources: recorded (WireTAP backend, csv) and capture replay
   const isRecorded = capabilities?.traits.temporal_mode === "recorded"
@@ -772,7 +806,9 @@ function DiscoveryInner() {
   }, [exportDataMode, backendByteCount, captureMode, isSerialMode, framedCaptureId, backendFrameCount, framedData.length, frames.length]);
 
   const exportDefaultFilename = useMemo(() => {
-    const protocol = exportDataMode === "bytes" ? "serial" : (protocolLabel || "can");
+    // Not "can": this fires only when nothing said what the frames are, and naming
+    // them after a protocol nobody reported is how the badge got it wrong.
+    const protocol = exportDataMode === "bytes" ? "serial" : (protocolLabel ?? "frames");
     return `${formatFilenameDate()}-${protocol}`;
   }, [exportDataMode, protocolLabel]);
 
@@ -792,20 +828,8 @@ function DiscoveryInner() {
     job: ScanJob,
     meta: { registerType: string; unitId: number },
     errorMessage: string,
-    stopSession: boolean,
   ) => {
-    if (!modbusTarget) return;
-    const scanSessionId = `m_scan${Date.now().toString(36)}`;
-    // Remember the device before the sweep, so the results view can offer to
-    // resume polling it: stopping the session replaces its profile ids with its
-    // capture id, and there is then nothing left to read the profile back from.
-    // Only when we actually stop something — otherwise there is nothing to resume.
-    startModbusScanStore(
-      scanType,
-      scanSessionId,
-      stopSession ? modbusTarget.sessionId : undefined,
-      stopSession ? modbusTarget.name : undefined,
-    );
+    const scanSessionId = `${MODBUS_SCAN_SESSION_PREFIX}${Date.now().toString(36)}`;
     // Tell Save how to render the discovered registers as a catalogue.
     setModbusExportConfig({
       device_address: meta.unitId,
@@ -814,67 +838,62 @@ function DiscoveryInner() {
       default_interval: 1000,
     });
     try {
-      // One call: Rust resolves the device from the session, *then* stops it.
-      // Doing it in that order matters — a stopped session no longer names its
-      // device — and keeping both inside the command means a refused scan can
-      // never leave a session stopped for a sweep that didn't happen.
-      await createModbusScanSession(scanSessionId, job, {
-        appName: "discovery",
-        // Keeps the tools lit while the scan session is in view, so a probe can
-        // be followed by a unit scan and then a register sweep.
-        profileId: modbusTarget.profileId,
-        targetSessionId: modbusTarget.sessionId,
-        stopTarget: stopSession,
-        allowContention: !stopSession,
-      });
+      // No target session: the address comes from the panel, which is the whole
+      // point of running these with no source selected. `targetSessionId` and
+      // `stopTarget` stay in the API for MCP, which can sweep a device someone
+      // else already has open. Contention is still refused by name — another app
+      // polling this endpoint is a reason to stop, not to collect a half-empty
+      // register map.
+      await createModbusScanSession(scanSessionId, job, { appName: "discovery" });
       await joinSession(scanSessionId);
+      // After the session exists, not before: the record *is* the tab, so a
+      // refused sweep would otherwise leave one behind with nothing in it.
+      startModbusScanStore(scanType, scanSessionId);
       await startReaderSession(scanSessionId);
     } catch (e) {
       finishModbusScan();
       showAppError(t("errors.scanTitle"), errorMessage, String(e));
     }
-  }, [modbusTarget, startModbusScanStore, finishModbusScan, showAppError, setModbusExportConfig, joinSession, t]);
+  }, [startModbusScanStore, finishModbusScan, showAppError, setModbusExportConfig, joinSession, t]);
 
-  const handleStartModbusScan = useCallback((config: ModbusScanConfig, stopSession: boolean) => {
+  const handleStartModbusScan = useCallback((config: ModbusScanConfig) => {
     void runModbusScan(
       'register',
       { kind: "registers", config },
       { registerType: config.register_type, unitId: config.unit_id },
       t("errors.modbusRegisterScanMessage"),
-      stopSession,
     );
   }, [runModbusScan, t]);
 
-  const handleStartModbusUnitIdScan = useCallback((config: UnitIdScanConfig, stopSession: boolean) => {
+  const handleStartModbusUnitIdScan = useCallback((config: UnitIdScanConfig) => {
     void runModbusScan(
       'unit-id',
       { kind: "unit_ids", config },
       { registerType: config.register_type, unitId: config.start_unit_id },
       t("errors.modbusUnitScanMessage"),
-      stopSession,
     );
   }, [runModbusScan, t]);
 
-  // Put the device back on the bus after a sweep took it. Rust kept the stopped
-  // session's source config, poll plan included, so resuming restores the
-  // polling rather than merely reconnecting; joining then moves Discovery off
-  // the scan session and back onto it.
-  const handleResumePolling = useCallback(async (polledSessionId: string) => {
+  // The probe answers in one call rather than owning a session, so it writes its
+  // own result: no capture, no progress channel, nothing to subscribe to. The
+  // failure goes in the tab beside the table — a probe that got no answer is a
+  // finding about the device, not an error dialog's business.
+  const handleStartModbusFcProbe = useCallback(async (config: FcProbeConfig, deviceName: string) => {
+    const store = useDiscoveryToolboxStore.getState();
+    store.startModbusFcProbe(deviceName);
     try {
-      await resumeSessionToLive(polledSessionId);
-      await joinSession(polledSessionId);
+      const entries = await probeModbusFunctionCodes(config);
+      store.finishModbusFcProbe({ entries });
     } catch (e) {
-      showAppError(t("errors.scanTitle"), t("errors.modbusResumeMessage"), String(e));
+      store.finishModbusFcProbe({ error: String(e) });
     }
-  }, [joinSession, showAppError, t]);
+  }, []);
 
   // Cancelling is stopping the scan's session: that sets its cancel flag, waits
   // for the sweep to unwind, and finalises the capture, so the registers found
   // before the stop are kept rather than discarded.
   const handleCancelModbusScan = useCallback(async () => {
-    const scanSessionId = useDiscoveryToolboxStore.getState().toolbox
-      .modbusRegisterScanResults?.sessionId
-      ?? useDiscoveryToolboxStore.getState().toolbox.modbusUnitIdScanResults?.sessionId;
+    const scanSessionId = runningModbusScan(useDiscoveryToolboxStore.getState().toolbox)?.sessionId;
     if (!scanSessionId) return;
     try {
       await stopReaderSession(scanSessionId);
@@ -1096,7 +1115,12 @@ function DiscoveryInner() {
           framingAccepted={framingAccepted}
           serialActiveTab={serialActiveTab}
           onUndoFraming={undoAcceptFraming}
-          isModbusSession={modbusTarget !== null}
+          modbus={poller ? {
+            deviceName: poller.session.name,
+            isPolling: poller.live && pollingRequested,
+            onPause: pauseModbusPolling,
+            onResume: resumeModbusPolling,
+          } : undefined}
           isCaptureMode={isCaptureMode}
           capturePersistent={session.capturePersistent}
           onToggleCapturePin={() => {
@@ -1141,7 +1165,6 @@ function DiscoveryInner() {
             sessionId={sessionId}
             protocol={protocolLabel}
             onCancelScan={handleCancelModbusScan}
-            onResumePolling={handleResumePolling}
             displayFrameIdFormat={displayFrameIdFormat}
             displayTimeFormat={displayTimeFormat}
             onBookmark={isRecorded ? handlers.handleBookmark : undefined}
@@ -1292,8 +1315,11 @@ function DiscoveryInner() {
         onSave={handlers.handleSaveNewSelectionSet}
       />
 
+      {/* Mounted only while open: Discovery re-renders on every frame flush, and
+          the dialog builds its whole tool list each time. Guarded here rather
+          than inside, so its hooks stay unconditional. */}
+      {dialogs.toolbox.isOpen && (
       <ToolboxDialog
-        isOpen={dialogs.toolbox.isOpen}
         onClose={() => dialogs.toolbox.close()}
         selectedCount={framesViewActiveTab === 'filtered' ? seenIds.size - selectedFrames.size : selectedFrames.size}
         frameCount={frameList.length}
@@ -1302,10 +1328,12 @@ function DiscoveryInner() {
         isFilteredView={framesViewActiveTab === 'filtered'}
         serialFrameCount={backendFrameCount > 0 ? backendFrameCount : (framedData.length + frames.length)}
         serialBytesCount={backendByteCount}
-        modbusTarget={modbusTarget}
+        hasSource={hasSource}
         onStartModbusScan={handleStartModbusScan}
         onStartModbusUnitIdScan={handleStartModbusUnitIdScan}
+        onStartModbusFcProbe={handleStartModbusFcProbe}
       />
+      )}
 
       <DecoderInfoDialog
         isOpen={showInfoView}

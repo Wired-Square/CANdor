@@ -140,6 +140,7 @@ the token. Hardcoded `text-zinc-100` will not update.
 | `dataViewTabClass(active, hasIndicator)` | Data view tabs |
 | `paginationButtonDark` / `tableIconButtonDark` | Data view chrome |
 | `playbackIconButton` / `playbackStepButton(canStep)` | Themed playback toolbar buttons (skip/rewind, step) |
+| `pollButtonClass(isPolling)` | Modbus poll switch in a top bar (Discovery, Decoder). Colour is the *action*, not the state: red while polling, green while stopped |
 | `iconActionButton(colour)` | Coloured icon-only "create" button (blue/purple) |
 | `actionChip(colour)` | Inline pill action button used next to text (blue/red/green/amber); themed via status CSS vars |
 | `byteHighlight(state)` | Tri-state byte highlight (checksum / calcData / default) for frame previews |
@@ -194,6 +195,13 @@ their rows have to line up. These are the metrics that keep them in step.
 | `dataTableContainer` | Scroll container (`flex-1 min-h-0 overflow-auto font-mono text-xs`) |
 | `dataCell` | Body cell padding |
 | `dataHeaderCell` | Header cell padding, rule included |
+| `resultHeaderCell` / `resultCell(tone)` | The wider metrics for tool result tables — read as prose, not scanned as a byte dump |
+
+`resultCell` is deliberately not `dataCell`: the Modbus result tables are read a
+row at a time rather than compared column-to-column with a neighbouring view, so
+they get room to breathe. They are shared between the two result views for the
+same reason the metrics above are shared — the pair had already been copied once
+and would have drifted.
 
 Two things worth knowing before changing the frame table's columns:
 
@@ -207,6 +215,19 @@ Two things worth knowing before changing the frame table's columns:
   [timeFormat.ts](../src/utils/timeFormat.ts). A column wide enough for an ISO
   timestamp is nearly twice what a delta needs, and the slack shows up as a gap
   before whatever column follows.
+
+### The protocol badge says what it knows
+
+`ProtocolBadge` labels a data view with the protocol on screen. It has **no
+default**: with nothing captured and no source selected there is no protocol, and
+it shows a dash. That is a rule learned twice — the badge and Discovery both used
+to fall back to `"CAN"`, so a Modbus tool that owns no session sat under a CAN
+label. Evidence, most direct first: a frame in hand, then what the capture says it
+holds, then the session's declared protocol, then — in Discovery — the open tool
+tab, for a tool that speaks one protocol and owns no session
+(`protocolForToolTab`). A path that genuinely must name a protocol (a frame key,
+an export filename) picks its own fallback explicitly rather than leaning on the
+badge's.
 
 ## Composition recipes
 
@@ -577,6 +598,13 @@ automatically.
 - Dot-paths within a namespace: `general.power.preventIdleSleep.label`.
 - For repeated UI text (Save, Cancel, OK, Loading…), put it in `common.json`
   under `actions`, `states`, `errors`, `units`.
+- **Strings owned by a shared component belong in `common.json` too**, under a
+  key named for the domain rather than the caller — `common:modbus.holding` for
+  the register-type options `registerTypeOptions` supplies to every Modbus
+  dropdown. A shared control whose labels live in each caller's namespace is how
+  the same dropdown ends up reading "FC 3" in one panel and "FC03" in another;
+  that drift had already shipped before the options were lifted into
+  [ModbusFields.tsx](../src/components/modbus/ModbusFields.tsx).
 - Form fields follow the pattern `section.field.label` and `section.field.help`.
 - Select option labels go under `section.field.options.<value>`.
 

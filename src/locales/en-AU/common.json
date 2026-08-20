@@ -256,5 +256,11 @@
     },
     "repos_one": "{{count}} repository",
     "repos_other": "{{count}} repositories"
+  },
+  "modbus": {
+    "holding": "Holding (FC 3)",
+    "input": "Input (FC 4)",
+    "coil": "Coil (FC 1)",
+    "discrete": "Discrete (FC 2)"
   }
 }

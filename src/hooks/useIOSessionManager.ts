@@ -540,8 +540,10 @@ export function useIOSessionManager(
   // *different* capture ID, so tracking IDs would never trip.
   const captureAdoptionsRef = useRef<number[]>([]);
 
-  // Handle external session destruction (e.g., destroyed from Sessions app)
-  // Switches to capture mode if orphaned captures are available, otherwise clears state
+  // Handle external session destruction (e.g., destroyed from Sessions app).
+  // Switches to capture mode if orphaned captures are available, otherwise clears
+  // state. Never fires for a session this app moved off — `useIOSession` filters
+  // those out, since the destroy of the session being left is part of switching.
   const handleSessionDestroyed = useCallback((orphanedCaptureIds: string[], userInitiated: boolean) => {
     // A user-initiated "Destroy session" wants a clean slate, not the orphaned
     // capture the external-destroy path falls back to. The intent is carried by
@@ -803,7 +805,10 @@ export function useIOSessionManager(
     };
 
     // Create the session and set up heartbeats
-    // This ensures heartbeats start immediately, keeping the session alive
+    // This ensures heartbeats start immediately, keeping the session alive.
+    // Stamped first: registering here is what makes Rust destroy the session
+    // this app is leaving.
+    session.markSessionSwitch(sessionId);
     await createAndStartMultiSourceSession(createOptions);
 
     // Build output bus → source mapping
@@ -840,6 +845,7 @@ export function useIOSessionManager(
     sourceProfileIds?: string[]
   ) => {
     // Clear frontend state before joining (fixes frame count showing stale data)
+    session.markSessionSwitch(sessionId);
     onBeforeWatch?.();
     resetWatchFrameCount();
     // Reset multiSessionId when switching sessions so effectiveSessionId updates cleanly

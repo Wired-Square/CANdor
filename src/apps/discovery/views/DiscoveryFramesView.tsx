@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { iconSm, iconXs, flexRowGap2 } from "../../../styles/spacing";
 import { formatIsoUs, formatHumanUs, renderDeltaNode } from "../../../utils/timeFormat";
 import { TOOL_TAB_CONFIG } from "../../../stores/discoveryStore";
+import { protocolForToolTab } from "../../../stores/discoveryToolboxStore";
 import { useDiscoveryFrameStore } from "../../../stores/discoveryFrameStore";
 import { useDiscoveryUIStore } from "../../../stores/discoveryUIStore";
 import { useDiscoveryToolboxStore } from "../../../stores/discoveryToolboxStore";
@@ -19,6 +20,7 @@ import ChangesResultView from "./tools/ChangesResultView";
 import MessageOrderResultView from "./tools/MessageOrderResultView";
 import ChecksumDiscoveryResultView from "./tools/ChecksumDiscoveryResultView";
 import ModbusScanResultView from "./tools/ModbusScanResultView";
+import ModbusFcProbeResultView from "./tools/ModbusFcProbeResultView";
 import FilteredTabContent from "./FilteredTabContent";
 import { bgDataView, bgSurface, tabBarIconToggle, textDataSecondary, textMuted, textPrimary, textSecondary, borderDefault } from "../../../styles";
 import type { FrameMessage } from "../../../types/frame";
@@ -45,7 +47,9 @@ type Props = {
   captureId?: string | null;
   /** Owning session — lets the frame view refetch its live tail when Rust reports new frames. */
   sessionId?: string | null;
-  protocol: string;
+  /** What the frames are, when anything says so. Absent is a real answer: with no
+   *  source and nothing captured, the badge shows a dash rather than guessing. */
+  protocol?: string;
   displayFrameIdFormat: "hex" | "decimal";
   displayTimeFormat: TimeDisplayFormat;
   onBookmark?: (frameId: number, timestampUs: number) => void;
@@ -104,8 +108,6 @@ type Props = {
 
   /** Called to cancel a running modbus scan */
   onCancelScan?: () => void;
-  /** Restore the Modbus session a sweep stopped to free the device. */
-  onResumePolling?: (polledSessionId: string) => void;
 
   /** Whether to use local timezone for time display */
   useLocalTimezone?: boolean;
@@ -150,7 +152,6 @@ function DiscoveryFramesView({
   isStreamPaused = false,
   onResumeStream,
   onCancelScan,
-  onResumePolling,
   useLocalTimezone = false,
 }: Props) {
   const { t } = useTranslation("discovery");
@@ -496,8 +497,18 @@ function DiscoveryFramesView({
         closeable: !scan.isScanning,
       });
     }
+    if (toolboxResults.modbusFcProbeResults) {
+      const probe = toolboxResults.modbusFcProbeResults;
+      result.push({
+        id: TOOL_TAB_CONFIG['modbus-function-codes'].tabId,
+        label: TOOL_TAB_CONFIG['modbus-function-codes'].label,
+        count: probe.isProbing ? undefined : probe.entries.filter((e) => e.responded).length,
+        countColor: 'purple' as const,
+        closeable: !probe.isProbing,
+      });
+    }
     return result;
-  }, [frameCount, filteredOutCount, toolboxResults.messageOrderResults, toolboxResults.changesResults, toolboxResults.checksumDiscoveryResults, toolboxResults.modbusRegisterScanResults, toolboxResults.modbusUnitIdScanResults]);
+  }, [frameCount, filteredOutCount, toolboxResults.messageOrderResults, toolboxResults.changesResults, toolboxResults.checksumDiscoveryResults, toolboxResults.modbusRegisterScanResults, toolboxResults.modbusUnitIdScanResults, toolboxResults.modbusFcProbeResults]);
 
   // Handle closing a tool output tab
   const clearToolResult = useDiscoveryToolboxStore((s) => s.clearToolResult);
@@ -915,7 +926,7 @@ function DiscoveryFramesView({
       activeTab={activeTab}
       onTabChange={(id) => setActiveTab(id)}
       onTabClose={handleTabClose}
-      protocolLabel={protocol.toUpperCase()}
+      protocolLabel={(protocol ?? protocolForToolTab(activeTab))?.toUpperCase() ?? "—"}
       isStreaming={isStreaming}
       timestamp={timestamp}
       displayTime={displayTime}
@@ -1044,18 +1055,27 @@ function DiscoveryFramesView({
       {activeTab === TOOL_TAB_CONFIG['modbus-register-scan'].tabId && toolboxResults.modbusRegisterScanResults && (
         <ModbusScanResultView
           results={toolboxResults.modbusRegisterScanResults}
+          currentSessionId={sessionId ?? ""}
           onClose={() => handleTabClose(TOOL_TAB_CONFIG['modbus-register-scan'].tabId)}
           onCancel={onCancelScan}
-          onResumePolling={onResumePolling}
         />
+      )}
+
+      {activeTab === TOOL_TAB_CONFIG['modbus-function-codes'].tabId && toolboxResults.modbusFcProbeResults && (
+        <div className="flex-1 min-h-0">
+          <ModbusFcProbeResultView
+            results={toolboxResults.modbusFcProbeResults}
+            onClose={() => handleTabClose(TOOL_TAB_CONFIG['modbus-function-codes'].tabId)}
+          />
+        </div>
       )}
 
       {activeTab === TOOL_TAB_CONFIG['modbus-unit-scan'].tabId && toolboxResults.modbusUnitIdScanResults && (
         <ModbusScanResultView
           results={toolboxResults.modbusUnitIdScanResults}
+          currentSessionId={sessionId ?? ""}
           onClose={() => handleTabClose(TOOL_TAB_CONFIG['modbus-unit-scan'].tabId)}
           onCancel={onCancelScan}
-          onResumePolling={onResumePolling}
         />
       )}
     </AppTabView>

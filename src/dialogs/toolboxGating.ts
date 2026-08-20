@@ -18,12 +18,19 @@ export interface SessionShape {
   /** The session's protocol is serial, however it delivers its data. */
   isSerialProtocol: boolean;
   /**
-   * A live Modbus session — the device the sweeps run against.
+   * A source is selected — anything, not just Modbus.
    *
-   * Not merely "a Modbus profile is configured": the sweeps scan the session's
-   * own device, so a device you have no session for is out of their scope.
+   * The Modbus tools are the one group that *withholds* on this rather than
+   * requiring it. A sweep names its own device, opens its own connection and
+   * then takes the view over to show what it found, so it has no use for the
+   * current source and every reason not to disturb it: joining the sweep's
+   * session is what empties and destroys whichever session was selected.
+   *
+   * The sweeps' own sessions do not count. Chaining probe → unit scan → register
+   * sweep is the normal way to work through an unknown device, and the results
+   * of the last one are what tell you how to aim the next.
    */
-  hasLiveModbusSession: boolean;
+  hasSource: boolean;
 }
 
 export interface ToolDataCounts {
@@ -50,7 +57,9 @@ export function toolNeeds(tool: ToolRequirements): ToolNeeds {
  */
 export function isToolApplicable(tool: ToolRequirements, session: SessionShape): boolean {
   switch (toolNeeds(tool)) {
-    case 'modbus': return session.hasLiveModbusSession;
+    // Always listed: a sweep needs no session and no catalogue, so there is no
+    // session shape that rules it out — only one that withholds it.
+    case 'modbus': return true;
     case 'serial-bytes': return session.isSerialMode;
     case 'serial-frames': return session.isSerialProtocol || session.isSerialMode;
     // Frame tools are meaningless while a serial source is still an unframed stream.
@@ -64,8 +73,9 @@ export function hasToolData(
   counts: ToolDataCounts
 ): boolean {
   switch (toolNeeds(tool)) {
-    // No frame threshold: a sweep produces the data, it doesn't consume it.
-    case 'modbus': return session.hasLiveModbusSession;
+    // No frame threshold: a sweep produces the data, it doesn't consume it —
+    // what it needs is the device to itself.
+    case 'modbus': return !session.hasSource;
     case 'serial-bytes': return counts.serialBytesCount > 0;
     case 'serial-frames': return counts.serialFrameCount > 0;
     case 'frames': return counts.frameCount > 0;

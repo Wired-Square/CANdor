@@ -20,6 +20,8 @@ import {
   updateKnowledgeFromMessageOrder,
   updateKnowledgeFromPayloadAnalysis,
 } from '../utils/decoderKnowledge';
+import type { FcProbeEntry, Protocol } from '../api/io';
+import { MODBUS_BLANK_CONNECTION, type ModbusConnection } from '../utils/modbusProfiles';
 import type { FrameInfo } from './discoveryStore';
 import { parseFrameKey, type ProtocolFrames } from '../utils/frameKey';
 import { useDiscoveryUIStore } from './discoveryUIStore';
@@ -36,16 +38,61 @@ export type ChecksumScanSource =
   | { captureId: string; selection: ProtocolFrames[] }
   | { frames: FrameMessage[] };
 
-/** Tab ID and label for each analysis tool's output tab */
-export const TOOL_TAB_CONFIG: Record<string, { tabId: string; label: string }> = {
-  'message-order':        { tabId: 'tool:message-order',        label: 'Frame Order' },
-  'changes':              { tabId: 'tool:changes',              label: 'Payload Changes' },
-  'checksum-discovery':   { tabId: 'tool:checksum-discovery',   label: 'Checksums' },
-  'serial-framing':       { tabId: 'tool:serial-framing',       label: 'Serial Framing' },
-  'serial-payload':       { tabId: 'tool:serial-payload',       label: 'Serial Payload' },
-  'modbus-register-scan': { tabId: 'tool:modbus-register-scan', label: 'Register Scan' },
-  'modbus-unit-scan':     { tabId: 'tool:modbus-unit-scan',     label: 'Unit ID Scan' },
+/** The `ToolboxState` slot each tool writes its output into. */
+export type ToolResultKey =
+  | 'messageOrderResults'
+  | 'changesResults'
+  | 'serialFramingResults'
+  | 'serialPayloadResults'
+  | 'checksumDiscoveryResults'
+  | 'modbusRegisterScanResults'
+  | 'modbusUnitIdScanResults'
+  | 'modbusFcProbeResults';
+
+/**
+ * Tab ID, label and result slot for each analysis tool's output tab.
+ *
+ * `resultKey` is here so the two ways of discarding a result — closing one tab,
+ * and dropping the source — read the same list. They used to spell it out
+ * separately and had already drifted apart by one tool.
+ *
+ * `protocol` is what a tool's output *is*, for tools that only ever speak one.
+ * With no source selected there is no session and no frame to read a protocol
+ * off, and the view would otherwise fall back to claiming CAN.
+ *
+ * `ownsData` divides the two kinds of tool. An analysis tool describes the
+ * frames currently on screen, so dropping the source invalidates it. A Modbus
+ * tool went and got its own answer — a sweep from its own capture, a probe from
+ * four requests — and stays true whatever the app looks at next. Only the first
+ * kind is cleared when the view resets, which is what lets scan tabs accumulate
+ * as you work through a device instead of each sweep wiping the last.
+ */
+export const TOOL_TAB_CONFIG: Record<
+  string,
+  { tabId: string; label: string; resultKey: ToolResultKey; ownsData?: boolean; protocol?: Protocol }
+> = {
+  'message-order':        { tabId: 'tool:message-order',        label: 'Frame Order',     resultKey: 'messageOrderResults' },
+  'changes':              { tabId: 'tool:changes',              label: 'Payload Changes', resultKey: 'changesResults' },
+  'checksum-discovery':   { tabId: 'tool:checksum-discovery',   label: 'Checksums',       resultKey: 'checksumDiscoveryResults' },
+  'serial-framing':       { tabId: 'tool:serial-framing',       label: 'Serial Framing',  resultKey: 'serialFramingResults' },
+  'serial-payload':       { tabId: 'tool:serial-payload',       label: 'Serial Payload',  resultKey: 'serialPayloadResults' },
+  'modbus-register-scan': { tabId: 'tool:modbus-register-scan', label: 'Register Scan',   resultKey: 'modbusRegisterScanResults', ownsData: true, protocol: 'modbus' },
+  'modbus-unit-scan':     { tabId: 'tool:modbus-unit-scan',     label: 'Unit ID Scan',    resultKey: 'modbusUnitIdScanResults',   ownsData: true, protocol: 'modbus' },
+  'modbus-function-codes':{ tabId: 'tool:modbus-function-codes',label: 'Function Codes',  resultKey: 'modbusFcProbeResults',      ownsData: true, protocol: 'modbus' },
 };
+
+/** The table read the other way round. One index, so a third per-tab fact needs no fourth. */
+const CONFIG_BY_TAB_ID = new Map(Object.values(TOOL_TAB_CONFIG).map((c) => [c.tabId, c]));
+
+/** The protocol an open tool tab is showing, for a tool that speaks only one. */
+export function protocolForToolTab(tabId: string): Protocol | undefined {
+  return CONFIG_BY_TAB_ID.get(tabId)?.protocol;
+}
+
+/** The results a view reset discards: everything that describes frames it is dropping. */
+const NO_BORROWED_RESULTS = Object.fromEntries(
+  Object.values(TOOL_TAB_CONFIG).filter((c) => !c.ownsData).map((c) => [c.resultKey, null])
+) as Partial<Record<ToolResultKey, null>>;
 
 export type MessageOrderOptions = {
   startMessageId: number | null;
@@ -53,6 +100,19 @@ export type MessageOrderOptions = {
 
 export type ChangesOptions = {
   maxExamples: number;
+};
+
+/**
+ * The device the three Modbus tools point at.
+ *
+ * Store state rather than per-panel, like every other tool's options: the panels
+ * are mounted by `activeTool` and unmounted when the dialog closes, so per-panel
+ * state loses the address on every tool switch — which is exactly the
+ * probe → unit scan → register sweep chain these tools are meant to support.
+ */
+export type ModbusTargetOptions = {
+  profileId: string | null;
+  connection: ModbusConnection;
 };
 
 export type ChangesResult = {
@@ -95,25 +155,52 @@ export type ModbusScanResults = {
   deviceInfo: Map<number, DeviceInfo>;
   /** Diagnoses from the sweep, e.g. a function code that never answered. */
   notes: string[];
-  /** The scan's own session — what its progress subscription is keyed on. */
-  sessionId: string | null;
-  /**
-   * The session that was polling the device when the sweep started, so the
-   * results view can offer to put it back.
-   *
-   * Snapshotted rather than looked up later: once the sweep starts, the app's
-   * current session is the scan's own, and the polled one is only reachable by
-   * the id captured here. Rust keeps that session's source config — poll plan
-   * included — so resuming it restores the polling, not merely the connection.
-   */
-  polledSessionId: string | null;
-  polledProfileName: string | null;
+  /** The scan's own session. Kept for life: it is how the tab knows whether the
+   *  frames on screen are still its own. `isScanning` is what bounds the
+   *  progress subscription. */
+  sessionId: string;
+  /** The capture holding this scan's rows, once known — the tab's own copy of
+   *  the answer, so a later sweep cannot overwrite what this one found. */
+  captureId: string | null;
+};
+
+/**
+ * A function-code probe's answer.
+ *
+ * Unlike the sweeps this owns no session and writes no capture — four requests
+ * per unit produce a verdict table and nothing else — so the rows live here
+ * rather than in a frame store.
+ */
+export type ModbusFcProbeResults = {
+  isProbing: boolean;
+  /** The device probed, for the tab's header. */
+  deviceName: string;
+  entries: FcProbeEntry[];
+  /** Set instead of `entries` when the probe itself failed. */
+  error: string | null;
 };
 
 type ModbusScanKey = 'modbusRegisterScanResults' | 'modbusUnitIdScanResults';
 
+const MODBUS_SCAN_KEYS: readonly ModbusScanKey[] = [
+  'modbusRegisterScanResults',
+  'modbusUnitIdScanResults',
+];
+
 function resultKeyFor(scanType: 'register' | 'unit-id'): ModbusScanKey {
   return scanType === 'register' ? 'modbusRegisterScanResults' : 'modbusUnitIdScanResults';
+}
+
+/**
+ * The sweep still running, if any.
+ *
+ * A finished scan keeps its session id — that is how its tab tells its own rows
+ * from a later sweep's — so "the first slot with a session id" is not the same
+ * question, and three call sites had each answered it their own way. `isScanning`
+ * is the one that means "still going", and only one sweep runs at a time.
+ */
+export function runningModbusScan(toolbox: ToolboxState): ModbusScanResults | null {
+  return MODBUS_SCAN_KEYS.map((k) => toolbox[k]).find((scan) => scan?.isScanning) ?? null;
 }
 
 export type ToolboxState = {
@@ -122,6 +209,7 @@ export type ToolboxState = {
   messageOrder: MessageOrderOptions;
   changes: ChangesOptions;
   checksumDiscovery: ChecksumDiscoveryOptions;
+  modbusTarget: ModbusTargetOptions;
   messageOrderResults: MessageOrderResult | null;
   changesResults: ChangesResult | null;
   serialFramingResults: SerialFramingResult | null;
@@ -129,6 +217,7 @@ export type ToolboxState = {
   checksumDiscoveryResults: ChecksumDiscoveryResult | null;
   modbusRegisterScanResults: ModbusScanResults | null;
   modbusUnitIdScanResults: ModbusScanResults | null;
+  modbusFcProbeResults: ModbusFcProbeResults | null;
   isRunning: boolean;
 };
 
@@ -146,25 +235,23 @@ interface DiscoveryToolboxState {
   updateMessageOrderOptions: (options: Partial<MessageOrderOptions>) => void;
   updateChangesOptions: (options: Partial<ChangesOptions>) => void;
   updateChecksumDiscoveryOptions: (options: Partial<ChecksumDiscoveryOptions>) => void;
+  updateModbusTarget: (options: Partial<ModbusTargetOptions>) => void;
   setIsRunning: (running: boolean) => void;
   setMessageOrderResults: (results: MessageOrderResult | null) => void;
   setChangesResults: (results: ChangesResult | null) => void;
   setSerialFramingResults: (results: SerialFramingResult | null) => void;
   setSerialPayloadResults: (results: SerialPayloadResult | null) => void;
   setChecksumDiscoveryResults: (results: ChecksumDiscoveryResult | null) => void;
-  startModbusScan: (
-    scanType: 'register' | 'unit-id',
-    sessionId: string,
-    /** The session that was polling the device, for the resume affordance. */
-    polledSessionId?: string,
-    polledProfileName?: string,
-  ) => void;
+  startModbusScan: (scanType: 'register' | 'unit-id', sessionId: string) => void;
+  startModbusFcProbe: (deviceName: string) => void;
+  finishModbusFcProbe: (outcome: { entries: FcProbeEntry[] } | { error: string }) => void;
   setModbusScanDevices: (devices: Array<{ unit_id: number; vendor?: string | null; product_code?: string | null; revision?: string | null }>) => void;
   updateModbusScanProgress: (
     progress: { current: number; total: number; found_count: number; pass: number; total_passes: number },
     notes?: string[]
   ) => void;
   finishModbusScan: (notes?: string[]) => void;
+  setModbusScanCapture: (sessionId: string, captureId: string) => void;
   clearAnalysisResults: () => void;
   clearToolResult: (toolTabId: string) => void;
 
@@ -209,8 +296,7 @@ function updateActiveScan(
   state: DiscoveryToolboxState,
   fn: (scan: ModbusScanResults) => ModbusScanResults
 ): Partial<DiscoveryToolboxState> | DiscoveryToolboxState {
-  const { modbusRegisterScanResults: reg, modbusUnitIdScanResults: uid } = state.toolbox;
-  const scan = reg?.isScanning ? reg : uid?.isScanning ? uid : null;
+  const scan = runningModbusScan(state.toolbox);
   if (!scan) return state;
   return {
     toolbox: { ...state.toolbox, [resultKeyFor(scan.scanType)]: fn(scan) },
@@ -229,6 +315,7 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
       searchCustomPolynomials: false,
       minLikeness: 50,
     },
+    modbusTarget: { profileId: null, connection: MODBUS_BLANK_CONNECTION },
     messageOrderResults: null,
     changesResults: null,
     serialFramingResults: null,
@@ -236,6 +323,7 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
     checksumDiscoveryResults: null,
     modbusRegisterScanResults: null,
     modbusUnitIdScanResults: null,
+    modbusFcProbeResults: null,
     isRunning: false,
   },
   knowledge: createEmptyKnowledge(),
@@ -269,6 +357,12 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
   updateChecksumDiscoveryOptions: (options) => {
     set((state) => ({
       toolbox: { ...state.toolbox, checksumDiscovery: { ...state.toolbox.checksumDiscovery, ...options } },
+    }));
+  },
+
+  updateModbusTarget: (options) => {
+    set((state) => ({
+      toolbox: { ...state.toolbox, modbusTarget: { ...state.toolbox.modbusTarget, ...options } },
     }));
   },
 
@@ -308,7 +402,7 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
     }));
   },
 
-  startModbusScan: (scanType, sessionId, polledSessionId, polledProfileName) => {
+  startModbusScan: (scanType, sessionId) => {
     const tabKey = scanType === 'register' ? 'modbus-register-scan' : 'modbus-unit-scan';
     set((state) => ({
       toolbox: {
@@ -320,12 +414,36 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
           deviceInfo: new Map(),
           notes: [],
           sessionId,
-          polledSessionId: polledSessionId ?? null,
-          polledProfileName: polledProfileName ?? null,
+          captureId: null,
         },
       },
     }));
     useDiscoveryUIStore.getState().setFramesViewActiveTab(TOOL_TAB_CONFIG[tabKey].tabId);
+  },
+
+  startModbusFcProbe: (deviceName) => {
+    set((state) => ({
+      toolbox: {
+        ...state.toolbox,
+        modbusFcProbeResults: { isProbing: true, deviceName, entries: [], error: null },
+      },
+    }));
+    useDiscoveryUIStore
+      .getState()
+      .setFramesViewActiveTab(TOOL_TAB_CONFIG['modbus-function-codes'].tabId);
+  },
+
+  finishModbusFcProbe: (outcome) => {
+    set((state) => {
+      const prev = state.toolbox.modbusFcProbeResults;
+      if (!prev) return state;
+      return {
+        toolbox: {
+          ...state.toolbox,
+          modbusFcProbeResults: { ...prev, isProbing: false, entries: [], error: null, ...outcome },
+        },
+      };
+    });
   },
 
   // The backend republishes its whole device list on every progress tick, so
@@ -358,60 +476,40 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
     );
   },
 
+  // Stamped while Discovery is joined to the sweep, which is the only moment the
+  // scan's capture id is on hand — and it must outlive that join, since it is
+  // what the tab reads from once a later sweep owns the frame store.
+  setModbusScanCapture: (sessionId, captureId) => {
+    set((state) => {
+      for (const key of MODBUS_SCAN_KEYS) {
+        const scan = state.toolbox[key];
+        // Matched by session id, not by which sweep is running: the stamp has to
+        // reach the tab that owns the capture even once it has finished.
+        if (scan?.sessionId !== sessionId || scan.captureId === captureId) continue;
+        return { toolbox: { ...state.toolbox, [key]: { ...scan, captureId } } };
+      }
+      return state;
+    });
+  },
+
   finishModbusScan: (notes) => {
     set((state) =>
       updateActiveScan(state, (scan) => ({
         ...scan,
         isScanning: false,
         notes: notes ?? scan.notes,
-        sessionId: null,
       }))
     );
   },
 
   clearAnalysisResults: () => {
-    set((state) => ({
-      toolbox: {
-        ...state.toolbox,
-        messageOrderResults: null,
-        changesResults: null,
-        serialFramingResults: null,
-        serialPayloadResults: null,
-        checksumDiscoveryResults: null,
-        modbusRegisterScanResults: null,
-        modbusUnitIdScanResults: null,
-      },
-    }));
+    set((state) => ({ toolbox: { ...state.toolbox, ...NO_BORROWED_RESULTS } }));
   },
 
   clearToolResult: (toolTabId) => {
-    set((state) => {
-      const toolbox = { ...state.toolbox };
-      switch (toolTabId) {
-        case TOOL_TAB_CONFIG['message-order'].tabId:
-          toolbox.messageOrderResults = null;
-          break;
-        case TOOL_TAB_CONFIG['changes'].tabId:
-          toolbox.changesResults = null;
-          break;
-        case TOOL_TAB_CONFIG['checksum-discovery'].tabId:
-          toolbox.checksumDiscoveryResults = null;
-          break;
-        case TOOL_TAB_CONFIG['serial-framing'].tabId:
-          toolbox.serialFramingResults = null;
-          break;
-        case TOOL_TAB_CONFIG['serial-payload'].tabId:
-          toolbox.serialPayloadResults = null;
-          break;
-        case TOOL_TAB_CONFIG['modbus-register-scan'].tabId:
-          toolbox.modbusRegisterScanResults = null;
-          break;
-        case TOOL_TAB_CONFIG['modbus-unit-scan'].tabId:
-          toolbox.modbusUnitIdScanResults = null;
-          break;
-      }
-      return { toolbox };
-    });
+    const resultKey = CONFIG_BY_TAB_ID.get(toolTabId)?.resultKey;
+    if (!resultKey) return;
+    set((state) => ({ toolbox: { ...state.toolbox, [resultKey]: null } }));
   },
 
   // Knowledge actions

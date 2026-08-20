@@ -6,6 +6,7 @@ import type { IOProfile } from "../../../types/common";
 import type { CaptureMetadata } from "../../../api/capture";
 import type { BusSourceInfo } from "../../../utils/busFormat";
 import AppTopBar from "../../../components/AppTopBar";
+import ModbusPollToggle, { type ModbusPollToggleProps } from "../../../components/modbus/ModbusPollToggle";
 import { buttonBase, iconButtonBase } from "../../../styles/buttonStyles";
 import { iconMd, iconSm } from "../../../styles/spacing";
 
@@ -71,8 +72,8 @@ type Props = {
   /** Called when user wants to undo framing acceptance */
   onUndoFraming?: () => void;
 
-  /** Whether the active profile is Modbus TCP (enables scan tools without data) */
-  isModbusSession?: boolean;
+  /** The Modbus poller this session owns, when it has one, and its pause switch. */
+  modbus?: ModbusPollToggleProps;
 
   // Buffer actions
   /** Whether the session is in buffer replay mode */
@@ -125,7 +126,7 @@ export default function DiscoveryTopBar({
   framingAccepted = false,
   serialActiveTab = 'raw',
   onUndoFraming,
-  isModbusSession = false,
+  modbus,
   isCaptureMode = false,
   capturePersistent = false,
   onToggleCapturePin,
@@ -233,15 +234,21 @@ export default function DiscoveryTopBar({
         </button>
       )}
 
+      {/* Modbus poll switch — pause/resume the selected session's poller */}
+      {modbus && (
+        <ModbusPollToggle {...modbus} />
+      )}
+
       {/* Right arrow icon */}
       <ChevronRight className={`${iconSm} text-slate-400 shrink-0`} />
 
-      {/* Toolbox button */}
+      {/* Toolbox button. Never disabled: the Modbus scan tools need neither a
+          session nor frames — "No source" is where they are meant to be run —
+          so there is always something inside worth opening. */}
       <button
         onClick={onOpenToolbox}
-        disabled={!hasFrames && !isModbusSession}
         className={buttonBase}
-        title={isModbusSession ? t("topBar.scanningTools") : t("topBar.analysisTools")}
+        title={t("topBar.scanningTools")}
       >
         <Wrench className={`${iconSm} flex-shrink-0`} />
         <span>{t("topBar.toolsLabel")}</span>

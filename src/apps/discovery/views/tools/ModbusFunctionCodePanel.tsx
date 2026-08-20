@@ -2,96 +2,59 @@
 //
 // "Which function codes does this thing answer?" — the cheapest first question
 // to ask an unknown Modbus device, and the one that decides what a sweep should
-// even look for. Four requests per unit, and it runs inline rather than as a
-// session because it produces an answer rather than a stream.
+// even look for. Four requests per unit, run inline rather than as a session
+// because it produces an answer rather than a stream.
+//
+// The answer still lands in a results tab, like every other tool's: a verdict
+// table is something you read against a sweep you run next, not something to
+// lose by closing the dialog it was launched from.
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { borderDefault, textMuted, textPrimary, textSecondary } from "../../../../styles";
-import ModbusTargetSummary from "../../../../components/modbus/ModbusTargetSummary";
-import { FieldRow, NumberField, RunButton, TextField } from "../../../../components/modbus/ModbusFields";
+import ModbusConnectionFields from "../../../../components/modbus/ModbusConnectionFields";
+import { useModbusTarget } from "../../../../components/modbus/useModbusTarget";
+import { FieldRow, NumberField, RunButton, ScanNote, TextField } from "../../../../components/modbus/ModbusFields";
 import {
   MODBUS_SCAN_BOUNDS,
   MODBUS_SCAN_DEFAULTS,
 } from "../../../../components/modbus/modbusScanDefaults";
-import type { ModbusSessionTarget } from "../../../../utils/modbusProfiles";
-import { probeModbusFunctionCodes, type FcProbeEntry, type FcVerdict } from "../../../../api/io";
+import type { FcProbeConfig } from "../../../../api/io";
 
 type Props = {
-  target: ModbusSessionTarget;
+  /** `deviceName` is what the results tab is headed with — the profile's name when one was picked. */
+  onStartProbe: (config: FcProbeConfig, deviceName: string) => void;
 };
 
-/** Verdict → a short label plus the colour that carries the meaning. */
-function verdictLabel(v: FcVerdict, t: (k: string) => string): { text: string; className: string } {
-  switch (v.verdict) {
-    case "values":
-      return {
-        text: v.values.length > 0 ? `0x${v.values[0].toString(16).padStart(4, "0").toUpperCase()}` : t("modbusFc.ok"),
-        className: "text-green-500",
-      };
-    case "bits":
-      return { text: v.values[0] ? "1" : "0", className: "text-green-500" };
-    case "exception":
-      // An exception still proves the function code is implemented — the address
-      // was simply wrong. That is a materially different finding from silence.
-      return { text: t("modbusFc.exception"), className: "text-amber-500" };
-    case "silent":
-      return { text: t("modbusFc.silent"), className: "text-[color:var(--text-muted)]" };
-  }
-}
-
-export default function ModbusFunctionCodePanel({ target }: Props) {
+export default function ModbusFunctionCodePanel({ onStartProbe }: Props) {
   const { t } = useTranslation("discovery");
+  const target = useModbusTarget();
 
-  // Lead with the session's own unit — the one you actually care about — then the
+  // Lead with the profile's own unit — the one you actually care about — then the
   // usual suspects for a gateway fronting more than one slave.
-  const [unitIdsText, setUnitIdsText] = useState(`${target.unit_id}, 0, 255`);
+  const [unitIdsText, setUnitIdsText] = useState(`${target.connection.unit_id}, 0, 255`);
   const [testRegister, setTestRegister] = useState(0);
   const [timeoutMs, setTimeoutMs] = useState(MODBUS_SCAN_DEFAULTS.timeoutMs);
-  const [results, setResults] = useState<FcProbeEntry[] | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const unitIds = unitIdsText
     .split(",")
     .map((s) => Number(s.trim()))
     .filter((n) => Number.isInteger(n) && n >= 0 && n <= 255);
 
-  const handleProbe = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      setResults(
-        // No address: Rust takes it from the session, so the device probed is
-        // always the device named above.
-        await probeModbusFunctionCodes(
-          {
-            unit_ids: unitIds,
-            test_register: testRegister,
-            timeout_ms: timeoutMs,
-          },
-          target.sessionId
-        )
-      );
-    } catch (e) {
-      setError(String(e));
-      setResults(null);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Keyed to just the four verdict fields, so the cells need no cast.
-  const columns: Array<{ key: "holding" | "input" | "coil" | "discrete"; label: string }> = [
-    { key: "holding", label: t("modbusFc.holding") },
-    { key: "input", label: t("modbusFc.input") },
-    { key: "coil", label: t("modbusFc.coil") },
-    { key: "discrete", label: t("modbusFc.discrete") },
-  ];
+  const handleProbe = () =>
+    onStartProbe(
+      {
+        host: target.connection.host,
+        port: target.connection.port,
+        unit_ids: unitIds,
+        test_register: testRegister,
+        timeout_ms: timeoutMs,
+      },
+      target.name
+    );
 
   return (
     <div className="space-y-3 text-xs">
-      <ModbusTargetSummary target={target} />
+      <ModbusConnectionFields target={target} showUnitId={false} />
 
       <FieldRow>
         <TextField
@@ -116,55 +79,15 @@ export default function ModbusFunctionCodePanel({ target }: Props) {
         />
       </FieldRow>
 
-      <p className={`${textMuted} pt-2 border-t ${borderDefault}`}>
+      <ScanNote ready={target.hasAddress}>
         {t("modbusFc.description", { count: unitIds.length, requests: unitIds.length * 4 })}
-      </p>
+      </ScanNote>
 
       <RunButton
-        label={busy ? t("modbusFc.probing") : t("modbusFc.runProbe")}
+        label={t("modbusFc.runProbe")}
         onClick={handleProbe}
-        disabled={busy || unitIds.length === 0}
-        busy={busy}
+        disabled={!target.hasAddress || unitIds.length === 0}
       />
-
-      {error && <p className="text-red-500">{error}</p>}
-
-      {results && (
-        <div className={`pt-2 border-t ${borderDefault} space-y-2`}>
-          <table className="w-full">
-            <thead>
-              <tr className={`border-b ${borderDefault}`}>
-                <th className={`text-left py-1 font-medium ${textMuted}`}>{t("modbusFc.unit")}</th>
-                {columns.map((c) => (
-                  <th key={c.key} className={`text-left py-1 font-medium ${textMuted}`}>
-                    {c.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {results.map((r) => (
-                <tr key={r.unit_id} className="border-b border-[color:var(--border-default)]/30">
-                  <td className={`py-1 font-mono ${textPrimary}`}>{r.unit_id}</td>
-                  {columns.map((c) => {
-                    const { text, className } = verdictLabel(r[c.key], t);
-                    return (
-                      <td key={c.key} className={`py-1 font-mono ${className}`}>
-                        {text}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className={textSecondary}>
-            {results.some((r) => r.responded)
-              ? t("modbusFc.hintFound")
-              : t("modbusFc.hintNothing")}
-          </p>
-        </div>
-      )}
     </div>
   );
 }

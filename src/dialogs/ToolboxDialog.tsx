@@ -24,8 +24,7 @@ import ChecksumDiscoveryToolPanel from "../apps/discovery/views/tools/ChecksumDi
 import ModbusRegisterScanPanel from "../apps/discovery/views/tools/ModbusRegisterScanPanel";
 import ModbusUnitIdScanPanel from "../apps/discovery/views/tools/ModbusUnitIdScanPanel";
 import ModbusFunctionCodePanel from "../apps/discovery/views/tools/ModbusFunctionCodePanel";
-import type { ModbusScanConfig, UnitIdScanConfig } from "../api/io";
-import type { ModbusSessionTarget } from "../utils/modbusProfiles";
+import type { FcProbeConfig, ModbusScanConfig, UnitIdScanConfig } from "../api/io";
 import {
   toolNeeds,
   isToolApplicable,
@@ -63,7 +62,6 @@ function isModbusScanTool(id: ToolboxView): boolean {
 }
 
 type Props = {
-  isOpen: boolean;
   onClose: () => void;
   selectedCount: number;
   frameCount: number;
@@ -78,15 +76,14 @@ type Props = {
   serialFrameCount?: number;
   /** Number of raw serial bytes available (before framing) */
   serialBytesCount?: number;
-  /**
-   * The device the sweeps scan — the current Modbus session's. Null when there
-   * is no live Modbus session, which is also what withholds the Modbus tools.
-   */
-  modbusTarget?: ModbusSessionTarget | null;
+  /** A source is selected — lists the Modbus tools but withholds them (see SessionShape) */
+  hasSource?: boolean;
   /** Called when a modbus register scan should start */
-  onStartModbusScan?: (config: ModbusScanConfig, stopSession: boolean) => void;
+  onStartModbusScan?: (config: ModbusScanConfig) => void;
   /** Called when a modbus unit ID scan should start */
-  onStartModbusUnitIdScan?: (config: UnitIdScanConfig, stopSession: boolean) => void;
+  onStartModbusUnitIdScan?: (config: UnitIdScanConfig) => void;
+  /** Called when a modbus function-code probe should start */
+  onStartModbusFcProbe?: (config: FcProbeConfig, deviceName: string) => void;
 };
 
 function getSelectionText(
@@ -110,7 +107,6 @@ function getSelectionText(
 }
 
 export default function ToolboxDialog({
-  isOpen,
   onClose,
   selectedCount,
   frameCount,
@@ -119,9 +115,10 @@ export default function ToolboxDialog({
   isFilteredView = false,
   serialFrameCount = 0,
   serialBytesCount = 0,
-  modbusTarget,
+  hasSource = false,
   onStartModbusScan,
   onStartModbusUnitIdScan,
+  onStartModbusFcProbe,
 }: Props) {
   const { t } = useTranslation("dialogs");
   const activeView = useDiscoveryStore((s) => s.toolbox.activeView);
@@ -135,17 +132,37 @@ export default function ToolboxDialog({
   const session: SessionShape = {
     isSerialMode,
     isSerialProtocol,
-    hasLiveModbusSession: modbusTarget != null,
+    hasSource,
   };
   const counts: ToolDataCounts = { frameCount, serialFrameCount, serialBytesCount };
 
   const availableTools = tools.filter((tool) => isToolApplicable(tool, session));
   const isToolAvailable = (tool: ToolConfig): boolean => hasToolData(tool, session, counts);
 
+  /**
+   * The selected tool, but only while it is actually runnable.
+   *
+   * `activeView` is store state that outlives both the dialog and the session it
+   * was chosen under, and nothing resets it — so "selected" and "available" can
+   * disagree. Everything below reads this rather than `activeTool`, because a
+   * selection the gate has withdrawn must not collapse the list (leaving one
+   * disabled button and no click that expands it again) nor render its options
+   * panel, which would offer to start a sweep the gate exists to prevent.
+   */
+  const selectedTool = availableTools.find(
+    (tool) => tool.id === activeTool && isToolAvailable(tool)
+  );
+  const effectiveTool = selectedTool?.id ?? null;
+
+  // Picking a tool collapses the list to that one, so the options panel below it
+  // gets the dialog's height instead of eight buttons nobody is reading. Clicking
+  // it again is what brings the list back — the same click that already deselected
+  // it, so there is no new control and nothing to discover.
+  const visibleTools = selectedTool ? [selectedTool] : availableTools;
+
   const getEffectiveCount = (): number => {
-    const tool = activeTool ? tools.find(t => t.id === activeTool) : undefined;
-    if (!tool) return 0;
-    switch (toolNeeds(tool)) {
+    if (!selectedTool) return 0;
+    switch (toolNeeds(selectedTool)) {
       case 'modbus': return 0;
       case 'serial-bytes': return serialBytesCount;
       case 'serial-frames': return serialFrameCount;
@@ -158,7 +175,7 @@ export default function ToolboxDialog({
   const getDisabledReason = (tool: ToolConfig): string | null => {
     switch (toolNeeds(tool)) {
       case 'modbus':
-        return modbusTarget ? null : t("toolbox.disabledReasons.modbusSession");
+        return hasSource ? t("toolbox.disabledReasons.modbusHasSource") : null;
       case 'serial-bytes':
         return serialBytesCount === 0 ? t("toolbox.disabledReasons.noBytes") : null;
       case 'serial-frames':
@@ -179,36 +196,34 @@ export default function ToolboxDialog({
   };
 
   const handleRunAnalysis = async () => {
-    if (effectiveSelectedCount === 0 || isRunning || !activeTool) return;
+    if (effectiveSelectedCount === 0 || isRunning || !effectiveTool) return;
     await runAnalysis();
     onClose();
-    if (activeTool === "serial-framing" || activeTool === "serial-payload") {
-      const config = TOOL_TAB_CONFIG[activeTool];
+    if (effectiveTool === "serial-framing" || effectiveTool === "serial-payload") {
+      const config = TOOL_TAB_CONFIG[effectiveTool];
       if (config) {
         setSerialActiveTab(config.tabId);
       }
     }
   };
 
-  const handleStartModbusScan = (config: ModbusScanConfig, stopSession: boolean) => {
-    onStartModbusScan?.(config, stopSession);
-    onClose();
-  };
+  /** Every scan tool hands off and closes; only the callback differs. */
+  const runAndClose =
+    <A extends unknown[]>(start?: (...args: A) => void) =>
+    (...args: A) => {
+      start?.(...args);
+      onClose();
+    };
 
-  const handleStartModbusUnitIdScan = (config: UnitIdScanConfig, stopSession: boolean) => {
-    onStartModbusUnitIdScan?.(config, stopSession);
-    onClose();
-  };
-
-  const isActiveModbusScan = activeTool != null && isModbusScanTool(activeTool);
+  const isActiveModbusScan = effectiveTool != null && isModbusScanTool(effectiveTool);
 
   return (
-    <Dialog isOpen={isOpen} onBackdropClick={onClose} maxWidth="max-w-lg">
+    <Dialog isOpen onBackdropClick={onClose} maxWidth="max-w-lg">
       <div className={`${cardElevated} shadow-xl overflow-hidden flex flex-col`}>
         {/* Header */}
         <div className={`${paddingCard} flex items-center justify-between border-b ${borderDefault}`}>
           <h2 className={h3}>
-            {modbusTarget ? t("toolbox.titleAnalysisAndScanning") : t("toolbox.titleAnalysis")}
+            {t("toolbox.titleAnalysisAndScanning")}
           </h2>
           <button
             onClick={onClose}
@@ -223,9 +238,9 @@ export default function ToolboxDialog({
         <div className={`${paddingCard} ${spaceYSmall}`}>
           {/* Tool selection */}
           <div className={spaceYSmall}>
-            {availableTools.map((tool) => {
+            {visibleTools.map((tool) => {
               const Icon = tool.icon;
-              const isActive = activeTool === tool.id;
+              const isActive = effectiveTool === tool.id;
               const isDisabled = !isToolAvailable(tool);
               const disabledReason = getDisabledReason(tool);
               const label = t(`toolbox.tools.${tool.i18nKey}.label`);
@@ -244,7 +259,7 @@ export default function ToolboxDialog({
                         ? "bg-purple-100 text-[color:var(--text-purple)] ring-2 ring-purple-500"
                         : "bg-[var(--bg-surface)] text-[color:var(--text-secondary)] ring-1 ring-[color:var(--border-default)] hover:ring-2 hover:ring-purple-400"
                   }`}
-                  title={disabledReason ?? label}
+                  title={disabledReason ?? (isActive ? t("toolbox.showAllTools") : label)}
                 >
                   <Icon className={`${iconLg} mt-0.5 flex-shrink-0 ${isActive ? "text-[color:var(--text-purple)]" : ""}`} />
                   <div>
@@ -259,40 +274,30 @@ export default function ToolboxDialog({
           </div>
 
           {/* Tool-specific options panel */}
-          {activeTool && (
+          {effectiveTool && (
             <div className={`border-t ${borderDefault} pt-3`}>
-              {activeTool === "message-order" && <MessageOrderToolPanel />}
-              {activeTool === "changes" && <ChangesToolPanel />}
-              {activeTool === "checksum-discovery" && <ChecksumDiscoveryToolPanel />}
-              {activeTool === "serial-framing" && <SerialFramingToolPanel bytesCount={serialBytesCount} />}
-              {activeTool === "serial-payload" && <SerialPayloadToolPanel framesCount={serialFrameCount} />}
-              {modbusTarget && (
-                <>
-                  {activeTool === "modbus-function-codes" && (
-                    <ModbusFunctionCodePanel target={modbusTarget} />
-                  )}
-                  {activeTool === "modbus-register-scan" && (
-                    <ModbusRegisterScanPanel
-                      target={modbusTarget}
-                      onStartScan={handleStartModbusScan}
-                    />
-                  )}
-                  {activeTool === "modbus-unit-scan" && (
-                    <ModbusUnitIdScanPanel
-                      target={modbusTarget}
-                      onStartScan={handleStartModbusUnitIdScan}
-                    />
-                  )}
-                </>
+              {effectiveTool === "message-order" && <MessageOrderToolPanel />}
+              {effectiveTool === "changes" && <ChangesToolPanel />}
+              {effectiveTool === "checksum-discovery" && <ChecksumDiscoveryToolPanel />}
+              {effectiveTool === "serial-framing" && <SerialFramingToolPanel bytesCount={serialBytesCount} />}
+              {effectiveTool === "serial-payload" && <SerialPayloadToolPanel framesCount={serialFrameCount} />}
+              {effectiveTool === "modbus-function-codes" && (
+                <ModbusFunctionCodePanel onStartProbe={runAndClose(onStartModbusFcProbe)} />
+              )}
+              {effectiveTool === "modbus-register-scan" && (
+                <ModbusRegisterScanPanel onStartScan={runAndClose(onStartModbusScan)} />
+              )}
+              {effectiveTool === "modbus-unit-scan" && (
+                <ModbusUnitIdScanPanel onStartScan={runAndClose(onStartModbusUnitIdScan)} />
               )}
             </div>
           )}
 
           {/* Selection count and run button (for analysis tools, not modbus scan) */}
-          {activeTool && !isActiveModbusScan && (
+          {effectiveTool && !isActiveModbusScan && (
             <div className={`border-t ${borderDefault} pt-3 ${spaceYSmall}`}>
               <div className={`text-sm ${textTertiary}`}>
-                {getSelectionText(t, activeTool, effectiveSelectedCount, isSerialMode, isFilteredView)}
+                {getSelectionText(t, effectiveTool, effectiveSelectedCount, isSerialMode, isFilteredView)}
               </div>
               <button
                 type="button"
@@ -315,7 +320,7 @@ export default function ToolboxDialog({
           )}
 
           {/* Help text when no tool selected */}
-          {!activeTool && availableTools.some(t => isToolAvailable(t)) && (
+          {!effectiveTool && availableTools.some((tool) => isToolAvailable(tool)) && (
             <div className={`text-xs ${textTertiary} text-center py-2`}>
               {t("toolbox.selectTool")}
             </div>

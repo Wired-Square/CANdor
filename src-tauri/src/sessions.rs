@@ -2539,8 +2539,10 @@ pub async fn create_modbus_scan_session(
     }
 
     if !allow_contention.unwrap_or(false) {
-        // The target is excluded: it is about to be handed over, so it is not the
-        // conflict. Anything *else* on that endpoint still is.
+        // The target is excluded on the caller's word that it has dealt with it —
+        // by passing `stop_target`, or by not holding the device in the first
+        // place. Anything *else* on that endpoint still conflicts. No caller
+        // passes a target today; see the note on the parameters above.
         let exclude: Vec<&str> = std::iter::once(session_id.as_str())
             .chain(target_session_id.as_deref())
             .collect();

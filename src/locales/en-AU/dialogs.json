@@ -300,8 +300,8 @@
     "next": "Next: Map Columns"
   },
   "toolbox": {
-    "titleAnalysis": "Analysis Tools",
     "titleAnalysisAndScanning": "Analysis & Scanning Tools",
+    "showAllTools": "Show all tools",
     "tools": {
       "messageOrder": {
         "label": "Frame Order Analysis",
@@ -337,7 +337,7 @@
       }
     },
     "disabledReasons": {
-      "modbusSession": "Open a Modbus session first — these scan the connected device",
+      "modbusHasSource": "Disconnect the source first — these open their own connection to the device",
       "noFrames": "No frames discovered",
       "noBytes": "No raw bytes captured",
       "needFraming": "Apply framing first to get frames"
@@ -558,5 +558,15 @@
       "delete": "Delete capture",
       "sendToBackend": "Send to backend"
     }
+  },
+  "modbusPoll": {
+    "enable": "Poll a register range",
+    "disabledHint": "Without a range this source connects but reads nothing — a decoder is the other way to give it a poll plan. The scanning tools work either way.",
+    "registerType": "Type",
+    "start": "Start",
+    "end": "End",
+    "intervalMs": "Every (ms)",
+    "summary": "{{count}} registers every {{interval}} ms.",
+    "rangeInvalid": "Start must not be past End."
   }
 }

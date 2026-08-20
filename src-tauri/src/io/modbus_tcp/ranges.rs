@@ -108,6 +108,14 @@ pub fn build_polls_from_ranges(spec: &ModbusRangeSpec) -> Result<Vec<PollGroup>,
     if spec.block_size == 0 {
         return Err("Block size must be at least 1".to_string());
     }
+    // A zero interval is not a fast poll, it is a panic: `Cadence` hands the
+    // interval to `tokio::time::interval`, which rejects a zero period — inside
+    // a detached poll task, where it takes the source down with no diagnosis.
+    // Checked here rather than at each caller because every author of a spec
+    // (the picker, MCP) would otherwise have to know.
+    if spec.interval_ms == 0 || spec.ranges.iter().any(|r| r.interval_ms == Some(0)) {
+        return Err("Poll interval must be at least 1 ms".to_string());
+    }
 
     let mut total_registers: u32 = 0;
     for r in &spec.ranges {
@@ -287,5 +295,18 @@ mod tests {
     #[test]
     fn an_empty_spec_is_rejected() {
         assert!(build_polls_from_ranges(&spec(vec![])).is_err());
+    }
+
+    #[test]
+    fn a_zero_interval_is_rejected_rather_than_panicking_a_poll_task() {
+        // `tokio::time::interval` panics on a zero period, and it would do so
+        // inside the detached poll task where nothing reports it.
+        let mut s = spec(vec![range(RegisterType::Holding, 0, 9)]);
+        s.interval_ms = 0;
+        assert!(build_polls_from_ranges(&s).unwrap_err().contains("interval"));
+
+        let mut s = spec(vec![range(RegisterType::Holding, 0, 9)]);
+        s.ranges[0].interval_ms = Some(0);
+        assert!(build_polls_from_ranges(&s).unwrap_err().contains("interval"));
     }
 }

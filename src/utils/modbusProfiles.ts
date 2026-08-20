@@ -3,10 +3,29 @@
 // Small predicates over IO profiles that several apps need when deciding
 // whether Modbus polling applies to a session.
 
+import { useMemo } from "react";
 import { useSettingsStore } from "../apps/settings/stores/settingsStore";
+import type { IOProfile } from "../settings/appSettings";
 
 /** The profile kind that carries Modbus polling. */
-const MODBUS_PROFILE_KIND = "modbus_tcp";
+export const MODBUS_PROFILE_KIND = "modbus_tcp";
+
+/** A Modbus profile, narrowed out of the profile-kind union. */
+export type ModbusProfile = Extract<IOProfile, { kind: "modbus_tcp" }>;
+
+/** Session-id prefix for a discovery sweep, as opposed to a polling session. */
+export const MODBUS_SCAN_SESSION_PREFIX = "m_scan";
+
+/**
+ * Whether this session is a sweep rather than a poller.
+ *
+ * A sweep reports `Protocol::Modbus` too — that is what keeps the tools lit while
+ * its results are in view — so protocol alone cannot tell the two apart, and the
+ * poll switch has to address the poller, not the sweep that borrowed the screen.
+ */
+export function isModbusScanSession(sessionId: string): boolean {
+  return sessionId.startsWith(MODBUS_SCAN_SESSION_PREFIX);
+}
 
 /**
  * Just enough of a profile to read an address off it.
@@ -32,6 +51,16 @@ export function anyModbusProfile(profileIds: string[]): boolean {
   return profileIds.some((id) => profiles.find((p) => p.id === id)?.kind === MODBUS_PROFILE_KIND);
 }
 
+function isModbusProfile(p: IOProfile): p is ModbusProfile {
+  return p.kind === MODBUS_PROFILE_KIND;
+}
+
+/** Every configured Modbus profile. */
+export function useModbusProfiles(): ModbusProfile[] {
+  const profiles = useSettingsStore((s) => s.ioProfiles.profiles);
+  return useMemo(() => profiles.filter(isModbusProfile), [profiles]);
+}
+
 /** A Modbus device address. */
 export interface ModbusConnection {
   host: string;
@@ -39,15 +68,24 @@ export interface ModbusConnection {
   unit_id: number;
 }
 
+/** What a Modbus address falls back to with no profile to read one off. */
+export const MODBUS_DEFAULT_CONNECTION: ModbusConnection = {
+  host: "127.0.0.1",
+  port: 502,
+  unit_id: 1,
+};
+
+/** What **Custom** means: no device named, but the fields with real defaults keep them. */
+export const MODBUS_BLANK_CONNECTION: ModbusConnection = { ...MODBUS_DEFAULT_CONNECTION, host: "" };
+
 /**
- * The device a Discovery sweep runs against: the current Modbus session's own.
+ * The Modbus session whose poller the top bar's switch drives.
  *
- * The scans no longer take a typed-in address — they scan what the session is
- * connected to — so they need the session and profile ids as well as the address
- * itself. The address is carried for display; the backend re-resolves it from
- * `sessionId` so the two cannot drift.
+ * Identity only — no address. The scan tools name their own device through
+ * `useModbusTarget`, so nothing reads a host off this; carrying one would just
+ * be a second place for the device to be described.
  */
-export interface ModbusSessionTarget extends ModbusConnection {
+export interface ModbusPollerRef {
   sessionId: string;
   profileId: string;
   /** Profile display name, for naming the device on screen. */
@@ -59,8 +97,8 @@ export function modbusConnectionOf(
   profile: HasModbusConnection | undefined | null
 ): ModbusConnection {
   return {
-    host: String(profile?.connection?.host ?? "127.0.0.1"),
-    port: Number(profile?.connection?.port) || 502,
-    unit_id: Number(profile?.connection?.unit_id) || 1,
+    host: String(profile?.connection?.host ?? MODBUS_DEFAULT_CONNECTION.host),
+    port: Number(profile?.connection?.port) || MODBUS_DEFAULT_CONNECTION.port,
+    unit_id: Number(profile?.connection?.unit_id) || MODBUS_DEFAULT_CONNECTION.unit_id,
   };
 }

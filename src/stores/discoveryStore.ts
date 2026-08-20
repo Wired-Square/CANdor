@@ -504,8 +504,8 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
         if (payloadFrames.length === 0 && serialStore.framedCaptureId && serialStore.backendFrameCount > 0) {
           toolboxStore.setIsRunning(true);
           try {
-            const { getCaptureFramesPaginatedById } = await import('../api/capture');
-            const BATCH_SIZE = 50000;
+            const { getCaptureFramesPaginatedById, CAPTURE_PAGE_SIZE: BATCH_SIZE } =
+              await import('../api/capture');
             payloadFrames = [];
             let offset = 0;
             const totalCount = serialStore.backendFrameCount;

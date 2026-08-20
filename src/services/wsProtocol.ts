@@ -322,6 +322,8 @@ export interface ModbusScanStateMsg {
   progress: ScanProgressPayload | null;
   device_info: DeviceInfoEntry[];
   notes: string[];
+  /** The capture this sweep is filling — the results tab's own copy of the answer. */
+  capture_id: string | null;
 }
 
 // ============================================================================

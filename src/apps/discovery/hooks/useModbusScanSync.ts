@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { wsTransport } from "../../../services/wsTransport";
 import { MsgType, decodeWsJson, type ModbusScanStateMsg } from "../../../services/wsProtocol";
-import { useDiscoveryToolboxStore } from "../../../stores/discoveryToolboxStore";
+import { runningModbusScan, useDiscoveryToolboxStore } from "../../../stores/discoveryToolboxStore";
 
 /**
  * Feed the toolbox store from the running sweep's progress messages.
@@ -12,15 +12,14 @@ import { useDiscoveryToolboxStore } from "../../../stores/discoveryToolboxStore"
  * put a Modbus-specific callback in a generic session interface, which is the
  * layering this message type was moved to the session channel to avoid.
  *
- * The session id comes from the store, so the subscription lasts exactly as long
- * as the scan — `finishModbusScan` clearing it is what tears this down.
+ * Keyed on whichever scan is still running, so the subscription lasts exactly as
+ * long as the sweep. The result keeps its session id afterwards — that is how its
+ * tab knows whether the frames on screen are still its own — so the id alone
+ * would keep this alive for the life of the tab.
  */
 export function useModbusScanSync() {
   const scanSessionId = useDiscoveryToolboxStore(
-    (s) =>
-      s.toolbox.modbusRegisterScanResults?.sessionId ??
-      s.toolbox.modbusUnitIdScanResults?.sessionId ??
-      null
+    (s) => runningModbusScan(s.toolbox)?.sessionId ?? null
   );
 
   useEffect(() => {
@@ -38,6 +37,10 @@ export function useModbusScanSync() {
         }
 
         const store = useDiscoveryToolboxStore.getState();
+        // Recorded from the sweep's own messages rather than observed from the
+        // session Discovery happens to be joined to: the tab needs it after the
+        // app has moved on, which is exactly when nothing is observing.
+        if (state.capture_id) store.setModbusScanCapture(scanSessionId, state.capture_id);
         if (state.progress) store.updateModbusScanProgress(state.progress, state.notes);
         store.setModbusScanDevices(state.device_info);
         // The sweep publishes a terminal status on its way out — the start call

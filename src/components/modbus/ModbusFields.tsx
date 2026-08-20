@@ -5,10 +5,13 @@
 // pattern for every field; these give it a name.
 
 import type { ReactNode } from "react";
-import { Play, Search } from "lucide-react";
-import { bgSurface } from "../../styles";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
+import { Play } from "lucide-react";
+import { bgSurface, borderDefault, textMuted } from "../../styles";
 import { iconMd } from "../../styles/spacing";
 import CheckboxField, { type CheckboxFieldProps } from "../forms/CheckboxField";
+import type { ModbusRegisterType } from "../../api/io";
 
 const CONTROL =
   "w-full px-2 py-1 rounded border border-[color:var(--border-default)] text-[color:var(--text-primary)]";
@@ -90,18 +93,21 @@ export function SelectField<T extends string>({
   value,
   onChange,
   options,
+  disabled,
 }: {
   label: string;
   value: T;
   onChange: (v: T) => void;
   options: Array<{ value: T; label: string }>;
+  disabled?: boolean;
 }) {
   return (
     <Field label={label}>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value as T)}
-        className={`${CONTROL} ${bgSurface}`}
+        disabled={disabled}
+        className={`${CONTROL} ${bgSurface} disabled:opacity-50`}
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>
@@ -127,12 +133,10 @@ export function RunButton({
   label,
   onClick,
   disabled,
-  busy,
 }: {
   label: string;
   onClick: () => void;
   disabled?: boolean;
-  busy?: boolean;
 }) {
   return (
     <button
@@ -145,8 +149,43 @@ export function RunButton({
           : "bg-purple-600 hover:bg-purple-700 text-white"
       }`}
     >
-      {busy ? <Search className={`${iconMd} animate-pulse`} /> : <Play className={iconMd} />}
+      <Play className={iconMd} />
       {label}
     </button>
   );
+}
+
+/**
+ * The sentence a scan panel closes with, above its Run button.
+ *
+ * Takes `ready` rather than being three separate ternaries because every panel
+ * needs the same fallback: with no host there is nothing to describe, and the
+ * disabled Run button above it should say why.
+ */
+export function ScanNote({ ready, children }: { ready: boolean; children: ReactNode }) {
+  const { t } = useTranslation("discovery");
+  return (
+    <p className={`${textMuted} pt-2 border-t ${borderDefault}`}>
+      {ready ? children : t("modbusConnection.needHost")}
+    </p>
+  );
+}
+
+/**
+ * The four readable register types, for a `SelectField`.
+ *
+ * Shared because it was written out three times — the two scan panels and the
+ * picker's poll range — against two i18n namespaces, and the labels had already
+ * drifted ("FC 3" against "FC03") for what is the same dropdown. The strings
+ * live in `common` for the same reason every other shared control's do.
+ */
+export function registerTypeOptions(
+  t: TFunction
+): Array<{ value: ModbusRegisterType; label: string }> {
+  return [
+    { value: "holding", label: t("common:modbus.holding") },
+    { value: "input", label: t("common:modbus.input") },
+    { value: "coil", label: t("common:modbus.coil") },
+    { value: "discrete", label: t("common:modbus.discrete") },
+  ];
 }

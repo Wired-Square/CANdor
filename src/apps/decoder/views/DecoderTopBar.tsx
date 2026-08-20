@@ -9,7 +9,7 @@ import type { PlaybackSpeed } from "../../../components/TimeController";
 import type { CaptureMetadata } from "../../../api/capture";
 import type { BusSourceInfo } from "../../../utils/busFormat";
 import AppTopBar from "../../../components/AppTopBar";
-import { buttonBase, iconButtonBase, toggleButtonClass } from "../../../styles/buttonStyles";
+import { buttonBase, iconButtonBase, pollButtonClass, toggleButtonClass } from "../../../styles/buttonStyles";
 
 
 type Props = {
@@ -126,10 +126,6 @@ type Props = {
   };
 };
 
-const POLL_BTN_BASE = "flex items-center gap-1.5 px-3 py-1 rounded text-xs font-medium transition-colors";
-const POLL_BTN_RED = `${POLL_BTN_BASE} bg-red-600/20 text-red-400 hover:bg-red-600/30`;
-const POLL_BTN_GREEN = `${POLL_BTN_BASE} bg-green-600/20 text-green-400 hover:bg-green-600/30`;
-
 export default function DecoderTopBar({
   catalogs,
   catalogPath,
@@ -186,11 +182,11 @@ export default function DecoderTopBar({
   // Resolve the single poll-control button for the current Modbus state.
   const pollButton = !modbus ? null
     : modbus.isPolling && isStreaming && modbus.onPause
-      ? { onClick: modbus.onPause, Icon: Square, label: t("modbus.pause"), title: t("modbus.pausePolling"), cls: POLL_BTN_RED }
+      ? { onClick: modbus.onPause, Icon: Square, label: t("modbus.pause"), title: t("modbus.pausePolling"), cls: pollButtonClass(true) }
     : isStreaming && !modbus.isPolling && modbus.onResume
-      ? { onClick: modbus.onResume, Icon: Play, label: t("modbus.poll"), title: t("modbus.resumePolling"), cls: POLL_BTN_GREEN }
+      ? { onClick: modbus.onResume, Icon: Play, label: t("modbus.poll"), title: t("modbus.resumePolling"), cls: pollButtonClass(false) }
     : !isStreaming && modbus.pollGroupCount > 0 && modbus.onStart
-      ? { onClick: modbus.onStart, Icon: Play, label: t("modbus.poll"), title: t("modbus.startPolling"), cls: POLL_BTN_GREEN }
+      ? { onClick: modbus.onStart, Icon: Play, label: t("modbus.poll"), title: t("modbus.startPolling"), cls: pollButtonClass(false) }
     : null;
   // Filter button state
   const hasFilters = minFrameLength > 0 || frameIdFilter.trim() !== '';

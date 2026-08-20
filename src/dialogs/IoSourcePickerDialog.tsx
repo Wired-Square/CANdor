@@ -48,6 +48,7 @@ import {
   type TemporalMode,
   type ProfileUsageInfo,
   type FramingEncoding,
+  type ModbusRangeSpec,
 } from '../api/io';
 import { loadCatalog } from "../utils/catalogParser";
 import { getAllFavorites, type TimeRangeFavorite } from "../utils/favorites";
@@ -64,6 +65,12 @@ import { ActionButtons } from "./io-source-picker";
 import { LoadStatus } from "./io-source-picker";
 import DeviceBusConfig from "./io-source-picker/DeviceBusConfig";
 import SingleBusConfig from "./io-source-picker/SingleBusConfig";
+import ModbusPollConfig, {
+  DEFAULT_MODBUS_POLL_CONFIG,
+  pollSpecFor,
+  type ModbusPollConfigState,
+} from "./io-source-picker/ModbusPollConfig";
+import { MODBUS_PROFILE_KIND, modbusConnectionOf } from "../utils/modbusProfiles";
 import {
   localToIsoWithOffset,
   CSV_EXTERNAL_ID,
@@ -113,6 +120,12 @@ export interface LoadOptions {
   perInterfaceFraming?: Map<string, InterfaceFramingConfig>;
   /** Catalogue path to attach to the new session (decoder picker) */
   catalogPath?: string | null;
+  /**
+   * Address ranges for a Modbus session to poll, when no catalogue supplies a
+   * poll set. Session-level rather than per-source, because `modbusPollsJson`
+   * is: the backend injects one poll plan into every modbus_tcp source.
+   */
+  modbusRanges?: ModbusRangeSpec;
 }
 
 // Stable empty array to avoid re-renders when selectedIds is not provided
@@ -308,6 +321,8 @@ export default function IoSourcePickerDialog({
   const [singleBusOverrideMap, setSingleBusOverrideMap] = useState<Map<string, number>>(new Map());
   // Per-profile framing config (for serial profiles in multi-bus mode)
   const [framingConfigMap, setFramingConfigMap] = useState<Map<string, InterfaceFramingConfig>>(new Map());
+  // What a Modbus session should read. Session-level, like `modbusPollsJson`.
+  const [modbusPoll, setModbusPoll] = useState<ModbusPollConfigState>(DEFAULT_MODBUS_POLL_CONFIG);
   // Serial framing declared by the selected decoder's catalogue (drives the
   // framing dropdown for serial sources). Null when the decoder has no framing.
   const [catalogSerialEncoding, setCatalogSerialEncoding] = useState<FramingEncoding | null>(null);
@@ -392,6 +407,21 @@ export default function IoSourcePickerDialog({
 
   // All profiles are read profiles now (mode field removed)
   const readProfiles = ioProfiles;
+
+  // The sources about to start, whichever way they were picked. Single-select
+  // keeps `checkedSourceId` and clears the array, so reading only the array
+  // silently loses the commonest selection — which it did, for the poll range.
+  const selectedSourceIds = useMemo(
+    () => (checkedSourceIds.length > 0 ? checkedSourceIds : checkedSourceId ? [checkedSourceId] : []),
+    [checkedSourceIds, checkedSourceId]
+  );
+  /** The Modbus source in that selection, if any — what the poll range applies to. */
+  const modbusProfile = useMemo(
+    () => selectedSourceIds
+      .map((id) => readProfiles.find((p) => p.id === id))
+      .find((p) => p?.kind === MODBUS_PROFILE_KIND),
+    [selectedSourceIds, readProfiles]
+  );
 
   // Get the checked profile object (null for CSV external)
   const checkedProfile = useMemo(() => {
@@ -550,6 +580,7 @@ export default function IoSourcePickerDialog({
       setDeviceProbeLoadingMap(new Map());
       setDeviceBusConfigMap(new Map());
       setSingleBusOverrideMap(new Map());
+      setModbusPoll(DEFAULT_MODBUS_POLL_CONFIG);
       probedProfilesRef.current.clear();
     }
   // Only `isOpen` is a real dep — loadProfileId/selectedId/selectedIds are
@@ -592,11 +623,8 @@ export default function IoSourcePickerDialog({
     if (decoderUserTouchedRef.current) return; // user set/cleared it — don't override
     const decoderDir = settings?.decoder_dir;
     if (!decoderDir) return;
-    const ids = checkedSourceIds.length > 0
-      ? checkedSourceIds
-      : checkedSourceId ? [checkedSourceId] : [];
     const preferred = [...new Set(
-      ids.map((id) => readProfiles.find((p) => p.id === id)?.preferred_catalog).filter(Boolean)
+      selectedSourceIds.map((id) => readProfiles.find((p) => p.id === id)?.preferred_catalog).filter(Boolean)
     )] as string[];
     if (preferred.length === 1) {
       // The source's own preference beats the seed, which is only the host app's
@@ -605,7 +633,7 @@ export default function IoSourcePickerDialog({
       // A manual pick or clear still wins, via the `decoderUserTouched` guard.
       setSelectedCatalogPath(buildCatalogPath(preferred[0], decoderDir));
     }
-  }, [checkedSourceId, checkedSourceIds, readProfiles, settings?.decoder_dir]);
+  }, [selectedSourceIds, readProfiles, settings?.decoder_dir]);
 
   // Read the selected decoder's serial framing so it can drive the framing
   // dropdown for serial sources (a decoder that specifies e.g. SLIP framing).
@@ -629,10 +657,7 @@ export default function IoSourcePickerDialog({
   // framed by hand.
   useEffect(() => {
     if (!catalogSerialEncoding) return;
-    const ids = checkedSourceIds.length > 0
-      ? checkedSourceIds
-      : checkedSourceId ? [checkedSourceId] : [];
-    const serialIds = ids.filter(
+    const serialIds = selectedSourceIds.filter(
       (id) => !framingUserTouchedRef.current.has(id)
         && readProfiles.find((p) => p.id === id)?.kind === "serial"
     );
@@ -649,7 +674,7 @@ export default function IoSourcePickerDialog({
       }
       return changed ? next : prev;
     });
-  }, [catalogSerialEncoding, checkedSourceId, checkedSourceIds, readProfiles]);
+  }, [catalogSerialEncoding, selectedSourceIds, readProfiles]);
 
   // Auto-import mode: immediately open file picker when triggered from menu
   useEffect(() => {
@@ -1121,6 +1146,13 @@ export default function IoSourcePickerDialog({
       opts.catalogPath = selectedCatalogPath;
     }
 
+    // The unit comes from the profile: the poll loop sets the slave per request,
+    // so a spec without it reads unit 1 whatever the profile says.
+    if (modbusProfile) {
+      const spec = pollSpecFor(modbusPoll, modbusConnectionOf(modbusProfile).unit_id);
+      if (spec) opts.modbusRanges = spec;
+    }
+
     console.log("[buildLoadOptions] Built options:", opts);
     console.log("[buildLoadOptions] framingConfig state:", framingConfig);
 
@@ -1323,28 +1355,17 @@ export default function IoSourcePickerDialog({
   const handleRelease = async () => {
     if (!subscriberId) return; // Need listener ID to unregister
 
-    // Unregister from any active sessions (doesn't destroy them, other listeners can still use them)
-    // Single-select mode: unregister from session for the checked profile
-    if (checkedSourceId && checkedSourceId !== CSV_EXTERNAL_ID) {
-      const session = getSessionForProfile(checkedSourceId);
-      if (session) {
-        try {
-          await unregisterSessionSubscriber(session.id, subscriberId);
-        } catch (e) {
-          console.error("Failed to unregister from session:", e);
-        }
-      }
-    }
-
-    // Multi-select mode: unregister from sessions for all checked profiles
-    for (const profileId of checkedSourceIds) {
+    // Unregister from any active sessions (doesn't destroy them, other listeners
+    // can still use them). `selectedSourceIds` covers both selection modes, so
+    // this is one loop rather than a single-select branch beside a multi one.
+    for (const profileId of selectedSourceIds) {
+      if (profileId === CSV_EXTERNAL_ID) continue;
       const session = getSessionForProfile(profileId);
-      if (session) {
-        try {
-          await unregisterSessionSubscriber(session.id, subscriberId);
-        } catch (e) {
-          console.error(`Failed to unregister from session for ${profileId}:`, e);
-        }
+      if (!session) continue;
+      try {
+        await unregisterSessionSubscriber(session.id, subscriberId);
+      } catch (e) {
+        console.error(`Failed to unregister from session for ${profileId}:`, e);
       }
     }
 
@@ -1375,6 +1396,9 @@ export default function IoSourcePickerDialog({
     setDeviceProbeLoadingMap(new Map());
     setDeviceBusConfigMap(new Map());
     setSingleBusOverrideMap(new Map());
+    // Off is the deliberate default — a range left ticked for the previous
+    // device would start polling this one the moment you press Connect.
+    setModbusPoll(DEFAULT_MODBUS_POLL_CONFIG);
     probedProfilesRef.current.clear();
 
     // Clear import error
@@ -1831,6 +1855,17 @@ export default function IoSourcePickerDialog({
               />
             ) : undefined}
           />
+
+          {/* A Modbus source reads nothing without a poll plan, and only a
+              catalogue could supply one — so offer a range. Session-level,
+              because the backend injects one plan into every Modbus source. */}
+          {modbusProfile && !checkedMultiSourceSession && (
+            <ModbusPollConfig
+              config={modbusPoll}
+              onChange={setModbusPoll}
+              disabled={profileUsage.get(modbusProfile.id)?.configLocked ?? false}
+            />
+          )}
 
           {/* Show load options when creating a new session */}
           {/* Hide when: connect mode, joining an existing session, or nothing selected */}

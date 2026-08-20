@@ -172,6 +172,10 @@ range directly instead of a catalogue's registers, so a device with no decoder c
 still be watched live. An explicit range wins over a present `preferred_catalog`.
 With neither, the open fails rather than falling back to a default sweep.
 
+The IO source picker offers the same range in the UI and resolves the conflict the
+same way, deliberately: the rule is one rule, so a session polls the same registers
+whether a person or an agent opened it.
+
 ## Writing catalogs
 
 Three tools let an agent persist decode work, gated by **two catalog-specific

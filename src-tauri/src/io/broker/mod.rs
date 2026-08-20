@@ -128,6 +128,16 @@ pub struct IOBroker {
     /// is why a session whose sources all failed to connect used to keep
     /// reporting `Running` to `get_session_state` indefinitely.
     fatal_error: Arc<Mutex<Option<String>>>,
+    /// Set when the merge task returns, for any reason, error or not.
+    ///
+    /// `fatal_error` only covers the error case, so a session that ended
+    /// *cleanly* — a Modbus source with no poll groups ends as `no_polls` within
+    /// a millisecond of starting — went on reporting `Running` forever. That is
+    /// not cosmetic: `StreamEnded` is a push on the session channel, and a
+    /// subscriber that attaches after it fired never learns, so the state read
+    /// at registration is the only thing left to tell it — and
+    /// `endpoint_in_use_by_poller` reads it to decide whether a sweep may run.
+    ended: Arc<AtomicBool>,
 }
 
 impl IOBroker {
@@ -302,6 +312,7 @@ impl IOBroker {
             merge_cmd_tx: Arc::new(Mutex::new(None)),
             virtual_cmd_txs: Arc::new(Mutex::new(HashMap::new())),
             fatal_error: Arc::new(Mutex::new(None)),
+            ended: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -617,6 +628,8 @@ impl IOSource for IOBroker {
         }
         let virtual_cmd_txs = self.virtual_cmd_txs.clone();
         let fatal_error = self.fatal_error.clone();
+        self.ended.store(false, Ordering::SeqCst);
+        let ended = self.ended.clone();
 
         // Create command channel for hot source add/remove
         let (merge_cmd_tx, merge_cmd_rx) = mpsc::unbounded_channel::<MergeCommand>();
@@ -644,6 +657,12 @@ impl IOSource for IOBroker {
                 fatal_error,
             )
             .await;
+            // Set here rather than inside the task: `run_merge_task` returns
+            // early when settings fail to load, and a flag stored at one of two
+            // exit points is exactly the hole this exists to close. The
+            // invariant is "the task has returned ⇒ nothing is running", so it
+            // belongs where the task returns.
+            ended.store(true, Ordering::SeqCst);
         });
 
         self.task_handles.push(merge_handle);
@@ -715,13 +734,17 @@ impl IOSource for IOBroker {
     /// A fatal error outranks the last state `start`/`stop` set, because the
     /// merge task discovers it after `start` has already recorded `Running`.
     fn state(&self) -> IOState {
-        match self.fatal_error.lock() {
-            Ok(slot) => match slot.as_ref() {
-                Some(msg) => IOState::Error(msg.clone()),
-                None => self.state.clone(),
-            },
-            Err(_) => self.state.clone(),
+        if let Ok(slot) = self.fatal_error.lock() {
+            if let Some(msg) = slot.as_ref() {
+                return IOState::Error(msg.clone());
+            }
         }
+        // A merge task that has exited leaves nothing running, whatever `state`
+        // was set to at start.
+        if self.ended.load(Ordering::SeqCst) {
+            return IOState::Stopped;
+        }
+        self.state.clone()
     }
 
     fn session_id(&self) -> &str {

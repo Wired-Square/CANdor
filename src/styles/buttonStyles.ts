@@ -295,6 +295,22 @@ export function actionChip(colour: 'blue' | 'red' | 'green' | 'amber'): string {
 }
 
 /**
+ * The Modbus poll switch, in a top bar. Red while polling (the click stops it),
+ * green while stopped (the click starts it) — so the colour is the action, not
+ * the state, matching every other transport control.
+ *
+ * Shared because the Decoder and Discovery both carry one and they are the same
+ * control wearing different labels.
+ * @param isPolling - Whether the source is currently polling
+ */
+export function pollButtonClass(isPolling: boolean): string {
+  const base = "flex items-center gap-1.5 px-3 py-1 rounded text-xs font-medium transition-colors";
+  return isPolling
+    ? `${base} bg-red-600/20 text-red-400 hover:bg-red-600/30`
+    : `${base} bg-green-600/20 text-green-400 hover:bg-green-600/30`;
+}
+
+/**
  * Tab button for data views
  * @param isActive - Whether the tab is currently active
  * @param hasIndicator - Whether to show purple indicator (for tabs with new data)

@@ -201,7 +201,11 @@ export interface UseIOSessionOptions {
   onResuming?: (payload: SessionResumingPayload) => void;
   /** Callback when the session's device is replaced in-place (caps/state change, listeners preserved) */
   onSourceReplaced?: (payload: SourceReplacedPayload) => void;
-  /** Callback when session is destroyed externally (e.g., from Session Manager or last-subscriber auto-destroy) */
+  /**
+   * Callback when session is destroyed externally (e.g., from Session Manager or
+   * last-subscriber auto-destroy). Never fires for a session this hook has moved
+   * off — see `markSessionSwitch`.
+   */
   onDestroyed?: (orphanedCaptureIds: string[], reset: boolean) => void;
 }
 
@@ -315,6 +319,13 @@ export interface UseIOSessionResult {
   switchToCaptureReplay: (speed?: number) => Promise<void>;
   /** Rejoin an existing session after leaving (for shared sessions) */
   rejoin: (profileId?: string, profileName?: string) => Promise<void>;
+  /**
+   * Declare that this app is moving to `nextSessionId`, so the destroy of the
+   * session it is leaving does not reach `onDestroyed`. `reinitialize` does this
+   * for itself; call it before any *other* backend attach — the registration is
+   * what triggers the old session's teardown. Stable identity.
+   */
+  markSessionSwitch: (nextSessionId: string | null) => void;
   /** Transmit a CAN frame (only if capabilities.traits.tx_frames is true) */
   transmitFrame: (frame: CanTransmitFrame) => Promise<TransmitResult>;
 }
@@ -392,6 +403,23 @@ export function useIOSession(
   const isMountedRef = useRef(true);
   // Track the currently active session ID (for cleanup to check if session changed)
   const currentSessionIdRef = useRef<string | null>(null);
+  /**
+   * The session this hook moved off, stamped before the backend call that does
+   * the moving. Registering on a new session makes Rust tear the previous one
+   * down (`teardown_session_if_empty(prev, true)`) and broadcast `destroyed`;
+   * that event lands after the switch has returned, while this hook's listener
+   * for the *departing* session is still registered — see the lifecycle
+   * listener below, and `docs/session-flow.md` § App cleanup on teardown.
+   *
+   * Phrased as "which session did I leave" rather than "which am I on" on
+   * purpose: a path that never stamps degrades to the old behaviour, where the
+   * opposite phrasing would strand the app on a session that is genuinely gone.
+   */
+  const abandonedSessionRef = useRef<string | null>(null);
+  const markSessionSwitch = useCallback((nextId: string | null) => {
+    const leaving = currentSessionIdRef.current;
+    abandonedSessionRef.current = leaving && leaving !== nextId ? leaving : null;
+  }, []);
   // Generate a unique subscriber instance ID per hook mount (e.g., "discovery_1")
   const subscriberIdRef = useRef<string>(generateSubscriberId(appName));
   // Track if we're currently leaving to prevent double-leave
@@ -563,40 +591,56 @@ export function useIOSession(
         async (event) => {
           if (cancelled) return;
           if (
-            event.payload.event_type === "destroyed" &&
-            event.payload.session_id === effectiveSessionId
+            event.payload.event_type !== "destroyed" ||
+            event.payload.session_id !== effectiveSessionId
           ) {
-            tlog.info(
-              `[useIOSession:${appName}] Session '${effectiveSessionId}' destroyed externally`
-            );
-            // Prevent the cleanup timeout (from the mount effect) from trying to leave
-            setupCompleteRef.current = false;
-            currentSessionIdRef.current = null;
-            // Clean up session store entry (local-only, session is already gone in Rust)
-            useSessionStore.getState().cleanupDestroyedSession(effectiveSessionId);
-            // Clear local state
-            setLocalState(null);
-            // Fetch orphaned capture IDs from post-session cache
-            let bufferIds: string[] = [];
-            try {
-              bufferIds = await getOrphanedCaptureIds(effectiveSessionId);
-            } catch {
-              // Cache may have expired
-            }
-            // Register orphaned captures so isCaptureProfileId() recognises them.
-            // Normally `StreamEnded` (WS) would have done this already, but the
-            // destroy path unsubscribes the session's WS channel in
-            // cleanupDestroyedSession before StreamEnded is processed, so on a
-            // leave-session-with-orphan the capture id never made it into
-            // knownCaptureIds. Without this, the subsequent re-setup via
-            // setIoProfile(captureId) takes the profile branch in openSession
-            // and calls create_reader_session instead of
-            // create_capture_source_session.
-            for (const id of bufferIds) {
-              useSessionStore.getState().addKnownCaptureId(id);
-            }
-            callbacksRef.current.onDestroyed?.(bufferIds, event.payload.reset ?? false);
+            return;
           }
+          // The session is gone either way, so drop its store entry and WS
+          // channel before deciding whether the app should hear about it.
+          useSessionStore.getState().cleanupDestroyedSession(effectiveSessionId);
+
+          // A destroy naming a session this hook deliberately left is the
+          // backend tearing down what the switch left behind — it arrives here
+          // only because this listener belongs to the departing session and is
+          // torn down asynchronously. Passing it on resets the session just
+          // joined, which is the whole of "the app fell back to No source
+          // milliseconds after joining".
+          if (event.payload.session_id === abandonedSessionRef.current) {
+            tlog.debug(
+              `[useIOSession:${appName}] Ignoring destroy of '${effectiveSessionId}' — already moved on`
+            );
+            return;
+          }
+
+          tlog.info(
+            `[useIOSession:${appName}] Session '${effectiveSessionId}' destroyed externally`
+          );
+          // Prevent the cleanup timeout (from the mount effect) from trying to leave
+          setupCompleteRef.current = false;
+          currentSessionIdRef.current = null;
+          // Clear local state
+          setLocalState(null);
+          // Fetch orphaned capture IDs from post-session cache
+          let bufferIds: string[] = [];
+          try {
+            bufferIds = await getOrphanedCaptureIds(effectiveSessionId);
+          } catch {
+            // Cache may have expired
+          }
+          // Register orphaned captures so isCaptureProfileId() recognises them.
+          // Normally `StreamEnded` (WS) would have done this already, but the
+          // destroy path unsubscribes the session's WS channel in
+          // cleanupDestroyedSession before StreamEnded is processed, so on a
+          // leave-session-with-orphan the capture id never made it into
+          // knownCaptureIds. Without this, the subsequent re-setup via
+          // setIoProfile(captureId) takes the profile branch in openSession
+          // and calls create_reader_session instead of
+          // create_capture_source_session.
+          for (const id of bufferIds) {
+            useSessionStore.getState().addKnownCaptureId(id);
+          }
+          callbacksRef.current.onDestroyed?.(bufferIds, event.payload.reset ?? false);
         }
       );
       unlistenFns.push(unlistenLifecycle);
@@ -1065,6 +1109,9 @@ export function useIOSession(
       try {
         // If switching to a different session, leave the old one first
         const oldSessionId = currentSessionIdRef.current;
+        // Every reinitialize caller — watch, load, connect-only, jump-to-bookmark —
+        // funnels through here, so stamping the switch once covers all of them.
+        markSessionSwitch(targetSessionId);
         if (oldSessionId && oldSessionId !== targetSessionId) {
           tlog.debug(`[useIOSession:${appName}] reinitialize() - switching sessions, leaving old session '${oldSessionId}'`);
           // Clear callbacks for old session
@@ -1172,7 +1219,7 @@ export function useIOSession(
         }, REINITIALIZE_GRACE_PERIOD_MS + 50);
       }
     },
-    [appName, effectiveSessionId, effectiveProfileName, reinitializeSession, registerCallbacks, clearCallbacks, leaveSession]
+    [appName, effectiveSessionId, effectiveProfileName, reinitializeSession, registerCallbacks, clearCallbacks, leaveSession, markSessionSwitch]
   );
 
   const switchToCaptureReplay = useCallback(
@@ -1300,6 +1347,7 @@ export function useIOSession(
     reinitialize,
     switchToCaptureReplay,
     rejoin,
+    markSessionSwitch,
     transmitFrame,
   };
 }

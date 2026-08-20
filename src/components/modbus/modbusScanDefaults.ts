@@ -66,6 +66,7 @@ export function maxChunkFor(type: ModbusRegisterType): number {
 export const MODBUS_SCAN_BOUNDS = {
   register: { min: 0, max: 65535 },
   unitId: { min: 0, max: 255 },
+  port: { min: 1, max: 65535 },
   delayMs: { min: 0, max: 5000 },
   timeoutMs: { min: 100, max: 30000 },
   settleMs: { min: 0, max: 5000 },
@@ -73,4 +74,11 @@ export const MODBUS_SCAN_BOUNDS = {
   maxRequests: { min: 1, max: 100000 },
   repeat: { min: 1, max: 20 },
   repeatDelayMs: { min: 0, max: 600000 },
+  /**
+   * How often a live poll repeats — not a delay between requests, which is why
+   * it cannot borrow `delayMs`. The floor is 1 ms in Rust (zero panics the poll
+   * task's timer); 100 ms here because anything faster is a mistake on a device
+   * that answers in tens of milliseconds.
+   */
+  pollIntervalMs: { min: 100, max: 3600000 },
 } as const;

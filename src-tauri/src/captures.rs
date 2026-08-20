@@ -422,6 +422,13 @@ pub async fn get_capture_frames_by_id(capture_id: String) -> Result<Vec<FrameMes
         .ok_or_else(|| format!("Capture '{}' not found or is not a frame capture", capture_id))
 }
 
+/// Get the newest frame per identity from a specific capture by ID
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_capture_latest_frames(capture_id: String) -> Result<Vec<FrameMessage>, String> {
+    capture_store::get_capture_latest_frames(&capture_id)
+        .ok_or_else(|| format!("Capture '{}' not found or is not a frame capture", capture_id))
+}
+
 /// Get raw bytes from a specific capture by ID
 #[tauri::command(rename_all = "snake_case")]
 pub async fn get_capture_bytes_by_id(capture_id: String) -> Result<Vec<TimestampedByte>, String> {

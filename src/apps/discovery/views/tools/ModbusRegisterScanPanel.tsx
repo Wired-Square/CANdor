@@ -5,38 +5,31 @@ import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { iconSm } from "../../../../styles/spacing";
 import { borderDefault, textMuted } from "../../../../styles";
-import ModbusTargetSummary from "../../../../components/modbus/ModbusTargetSummary";
+import ModbusConnectionFields from "../../../../components/modbus/ModbusConnectionFields";
+import { useModbusTarget } from "../../../../components/modbus/useModbusTarget";
 import {
   CheckboxRow,
   FieldRow,
   NumberField,
   RunButton,
+  ScanNote,
   SelectField,
+  registerTypeOptions,
 } from "../../../../components/modbus/ModbusFields";
 import {
   MODBUS_SCAN_BOUNDS,
   MODBUS_SCAN_DEFAULTS,
   maxChunkFor,
 } from "../../../../components/modbus/modbusScanDefaults";
-import type { ModbusSessionTarget } from "../../../../utils/modbusProfiles";
 import type { ModbusScanConfig, ModbusRegisterType } from "../../../../api/io";
 
 type Props = {
-  /** The device this sweep runs against — the current session's. */
-  target: ModbusSessionTarget;
-  onStartScan: (config: ModbusScanConfig, stopSession: boolean) => void;
+  onStartScan: (config: ModbusScanConfig) => void;
 };
 
-export default function ModbusRegisterScanPanel({ target, onStartScan }: Props) {
+export default function ModbusRegisterScanPanel({ onStartScan }: Props) {
   const { t } = useTranslation("discovery");
-
-  // The address comes from the session, but the slave does not: a unit-id sweep
-  // exists to find *other* slaves behind one host:port, and you need to be able
-  // to sweep the one it finds.
-  const [unitId, setUnitId] = useState(target.unit_id);
-  // Most devices serve one Modbus conversation at a time, and pausing keeps the
-  // socket — only stopping frees it. Default to handing the device over.
-  const [stopSession, setStopSession] = useState(true);
+  const target = useModbusTarget();
 
   const [registerType, setRegisterType] = useState<ModbusRegisterType>(
     MODBUS_SCAN_DEFAULTS.registerType
@@ -78,13 +71,14 @@ export default function ModbusRegisterScanPanel({ target, onStartScan }: Props) 
 
   const registerCount = Math.max(0, endRegister - startRegister + 1);
   const overRegisterCap = registerCount > MODBUS_SCAN_DEFAULTS.maxRegisters;
-  const isValid = startRegister <= endRegister && chunkSize > 0 && !overRegisterCap;
+  const isValid =
+    target.hasAddress && startRegister <= endRegister && chunkSize > 0 && !overRegisterCap;
 
   const handleStart = () => {
-    // No host/port: Rust resolves them from the session, so the sweep cannot
-    // drift from the device named on screen.
     onStartScan({
-      unit_id: unitId,
+      host: target.connection.host,
+      port: target.connection.port,
+      unit_id: target.connection.unit_id,
       register_type: registerType,
       start_register: startRegister,
       end_register: endRegister,
@@ -97,35 +91,19 @@ export default function ModbusRegisterScanPanel({ target, onStartScan }: Props) 
       max_requests: maxRequests,
       repeat,
       repeat_delay_ms: repeatDelayMs,
-    }, stopSession);
+    });
   };
 
   return (
     <div className="space-y-3 text-xs">
-      <ModbusTargetSummary
-        target={target}
-        stopSession={stopSession}
-        onStopSessionChange={setStopSession}
-      />
+      <ModbusConnectionFields target={target} />
 
       <FieldRow>
         <SelectField
           label={t("modbusRegister.registerType")}
           value={registerType}
           onChange={handleRegisterTypeChange}
-          options={[
-            { value: "holding", label: t("modbusRegister.holdingFc") },
-            { value: "input", label: t("modbusRegister.inputFc") },
-            { value: "coil", label: t("modbusRegister.coilFc") },
-            { value: "discrete", label: t("modbusRegister.discreteFc") },
-          ]}
-        />
-        <NumberField
-          label={t("modbusRegister.unitId")}
-          value={unitId}
-          onChange={setUnitId}
-          min={MODBUS_SCAN_BOUNDS.unitId.min}
-          max={MODBUS_SCAN_BOUNDS.unitId.max}
+          options={registerTypeOptions(t)}
         />
         <NumberField
           label={t("modbusRegister.startRegister")}
@@ -233,15 +211,15 @@ export default function ModbusRegisterScanPanel({ target, onStartScan }: Props) 
         </div>
       )}
 
-      <p className={`${textMuted} pt-2 border-t ${borderDefault}`}>
+      <ScanNote ready={target.hasAddress}>
         {t("modbusRegister.scanDescription", {
           device: target.name,
-          unit: unitId,
+          unit: target.connection.unit_id,
           type: registerType,
           start: startRegister,
           end: endRegister,
         })}
-      </p>
+      </ScanNote>
       {overRegisterCap && (
         <p className="text-amber-500">
           {t("modbusRegister.tooManyRegisters", {

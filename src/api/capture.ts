@@ -346,6 +346,21 @@ export async function getCaptureFramesTail(
  * @param offset - Starting index (0-based)
  * @param limit - Maximum number of frames to return
  */
+/** Rows per page when walking a whole capture. Large enough that most captures are one trip. */
+export const CAPTURE_PAGE_SIZE = 50000;
+
+/**
+ * The newest frame per identity in a capture — one row per (protocol, frame_id).
+ *
+ * For anything that wants "the current value of each thing" rather than the
+ * history, this is the read to use: a Modbus sweep with 20 passes writes 20 rows
+ * per register, and reading them all to keep the last of each ships 20× the data
+ * for the same answer.
+ */
+export async function getCaptureLatestFrames(captureId: string): Promise<CaptureFrame[]> {
+  return invoke("get_capture_latest_frames", { capture_id: captureId });
+}
+
 export async function getCaptureFramesPaginatedById(
   captureId: string,
   offset: number,
