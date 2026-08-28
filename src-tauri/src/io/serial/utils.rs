@@ -8,6 +8,7 @@ use serialport::{DataBits, Parity as SpParity, StopBits};
 use tokio::sync::mpsc;
 
 use super::framer::{FrameIdConfig, FramingEncoding};
+use crate::io::device_kinds::{conn_i64, conn_str};
 use crate::io::error::{DevicePresence, IoError};
 use crate::io::types::SourceMessage;
 use crate::settings::IOProfile;
@@ -151,46 +152,22 @@ pub fn parse_profile_for_source(
     min_frame_length_override: Option<usize>,
     emit_raw_bytes_override: Option<bool>,
 ) -> Option<SerialSourceConfig> {
-    let port = profile.connection.get("port").and_then(|v| v.as_str())?.to_string();
+    let port = conn_str(profile, "port")?;
 
-    let baud_rate = profile
-        .connection
-        .get("baud_rate")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(115200) as u32;
-
-    let data_bits = profile
-        .connection
-        .get("data_bits")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(8) as u8;
-
-    let stop_bits = profile
-        .connection
-        .get("stop_bits")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(1) as u8;
-
-    let parity_str = profile
-        .connection
-        .get("parity")
-        .and_then(|v| v.as_str())
-        .unwrap_or("none");
-    let parity = match parity_str {
+    // Line settings come from `io::device_kinds`, the one declaration the form
+    // also seeds from.
+    let baud_rate = conn_i64(profile, "baud_rate").unwrap_or_default() as u32;
+    let data_bits = conn_i64(profile, "data_bits").unwrap_or_default() as u8;
+    let stop_bits = conn_i64(profile, "stop_bits").unwrap_or_default() as u8;
+    let parity = match conn_str(profile, "parity").unwrap_or_default().as_str() {
         "odd" => Parity::Odd,
         "even" => Parity::Even,
         _ => Parity::None,
     };
 
     // Framing configuration - prefer session override, fall back to profile settings
-    let framing_encoding_str = framing_encoding_override
-        .or_else(|| {
-            profile
-                .connection
-                .get("framing_encoding")
-                .and_then(|v| v.as_str())
-        })
-        .unwrap_or("raw");
+    let profile_framing = conn_str(profile, "framing_encoding").unwrap_or_default();
+    let framing_encoding_str = framing_encoding_override.unwrap_or(&profile_framing);
 
     let framing_encoding = match framing_encoding_str {
         "slip" => FramingEncoding::Slip,

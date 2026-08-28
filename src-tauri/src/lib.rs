@@ -1354,6 +1354,10 @@ pub fn run() {
             // Profile lifecycle
             io::profiles::reconfigure_device,
             sessions::clear_profile_probe_cache,
+            // Per-kind connection defaults and validation — one declaration,
+            // which the form seeds from and the readers consume.
+            io::device_kinds::default_connection_for_kind,
+            io::device_kinds::validate_io_profile,
             // Credential storage API
             credentials::store_credential,
             credentials::get_credential,

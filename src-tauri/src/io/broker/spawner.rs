@@ -14,6 +14,9 @@ use tokio_modbus::client::{self, tcp};
 use tokio_modbus::prelude::*;
 
 use super::types::ModbusRole;
+use crate::io::device_kinds::{
+    self, conn_bool, conn_f64, conn_i64, conn_str, req_bool, req_f64, req_i64, req_str,
+};
 use crate::io::gvret::{run_gvret_tcp_source, BusMapping};
 #[cfg(not(target_os = "ios"))]
 use crate::io::gvret::run_gvret_usb_source;
@@ -68,25 +71,22 @@ pub(super) async fn run_source_reader(
     virtual_bus_controls: VirtualBusControls,
     virtual_cmd_rx: Option<mpsc::UnboundedReceiver<VirtualBusCommand>>,
 ) {
-    match profile.kind.as_str() {
+    let error_tx = tx.clone();
+    let outcome = match profile.kind.as_str() {
         "gvret_tcp" | "gvret-tcp" => {
-            run_gvret_tcp_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await;
+            run_gvret_tcp_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await
         }
         #[cfg(not(target_os = "ios"))]
         "gvret_usb" | "gvret-usb" => {
-            run_gvret_usb_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await;
+            run_gvret_usb_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await
         }
         #[cfg(not(target_os = "ios"))]
-        "slcan" => {
-            run_slcan_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await;
-        }
+        "slcan" => run_slcan_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await,
         #[cfg(any(target_os = "windows", target_os = "macos"))]
-        "gs_usb" => {
-            run_gs_usb_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await;
-        }
+        "gs_usb" => run_gs_usb_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await,
         #[cfg(target_os = "linux")]
         "socketcan" => {
-            run_socketcan_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await;
+            run_socketcan_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await
         }
         #[cfg(not(target_os = "ios"))]
         "serial" => {
@@ -108,50 +108,39 @@ pub(super) async fn run_source_reader(
                 stop_flag,
                 tx,
             )
-            .await;
+            .await
         }
         "framelink" => {
-            run_framelink_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await;
+            run_framelink_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await
         }
         "virtual" => {
-            run_virtual_reader(source_idx, &profile, bus_mappings, stop_flag, tx, virtual_bus_controls, virtual_cmd_rx).await;
+            run_virtual_reader(source_idx, &profile, bus_mappings, stop_flag, tx, virtual_bus_controls, virtual_cmd_rx).await
         }
-        "modbus_tcp" => {
-            let role = _modbus_role.unwrap_or(ModbusRole::Client);
-            match role {
-                ModbusRole::Client => {
-                    run_modbus_tcp_client(
-                        source_idx,
-                        &profile,
-                        bus_mappings,
-                        _modbus_polls.unwrap_or_default(),
-                        _max_register_errors.unwrap_or(0),
-                        stop_flag,
-                        pause_flag,
-                        tx,
-                    )
-                    .await;
-                }
-                ModbusRole::Server => {
-                    run_modbus_tcp_server(
-                        source_idx,
-                        &profile,
-                        bus_mappings,
-                        stop_flag,
-                        tx,
-                    )
-                    .await;
-                }
-            }
-        }
-        kind => {
-            let _ = tx
-                .send(SourceMessage::Error(
+        "modbus_tcp" => match _modbus_role.unwrap_or(ModbusRole::Client) {
+            ModbusRole::Client => {
+                run_modbus_tcp_client(
                     source_idx,
-                    format!("Unsupported source type for multi-bus: {}", kind),
-                ))
-                .await;
-        }
+                    &profile,
+                    bus_mappings,
+                    _modbus_polls.unwrap_or_default(),
+                    _max_register_errors.unwrap_or(0),
+                    stop_flag,
+                    pause_flag,
+                    tx,
+                )
+                .await
+            }
+            ModbusRole::Server => {
+                run_modbus_tcp_server(source_idx, &profile, bus_mappings, stop_flag, tx).await
+            }
+        },
+        kind => Err(format!("Unsupported source type for multi-bus: {}", kind)),
+    };
+
+    // One place a source's setup failure is reported, rather than the same
+    // send-and-return block copied into every reader.
+    if let Err(e) = outcome {
+        let _ = error_tx.send(SourceMessage::Error(source_idx, e)).await;
     }
 }
 
@@ -165,25 +154,13 @@ async fn run_gvret_tcp_reader(
     bus_mappings: Vec<BusMapping>,
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
-) {
-    let host = profile
-        .connection
-        .get("host")
-        .and_then(|v| v.as_str())
-        .unwrap_or("127.0.0.1")
-        .to_string();
-    let port = profile
-        .connection
-        .get("port")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(23) as u16;
-    let timeout_sec = profile
-        .connection
-        .get("timeout")
-        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(5.0);
+) -> Result<(), String> {
+    let host = req_str(profile, "host")?;
+    let port = req_i64(profile, "port")? as u16;
+    let timeout_sec = req_f64(profile, "timeout")?;
 
     run_gvret_tcp_source(source_idx, host, port, timeout_sec, bus_mappings, stop_flag, tx).await;
+    Ok(())
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -193,26 +170,12 @@ async fn run_gvret_usb_reader(
     bus_mappings: Vec<BusMapping>,
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
-) {
-    let port = match profile.connection.get("port").and_then(|v| v.as_str()) {
-        Some(p) => p.to_string(),
-        None => {
-            let _ = tx
-                .send(SourceMessage::Error(
-                    source_idx,
-                    "Serial port is required".to_string(),
-                ))
-                .await;
-            return;
-        }
-    };
-    let baud_rate = profile
-        .connection
-        .get("baud_rate")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(115200) as u32;
+) -> Result<(), String> {
+    let port = req_str(profile, "port")?;
+    let baud_rate = req_i64(profile, "baud_rate")? as u32;
 
     run_gvret_usb_source(source_idx, port, baud_rate, bus_mappings, stop_flag, tx).await;
+    Ok(())
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -222,44 +185,13 @@ async fn run_slcan_reader(
     bus_mappings: Vec<BusMapping>,
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
-) {
-    let port = match profile.connection.get("port").and_then(|v| v.as_str()) {
-        Some(p) => p.to_string(),
-        None => {
-            let _ = tx
-                .send(SourceMessage::Error(
-                    source_idx,
-                    "Serial port is required".to_string(),
-                ))
-                .await;
-            return;
-        }
-    };
-    let baud_rate = profile
-        .connection
-        .get("baud_rate")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(115200) as u32;
-    let bitrate = profile
-        .connection
-        .get("bitrate")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(500_000) as u32;
-    let silent_mode = profile
-        .connection
-        .get("silent_mode")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let enable_fd = profile
-        .connection
-        .get("enable_fd")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let data_bitrate = profile
-        .connection
-        .get("data_bitrate")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(2_000_000) as u32;
+) -> Result<(), String> {
+    let port = req_str(profile, "port")?;
+    let baud_rate = req_i64(profile, "baud_rate")? as u32;
+    let bitrate = req_i64(profile, "bitrate")? as u32;
+    let silent_mode = req_bool(profile, "silent_mode")?;
+    let enable_fd = req_bool(profile, "enable_fd")?;
+    let data_bitrate = req_i64(profile, "data_bitrate")? as u32;
 
     run_slcan_source(
         source_idx,
@@ -274,6 +206,7 @@ async fn run_slcan_reader(
         tx,
     )
     .await;
+    Ok(())
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -283,57 +216,19 @@ async fn run_gs_usb_reader(
     bus_mappings: Vec<BusMapping>,
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
-) {
-    let bus = profile
-        .connection
-        .get("bus")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(0) as u8;
-    let address = profile
-        .connection
-        .get("address")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(0) as u8;
-    let serial = profile
-        .connection
-        .get("serial")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let bitrate = profile
-        .connection
-        .get("bitrate")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(500_000) as u32;
-    let sample_point = profile
-        .connection
-        .get("sample_point")
-        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(87.5) as f32;
-    let listen_only = profile
-        .connection
-        .get("listen_only")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-    let channel = profile
-        .connection
-        .get("channel")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(0) as u8;
-    let enable_fd = profile
-        .connection
-        .get("enable_fd")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let data_bitrate = profile
-        .connection
-        .get("data_bitrate")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(2_000_000) as u32;
-    let data_sample_point = profile
-        .connection
-        .get("data_sample_point")
-        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(75.0) as f32;
+) -> Result<(), String> {
+    let bus = req_i64(profile, "bus")? as u8;
+    let address = req_i64(profile, "address")? as u8;
+    // No default: a serial number identifies one adapter among several, and
+    // absent means "take whichever is there".
+    let serial = conn_str(profile, "serial");
+    let bitrate = req_i64(profile, "bitrate")? as u32;
+    let sample_point = req_f64(profile, "sample_point")? as f32;
+    let listen_only = req_bool(profile, "listen_only")?;
+    let channel = req_i64(profile, "channel")? as u8;
+    let enable_fd = req_bool(profile, "enable_fd")?;
+    let data_bitrate = req_i64(profile, "data_bitrate")? as u32;
+    let data_sample_point = req_f64(profile, "data_sample_point")? as f32;
 
     run_gs_usb_source(
         source_idx,
@@ -352,6 +247,7 @@ async fn run_gs_usb_reader(
         tx,
     )
     .await;
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -361,36 +257,14 @@ async fn run_socketcan_reader(
     bus_mappings: Vec<BusMapping>,
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
-) {
-    let interface = match profile.connection.get("interface").and_then(|v| v.as_str()) {
-        Some(i) => i.to_string(),
-        None => {
-            let _ = tx
-                .send(SourceMessage::Error(
-                    source_idx,
-                    "SocketCAN interface is required".to_string(),
-                ))
-                .await;
-            return;
-        }
-    };
+) -> Result<(), String> {
+    let interface = req_str(profile, "interface")?;
 
-    // Optional bitrate - if set, interface will be configured automatically
-    let bitrate = profile
-        .connection
-        .get("bitrate")
-        .and_then(|v| v.as_str())
-        .and_then(|s| s.parse::<u32>().ok());
-    let enable_fd = profile
-        .connection
-        .get("enable_fd")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let data_bitrate = profile
-        .connection
-        .get("data_bitrate")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .map(|v| v as u32);
+    // The two bitrates stay optional: absent means "leave the interface as the
+    // system configured it", which is a different instruction from any rate.
+    let bitrate = conn_i64(profile, "bitrate").map(|v| v as u32);
+    let data_bitrate = conn_i64(profile, "data_bitrate").map(|v| v as u32);
+    let enable_fd = req_bool(profile, "enable_fd")?;
 
     run_socketcan_source(
         source_idx,
@@ -403,6 +277,7 @@ async fn run_socketcan_reader(
         tx,
     )
     .await;
+    Ok(())
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -423,28 +298,18 @@ async fn run_serial_reader(
     source_address_big_endian_override: Option<bool>,
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
-) {
+) -> Result<(), String> {
     use crate::io::serial::FrameIdConfig;
 
-    let config = match parse_profile_for_source(
+    let config = parse_profile_for_source(
         profile,
         framing_encoding_override.as_deref(),
         delimiter_override,
         max_frame_length_override,
         min_frame_length_override,
         emit_raw_bytes_override,
-    ) {
-        Some(c) => c,
-        None => {
-            let _ = tx
-                .send(SourceMessage::Error(
-                    source_idx,
-                    "Serial port is required".to_string(),
-                ))
-                .await;
-            return;
-        }
-    };
+    )
+    .ok_or("Serial port is required")?;
 
     // Build frame_id_config: prefer session overrides, fall back to profile config
     let frame_id_config = if frame_id_start_byte_override.is_some() {
@@ -490,6 +355,7 @@ async fn run_serial_reader(
         tx,
     )
     .await;
+    Ok(())
 }
 
 // ============================================================================
@@ -502,31 +368,13 @@ async fn run_framelink_reader(
     bus_mappings: Vec<BusMapping>,
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
-) {
-    let host = match profile.connection.get("host").and_then(|v| v.as_str()) {
-        Some(h) => h.to_string(),
-        None => {
-            let _ = tx
-                .send(SourceMessage::Error(
-                    source_idx,
-                    "FrameLink profile missing 'host'".to_string(),
-                ))
-                .await;
-            return;
-        }
-    };
-    let port = profile
-        .connection
-        .get("port")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(120) as u16;
-    let timeout = profile
-        .connection
-        .get("timeout")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(5.0);
+) -> Result<(), String> {
+    let host = req_str(profile, "host")?;
+    let port = req_i64(profile, "port")? as u16;
+    let timeout = req_f64(profile, "timeout")?;
 
     run_framelink_source(source_idx, host, port, timeout, bus_mappings, stop_flag, tx).await;
+    Ok(())
 }
 
 // ============================================================================
@@ -546,12 +394,12 @@ async fn run_virtual_reader(
     tx: mpsc::Sender<SourceMessage>,
     virtual_bus_controls: VirtualBusControls,
     virtual_cmd_rx: Option<mpsc::UnboundedReceiver<VirtualBusCommand>>,
-) {
+) -> Result<(), String> {
     use crate::io::virtual_device::canfd_patterns;
     use std::collections::HashMap;
 
     // Parse traffic type
-    let traffic_type = match profile.connection.get("traffic_type").and_then(|v| v.as_str()) {
+    let traffic_type = match conn_str(profile, "traffic_type").as_deref() {
         Some("canfd") => "canfd",
         Some("modbus") => "modbus",
         _ => "can",
@@ -565,13 +413,18 @@ async fn run_virtual_reader(
         frame_rate_hz: f64,
     }
 
+    // Clamps are validation, not defaults, so they live with the reader — but
+    // the values they clamp towards come from the one table.
+    let (rate_min, rate_max) = device_kinds::VIRTUAL_FRAME_RATE_RANGE;
+    let (bus_min, bus_max) = device_kinds::VIRTUAL_BUS_COUNT_RANGE;
+
     let interfaces: Vec<IfaceConfig> = profile
         .connection
         .get("interfaces")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|item| {
+                .map(|item| {
                     let bus = item
                         .get("bus")
                         .and_then(|v| v.as_i64().map(|n| n as u8).or_else(|| v.as_str().and_then(|s| s.parse().ok())))
@@ -579,35 +432,27 @@ async fn run_virtual_reader(
                     let signal_generator = item
                         .get("signal_generator")
                         .and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| s != "false")))
-                        .unwrap_or(true);
+                        .unwrap_or(device_kinds::VIRTUAL_SIGNAL_GENERATOR);
                     let frame_rate_hz = item
                         .get("frame_rate_hz")
                         .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                        .unwrap_or(10.0)
-                        .clamp(0.1, 1000.0);
-                    Some(IfaceConfig { bus, signal_generator, frame_rate_hz })
+                        .unwrap_or(device_kinds::VIRTUAL_FRAME_RATE_HZ)
+                        .clamp(rate_min, rate_max);
+                    IfaceConfig { bus, signal_generator, frame_rate_hz }
                 })
                 .collect()
         })
         .unwrap_or_else(|| {
-            // Legacy fallback
-            let frame_rate_hz = profile
-                .connection
-                .get("frame_rate_hz")
-                .and_then(|v| v.as_str().and_then(|s| s.parse().ok()).or_else(|| v.as_f64()))
-                .unwrap_or(10.0)
-                .clamp(0.1, 1000.0);
-            let signal_generator = profile
-                .connection
-                .get("signal_generator")
-                .and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| s != "false")))
-                .unwrap_or(true);
-            let bus_count = profile
-                .connection
-                .get("bus_count")
-                .and_then(|v| v.as_str().and_then(|s| s.parse().ok()).or_else(|| v.as_i64().map(|n| n as u8)))
+            // Legacy fallback: one interface per bus, from the top-level fields,
+            // which the table declares.
+            let frame_rate_hz = conn_f64(profile, "frame_rate_hz")
+                .unwrap_or(device_kinds::VIRTUAL_FRAME_RATE_HZ)
+                .clamp(rate_min, rate_max);
+            let signal_generator = conn_bool(profile, "signal_generator")
+                .unwrap_or(device_kinds::VIRTUAL_SIGNAL_GENERATOR);
+            let bus_count = conn_i64(profile, "bus_count")
                 .unwrap_or(1)
-                .clamp(1, 8);
+                .clamp(bus_min as i64, bus_max as i64) as u8;
             (0..bus_count)
                 .map(|bus| IfaceConfig { bus, signal_generator, frame_rate_hz })
                 .collect()
@@ -777,6 +622,7 @@ async fn run_virtual_reader(
     let _ = tx
         .send(SourceMessage::Ended(source_idx, "stopped".to_string()))
         .await;
+    Ok(())
 }
 
 /// Spawn a single bus generator task and register its controls in the shared map.
@@ -949,7 +795,7 @@ async fn run_modbus_tcp_client(
     stop_flag: Arc<AtomicBool>,
     pause_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
-) {
+) -> Result<(), String> {
     let (host, port, unit_id) = crate::io::modbus_endpoint(profile);
 
     let output_bus = bus_mappings
@@ -968,37 +814,19 @@ async fn run_modbus_tcp_client(
                 "no_polls".to_string(),
             ))
             .await;
-        return;
+        return Ok(());
     }
 
     // Resolve server address (accepts a hostname or an IP literal)
-    let addr: SocketAddr = match crate::io::net::resolve_host_port(&host, port).await {
-        Ok(a) => a,
-        Err(e) => {
-            let _ = tx
-                .send(SourceMessage::Error(
-                    source_idx,
-                    e.user_message(),
-                ))
-                .await;
-            return;
-        }
-    };
+    let addr: SocketAddr = crate::io::net::resolve_host_port(&host, port)
+        .await
+        .map_err(|e| e.user_message())?;
 
     // Connect to the Modbus TCP server
     let slave = Slave(unit_id);
-    let ctx = match tcp::connect_slave(addr, slave).await {
-        Ok(c) => c,
-        Err(e) => {
-            let _ = tx
-                .send(SourceMessage::Error(
-                    source_idx,
-                    format!("Failed to connect to Modbus TCP server at {}: {}", addr, e),
-                ))
-                .await;
-            return;
-        }
-    };
+    let ctx = tcp::connect_slave(addr, slave)
+        .await
+        .map_err(|e| format!("Failed to connect to Modbus TCP server at {}: {}", addr, e))?;
 
     let ctx: Arc<Mutex<client::Context>> = Arc::new(Mutex::new(ctx));
     let address = format!("{}:{}", host, port);
@@ -1052,6 +880,7 @@ async fn run_modbus_tcp_client(
     let _ = tx
         .send(SourceMessage::Ended(source_idx, "stopped".to_string()))
         .await;
+    Ok(())
 }
 
 // ============================================================================
@@ -1060,13 +889,18 @@ async fn run_modbus_tcp_client(
 
 /// Modbus TCP server source: listens for incoming Modbus TCP connections and logs requests.
 /// This enables MITM scenarios where WireTAP sits between a Modbus master and slave.
+///
+/// Its `host`/`port` are an address to *listen* on, where every other reader's
+/// are one to *dial* — the same two keys carrying two meanings off `modbus_role`.
+/// It is left out of the `device_kinds` table for that reason, and nothing sets
+/// `modbus_role: server` today.
 async fn run_modbus_tcp_server(
     source_idx: usize,
     profile: &IOProfile,
     bus_mappings: Vec<BusMapping>,
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
-) {
+) -> Result<(), String> {
     let host = profile
         .connection
         .get("host")
@@ -1090,18 +924,9 @@ async fn run_modbus_tcp_server(
 
     let bind_addr = format!("{}:{}", host, port);
 
-    let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            let _ = tx
-                .send(SourceMessage::Error(
-                    source_idx,
-                    format!("Failed to bind Modbus TCP server on {}: {}", bind_addr, e),
-                ))
-                .await;
-            return;
-        }
-    };
+    let listener = tokio::net::TcpListener::bind(&bind_addr)
+        .await
+        .map_err(|e| format!("Failed to bind Modbus TCP server on {}: {}", bind_addr, e))?;
 
     let _ = tx
         .send(SourceMessage::Connected(
@@ -1162,6 +987,7 @@ async fn run_modbus_tcp_server(
     let _ = tx
         .send(SourceMessage::Ended(source_idx, "stopped".to_string()))
         .await;
+    Ok(())
 }
 
 /// Handle a single Modbus TCP server connection, parsing MBAP frames and logging requests.

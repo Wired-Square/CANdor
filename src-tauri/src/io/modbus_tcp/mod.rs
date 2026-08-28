@@ -18,19 +18,18 @@ pub use scanner::{
     FcProbeConfig, FcProbeEntry, ModbusScanConfig, ScanCompletePayload, UnitIdScanConfig,
 };
 
-/// Read `host`/`port`/`unit_id` off a Modbus profile's connection map, tolerating
-/// both the string and number spellings the settings file allows. The Rust twin
-/// of `modbusConnectionOf` in `src/utils/modbusProfiles.ts`.
+/// Read `host`/`port`/`unit_id` off a Modbus profile's connection map.
+///
+/// The values come from `io::device_kinds`, which is also what the form seeds
+/// from — this function used to carry its own `127.0.0.1`/502/1 while the form
+/// pre-filled `192.168.1.100`, so a profile with a blank host was dialled
+/// somewhere the user had never been shown.
 pub fn modbus_endpoint(profile: &crate::settings::IOProfile) -> (String, u16, u8) {
-    let conn = &profile.connection;
-    let num = |key: &str| -> Option<i64> {
-        conn.get(key)
-            .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-    };
+    use crate::io::device_kinds::{conn_i64, conn_str};
     (
-        conn.get("host").and_then(|v| v.as_str()).unwrap_or("127.0.0.1").to_string(),
-        num("port").unwrap_or(502) as u16,
-        num("unit_id").unwrap_or(1) as u8,
+        conn_str(profile, "host").unwrap_or_default(),
+        conn_i64(profile, "port").unwrap_or_default() as u16,
+        conn_i64(profile, "unit_id").unwrap_or_default() as u8,
     )
 }
 

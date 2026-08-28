@@ -32,6 +32,7 @@ use crate::{
     settings::{self, AppSettings, IOProfile},
 };
 #[cfg(not(target_os = "ios"))]
+use crate::io::device_kinds::{conn_f64, conn_i64, conn_str, req_str};
 use crate::io::probe_gvret_usb;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -1495,21 +1496,9 @@ pub async fn probe_gvret_device(
 
     match profile.kind.as_str() {
         "gvret_tcp" | "gvret-tcp" => {
-            let host = profile
-                .connection
-                .get("host")
-                .and_then(|v| v.as_str())
-                .unwrap_or("127.0.0.1");
-            let port = profile
-                .connection
-                .get("port")
-                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(23) as u16;
-            let timeout_sec = profile
-                .connection
-                .get("timeout")
-                .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(5.0);
+            let host = &conn_str(profile, "host").unwrap_or_default();
+            let port = conn_i64(profile, "port").unwrap_or_default() as u16;
+            let timeout_sec = conn_f64(profile, "timeout").unwrap_or_default();
 
             // user_message(), not String::from — the latter renders Display, which for
             // a DNS failure drops the "check your network or VPN" half of the message.
@@ -1524,11 +1513,7 @@ pub async fn probe_gvret_device(
                 .get("port")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Serial port is required for GVRET USB".to_string())?;
-            let baud_rate = profile
-                .connection
-                .get("baud_rate")
-                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(115200) as u32;
+            let baud_rate = conn_i64(profile, "baud_rate").unwrap_or_default() as u32;
 
             // Run blocking serial probe in a dedicated thread
             let port_owned = port.to_string();
@@ -1657,17 +1642,11 @@ pub async fn probe_device(
     let result = match profile.kind.as_str() {
         // GVRET devices - multi-bus
         "gvret_tcp" | "gvret-tcp" => {
-            let host = profile.connection.get("host")
-                .and_then(|v| v.as_str())
-                .unwrap_or("127.0.0.1");
-            let port = profile.connection.get("port")
-                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(23) as u16;
-            let timeout_sec = profile.connection.get("timeout")
-                .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(5.0);
+            let host = conn_str(profile, "host").unwrap_or_default();
+            let port = conn_i64(profile, "port").unwrap_or_default() as u16;
+            let timeout_sec = conn_f64(profile, "timeout").unwrap_or_default();
 
-            match probe_gvret_tcp(host, port, timeout_sec).await {
+            match probe_gvret_tcp(&host, port, timeout_sec).await {
                 Ok(info) => Ok(DeviceProbeResult {
                     success: true,
                     source_type: "gvret".to_string(),
@@ -1755,18 +1734,10 @@ pub async fn probe_device(
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Serial port is required for slcan".to_string())?
                 .to_string();
-            let baud_rate = profile.connection.get("baud_rate")
-                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(115200) as u32;
-            let data_bits = profile.connection.get("data_bits")
-                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .map(|v| v as u8);
-            let stop_bits = profile.connection.get("stop_bits")
-                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .map(|v| v as u8);
-            let parity = profile.connection.get("parity")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+            let baud_rate = conn_i64(profile, "baud_rate").unwrap_or_default() as u32;
+            let data_bits = conn_i64(profile, "data_bits").map(|v| v as u8);
+            let stop_bits = conn_i64(profile, "stop_bits").map(|v| v as u8);
+            let parity = conn_str(profile, "parity");
 
             let result = tokio::task::spawn_blocking(move || {
                 probe_slcan_device(port, baud_rate, data_bits, stop_bits, parity)
@@ -1844,9 +1815,7 @@ pub async fn probe_device(
         // SocketCAN - Linux only, check if interface exists
         #[cfg(target_os = "linux")]
         "socketcan" => {
-            let interface = profile.connection.get("interface")
-                .and_then(|v| v.as_str())
-                .unwrap_or("can0");
+            let interface = conn_str(profile, "interface").unwrap_or_default();
 
             // Check if the interface exists by reading from /sys/class/net
             let path = format!("/sys/class/net/{}", interface);
@@ -1926,22 +1895,16 @@ pub async fn probe_device(
 
         // Modbus TCP - probe by attempting a TCP connection
         "modbus_tcp" => {
-            let host = profile.connection.get("host")
-                .and_then(|v| v.as_str())
-                .unwrap_or("127.0.0.1");
-            let port = profile.connection.get("port")
-                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(502) as u16;
-            let timeout_sec = profile.connection.get("timeout")
-                .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(5.0);
+            let host = conn_str(profile, "host").unwrap_or_default();
+            let port = conn_i64(profile, "port").unwrap_or_default() as u16;
+            let timeout_sec = conn_f64(profile, "timeout").unwrap_or_default();
 
             let addr = format!("{}:{}", host, port);
 
             // Resolve before connecting, like every other Modbus TCP path — passing
             // the "host:port" string to connect() resolves inside the timeout, which
             // reports a DNS failure as a connection one.
-            let sock_addr = match crate::io::net::resolve_host_port(host, port).await {
+            let sock_addr = match crate::io::net::resolve_host_port(&host, port).await {
                 Ok(a) => a,
                 Err(e) => {
                     return Ok(DeviceProbeResult {
@@ -1996,23 +1959,18 @@ pub async fn probe_device(
 
         // FrameLink device — grouped profile with interfaces[], TCP probe to verify reachability
         "framelink" => {
-            let host = profile.connection.get("host")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| "FrameLink profile missing 'host'".to_string())?;
-            let port = profile.connection.get("port")
-                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(120) as u16;
-            let timeout_sec = profile.connection.get("timeout")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(5.0);
-            let device_id = profile.connection.get("device_id")
-                .and_then(|v| v.as_str());
+            let host = req_str(profile, "host")?;
+            let port = conn_i64(profile, "port").unwrap_or_default() as u16;
+            // `as_f64()` only, before — and the form writes strings, so a
+            // configured timeout was silently ignored.
+            let timeout_sec = conn_f64(profile, "timeout").unwrap_or_default();
+            let device_id = conn_str(profile, "device_id");
             let iface_count = profile.connection.get("interfaces")
                 .and_then(|v| v.as_array())
                 .map(|a| a.len() as u8)
                 .unwrap_or(1);
 
-            match crate::io::framelink::probe_framelink(host, port, timeout_sec).await {
+            match crate::io::framelink::probe_framelink(&host, port, timeout_sec).await {
                 Ok(probe) => {
                     let bus_count = probe.interfaces.len().max(iface_count as usize) as u8;
                     Ok(DeviceProbeResult {

@@ -4,6 +4,12 @@ All notable changes to WireTAP will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A CAN adapter set to listen-only no longer talks on the bus.** An slcan device saved before the Silent mode switch existed was displayed as silent and opened as active, so it acknowledged frames on a bus you believed it was only listening to. Silent is now the default everywhere it is read. Check any slcan profile you use on a live vehicle: if you had relied on the old behaviour to transmit, Silent mode now has to be switched off explicitly.
+
+- **A device with a blank host is dialled where the form said it would be.** Leaving Host empty on a GVRET TCP or Modbus TCP device connected to `127.0.0.1`, while the form had shown `192.168.1.100` — so the connection went somewhere you were never told about. Both now use the address the form shows. A FrameLink timeout typed into the form is also no longer ignored.
+
 ### Added
 
 - **Change a device's settings without losing the session.** The session menu's interface rows are now buttons: click one to open its device settings and change bitrate, baud rate, 8N1, host or port. Applying reconnects that device on the new settings — a bitrate cannot change under a running port, so the connection is re-established — but the session and every app watching it stay put, so you keep your capture. A multi-bus session lists each interface separately, so there is no "which device?" step.

@@ -6,6 +6,7 @@
 
 // Core modules
 pub mod codec; // Frame codec trait and implementations
+pub mod device_kinds; // Per-kind connection defaults and required fields — one declaration
 pub mod ephemeral; // Ad-hoc devices, overlaid onto settings.io_profiles for this run
 pub mod profiles; // Profile lifecycle: reconfigure a device and reconnect it
 mod error;

@@ -219,6 +219,51 @@ Three constraints on that path, each of which was got wrong first:
 
 ---
 
+### Connection defaults — one table
+
+What a device kind's `connection` map holds — its defaults and its required
+fields — is declared once, in
+[io/device_kinds.rs](../src-tauri/src/io/device_kinds.rs). Read it before adding
+a device kind or a connection field.
+
+**Defaults are resolved at read time, never written to disk.** The `req_*` and
+`conn_*` accessors take the profile's value, else the kind's declared default,
+so a profile hand-edited into `settings.json` and one built by the form behave
+identically. `apply_defaults` exists for the other job — seeding a *new*
+profile's map — and must not be used on a profile about to be saved: a default
+written into `settings.json` stops being a default, and changing it in a later
+release would then reach only profiles created after the change.
+
+`req_*` returns a named error for a field it cannot resolve; `conn_*` returns
+`Option` and is for the three fields the table deliberately leaves undeclared,
+where absent is itself an instruction (`gs_usb.serial` — take whichever adapter
+is there; `socketcan.bitrate`/`data_bitrate` — leave the interface as the system
+configured it).
+
+This replaced five copies of the table in Rust — the broker spawner,
+`create_reader_session`, `probe_device`, `probe_gvret_device` and
+`modbus_endpoint` — which had already drifted from the four in TypeScript. Three
+disagreements were resolved in the process, the third of them a real fault:
+
+| field | was (Rust) | was (TS form) | now |
+|---|---|---|---|
+| `gvret_tcp.host` | `127.0.0.1` | `192.168.1.100` | `192.168.1.100` |
+| `modbus_tcp.host` | `127.0.0.1` | `192.168.1.100` | `192.168.1.100` |
+| `slcan.silent_mode` | `false` | `true` | `true` |
+
+An slcan profile saved before `silent_mode` existed was **shown as listen-only
+and run as active** — `IOConnectionFields` renders `silent_mode !== false` while
+the reader took `.unwrap_or(false)`. `transmit.rs` had it right (`true`); the
+reader was the one that disagreed, which is why the symptom was an adapter
+ACKing on a bus the user believed it was only listening to.
+
+Still to come: `applyConnectionDefaults` and `validateProfileForm`
+([src/settings/ioProfileForm.ts](../src/settings/ioProfileForm.ts)) are to seed
+from the `default_connection_for_kind` and `validate_io_profile` commands rather
+than carry their own copies.
+
+---
+
 ## 2. Source selection
 
 All sources — hardware devices, databases, recorded sources, and captures — are
@@ -1559,6 +1604,7 @@ per-task interval can't express.
 | [src-tauri/src/io/traits.rs](../src-tauri/src/io/traits.rs) | `InterfaceTraits`, `SessionDataStreams`, validation/merge |
 | [src-tauri/src/io/ephemeral.rs](../src-tauri/src/io/ephemeral.rs) | Ad-hoc device registry, overlaid onto `io_profiles` (see [Where a device lives](#where-a-device-lives--saved-and-ad-hoc-profiles)) |
 | [src-tauri/src/io/profiles.rs](../src-tauri/src/io/profiles.rs) | `reconfigure_device` — write a device's settings and reconnect it |
+| [src-tauri/src/io/device_kinds.rs](../src-tauri/src/io/device_kinds.rs) | Per-kind connection defaults and required fields (see [Connection defaults](#connection-defaults--one-table)) |
 | [src-tauri/src/io/broker/](../src-tauri/src/io/broker/) | `IOBroker` — source aggregator / merge task |
 | [src-tauri/src/io/signal_throttle.rs](../src-tauri/src/io/signal_throttle.rs) | 2 Hz per-signal rate limiter |
 | [src-tauri/src/io/periodic.rs](../src-tauri/src/io/periodic.rs) | `Cadence` — shared interval/cancel/pause primitive for repeat-transmit and Modbus polling |

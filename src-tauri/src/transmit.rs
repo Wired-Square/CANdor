@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::AppHandle;
 
+use crate::io::device_kinds::conn_bool;
 use crate::io::periodic::Cadence;
 use crate::io::{self, CanTransmitFrame, IOCapabilities, SignalThrottle};
 use crate::settings::{load_settings, IOProfile};
@@ -104,18 +105,10 @@ fn supports_serial_transmit(kind: &str) -> bool {
 fn get_capabilities_for_kind(kind: &str, profile: &IOProfile) -> WriterCapabilities {
     match kind {
         "slcan" => {
-            // Check if silent mode is enabled - if so, no transmit
-            // Default is true (silent mode) for safety - must explicitly set false to transmit
-            let silent_mode = profile
-                .connection
-                .get("silent_mode")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-            let enable_fd = profile
-                .connection
-                .get("enable_fd")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            // Silent mode means no transmit. The default is declared once, in
+            // `io::device_kinds`, and is listen-only for safety.
+            let silent_mode = conn_bool(profile, "silent_mode").unwrap_or(true);
+            let enable_fd = conn_bool(profile, "enable_fd").unwrap_or(false);
 
             if silent_mode {
                 WriterCapabilities {
