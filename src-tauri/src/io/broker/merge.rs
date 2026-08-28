@@ -44,9 +44,11 @@ pub(super) async fn run_merge_task(
     virtual_cmd_txs: Arc<Mutex<HashMap<usize, VirtualCmdTx>>>,
     fatal_error: Arc<Mutex<Option<String>>>,
 ) {
-    // Load settings to get profile configurations
-    let settings = match settings::load_settings(app.clone()).await {
-        Ok(s) => s,
+    // Profiles for the initial spawn only — hot-adds re-read, since they exist
+    // to pick up a profile that has changed. Narrowed from the whole AppSettings
+    // and dropped after the loop so a long-lived session retains neither.
+    let io_profiles = match settings::load_settings(app.clone()).await {
+        Ok(s) => s.io_profiles,
         Err(e) => {
             tlog!("[IOBroker] Failed to load settings: {}", e);
             emit_stream_ended(&session_id, "error", "IOBroker");
@@ -62,7 +64,7 @@ pub(super) async fn run_merge_task(
     // Per-source pause flags for pause/resume polling
     let mut source_pause_flags: HashMap<String, Arc<AtomicBool>> = HashMap::new();
     for (index, source_config) in sources.iter().enumerate() {
-        let profile = match settings.io_profiles.iter().find(|p| p.id == source_config.profile_id) {
+        let profile = match io_profiles.iter().find(|p| p.id == source_config.profile_id) {
             Some(p) => p.clone(),
             None => {
                 tlog!(
@@ -181,12 +183,26 @@ pub(super) async fn run_merge_task(
                     Some(MergeCommand::AddSource(source_config)) => {
                         let idx = next_source_idx;
                         next_source_idx += 1;
-                        let profile = match settings.io_profiles.iter().find(|p| p.id == source_config.profile_id) {
-                            Some(p) => p.clone(),
-                            None => {
-                                tlog!("[IOBroker] Hot-add: profile '{}' not found", source_config.profile_id);
+                        // Re-read rather than using the profiles loaded at task
+                        // start: a source is hot-added to pick up a profile that
+                        // has *changed* — reconfiguring a live device's bitrate
+                        // or baud rate is a remove-then-add of that source — so
+                        // the original copy would respawn the device on exactly
+                        // the settings the user just replaced.
+                        let fresh = match settings::load_settings_sync(&app) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                tlog!("[IOBroker] Hot-add: failed to reload settings: {}", e);
                                 continue;
                             }
+                        };
+                        let Some(profile) = fresh
+                            .io_profiles
+                            .into_iter()
+                            .find(|p| p.id == source_config.profile_id)
+                        else {
+                            tlog!("[IOBroker] Hot-add: profile '{}' not found", source_config.profile_id);
+                            continue;
                         };
                         let source_stop = Arc::new(AtomicBool::new(false));
                         source_stop_flags.insert(source_config.profile_id.clone(), source_stop.clone());

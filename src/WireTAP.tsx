@@ -18,6 +18,7 @@ import { useUpdateStore } from "./stores/updateStore";
 import { useTheme } from "./hooks/useTheme";
 import { useAppErrorDialog, useSessionStore } from "./stores/sessionStore";
 import { useSettingsStore } from "./apps/settings/stores/settingsStore";
+import { useAdHocProfileStore } from "./stores/adHocProfileStore";
 import { checkRecoveryOccurred } from "./api/io";
 import { tlog } from "./api/settings";
 import { initTelemetry } from "./api/telemetry";
@@ -25,6 +26,7 @@ import { initWsTransport } from "./services/wsTransport";
 import { initMcpBridge } from "./services/mcpBridge";
 import "./services/memoryDiag"; // Memory diagnostic counters
 import ErrorDialog from "./dialogs/ErrorDialog";
+import DeviceSettingsDialog from "./dialogs/DeviceSettingsDialog";
 import { Shield, BarChart3 } from "lucide-react";
 import ConsentDialog from "./dialogs/ConsentDialog";
 
@@ -64,10 +66,14 @@ export default function WireTAP() {
   // preferred catalogs, etc. without requiring the Settings panel to be open.
   const loadSettingsStore = useSettingsStore((s) => s.loadSettings);
   const loadCaptureIds = useSessionStore((s) => s.loadCaptureIds);
+  // Ad-hoc devices live in the backend, so a second window (or a reload) picks
+  // up the ones already registered rather than showing an empty list.
+  const refreshAdHocProfiles = useAdHocProfileStore((s) => s.refresh);
   useEffect(() => {
     loadSettingsStore();
     loadCaptureIds();
-  }, [loadSettingsStore, loadCaptureIds]);
+    void refreshAdHocProfiles();
+  }, [loadSettingsStore, loadCaptureIds, refreshAdHocProfiles]);
 
   // Hand the Sentry DSN to the Rust backend so it can initialise its
   // usage-analytics logs client (emission + consent gating live in Rust).
@@ -206,6 +212,9 @@ export default function WireTAP() {
         </Suspense>
       </Sentry.ErrorBoundary>
       {/* Global app error dialog - shown for errors across all apps */}
+      {/* Device settings — opened from any session menu's interface rows. */}
+      <DeviceSettingsDialog />
+
       <ErrorDialog
         isOpen={appErrorOpen}
         title={appErrorTitle}

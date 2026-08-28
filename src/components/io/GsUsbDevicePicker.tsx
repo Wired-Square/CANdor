@@ -5,16 +5,16 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCw } from "lucide-react";
-import { iconLg } from "../../../styles/spacing";
+import { iconLg } from "../../styles/spacing";
 import {
   listGsUsbDevices,
   createDeviceId,
   formatDeviceDisplay,
   type GsUsbDeviceInfo,
-} from "../../../api/gs_usb";
-import { Select } from "../../../components/forms";
-import { iconButtonBase } from "../../../styles/buttonStyles";
-import { textDanger, spaceYSmall, helpText } from "../../../styles";
+} from "../../api/gs_usb";
+import { Select } from "../../components/forms";
+import { iconButtonBase } from "../../styles/buttonStyles";
+import { textDanger, spaceYSmall, helpText } from "../../styles";
 
 interface Props {
   /** Currently selected device ID (interface name on Linux, bus:address on Windows) */

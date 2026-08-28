@@ -10,6 +10,7 @@ export { default as LoadStatus } from "./LoadStatus";
 export { default as DeviceBusConfig } from "./DeviceBusConfig";
 export { default as SingleBusConfig } from "./SingleBusConfig";
 export { default as DecoderPicker } from "./DecoderPicker";
+export { default as DeviceEditor } from "./DeviceEditor";
 
 export type { SourceTab } from "./types";
 export type { FramingConfig } from "./FramingOptions";

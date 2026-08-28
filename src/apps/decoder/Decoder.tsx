@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { listen, emit } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { useSettings } from "../../hooks/useSettings";
+import { useAllIOProfiles } from "../../hooks/useAllIOProfiles";
 import { useFrameIdFormat, withFrameIdFormat } from "../../hooks/useFrameIdFormat";
 import { useDecoderStore, getDecodedFrames, getDecodedPerSource, getUnmatchedFrames, getFilteredFrames } from "../../stores/decoderStore";
 import { useIOSessionManager, type SessionReconfigurationInfo } from '../../hooks/useIOSessionManager';
@@ -57,6 +58,8 @@ function modbusPollsFor(profileIds: string[]): string | null {
 function DecoderInner() {
   const { t } = useTranslation("decoder");
   const { settings } = useSettings();
+  // Saved devices plus any created ad-hoc in the source picker.
+  const allIOProfiles = useAllIOProfiles();
   const [catalogNotification, setCatalogNotification] = useState<string | null>(null);
   const catalogs = useCatalogList();
   const [activeBookmarkId, setActiveBookmarkId] = useState<string | null>(null);
@@ -498,7 +501,7 @@ function DecoderInner() {
   // Use the IO session manager hook - manages session lifecycle, ingest, multi-bus, and derived state
   const manager = useIOSessionManager({
     appName: "decoder",
-    ioProfiles: settings?.io_profiles ?? [],
+    ioProfiles: allIOProfiles,
     store: { ioProfile, setIoProfile },
     enableIngest: true,
     onIngestComplete: handleIngestComplete,
@@ -1067,7 +1070,7 @@ function DecoderInner() {
             catalogs={catalogs}
             catalogPath={catalogPath}
             onOpenCatalogPicker={() => dialogs.catalogPicker.open()}
-            ioProfiles={settings?.io_profiles || []}
+            ioProfiles={allIOProfiles}
             ioProfile={ioProfile}
             onIoProfileChange={handlers.handleIoProfileChange}
             defaultReadProfileId={settings?.default_read_profile}
@@ -1226,7 +1229,7 @@ function DecoderInner() {
         {...ioPickerProps}
         isOpen={dialogs.ioSessionPicker.isOpen}
         onClose={() => dialogs.ioSessionPicker.close()}
-        ioProfiles={settings?.io_profiles || []}
+        ioProfiles={allIOProfiles}
         selectedId={ioProfile}
         selectedIds={ioProfiles.length > 0 ? ioProfiles : []}
         defaultId={settings?.default_read_profile}

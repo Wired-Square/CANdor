@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useSettings } from "../../hooks/useSettings";
+import { useAllIOProfiles } from "../../hooks/useAllIOProfiles";
 import { withFrameIdFormat } from "../../hooks/useFrameIdFormat";
 import { useDashboardStore, type SignalValueEntry } from "../../stores/dashboardStore";
 import { useIOSessionManager } from "../../hooks/useIOSessionManager";
@@ -37,6 +38,8 @@ import type { DecodedFrameMsg } from "../../services/wsProtocol";
 function DashboardInner() {
   const { t } = useTranslation("dashboard");
   const { settings } = useSettings();
+  // Saved devices plus any created ad-hoc in the source picker.
+  const allIOProfiles = useAllIOProfiles();
   const catalogs = useCatalogList();
 
   // Dialog to configure which panel
@@ -293,7 +296,7 @@ function DashboardInner() {
   // ── Session manager ──
   const manager = useIOSessionManager({
     appName: "dashboard",
-    ioProfiles: settings?.io_profiles ?? [],
+    ioProfiles: allIOProfiles,
     store: { ioProfile, setIoProfile },
     requireFrames: true,
     onFrames: handleFrames,
@@ -494,7 +497,7 @@ function DashboardInner() {
       topBar={
         <DashboardTopBar
           ioProfile={ioProfile}
-          ioProfiles={settings?.io_profiles ?? []}
+          ioProfiles={allIOProfiles}
           multiBusProfiles={sessionId ? multiBusProfiles : []}
           defaultReadProfileId={settings?.default_read_profile}
           sessionId={sessionId}
@@ -550,7 +553,7 @@ function DashboardInner() {
         {...ioPickerProps}
         isOpen={dialogs.ioSessionPicker.isOpen}
         onClose={() => dialogs.ioSessionPicker.close()}
-        ioProfiles={settings?.io_profiles ?? []}
+        ioProfiles={allIOProfiles}
         selectedId={ioProfile}
         defaultId={settings?.default_read_profile}
         onSelect={setIoProfile}

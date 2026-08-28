@@ -1,7 +1,6 @@
 // ui/src/apps/settings/hooks/handlers/useIOProfileHandlers.ts
 
 import {
-  storeCredential,
   getCredential,
   deleteAllCredentials,
   SECURE_FIELDS,
@@ -11,19 +10,26 @@ import type {
   IOProfile,
   ConnectionFieldValue,
   MqttConnection,
-  WiretapConnection,
-  GvretTcpConnection,
-  SlcanConnection,
-  SocketcanConnection,
-  ModbusTcpConnection,
-  SerialConnection,
-  FrameLinkConnection,
-  ConnectionTypeMap,
   ProfileKindId,
 } from '../../../../hooks/useSettings';
-import { isProfileKind } from '../../../../hooks/useSettings';
+import {
+  applyConnectionDefaults,
+  newSavedProfileId,
+  storeProfileSecrets,
+  validateProfileForm,
+} from '../../../../settings/ioProfileForm';
+import { clearProfileProbeCache } from '../../../../api/ephemeralProfiles';
 import { useSessionStore } from '../../../../stores/sessionStore';
+import { useAdHocProfileStore } from '../../../../stores/adHocProfileStore';
 import { withAppError } from '../../../../utils/appError';
+
+/** Validation messages, matching `ProfileValidationError`. */
+const VALIDATION_MESSAGES = {
+  nameRequired: 'Profile name is required.',
+  nameDuplicate: 'A profile with this name already exists. Please choose a unique name.',
+  portRequired: 'Serial port is required. Please select a port from the dropdown.',
+  hostRequired: 'Host is required for Modbus TCP.',
+} as const;
 
 export function useIOProfileHandlers() {
   // Store selectors
@@ -122,7 +128,7 @@ export function useIOProfileHandlers() {
   const handleDuplicateIOProfile = (profile: IOProfile) => {
     const copy: IOProfile = {
       ...profile,
-      id: `io_${Date.now()}`,
+      id: newSavedProfileId(),
       name: `${profile.name} (Copy)`,
     };
     addProfile(copy);
@@ -132,63 +138,35 @@ export function useIOProfileHandlers() {
   const handleSaveProfile = async () => {
     const { editingProfileId, profileForm } = dialogPayload;
 
-    // Validate profile name is not empty
-    if (!profileForm.name.trim()) {
-      showAppError('Validation Error', 'Profile name is required.');
-      return;
-    }
-
-    // Validate profile name is unique
-    const isDuplicate = profiles.some(
-      (p) => p.name === profileForm.name && p.id !== editingProfileId
+    const takenNames = new Set(
+      profiles.filter((p) => p.id !== editingProfileId).map((p) => p.name)
     );
-    if (isDuplicate) {
-      showAppError('Validation Error', 'A profile with this name already exists. Please choose a unique name.');
+    const invalid = validateProfileForm(profileForm, takenNames);
+    if (invalid) {
+      showAppError('Validation Error', VALIDATION_MESSAGES[invalid]);
       return;
-    }
-
-    // Validate required fields for specific profile types
-    if (profileForm.kind === 'slcan' || profileForm.kind === 'serial') {
-      if (!profileForm.connection.port) {
-        showAppError('Validation Error', 'Serial port is required. Please select a port from the dropdown.');
-        return;
-      }
-    }
-    if (profileForm.kind === 'modbus_tcp') {
-      if (!profileForm.connection.host) {
-        showAppError('Validation Error', 'Host is required for Modbus TCP.');
-        return;
-      }
     }
 
     // Apply default connection values
     const processedForm = applyConnectionDefaults(profileForm);
 
     // Determine the profile ID
-    const profileId = editingProfileId || `io_${Date.now()}`;
+    const profileId = editingProfileId || newSavedProfileId();
 
-    // Store secure fields in keyring and remove from connection object
-    const connRecord = { ...processedForm.connection } as Record<string, unknown>;
-    for (const field of SECURE_FIELDS) {
-      const value = connRecord[field];
-      if (value && typeof value === 'string' && value.trim()) {
-        const ok = await withAppError('Credential Error', `Failed to securely store ${field}.`, () =>
-          storeCredential(profileId, field, value)
-        );
-        if (!ok) return;
-        connRecord[`_${field}_stored`] = true;
-      }
-      delete connRecord[field];
+    // Secrets go to the keyring, never into settings.json.
+    let profileToSave: IOProfile;
+    try {
+      profileToSave = await storeProfileSecrets(processedForm, profileId);
+    } catch (e) {
+      showAppError('Credential Error', 'Failed to securely store a credential.', String(e));
+      return;
     }
-
-    const profileToSave: IOProfile = {
-      ...processedForm,
-      id: profileId,
-      connection: connRecord as ConnectionTypeMap[typeof processedForm.kind],
-    } as IOProfile;
 
     if (editingProfileId) {
       updateProfile(editingProfileId, profileToSave);
+      // The id is unchanged but the device behind it may not be, so a cached
+      // probe would describe the old one.
+      await clearProfileProbeCache(editingProfileId);
     } else {
       addProfile(profileToSave);
     }
@@ -225,40 +203,31 @@ export function useIOProfileHandlers() {
     });
   };
 
-  // Update MQTT format settings
-  // NOTE: We use getState() instead of the dialogPayload from the closure to avoid
-  // stale closure issues when multiple fields are updated in a single event handler.
-  const updateMqttFormat = (
-    format: 'json' | 'savvycan' | 'decode',
-    field: 'topic' | 'enabled',
-    value: string | boolean
-  ) => {
-    const currentPayload = useSettingsStore.getState().ui.dialogPayload;
-    const { profileForm } = currentPayload;
+  // Promote an ad-hoc device to a saved profile, then drop it from the
+  // ephemeral registry so it appears once, in the saved list.
+  const handleSaveAdHocProfile = async (profile: IOProfile) => {
+    const takenNames = new Set(profiles.map((p) => p.name));
+    let name = profile.name;
+    for (let n = 2; takenNames.has(name); n++) {
+      name = `${profile.name} (${n})`;
+    }
+    // An ad-hoc device keeps its secrets inline, since it never reaches disk.
+    // Saving it does, so they move to the keyring first.
+    const toSave = await storeProfileSecrets(
+      { ...profile, name } as IOProfile,
+      newSavedProfileId(),
+    );
+    addProfile(toSave);
+    await withAppError('Discard Failed', 'Saved, but could not clear the unsaved copy.', () =>
+      useAdHocProfileStore.getState().discard(profile.id)
+    );
+  };
 
-    if (!isProfileKind(profileForm, 'mqtt')) return;
-
-    const formats = profileForm.connection.formats || {
-      json: { topic: '', enabled: false },
-      savvycan: { topic: '', enabled: false },
-      decode: { topic: '', enabled: false },
-    };
-
-    setDialogPayload({
-      profileForm: {
-        ...profileForm,
-        connection: {
-          ...profileForm.connection,
-          formats: {
-            ...formats,
-            [format]: {
-              ...formats[format],
-              [field]: value,
-            },
-          },
-        },
-      },
-    });
+  const handleDiscardAdHocProfile = async (profileId: string) => {
+    // The backend refuses while a session still holds the device.
+    await withAppError('Discard Failed', 'Could not discard this device.', () =>
+      useAdHocProfileStore.getState().discard(profileId)
+    );
   };
 
   // Toggle default read profile
@@ -279,70 +248,12 @@ export function useIOProfileHandlers() {
     handleDuplicateIOProfile,
     handleSaveProfile,
     handleCancelProfile,
+    handleSaveAdHocProfile,
+    handleDiscardAdHocProfile,
     updateProfileField,
     updateConnectionField,
-    updateMqttFormat,
     toggleDefaultRead,
   };
-}
-
-// Helper: Apply default connection values based on profile kind.
-// Each case narrows the discriminated union so TypeScript knows the connection type.
-function applyConnectionDefaults(profile: IOProfile): IOProfile {
-  switch (profile.kind) {
-    case 'mqtt': {
-      const conn: MqttConnection = { ...profile.connection };
-      if (!conn.host) conn.host = 'localhost';
-      if (!conn.port) conn.port = '1883';
-      return { ...profile, connection: conn };
-    }
-    case 'wiretap': {
-      const conn: WiretapConnection = { ...profile.connection };
-      if (!conn.url) conn.url = 'http://localhost:8423';
-      if (!conn.database) conn.database = 'wiretap';
-      return { ...profile, connection: conn };
-    }
-    case 'gvret_tcp': {
-      const conn: GvretTcpConnection = { ...profile.connection };
-      if (!conn.host) conn.host = '192.168.1.100';
-      if (!conn.port) conn.port = '23';
-      return { ...profile, connection: conn };
-    }
-    case 'framelink': {
-      const conn: FrameLinkConnection = { ...profile.connection };
-      if (!conn.port) conn.port = '120';
-      return { ...profile, connection: conn };
-    }
-    case 'slcan': {
-      const conn: SlcanConnection = { ...profile.connection };
-      if (!conn.baud_rate) conn.baud_rate = '115200';
-      if (!conn.bitrate) conn.bitrate = '500000';
-      if (conn.silent_mode === undefined) conn.silent_mode = true;
-      return { ...profile, connection: conn };
-    }
-    case 'socketcan': {
-      const conn: SocketcanConnection = { ...profile.connection };
-      if (!conn.interface) conn.interface = 'can0';
-      return { ...profile, connection: conn };
-    }
-    case 'modbus_tcp': {
-      const conn: ModbusTcpConnection = { ...profile.connection };
-      if (!conn.host) conn.host = '192.168.1.100';
-      if (!conn.port) conn.port = '502';
-      if (!conn.unit_id) conn.unit_id = '1';
-      return { ...profile, connection: conn };
-    }
-    case 'serial': {
-      const conn: SerialConnection = { ...profile.connection };
-      if (!conn.baud_rate) conn.baud_rate = '115200';
-      if (!conn.data_bits) conn.data_bits = '8';
-      if (!conn.stop_bits) conn.stop_bits = '1';
-      if (!conn.parity) conn.parity = 'none';
-      return { ...profile, connection: conn };
-    }
-    default:
-      return profile;
-  }
 }
 
 export type IOProfileHandlers = ReturnType<typeof useIOProfileHandlers>;

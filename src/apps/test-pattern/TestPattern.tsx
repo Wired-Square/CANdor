@@ -31,6 +31,7 @@ import { useIOSessionManager } from "../../hooks/useIOSessionManager";
 import { useIOSourcePickerHandlers } from "../../hooks/useIOSourcePickerHandlers";
 import { useDialogManager } from "../../hooks/useDialogManager";
 import { useSettings } from "../../hooks/useSettings";
+import { useAllIOProfiles } from "../../hooks/useAllIOProfiles";
 import { ioTestStart, ioTestStop } from "../../api/testPattern";
 import type { TestConfig, IOTestState, AutoPhaseResult } from "../../api/testPattern";
 import { wsTransport } from "../../services/wsTransport";
@@ -52,7 +53,7 @@ function generateTestId(): string {
 export default function TestPattern() {
   const { t } = useTranslation("testPattern");
   const { settings } = useSettings();
-  const ioProfiles = settings?.io_profiles ?? [];
+  const ioProfiles = useAllIOProfiles();
 
   // All profiles that could potentially be used — including non-transmit ones
   // which will be shown greyed out with a reason.

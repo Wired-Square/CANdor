@@ -2072,10 +2072,9 @@ export function useAppErrorDialog() {
 }
 
 /** Source info for a bus in multi-bus mode */
-export interface BusSourceInfo {
-  profileName: string;
-  deviceBus: number;
-}
+// One definition, in busFormat — this store and SessionControls were carrying
+// separate copies of the same shape.
+export type { BusSourceInfo } from "../utils/busFormat";
 
 
 // ============================================================================

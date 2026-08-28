@@ -14,7 +14,7 @@ import * as ShareIcon from "../../../components/catalogIcons";
 import Alert from "../../../components/Alert";
 import Dialog from "../../../components/Dialog";
 import { PrimaryButton, SecondaryButton } from "../../../components/forms";
-import SecurePasswordField from "../../settings/components/SecurePasswordField";
+import SecurePasswordField from "../../../components/io/SecurePasswordField";
 import { iconMd, iconSm } from "../../../styles/spacing";
 import { bgSurface, borderDivider, caption, h2, textMedium } from "../../../styles";
 import { panelFooter } from "../../../styles/cardStyles";

@@ -44,6 +44,7 @@ import EditSelectionSetDialog from "./dialogs/EditSelectionSetDialog";
 import EditDashboardLayoutDialog from "./dialogs/EditDashboardLayoutDialog";
 import CreateBookmarkDialog from "./dialogs/CreateBookmarkDialog";
 import { useSettingsStore, type SettingsSection } from "./stores/settingsStore";
+import { useAdHocProfileStore } from "../../stores/adHocProfileStore";
 import { useSettingsForms } from "./hooks/useSettingsForms";
 import { useSettingsHandlers } from "./hooks/useSettingsHandlers";
 import { getTimeRangeCapableProfiles } from "../../utils/profileTraits";
@@ -178,6 +179,8 @@ export default function Settings() {
 
   // IO Profiles
   const ioProfiles = useSettingsStore((s) => s.ioProfiles.profiles);
+  // Ad-hoc devices from the source picker, listed apart from the saved ones.
+  const adHocProfiles = useAdHocProfileStore((s) => s.profiles);
   const defaultReadProfile = useSettingsStore(
     (s) => s.ioProfiles.defaultReadProfile,
   );
@@ -404,6 +407,9 @@ export default function Settings() {
               }
               onDeleteProfile={handlers.handleDeleteIOProfile}
               onDuplicateProfile={handlers.handleDuplicateIOProfile}
+              adHocProfiles={adHocProfiles}
+              onSaveAdHocProfile={handlers.handleSaveAdHocProfile}
+              onDiscardAdHocProfile={handlers.handleDiscardAdHocProfile}
             />
           )}
 
@@ -503,7 +509,6 @@ export default function Settings() {
         onMigratePassword={handlers.handleSaveProfile}
         onUpdateProfileField={handlers.updateProfileField}
         onUpdateConnectionField={handlers.updateConnectionField}
-        onUpdateMqttFormat={handlers.updateMqttFormat}
       />
 
       {/* Delete IO Profile Confirmation Dialog */}

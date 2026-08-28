@@ -5,11 +5,11 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCw } from "lucide-react";
-import { iconLg } from "../../../styles/spacing";
-import { listSerialPorts, SerialPortInfo } from "../../../api/serial";
-import { Input, Select } from "../../../components/forms";
-import { iconButtonBase } from "../../../styles/buttonStyles";
-import { helpText, textDanger, spaceYSmall } from "../../../styles";
+import { iconLg } from "../../styles/spacing";
+import { listSerialPorts, SerialPortInfo } from "../../api/serial";
+import { Input, Select } from "../../components/forms";
+import { iconButtonBase } from "../../styles/buttonStyles";
+import { helpText, textDanger, spaceYSmall } from "../../styles";
 
 interface Props {
   value: string;

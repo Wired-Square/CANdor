@@ -80,6 +80,12 @@ import {
 } from "./io-source-picker";
 import { isCaptureProfileId } from "../hooks/useIOSessionManager";
 import type { FramingConfig, InterfaceFramingConfig } from "./io-source-picker";
+import { DeviceEditor } from "./io-source-picker";
+import { useAdHocProfileStore, newAdHocProfileId } from "../stores/adHocProfileStore";
+import { useDeviceEditorStore } from "../stores/deviceEditorStore";
+import { useSettingsStore } from "../apps/settings/stores/settingsStore";
+import { newSavedProfileId, storeProfileSecrets } from "../settings/ioProfileForm";
+import { withAppError } from "../utils/appError";
 
 
 /** Options passed when starting a load or connect operation */
@@ -407,6 +413,16 @@ export default function IoSourcePickerDialog({
 
   // All profiles are read profiles now (mode field removed)
   const readProfiles = ioProfiles;
+
+  // ── Ad-hoc device editor ───────────────────────────────────────────────────
+  // Open for a brand-new device, or on an existing one's connection parameters.
+  // Creating a device is a picker concern (it needs the kind, the name, and
+  // the connect that follows). Editing one is not — that is the shared dialog.
+  const [creatingDevice, setCreatingDevice] = useState(false);
+  const registerAdHocProfile = useAdHocProfileStore((s) => s.register);
+  const openDeviceSettings = useDeviceEditorStore((s) => s.open);
+  const discardAdHocProfile = useAdHocProfileStore((s) => s.discard);
+  const addSettingsProfile = useSettingsStore((s) => s.addProfile);
 
   // The sources about to start, whichever way they were picked. Single-select
   // keeps `checkedSourceId` and clears the array, so reading only the array
@@ -1232,29 +1248,11 @@ export default function IoSourcePickerDialog({
     }
   };
 
-  // Handle Restart button - destroy existing session and start a new one with updated config
+  // Handle Restart button - destroy existing session and start a new one with
+  // updated config. Same shape as a device edit, so it shares the path.
   const handleRestartClick = async () => {
     if (!checkedSourceId || !checkedProfile) return;
-
-    // Destroy the existing session first
-    const existingSession = getSessionForProfile(checkedSourceId);
-    if (existingSession) {
-      try {
-        await destroyReaderSession(existingSession.id);
-      } catch (e) {
-        console.error("Failed to destroy existing session:", e);
-        // Continue anyway - maybe it was already destroyed
-      }
-    }
-
-    // Now start a new session with the updated config
-    const options = buildLoadOptions(selectedSpeed);
-    if (useExternalState) {
-      onStartLoad?.(checkedSourceId, true, options);
-    } else {
-      handleInternalStartLoad(checkedSourceId, options);
-    }
-    onClose();
+    await startDeviceSession(checkedSourceId, checkedSourceId);
   };
 
   // Handle Multi-Bus Restart button - destroy existing multi-source session and create a new one
@@ -1274,6 +1272,85 @@ export default function IoSourcePickerDialog({
     // Now create a new multi-source session with the updated config
     handleMultiWatchClick();
   };
+
+  // ── Device editor commits ──────────────────────────────────────────────────
+
+  /**
+   * Start a session on `profileId`, first dropping the session held by
+   * `replaceSessionFor` (if any). Nothing in the backend can change a bitrate or
+   * a baud rate on a running source, so a changed device means
+   * destroy-and-recreate.
+   *
+   * The two ids differ for a "use once" edit: the
+   * new session runs on an ad-hoc clone, but the session to tear down is the
+   * saved device's — and it must go, or two sessions fight over one adapter.
+   */
+  const startDeviceSession = async (profileId: string, replaceSessionFor: string | null) => {
+    const existing = replaceSessionFor ? getSessionForProfile(replaceSessionFor) : undefined;
+    if (existing) {
+      try {
+        await destroyReaderSession(existing.id);
+      } catch (e) {
+        // Already gone is fine; anything else the new session will surface.
+        console.error("Failed to destroy existing session:", e);
+      }
+    }
+    setCheckedReaderId(profileId);
+    setCheckedReaderIds([]);
+    const options = buildLoadOptions(selectedSpeed);
+    if (useExternalState) {
+      onStartLoad?.(profileId, true, options);
+    } else {
+      handleInternalStartLoad(profileId, options);
+    }
+    setCreatingDevice(false);
+    onClose();
+  };
+
+  /** Connect using an ad-hoc device: registered for this run, never persisted. */
+  const handleUseAdHocDevice = async (profile: IOProfile) => {
+    const adHocId = newAdHocProfileId();
+    await registerAdHocProfile({ ...profile, id: adHocId } as IOProfile);
+    await startDeviceSession(adHocId, null);
+  };
+
+  /** Persist the device to Settings, then connect to it. */
+  const handleSaveDevice = async (profile: IOProfile) => {
+    const profileId = newSavedProfileId();
+    // Secrets go to the keyring, never into settings.json.
+    addSettingsProfile(await storeProfileSecrets(profile, profileId));
+
+    // Flush past the store's save debounce: the backend re-reads settings.json
+    // when the session opens, so an unwritten profile would not be found.
+    await useSettingsStore.getState().saveSettings();
+    await startDeviceSession(profileId, null);
+  };
+
+  const handleEditDevice = (profileId: string) => {
+    // The shared device-settings dialog, the same one the session menu opens:
+    // one surface, one meaning, and a reconnect that keeps the session id
+    // instead of destroying and re-creating the session as this dialog would.
+    openDeviceSettings(profileId, getSessionForProfile(profileId)?.id ?? null);
+  };
+
+  const handleDiscardDevice = async (profileId: string) => {
+    // The backend refuses while a session still holds the device — the row hides
+    // the action then, but a session started elsewhere can race it.
+    const ok = await withAppError(
+      t("ioSourcePicker.deviceEditor.discardFailedTitle"),
+      t("ioSourcePicker.deviceEditor.discardFailed"),
+      () => discardAdHocProfile(profileId),
+    );
+    if (!ok) return;
+    setCheckedReaderId((prev) => (prev === profileId ? null : prev));
+    setCheckedReaderIds((prev) => prev.filter((id) => id !== profileId));
+  };
+
+  /** Names taken by existing devices, for the editor's duplicate check. */
+  const takenDeviceNames = useMemo(
+    () => new Set(readProfiles.map((p) => p.name)),
+    [readProfiles],
+  );
 
   // Handle time bounds change from TimeBoundsInput
   const handleTimeBoundsChange = useCallback((bounds: TimeBounds) => {
@@ -1668,6 +1745,270 @@ export default function IoSourcePickerDialog({
     onClose();
   };
 
+  // The source list and its options. Hoisted out of the render tree so the
+  // device editor swaps in as one line rather than burying 250 lines of JSX in
+  // a ternary arm.
+  const pickerBody = (
+    <>
+      <div className="max-h-[60vh] overflow-y-auto">
+        <SourceList
+          ioProfiles={ioProfiles}
+          onNewDevice={() => setCreatingDevice(true)}
+          onEditDevice={handleEditDevice}
+          onDiscardDevice={handleDiscardDevice}
+          checkedSourceId={checkedSourceId}
+          checkedSourceIds={checkedSourceIds}
+          defaultId={defaultId}
+          isLoading={isLoading}
+          activeTab={activeTab}
+          onTabChange={handleTabChange}
+          captureCount={captures.length}
+          captureNames={new Map(captures.map((b) => [b.id, b.name]))}
+          onSelectSource={(id) => {
+            if (id === null) {
+              hasUserExpandedRef.current = true;
+            }
+            setCheckedReaderId(id);
+            // Clear multi-bus selection when selecting a single profile
+            // (ensures mutual exclusivity between single-select and multi-select)
+            setCheckedReaderIds([]);
+            setValidationError(null);
+            if (id !== null) {
+              setSelectedCaptureId(null);
+            }
+          }}
+          onToggleSource={handleToggleReader}
+          isProfileLive={isProfileInUse}
+          getSessionForProfile={getSessionForProfile}
+          validationError={validationError}
+          allowMultiSelect={allowMultiSelect}
+          renderProfileExtra={(profileId) => {
+            // Render bus config for all real-time profiles
+            const profile = readProfiles.find((p) => p.id === profileId);
+            if (!profile || !isRealtimeProfile(profile)) return null;
+
+            const probeResult = deviceProbeResultMap.get(profileId) || null;
+            const isLoading = deviceProbeLoadingMap.get(profileId) || false;
+            const isDeviceMultiBus = isMultiBusProfile(profile);
+            // Check if config is locked for this profile (in use by 2+ sessions)
+            const usageInfo = profileUsage.get(profileId);
+            const configLocked = usageInfo?.configLocked ?? false;
+
+            // Collect output buses used by OTHER profiles for duplicate detection
+            const usedOutputBuses = new Set<number>();
+            for (const [otherId, otherConfig] of deviceBusConfigMap.entries()) {
+              if (otherId !== profileId) {
+                for (const mapping of otherConfig) {
+                  if (mapping.enabled) {
+                    usedOutputBuses.add(mapping.outputBus);
+                  }
+                }
+              }
+            }
+            for (const [otherId, otherBus] of singleBusOverrideMap.entries()) {
+              if (otherId !== profileId) {
+                usedOutputBuses.add(otherBus);
+              }
+            }
+
+            // Multi-bus devices - show DeviceBusConfig
+            if (isDeviceMultiBus || probeResult?.isMultiBus) {
+              let busConfig = deviceBusConfigMap.get(profileId);
+              if (!busConfig && probeResult) {
+                const profileIndex = checkedSourceIds.indexOf(profileId);
+                const offset = profileIndex >= 0 ? profileIndex : 0;
+                // Use profile-aware mappings for devices with interfaces[]
+                busConfig = isDeviceMultiBus
+                  ? buildDefaultBusMappings(profile).map((m, i) => ({ ...m, outputBus: offset + i }))
+                  : createDefaultBusMappings(probeResult.busCount || 5, offset);
+              }
+              busConfig = busConfig || [];
+
+              // Create GvretDeviceInfo-compatible object from probe result
+              const deviceInfo: GvretDeviceInfo | null = probeResult
+                ? { bus_count: probeResult.busCount || 5 }
+                : null;
+
+              return (
+                <DeviceBusConfig
+                  deviceInfo={deviceInfo}
+                  isLoading={isLoading}
+                  error={probeResult?.error || null}
+                  busConfig={busConfig}
+                  onBusConfigChange={(config) => {
+                    setDeviceBusConfigMap((prev) => new Map(prev).set(profileId, config));
+                  }}
+                  compact
+                  usedOutputBuses={usedOutputBuses}
+                  configLocked={configLocked}
+                />
+              );
+            }
+
+            // Single-bus devices - show SingleBusConfig
+            const busOverride = singleBusOverrideMap.get(profileId);
+            const profileForKind = ioProfiles.find((p) => p.id === profileId);
+            const profileKind = profileForKind?.kind;
+            const interfaceFraming = framingConfigMap.get(profileId);
+            return (
+              <SingleBusConfig
+                probeResult={probeResult}
+                isLoading={isLoading}
+                error={probeResult?.error || null}
+                busOverride={busOverride}
+                onBusOverrideChange={(bus) => {
+                  setSingleBusOverrideMap((prev) => {
+                    const newMap = new Map(prev);
+                    if (bus === undefined) {
+                      newMap.delete(profileId);
+                    } else {
+                      newMap.set(profileId, bus);
+                    }
+                    return newMap;
+                  });
+                }}
+                compact
+                usedBuses={usedOutputBuses}
+                profileKind={profileKind}
+                framingConfig={interfaceFraming}
+                onFramingChange={(config) => {
+                  framingUserTouchedRef.current.add(profileId);
+                  setFramingConfigMap((prev) => new Map(prev).set(profileId, config));
+                }}
+                configLocked={configLocked}
+              />
+            );
+          }}
+          activeMultiSourceSessions={activeMultiSourceSessions}
+          onSelectMultiSourceSession={handleSelectMultiSourceSession}
+          disabledProfiles={disabledProfiles}
+          hideExternal={hideCaptures}
+          hideRecorded={hideCaptures}
+          hideSessions={hideSessions}
+          profileUsage={profileUsage}
+          renderAfterSessions={!hideCaptures ? (
+            <CaptureList
+              captures={captures}
+              selectedCaptureId={selectedCaptureId}
+              checkedSourceId={checkedSourceId}
+              checkedSourceIds={checkedSourceIds}
+              onSelectCapture={handleSelectCapture}
+              onDeleteCapture={handleDeleteCapture}
+              onClearAllCaptures={handleClearAllCaptures}
+              onCaptureRenamed={() => listOrphanedCaptures().then(setCaptures).catch(console.error)}
+              onCapturePersistenceChanged={() => listOrphanedCaptures().then(setCaptures).catch(console.error)}
+              busConfig={selectedCaptureId ? deviceBusConfigMap.get(selectedCaptureId) : undefined}
+              onBusConfigChange={(config) => {
+                if (selectedCaptureId) {
+                  setDeviceBusConfigMap((prev) => new Map(prev).set(selectedCaptureId, config));
+                }
+              }}
+              isProbing={selectedCaptureId ? deviceProbeLoadingMap.get(selectedCaptureId) ?? false : false}
+              probeError={selectedCaptureId ? deviceProbeResultMap.get(selectedCaptureId)?.error ?? null : null}
+              activeSessionCaptureMap={new Map(
+                activeMultiSourceSessions
+                  .filter((s) => s.sourceType === "capture")
+                  .flatMap((s) => {
+                    const entries: [string, string][] = [[s.sessionId, s.sessionId]];
+                    if (s.captureId) entries.push([s.captureId, s.sessionId]);
+                    return entries;
+                  })
+              )}
+            />
+          ) : undefined}
+        />
+
+        {/* A Modbus source reads nothing without a poll plan, and only a
+            catalogue could supply one — so offer a range. Session-level,
+            because the backend injects one plan into every Modbus source. */}
+        {modbusProfile && !checkedMultiSourceSession && (
+          <ModbusPollConfig
+            config={modbusPoll}
+            onChange={setModbusPoll}
+            disabled={profileUsage.get(modbusProfile.id)?.configLocked ?? false}
+          />
+        )}
+
+        {/* Show load options when creating a new session */}
+        {/* Hide when: connect mode, joining an existing session, or nothing selected */}
+        {mode !== "connect" && (checkedSourceId || isMultiBusMode) && !checkedMultiSourceSession && (
+          <>
+            <LoadOptions
+              checkedSourceId={checkedSourceId}
+              checkedProfile={checkedProfile}
+              isLoading={isLoading}
+              timeBounds={timeBounds}
+              onTimeBoundsChange={handleTimeBoundsChange}
+              selectedSpeed={selectedSpeed}
+              onSpeedChange={handleSpeedChange}
+              profileBookmarks={profileBookmarks}
+            />
+
+            {/* Only show FramingOptions/FilterOptions for bytes capture - per-interface framing is now in SingleBusConfig */}
+            {isBytesCaptureSelected && (
+              <>
+                <FramingOptions
+                  checkedProfile={checkedProfile}
+                  ioProfiles={ioProfiles}
+                  checkedSourceIds={checkedSourceIds}
+                  isLoading={isLoading}
+                  framingConfig={framingConfig}
+                  onFramingConfigChange={setFramingConfig}
+                  isBytesCaptureSelected={isBytesCaptureSelected}
+                />
+
+                <FilterOptions
+                  checkedProfile={checkedProfile}
+                  ioProfiles={ioProfiles}
+                  checkedSourceIds={checkedSourceIds}
+                  isLoading={isLoading}
+                  minFrameLength={minFrameLength}
+                  onMinFrameLengthChange={setMinFrameLength}
+                  isBytesCaptureSelected={isBytesCaptureSelected}
+                />
+              </>
+            )}
+          </>
+        )}
+      </div>
+
+      <DecoderPicker catalogPath={selectedCatalogPath} onSelect={handleCatalogSelect} />
+
+      <ActionButtons
+        mode={mode}
+        isLoading={isLoading}
+        loadProfileId={loadProfileId}
+        checkedSourceId={checkedSourceId}
+        checkedProfile={checkedProfile}
+        isCaptureSelected={isCaptureSelected}
+        isCheckedProfileLive={isCheckedProfileLive || (isCheckedProfileStopped && isCheckedProfileCapture)}
+        isCheckedProfileStopped={isCheckedProfileStopped && !isCheckedProfileCapture}
+        isImporting={isImporting}
+        importError={importError}
+        onImport={handleImport}
+        onLoadClick={handleLoadClick}
+        onConnectClick={handleConnectClick}
+        onJoinClick={handleJoinClick}
+        onStartClick={handleStartClick}
+        onClose={handleCaptureOkClick}
+        onSkip={onSkip}
+        multiSelectMode={isMultiBusMode}
+        multiSelectCount={checkedSourceIds.length}
+        onMultiConnectClick={handleMultiWatchClick}
+        onRelease={subscriberId && (isCheckedProfileLive || (isCheckedProfileStopped && isCheckedProfileCapture)) ? handleRelease : undefined}
+        // Only show Restart for profiles, not for selecting existing sessions
+        onRestartClick={isCheckedProfileLive && !isCheckedProfileStopped && !checkedMultiSourceSession ? handleRestartClick : undefined}
+        isMultiSourceLive={isMultiSourceLive}
+        onMultiRestartClick={isMultiSourceLive ? handleMultiRestartClick : undefined}
+        onCaptureConnectClick={selectedCaptureId ? handleCaptureConnectClick : undefined}
+        onConnectOnlyClick={checkedSourceId && onConnect ? () => {
+          onConnect(checkedSourceId);
+          onClose();
+        } : undefined}
+      />
+    </>
+  );
+
   return (
     <>
     <Dialog isOpen={isOpen} onBackdropClick={onClose} maxWidth="max-w-md">
@@ -1691,260 +2032,18 @@ export default function IoSourcePickerDialog({
           onStopLoad={handleStopLoad}
         />
 
-        <div className="max-h-[60vh] overflow-y-auto">
-          <SourceList
-            ioProfiles={ioProfiles}
-            checkedSourceId={checkedSourceId}
-            checkedSourceIds={checkedSourceIds}
-            defaultId={defaultId}
-            isLoading={isLoading}
-            activeTab={activeTab}
-            onTabChange={handleTabChange}
-            captureCount={captures.length}
-            captureNames={new Map(captures.map((b) => [b.id, b.name]))}
-            onSelectSource={(id) => {
-              if (id === null) {
-                hasUserExpandedRef.current = true;
-              }
-              setCheckedReaderId(id);
-              // Clear multi-bus selection when selecting a single profile
-              // (ensures mutual exclusivity between single-select and multi-select)
-              setCheckedReaderIds([]);
-              setValidationError(null);
-              if (id !== null) {
-                setSelectedCaptureId(null);
-              }
-            }}
-            onToggleSource={handleToggleReader}
-            isProfileLive={isProfileInUse}
-            getSessionForProfile={getSessionForProfile}
-            validationError={validationError}
-            allowMultiSelect={allowMultiSelect}
-            renderProfileExtra={(profileId) => {
-              // Render bus config for all real-time profiles
-              const profile = readProfiles.find((p) => p.id === profileId);
-              if (!profile || !isRealtimeProfile(profile)) return null;
-
-              const probeResult = deviceProbeResultMap.get(profileId) || null;
-              const isLoading = deviceProbeLoadingMap.get(profileId) || false;
-              const isDeviceMultiBus = isMultiBusProfile(profile);
-              // Check if config is locked for this profile (in use by 2+ sessions)
-              const usageInfo = profileUsage.get(profileId);
-              const configLocked = usageInfo?.configLocked ?? false;
-
-              // Collect output buses used by OTHER profiles for duplicate detection
-              const usedOutputBuses = new Set<number>();
-              for (const [otherId, otherConfig] of deviceBusConfigMap.entries()) {
-                if (otherId !== profileId) {
-                  for (const mapping of otherConfig) {
-                    if (mapping.enabled) {
-                      usedOutputBuses.add(mapping.outputBus);
-                    }
-                  }
-                }
-              }
-              for (const [otherId, otherBus] of singleBusOverrideMap.entries()) {
-                if (otherId !== profileId) {
-                  usedOutputBuses.add(otherBus);
-                }
-              }
-
-              // Multi-bus devices - show DeviceBusConfig
-              if (isDeviceMultiBus || probeResult?.isMultiBus) {
-                let busConfig = deviceBusConfigMap.get(profileId);
-                if (!busConfig && probeResult) {
-                  const profileIndex = checkedSourceIds.indexOf(profileId);
-                  const offset = profileIndex >= 0 ? profileIndex : 0;
-                  // Use profile-aware mappings for devices with interfaces[]
-                  busConfig = isDeviceMultiBus
-                    ? buildDefaultBusMappings(profile).map((m, i) => ({ ...m, outputBus: offset + i }))
-                    : createDefaultBusMappings(probeResult.busCount || 5, offset);
-                }
-                busConfig = busConfig || [];
-
-                // Create GvretDeviceInfo-compatible object from probe result
-                const deviceInfo: GvretDeviceInfo | null = probeResult
-                  ? { bus_count: probeResult.busCount || 5 }
-                  : null;
-
-                return (
-                  <DeviceBusConfig
-                    deviceInfo={deviceInfo}
-                    isLoading={isLoading}
-                    error={probeResult?.error || null}
-                    busConfig={busConfig}
-                    onBusConfigChange={(config) => {
-                      setDeviceBusConfigMap((prev) => new Map(prev).set(profileId, config));
-                    }}
-                    compact
-                    usedOutputBuses={usedOutputBuses}
-                    configLocked={configLocked}
-                  />
-                );
-              }
-
-              // Single-bus devices - show SingleBusConfig
-              const busOverride = singleBusOverrideMap.get(profileId);
-              const profileForKind = ioProfiles.find((p) => p.id === profileId);
-              const profileKind = profileForKind?.kind;
-              const interfaceFraming = framingConfigMap.get(profileId);
-              return (
-                <SingleBusConfig
-                  probeResult={probeResult}
-                  isLoading={isLoading}
-                  error={probeResult?.error || null}
-                  busOverride={busOverride}
-                  onBusOverrideChange={(bus) => {
-                    setSingleBusOverrideMap((prev) => {
-                      const newMap = new Map(prev);
-                      if (bus === undefined) {
-                        newMap.delete(profileId);
-                      } else {
-                        newMap.set(profileId, bus);
-                      }
-                      return newMap;
-                    });
-                  }}
-                  compact
-                  usedBuses={usedOutputBuses}
-                  profileKind={profileKind}
-                  framingConfig={interfaceFraming}
-                  onFramingChange={(config) => {
-                    framingUserTouchedRef.current.add(profileId);
-                    setFramingConfigMap((prev) => new Map(prev).set(profileId, config));
-                  }}
-                  configLocked={configLocked}
-                />
-              );
-            }}
-            activeMultiSourceSessions={activeMultiSourceSessions}
-            onSelectMultiSourceSession={handleSelectMultiSourceSession}
-            disabledProfiles={disabledProfiles}
-            hideExternal={hideCaptures}
-            hideRecorded={hideCaptures}
-            hideSessions={hideSessions}
-            profileUsage={profileUsage}
-            renderAfterSessions={!hideCaptures ? (
-              <CaptureList
-                captures={captures}
-                selectedCaptureId={selectedCaptureId}
-                checkedSourceId={checkedSourceId}
-                checkedSourceIds={checkedSourceIds}
-                onSelectCapture={handleSelectCapture}
-                onDeleteCapture={handleDeleteCapture}
-                onClearAllCaptures={handleClearAllCaptures}
-                onCaptureRenamed={() => listOrphanedCaptures().then(setCaptures).catch(console.error)}
-                onCapturePersistenceChanged={() => listOrphanedCaptures().then(setCaptures).catch(console.error)}
-                busConfig={selectedCaptureId ? deviceBusConfigMap.get(selectedCaptureId) : undefined}
-                onBusConfigChange={(config) => {
-                  if (selectedCaptureId) {
-                    setDeviceBusConfigMap((prev) => new Map(prev).set(selectedCaptureId, config));
-                  }
-                }}
-                isProbing={selectedCaptureId ? deviceProbeLoadingMap.get(selectedCaptureId) ?? false : false}
-                probeError={selectedCaptureId ? deviceProbeResultMap.get(selectedCaptureId)?.error ?? null : null}
-                activeSessionCaptureMap={new Map(
-                  activeMultiSourceSessions
-                    .filter((s) => s.sourceType === "capture")
-                    .flatMap((s) => {
-                      const entries: [string, string][] = [[s.sessionId, s.sessionId]];
-                      if (s.captureId) entries.push([s.captureId, s.sessionId]);
-                      return entries;
-                    })
-                )}
-              />
-            ) : undefined}
-          />
-
-          {/* A Modbus source reads nothing without a poll plan, and only a
-              catalogue could supply one — so offer a range. Session-level,
-              because the backend injects one plan into every Modbus source. */}
-          {modbusProfile && !checkedMultiSourceSession && (
-            <ModbusPollConfig
-              config={modbusPoll}
-              onChange={setModbusPoll}
-              disabled={profileUsage.get(modbusProfile.id)?.configLocked ?? false}
+      {creatingDevice ? (
+          <div className="max-h-[70vh] overflow-y-auto">
+            <DeviceEditor
+              takenNames={takenDeviceNames}
+              onCancel={() => setCreatingDevice(false)}
+              onUseAdHoc={handleUseAdHocDevice}
+              onSave={handleSaveDevice}
             />
-          )}
-
-          {/* Show load options when creating a new session */}
-          {/* Hide when: connect mode, joining an existing session, or nothing selected */}
-          {mode !== "connect" && (checkedSourceId || isMultiBusMode) && !checkedMultiSourceSession && (
-            <>
-              <LoadOptions
-                checkedSourceId={checkedSourceId}
-                checkedProfile={checkedProfile}
-                isLoading={isLoading}
-                timeBounds={timeBounds}
-                onTimeBoundsChange={handleTimeBoundsChange}
-                selectedSpeed={selectedSpeed}
-                onSpeedChange={handleSpeedChange}
-                profileBookmarks={profileBookmarks}
-              />
-
-              {/* Only show FramingOptions/FilterOptions for bytes capture - per-interface framing is now in SingleBusConfig */}
-              {isBytesCaptureSelected && (
-                <>
-                  <FramingOptions
-                    checkedProfile={checkedProfile}
-                    ioProfiles={ioProfiles}
-                    checkedSourceIds={checkedSourceIds}
-                    isLoading={isLoading}
-                    framingConfig={framingConfig}
-                    onFramingConfigChange={setFramingConfig}
-                    isBytesCaptureSelected={isBytesCaptureSelected}
-                  />
-
-                  <FilterOptions
-                    checkedProfile={checkedProfile}
-                    ioProfiles={ioProfiles}
-                    checkedSourceIds={checkedSourceIds}
-                    isLoading={isLoading}
-                    minFrameLength={minFrameLength}
-                    onMinFrameLengthChange={setMinFrameLength}
-                    isBytesCaptureSelected={isBytesCaptureSelected}
-                  />
-                </>
-              )}
-            </>
-          )}
-        </div>
-
-        <DecoderPicker catalogPath={selectedCatalogPath} onSelect={handleCatalogSelect} />
-
-        <ActionButtons
-          mode={mode}
-          isLoading={isLoading}
-          loadProfileId={loadProfileId}
-          checkedSourceId={checkedSourceId}
-          checkedProfile={checkedProfile}
-          isCaptureSelected={isCaptureSelected}
-          isCheckedProfileLive={isCheckedProfileLive || (isCheckedProfileStopped && isCheckedProfileCapture)}
-          isCheckedProfileStopped={isCheckedProfileStopped && !isCheckedProfileCapture}
-          isImporting={isImporting}
-          importError={importError}
-          onImport={handleImport}
-          onLoadClick={handleLoadClick}
-          onConnectClick={handleConnectClick}
-          onJoinClick={handleJoinClick}
-          onStartClick={handleStartClick}
-          onClose={handleCaptureOkClick}
-          onSkip={onSkip}
-          multiSelectMode={isMultiBusMode}
-          multiSelectCount={checkedSourceIds.length}
-          onMultiConnectClick={handleMultiWatchClick}
-          onRelease={subscriberId && (isCheckedProfileLive || (isCheckedProfileStopped && isCheckedProfileCapture)) ? handleRelease : undefined}
-          // Only show Restart for profiles, not for selecting existing sessions
-          onRestartClick={isCheckedProfileLive && !isCheckedProfileStopped && !checkedMultiSourceSession ? handleRestartClick : undefined}
-          isMultiSourceLive={isMultiSourceLive}
-          onMultiRestartClick={isMultiSourceLive ? handleMultiRestartClick : undefined}
-          onCaptureConnectClick={selectedCaptureId ? handleCaptureConnectClick : undefined}
-          onConnectOnlyClick={checkedSourceId && onConnect ? () => {
-            onConnect(checkedSourceId);
-            onClose();
-          } : undefined}
-        />
-      </div>
+          </div>
+        ) : (
+          pickerBody
+        )}      </div>
     </Dialog>
 
     {/* File order dialog (opens when multiple files selected) */}

@@ -124,7 +124,8 @@
     "captureName": "Capture name",
     "resumeIo": "Resume IO stream",
     "pinCapture": "Pin capture (survives restart)",
-    "unpinCapture": "Unpin capture (will be cleared on restart)"
+    "unpinCapture": "Unpin capture (will be cleared on restart)",
+    "interfaceSettings": "Interface settings — {{name}}"
   },
   "timezone": {
     "changeTooltip": "Click to change timezone"

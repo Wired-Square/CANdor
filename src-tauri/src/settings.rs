@@ -11,6 +11,13 @@ pub struct IOProfile {
     pub connection: HashMap<String, serde_json::Value>,
     #[serde(default)]
     pub preferred_catalog: Option<String>,
+    /// A device created ad-hoc in the source picker. It lives in the in-memory
+    /// registry (`io::ephemeral`) for this run only: `load_settings` overlays it
+    /// onto `io_profiles` so every profile consumer sees it, and `save_settings`
+    /// drops it again so it never reaches settings.json. Skipped on serialise
+    /// when false, so saved profiles round-trip byte-identically.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ephemeral: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -585,14 +592,16 @@ fn paths_are_stale(settings: &AppSettings, app: &AppHandle) -> bool {
 /// those happen when the frontend calls `load_settings` via Tauri command.
 pub fn load_settings_sync(app: &AppHandle) -> Result<AppSettings, String> {
     let settings_path = get_settings_path(app)?;
-    if settings_path.exists() {
+    let mut settings = if settings_path.exists() {
         let content = std::fs::read_to_string(&settings_path)
             .map_err(|e| format!("Failed to read settings: {}", e))?;
         serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse settings: {}", e))
+            .map_err(|e| format!("Failed to parse settings: {}", e))?
     } else {
-        Ok(AppSettings::default())
-    }
+        AppSettings::default()
+    };
+    crate::io::ephemeral::overlay(&mut settings.io_profiles);
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -658,13 +667,16 @@ pub async fn load_settings(app: AppHandle) -> Result<AppSettings, String> {
             save_settings(app, settings.clone()).await?;
         }
 
+        // Last, so the internal saves above persist only what is on disk.
+        crate::io::ephemeral::overlay(&mut settings.io_profiles);
         Ok(settings)
     } else {
         // First run: create default settings and directories
         // Use with_defaults() for iOS-compatible path resolution
-        let settings = AppSettings::with_defaults(&app)?;
+        let mut settings = AppSettings::with_defaults(&app)?;
         initialize_directories(&settings)?;
         save_settings(app, settings.clone()).await?;
+        crate::io::ephemeral::overlay(&mut settings.io_profiles);
         Ok(settings)
     }
 }
@@ -708,12 +720,22 @@ fn clamp_settings(settings: &mut AppSettings) {
     settings.mcp_server_port = settings.mcp_server_port.clamp(1_024, 65_535);
 }
 
+/// Ad-hoc devices are a run-lifetime thing. `load_settings` overlays them onto
+/// `io_profiles`, so anything that round-trips a loaded settings object would
+/// otherwise persist them — drop them on the way out rather than trusting every
+/// caller to have kept them apart.
+fn drop_ephemeral_profiles(settings: &mut AppSettings) {
+    settings.io_profiles.retain(|p| !p.ephemeral);
+}
+
 #[tauri::command]
 pub async fn save_settings(app: AppHandle, mut settings: AppSettings) -> Result<(), String> {
     let settings_path = get_settings_path(&app)?;
 
     // Clamp numeric settings to their allowed ranges before persisting.
     clamp_settings(&mut settings);
+
+    drop_ephemeral_profiles(&mut settings);
 
     // Ensure directories exist when saving
     initialize_directories(&settings)?;
@@ -984,6 +1006,7 @@ mod tests {
             kind: "mqtt".to_string(),
             connection: HashMap::new(),
             preferred_catalog: None,
+            ephemeral: false,
         });
 
         let saved = serde_json::to_string(&settings).unwrap();
@@ -997,6 +1020,35 @@ mod tests {
         assert!(value.get("capture_storage").is_none(), "capture_storage key leaked");
         assert_eq!(value.get("report_dir").unwrap(), "/tmp/reports");
         assert_eq!(value.get("discovery_history_buffer").unwrap(), 12_345);
+    }
+
+    /// `load_settings` overlays ad-hoc devices onto `io_profiles`, so a caller
+    /// that round-trips a loaded settings object would persist them. `save_settings`
+    /// drops them; this guards the `retain` that does it, and the `skip_serializing_if`
+    /// that keeps saved profiles free of an `ephemeral` key.
+    #[test]
+    fn ephemeral_profiles_are_not_persisted() {
+        let mut profile = IOProfile {
+            id: "adhoc_1".to_string(),
+            name: "Ad-hoc".to_string(),
+            kind: "slcan".to_string(),
+            connection: HashMap::new(),
+            preferred_catalog: None,
+            ephemeral: true,
+        };
+        let mut settings = AppSettings::default();
+        settings.io_profiles.push(profile.clone());
+        profile.id = "io_1".to_string();
+        profile.ephemeral = false;
+        settings.io_profiles.push(profile);
+
+        drop_ephemeral_profiles(&mut settings);
+        assert_eq!(settings.io_profiles.len(), 1);
+        assert_eq!(settings.io_profiles[0].id, "io_1");
+
+        // A saved profile must not gain an `ephemeral` key in settings.json.
+        let value = serde_json::to_value(&settings.io_profiles[0]).unwrap();
+        assert!(value.get("ephemeral").is_none(), "ephemeral key leaked");
     }
 
     /// Older settings files stored the field as `capture_storage`; that spelling

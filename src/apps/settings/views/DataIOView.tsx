@@ -1,7 +1,7 @@
 // ui/src/apps/settings/views/DataIOView.tsx
 
 import React from "react";
-import { Cable, Plus, Copy, Edit2, Trash2, Star } from "lucide-react";
+import { Cable, Plus, Copy, Edit2, Trash2, Star, Save } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { iconMd } from "../../../styles/spacing";
@@ -38,6 +38,12 @@ type DataIOViewProps = {
   onDuplicateProfile: (profile: IOProfile) => void;
   defaultReadProfile: string | null;
   onToggleDefaultRead: (profileId: string) => void;
+  /** Devices created ad-hoc in the source picker, listed apart from saved ones. */
+  adHocProfiles: IOProfile[];
+  /** Promote an ad-hoc device to a saved profile. */
+  onSaveAdHocProfile: (profile: IOProfile) => void;
+  /** Drop an ad-hoc device from the run. */
+  onDiscardAdHocProfile: (profileId: string) => void;
 };
 
 
@@ -285,6 +291,9 @@ export default function DataIOView({
   onDuplicateProfile,
   defaultReadProfile,
   onToggleDefaultRead,
+  adHocProfiles,
+  onSaveAdHocProfile,
+  onDiscardAdHocProfile,
 }: DataIOViewProps) {
   const { t } = useTranslation("settings");
 
@@ -379,6 +388,50 @@ export default function DataIOView({
                   onClick={() => onDeleteProfile(profile.id)}
                   className={iconButtonHoverDanger}
                   title={t("dataIO.actions.delete")}
+                >
+                  <Trash2 className={`${iconMd} text-red-600`} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Devices created ad-hoc in the source picker. They live in memory for
+          this run, so they are listed apart from the saved ones and offer Save
+          rather than Edit. */}
+      {adHocProfiles.length > 0 && (
+        <div className={spaceYSmall}>
+          <div>
+            <h3 className={`font-medium ${textPrimary}`}>{t("dataIO.unsaved.heading")}</h3>
+            <p className={`text-sm ${textTertiary}`}>{t("dataIO.unsaved.description")}</p>
+          </div>
+          {adHocProfiles.map((profile) => (
+            <div
+              key={profile.id}
+              className={`flex items-center justify-between p-4 ${cardDefault}`}
+            >
+              <div className="flex-1">
+                <div className={`flex items-center ${gapSmall}`}>
+                  <h3 className={`font-medium ${textPrimary}`}>{profile.name}</h3>
+                  <span className={badgeInfo}>{getIOKindLabel(profile.kind)}</span>
+                  <span className={badgeNeutral}>{t("dataIO.unsaved.badge")}</span>
+                </div>
+                <div className="mt-2">{renderConnectionSummary(profile, t)}</div>
+              </div>
+
+              <div className={`flex items-center ${gapSmall}`}>
+                <button
+                  onClick={() => onSaveAdHocProfile(profile)}
+                  className={`p-2 ${hoverSubtle} ${roundedDefault} transition-colors`}
+                  title={t("dataIO.unsaved.save")}
+                >
+                  <Save className={`${iconMd} ${textSecondary}`} />
+                </button>
+                <button
+                  onClick={() => onDiscardAdHocProfile(profile.id)}
+                  className={iconButtonHoverDanger}
+                  title={t("dataIO.unsaved.discard")}
                 >
                   <Trash2 className={`${iconMd} text-red-600`} />
                 </button>

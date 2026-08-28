@@ -6,6 +6,8 @@
 
 // Core modules
 pub mod codec; // Frame codec trait and implementations
+pub mod ephemeral; // Ad-hoc devices, overlaid onto settings.io_profiles for this run
+pub mod profiles; // Profile lifecycle: reconfigure a device and reconnect it
 mod error;
 pub mod net; // Shared host/port resolution for TCP transports
 pub(crate) mod periodic; // Shared cadence primitive for interval-driven loops
@@ -3306,6 +3308,46 @@ pub async fn update_source_bus_mappings(
     );
 
     Ok(capabilities)
+}
+
+/// Reconnect one source of a running session so it picks up its profile's
+/// current connection parameters.
+///
+/// Re-applying the bus mappings the source already has is a remove-then-add,
+/// which is the whole job: the source config is unchanged, and the merge task
+/// re-reads the profile — which did change — when it respawns it.
+///
+/// Reconnecting is a session-lifecycle operation, not a device capability:
+/// no device can re-tune a bitrate or a baud rate in place, so there is nothing
+/// per-type to dispatch on.
+pub async fn reload_session_source(
+    session_id: &str,
+    profile_id: &str,
+) -> Result<(), String> {
+    let mut sessions = IO_SESSIONS.lock().await;
+    let session = sessions
+        .get_mut(session_id)
+        .ok_or_else(|| format!("Session '{}' not found", session_id))?;
+
+    let mappings = session
+        .source
+        .broker_configs()
+        .ok_or_else(|| {
+            "This source cannot be reconfigured while it is open — stop the session first"
+                .to_string()
+        })?
+        .into_iter()
+        .find(|c| c.profile_id == profile_id)
+        .ok_or_else(|| format!("Profile '{}' is not a source in this session", profile_id))?
+        .bus_mappings;
+
+    session.source.update_source_bus_mappings(profile_id, mappings)?;
+
+    tlog!(
+        "[reader] Reloaded source '{}' in session '{}'",
+        profile_id, session_id
+    );
+    Ok(())
 }
 
 /// Get all listeners for a session.

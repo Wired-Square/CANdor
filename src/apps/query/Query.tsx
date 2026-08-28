@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSettings } from "../../hooks/useSettings";
+import { useAllIOProfiles } from "../../hooks/useAllIOProfiles";
 import { useIOSessionManager, isCaptureProfileId } from "../../hooks/useIOSessionManager";
 import { useIOSourcePickerHandlers } from "../../hooks/useIOSourcePickerHandlers";
 import { useFrameIdFormat, withFrameIdFormat } from "../../hooks/useFrameIdFormat";
@@ -42,6 +43,8 @@ import AddBookmarkDialog from "../../dialogs/AddBookmarkDialog";
 function QueryInner() {
   const { t } = useTranslation("query");
   const { settings } = useSettings();
+  // Saved devices plus any created ad-hoc in the source picker.
+  const allIOProfiles = useAllIOProfiles();
 
   // Tab state
   const [activeTab, setActiveTab] = useState<string>("query");
@@ -116,8 +119,8 @@ function QueryInner() {
 
   // The Query app works against a database, which means a WireTAP backend.
   const backendProfiles = useMemo(
-    () => getTimeRangeCapableProfiles(settings?.io_profiles ?? []),
-    [settings?.io_profiles]
+    () => getTimeRangeCapableProfiles(allIOProfiles),
+    [allIOProfiles]
   );
 
   // Frame callback - frames arrive when user clicks a result row to ingest
@@ -356,7 +359,7 @@ function QueryInner() {
   const protocolBadges: ProtocolBadge[] = useMemo(() => {
     if (captureId) return [{ label: t("protocols.capture"), color: "amber" as const }];
     if (profileId) {
-      const profile = (settings?.io_profiles ?? []).find((p) => p.id === profileId);
+      const profile = allIOProfiles.find((p) => p.id === profileId);
       return [{ label: getIOKindLabel(profile?.kind), color: "blue" as const }];
     }
     return [];

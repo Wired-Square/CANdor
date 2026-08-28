@@ -1,7 +1,7 @@
 // ui/src/dialogs/io-source-picker/SourceList.tsx
 
 import { useTranslation } from "react-i18next";
-import { Bookmark, Wifi, Database, FolderOpen, GitMerge, Radio, Play, Lock } from "lucide-react";
+import { Bookmark, Wifi, Database, FolderOpen, GitMerge, Radio, Play, Lock, Plus, Pencil, Trash2 } from "lucide-react";
 import type { IOProfile } from "../../hooks/useSettings";
 import type { Session } from "../../stores/sessionStore";
 import type { ActiveSessionInfo, ProfileUsageInfo } from "../../api/io";
@@ -12,6 +12,7 @@ import { badgeSmallNeutral, badgeSmallSuccess, badgeSmallWarning, badgeSmallPurp
 import { iconMd, iconSm, iconXs, flexRowGap2 } from "../../styles/spacing";
 import { sectionHeader, caption, captionMuted, textMedium } from "../../styles/typography";
 import { borderDivider, bgSurface } from "../../styles";
+import { iconButtonHover, iconButtonHoverDanger } from "../../styles/buttonStyles";
 import type { ReactNode } from "react";
 import { AlertCircle } from "lucide-react";
 
@@ -76,6 +77,12 @@ type Props = {
   onTabChange: (tab: SourceTab) => void;
   /** Number of orphaned captures (for the Captures tab badge) */
   captureCount?: number;
+  /** Open the device editor for a new ad-hoc device. Omit to hide the affordance. */
+  onNewDevice?: () => void;
+  /** Open the device editor on an existing device's connection parameters. */
+  onEditDevice?: (profileId: string) => void;
+  /** Discard an ad-hoc device (only offered for `profile.ephemeral`). */
+  onDiscardDevice?: (profileId: string) => void;
 };
 
 export default function SourceList({
@@ -103,6 +110,9 @@ export default function SourceList({
   activeTab,
   onTabChange,
   captureCount = 0,
+  onNewDevice,
+  onEditDevice,
+  onDiscardDevice,
 }: Props) {
   const { t } = useTranslation("dialogs");
   // All profiles are read profiles now (mode field removed), separate by type
@@ -265,7 +275,9 @@ export default function SourceList({
   // Captures tab holds SQLite captures + recorded DB sources + CSV import.
   const showCapturesTab =
     !!renderAfterSessions || (!hideRecorded && recordedProfiles.length > 0) || !hideExternal;
-  const showDevicesTab = realtimeProfiles.length > 0;
+  // The Devices tab stays available with no devices at all when a device can be
+  // created from it — otherwise there is nowhere to make the first one.
+  const showDevicesTab = realtimeProfiles.length > 0 || !!onNewDevice;
   const availableTabs = [
     showSessionsTab && "sessions",
     showCapturesTab && "captures",
@@ -371,7 +383,7 @@ export default function SourceList({
   );
 
   // ── Devices tab body: real-time sources ──
-  const devicesBody = realtimeProfiles.length > 0 && (
+  const devicesBody = (realtimeProfiles.length > 0 || !!onNewDevice) && (
     <div className="border-b border-[color:var(--border-default)]">
       <div className={`px-4 py-1.5 ${captionMuted} flex items-center justify-between`}>
         <div className="flex items-center gap-1.5">
@@ -408,6 +420,7 @@ export default function SourceList({
             : onSelectSource;
 
           const usage = profileUsage?.get(profile.id);
+          const isLive = isProfileLive?.(profile.id) ?? false;
 
           return (
             <div key={profile.id}>
@@ -416,7 +429,7 @@ export default function SourceList({
                 isChecked={isProfileChecked}
                 isDefault={false}
                 isLoading={isLoading}
-                isLive={isProfileLive?.(profile.id) ?? false}
+                isLive={isLive}
                 sessionState={getSessionForProfile?.(profile.id)?.ioState}
                 onSelect={handleSelect}
                 useCheckbox={canMultiSelect}
@@ -425,12 +438,30 @@ export default function SourceList({
                 disabledReason={disabledReason}
                 usageInfo={usage}
                 isRealtime
+                onEdit={onEditDevice}
+                // Discarding a device with a live session would leave that
+                // session pointing at a profile nothing can resolve, so it is
+                // only offered once the device is idle.
+                onDiscard={profile.ephemeral && !isLive ? onDiscardDevice : undefined}
               />
               {/* Render extra content (e.g., bus config) inline below selected profile */}
               {isProfileChecked && renderProfileExtra?.(profile.id)}
             </div>
           );
         })}
+
+        {onNewDevice && (
+          <button
+            onClick={onNewDevice}
+            disabled={isLoading}
+            className={`w-full px-3 py-2 flex items-center gap-3 text-left rounded-lg transition-colors border border-dashed border-[color:var(--border-default)] hover:bg-[var(--hover-bg)] hover:border-[color:var(--status-info-text)] disabled:opacity-50 disabled:cursor-not-allowed`}
+          >
+            <Plus className={`${iconMd} text-[color:var(--text-muted)]`} />
+            <span className={`${textMedium} text-[color:var(--text-muted)]`}>
+              {t("ioSourcePicker.sources.newDevice")}
+            </span>
+          </button>
+        )}
       </div>
     </div>
   );
@@ -540,6 +571,8 @@ function SourceButton({
   disabledReason,
   usageInfo,
   isRealtime = false,
+  onEdit,
+  onDiscard,
 }: {
   profile: IOProfile;
   isChecked: boolean;
@@ -554,6 +587,10 @@ function SourceButton({
   disabledReason?: string;
   usageInfo?: ProfileUsageInfo;
   isRealtime?: boolean;
+  /** Open the device editor on this device's connection parameters. */
+  onEdit?: (profileId: string) => void;
+  /** Discard this device — only passed for ad-hoc ones. */
+  onDiscard?: (profileId: string) => void;
 }) {
   const { t } = useTranslation("dialogs");
   // Determine badge text and colors based on session state
@@ -637,6 +674,11 @@ function SourceButton({
               {t("ioSourcePicker.sources.busLabel", { bus: busNumber })}
             </span>
           )}
+          {profile.ephemeral && (
+            <span className={badgeSmallNeutral} title={t("ioSourcePicker.sources.unsavedHint")}>
+              {t("ioSourcePicker.sources.unsaved")}
+            </span>
+          )}
           {isLive && !isDisabled && (
             isStopped ? (
               <span className={badgeSmallWarning}>{t("ioSourcePicker.sources.stopped")}</span>
@@ -672,6 +714,36 @@ function SourceButton({
           )}
         </div>
       </div>
+
+      {/* Row actions. stopPropagation so they don't select the row. */}
+      {!isDisabled && (onEdit || onDiscard) && (
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {onEdit && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onEdit(profile.id);
+              }}
+              className={iconButtonHover}
+              title={t("ioSourcePicker.sources.editDevice")}
+            >
+              <Pencil className={`${iconXs} text-[color:var(--text-muted)]`} />
+            </button>
+          )}
+          {onDiscard && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDiscard(profile.id);
+              }}
+              className={iconButtonHoverDanger}
+              title={t("ioSourcePicker.sources.discardDevice")}
+            >
+              <Trash2 className={`${iconXs} text-[color:var(--text-muted)]`} />
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

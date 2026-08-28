@@ -18,19 +18,10 @@ import {
   IFACE_RS485,
   IFACE_RS232,
 } from "../../../api/framelinkAxes";
+import { CAN_BITRATES } from "../../../components/io/canBitrates";
 
-const CAN_BITRATES = [
-  { value: 10000, label: "10 Kbit/s" },
-  { value: 20000, label: "20 Kbit/s" },
-  { value: 50000, label: "50 Kbit/s" },
-  { value: 100000, label: "100 Kbit/s" },
-  { value: 125000, label: "125 Kbit/s" },
-  { value: 250000, label: "250 Kbit/s" },
-  { value: 500000, label: "500 Kbit/s" },
-  { value: 750000, label: "750 Kbit/s" },
-  { value: 1000000, label: "1 Mbit/s" },
-];
-
+// UART rates are FrameLink's own set; the CAN ones come from the shared table
+// that mirrors the rates the backend accepts.
 const UART_BITRATES = [
   { value: 300, label: "300" },
   { value: 1200, label: "1,200" },

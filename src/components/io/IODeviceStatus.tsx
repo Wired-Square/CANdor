@@ -6,9 +6,9 @@
 
 import { useTranslation } from "react-i18next";
 import { CircleCheck, CircleX, Loader2, RefreshCw } from "lucide-react";
-import { iconMd, iconLg } from "../../../styles/spacing";
-import { caption, iconButtonHoverSmall } from "../../../styles";
-import { badgeSmallSuccess, badgeSmallNeutral } from "../../../styles/badgeStyles";
+import { iconMd, iconLg } from "../../styles/spacing";
+import { caption, iconButtonHoverSmall } from "../../styles";
+import { badgeSmallSuccess, badgeSmallNeutral } from "../../styles/badgeStyles";
 
 export type DeviceProbeState = "idle" | "probing" | "success" | "error";
 

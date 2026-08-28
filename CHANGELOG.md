@@ -2,6 +2,14 @@
 
 All notable changes to WireTAP will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Change a device's settings without losing the session.** The session menu's interface rows are now buttons: click one to open its device settings and change bitrate, baud rate, 8N1, host or port. Applying reconnects that device on the new settings — a bitrate cannot change under a running port, so the connection is re-established — but the session and every app watching it stay put, so you keep your capture. A multi-bus session lists each interface separately, so there is no "which device?" step.
+
+- **Create devices from the source picker.** Any picker now has a **New device…** entry, so plugging in an unfamiliar adapter no longer means a round trip through Settings. A new device connects unsaved and is listed as **Unsaved** until you tick *Save to Settings*; unsaved devices are gone on restart. The pencil on a saved device opens the same settings dialog the session menu does.
+
 ## [0.11.0] - 2026-08-20
 
 ### Added

@@ -6,6 +6,8 @@
 export interface BusSourceInfo {
   profileName: string;
   deviceBus: number;
+  /** The device behind this bus, so the UI can offer to reconfigure it. */
+  profileId: string;
 }
 
 /**

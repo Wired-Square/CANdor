@@ -505,7 +505,12 @@
       "active": "Active",
       "framesCount": "{{count}} frames",
       "busLabel": "Bus {{bus}}",
-      "configLocked": "Config locked (in use by multiple sessions)"
+      "configLocked": "Config locked (in use by multiple sessions)",
+      "newDevice": "New device…",
+      "editDevice": "Edit connection",
+      "discardDevice": "Discard device",
+      "unsaved": "Unsaved",
+      "unsavedHint": "Created here and kept for this run only. Save it in the editor to keep it."
     },
     "singleBusConfig": {
       "deviceNotResponding": "Device not responding",
@@ -557,6 +562,32 @@
       "pinTooltip": "Pin capture (survives restart)",
       "delete": "Delete capture",
       "sendToBackend": "Send to backend"
+    },
+    "deviceEditor": {
+      "newTitle": "New device",
+      "newHint": "Connect without saving, or tick Save to Settings to keep it.",
+      "editTitle": "Edit {{name}}",
+      "editHint": "Use once leaves the saved device untouched; Save writes the change back.",
+      "kind": "Device type",
+      "name": "Name",
+      "namePlaceholder": "Name this device",
+      "saveToSettings": "Save to Settings",
+      "cancel": "Cancel",
+      "connect": "Connect",
+      "useOnce": "Use once",
+      "useOnceReconnect": "Use once & reconnect",
+      "save": "Save",
+      "saveReconnect": "Save & reconnect",
+      "modifiedName": "{{name}} (modified)",
+      "probeFailed": "Save this device first to probe it",
+      "errors": {
+        "nameRequired": "Give the device a name.",
+        "nameDuplicate": "Another device already has this name.",
+        "portRequired": "Pick a serial port.",
+        "hostRequired": "A Modbus TCP device needs a host."
+      },
+      "discardFailedTitle": "Discard Failed",
+      "discardFailed": "Could not discard this device."
     }
   },
   "modbusPoll": {
@@ -568,5 +599,21 @@
     "intervalMs": "Every (ms)",
     "summary": "{{count}} registers every {{interval}} ms.",
     "rangeInvalid": "Start must not be past End."
+  },
+  "deviceSettings": {
+    "unsaved": "Unsaved · this run only",
+    "liveHint": "The device is streaming. Applying drops the connection and re-establishes it on the new settings — a bitrate or baud rate is fixed when the port opens and cannot change under a running session. The session and everything watching it stay put.",
+    "savedFooter": "Applying changes this device everywhere it is used.",
+    "ephemeralFooter": "This device is not saved; changes last for this run.",
+    "cancel": "Cancel",
+    "apply": "Save",
+    "applyReconnect": "Apply & reconnect",
+    "probeFailed": "Could not reach the device",
+    "errors": {
+      "nameRequired": "Give the device a name.",
+      "nameDuplicate": "Another device already has this name.",
+      "portRequired": "Pick a serial port.",
+      "hostRequired": "A Modbus TCP device needs a host."
+    }
   }
 }

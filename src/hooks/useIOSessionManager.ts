@@ -33,6 +33,7 @@ import { markFavoriteUsed, type TimeRangeFavorite } from "../utils/favorites";
 import { localToUtc } from "../utils/timeFormat";
 import { isRealtimeProfile, generateLoadSessionId } from "../dialogs/io-source-picker/utils";
 import { isMultiSourceCapable, buildDefaultBusMappings } from "../utils/profileTraits";
+import { useAdHocProfileStore } from "../stores/adHocProfileStore";
 import { WINDOW_EVENTS } from "../events/registry";
 
 /** Attach the decoder chosen in the picker to a freshly-created session (cross-app). */
@@ -171,7 +172,6 @@ export interface UseIOSessionManagerResult {
   /** Profile name for display */
   ioProfileName: string | undefined;
   /** Map of profile ID to name */
-  profileNamesMap: Map<string, string>;
 
   // ---- Multi-Bus State ----
   /** Profiles in the multi-bus session */
@@ -402,6 +402,19 @@ export function useIOSessionManager(
   const bytesCaptureId = useSessionStore((s) =>
     effectiveSessionId ? s.sessions[effectiveSessionId]?.bytesCaptureId ?? null : null);
 
+  // Resolve a profile id, falling back to the ad-hoc registry.
+  //
+  // Read imperatively rather than through the merged `ioProfiles` prop: a device
+  // created in the picker is registered and connected in the same handler, so
+  // the parent's re-render has not landed yet and the closure would still hold
+  // the pre-registration list.
+  const findProfile = useCallback(
+    (id: string): IOProfile | undefined =>
+      ioProfiles.find((p) => p.id === id) ??
+      useAdHocProfileStore.getState().profiles.find((p) => p.id === id),
+    [ioProfiles],
+  );
+
   // Profile name for display
   const ioProfileName = useMemo(() => {
     if (multiBusProfiles.length > 1) {
@@ -420,11 +433,6 @@ export function useIOSessionManager(
     }
     return undefined;
   }, [ioProfile, sourceProfileId, multiBusProfiles, ioProfiles]);
-
-  // Profile names map for multi-bus
-  const profileNamesMap = useMemo(() => {
-    return new Map(ioProfiles.map((p) => [p.id, p.name]));
-  }, [ioProfiles]);
 
   // ---- Ingest frame suppression ----
   const isLoadingRef = useRef(isLoading);
@@ -767,7 +775,7 @@ export function useIOSessionManager(
     const effectiveBusMappings = new Map(busMappings ?? []);
     for (const profileId of profileIds) {
       if (!effectiveBusMappings.has(profileId)) {
-        const profile = ioProfiles.find((p) => p.id === profileId);
+        const profile = findProfile(profileId);
         if (profile) {
           effectiveBusMappings.set(profileId, buildDefaultBusMappings(profile));
         }
@@ -784,7 +792,9 @@ export function useIOSessionManager(
       appName,
       profileIds,
       busMappings: effectiveBusMappings,
-      profileNames: profileNamesMap,
+      // Resolved at call time for the same reason busToSource is below: a
+      // device registered moments ago is not in the prop array's closure yet.
+      profileNames: new Map(profileIds.map((id) => [id, findProfile(id)?.name ?? id])),
       // Pass framing config for serial sources
       framingEncoding,
       delimiter,
@@ -811,16 +821,19 @@ export function useIOSessionManager(
     session.markSessionSwitch(sessionId);
     await createAndStartMultiSourceSession(createOptions);
 
-    // Build output bus → source mapping
-    const busToSource = new Map<number, { profileName: string; deviceBus: number }>();
+    // Build output bus → source mapping. Names come from `findProfile`, not the
+    // prop array: a device registered moments ago in the picker is not in that
+    // closure yet, and the bus would be labelled with its raw id.
+    const busToSource = new Map<number, BusSourceInfo>();
     if (busMappings) {
       for (const [profileId, mappings] of busMappings) {
-        const profileName = profileNamesMap.get(profileId) ?? profileId;
+        const profileName = findProfile(profileId)?.name ?? profileId;
         for (const mapping of mappings) {
           if (mapping.enabled) {
             busToSource.set(mapping.outputBus, {
               profileName,
               deviceBus: mapping.deviceBus,
+              profileId,
             });
           }
         }
@@ -837,7 +850,7 @@ export function useIOSessionManager(
     setIsDetached(false);
 
     attachSessionCatalog(sessionId, opts.catalogPath);
-  }, [appName, profileNamesMap, setMultiBusProfiles, setOutputBusToSource, setIoProfile]);
+  }, [appName, findProfile, setMultiBusProfiles, setOutputBusToSource, setIoProfile]);
 
   // Join existing multi-source session
   const joinExistingSession = useCallback(async (
@@ -880,7 +893,7 @@ export function useIOSessionManager(
     opts: LoadOptions,
   ) => {
     const profiles = profileIds
-      .map((id) => ioProfiles.find((p) => p.id === id))
+      .map((id) => findProfile(id))
       .filter((p): p is IOProfile => p !== undefined);
     const allMultiSource = profiles.length > 0 && profiles.every((p) => isMultiSourceCapable(p));
     const isSingleNonMulti = profileIds.length === 1 && !allMultiSource;
@@ -1002,7 +1015,7 @@ export function useIOSessionManager(
     loadSessionIdRef.current = sessionId;
 
     const profiles = profileIds
-      .map((id) => ioProfiles.find((p) => p.id === id))
+      .map((id) => findProfile(id))
       .filter((p): p is IOProfile => p !== undefined);
     const allMultiSource = profiles.length > 0 && profiles.every((p) => isMultiSourceCapable(p));
     const isSingleNonMulti = profileIds.length === 1 && !allMultiSource;
@@ -1143,7 +1156,7 @@ export function useIOSessionManager(
       // - If jumping to a bookmark for the same profile we're already watching, reuse the session ID
       //   (other apps stay connected, capture is finalised and new one created)
       // - If switching to a different profile, generate a unique session ID
-      const targetProfile = ioProfiles.find((p) => p.id === targetProfileId);
+      const targetProfile = findProfile(targetProfileId);
       const isRecorded = targetProfile ? !isRealtimeProfile(targetProfile) : false;
       const isSameProfile = sourceProfileId === targetProfileId;
 
@@ -1260,7 +1273,7 @@ export function useIOSessionManager(
 
     // Set default speed from the selected profile if it has one (non-capture only)
     if (profileId && !isCaptureProfileId(profileId)) {
-      const profile = ioProfiles.find((p) => p.id === profileId);
+      const profile = findProfile(profileId);
       if (profile && profile.kind === "wiretap" && profile.connection?.default_speed) {
         const defaultSpeed = parseFloat(profile.connection.default_speed);
         setPlaybackSpeedProp?.(defaultSpeed);
@@ -1332,7 +1345,6 @@ export function useIOSessionManager(
     ioProfile,
     setIoProfile,
     ioProfileName,
-    profileNamesMap,
 
     // Multi-Bus State
     multiBusProfiles,

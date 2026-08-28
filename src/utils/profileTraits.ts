@@ -262,12 +262,35 @@ export function isProfileAvailableOnPlatform(profile: IOProfile, platform: Platf
 }
 
 /**
- * Get all profile kinds available on a given platform.
+ * The order profile kinds are offered in, roughly alphabetical by display name.
+ * Kept explicit so every kind picker — Settings and the source picker's device
+ * editor — lists them the same way, rather than in registry declaration order.
+ *
+ * A `Record`, not an array: a new kind added to `ProfileKind` and forgotten here
+ * would otherwise vanish from every kind picker with no compile error, and so
+ * be unaddable from the UI.
+ */
+const PROFILE_KIND_DISPLAY_ORDER: Record<ProfileKind, number> = {
+  framelink: 0,
+  gs_usb: 1,
+  gvret_tcp: 2,
+  gvret_usb: 3,
+  modbus_tcp: 4,
+  mqtt: 5,
+  wiretap: 6,
+  serial: 7,
+  slcan: 8,
+  socketcan: 9,
+  virtual: 10,
+};
+
+/**
+ * Get all profile kinds available on a given platform, in display order.
  */
 export function getAvailableProfileKinds(platform: Platform): ProfileKind[] {
-  return (Object.keys(PROFILE_TRAIT_REGISTRY) as ProfileKind[]).filter(
-    (kind) => PROFILE_TRAIT_REGISTRY[kind].platforms.includes(platform)
-  );
+  return (Object.keys(PROFILE_TRAIT_REGISTRY) as ProfileKind[])
+    .filter((kind) => PROFILE_TRAIT_REGISTRY[kind].platforms.includes(platform))
+    .sort((a, b) => PROFILE_KIND_DISPLAY_ORDER[a] - PROFILE_KIND_DISPLAY_ORDER[b]);
 }
 
 // ============================================================================

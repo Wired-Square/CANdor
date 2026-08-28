@@ -197,6 +197,13 @@ interface IOProfileBase {
   id: string;
   name: string;
   preferred_catalog?: string;
+  /**
+   * An ad-hoc device created in the source picker. It lives in the Rust
+   * ephemeral registry for this run only — `normalizeSettings` keeps these out
+   * of `io_profiles`, and the backend drops them on save. Use
+   * `useAllIOProfiles()` where both saved and ad-hoc devices are wanted.
+   */
+  ephemeral?: boolean;
 }
 
 /** IOProfile discriminated union — connection type depends on kind */
@@ -470,7 +477,10 @@ export function normalizeSettings(
     decoder_dir: settings.decoder_dir || defaultDirs?.decoders || "",
     dump_dir: settings.dump_dir || defaultDirs?.dumps || "",
     report_dir: settings.report_dir || defaultDirs?.reports || "",
-    io_profiles: settings.io_profiles || [],
+    // Ad-hoc devices arrive here because the backend overlays them onto
+    // io_profiles for every profile consumer. Drop them so the settings store,
+    // its dirty-tracking baseline and the save payload stay to what is on disk.
+    io_profiles: (settings.io_profiles || []).filter((p) => !p.ephemeral),
     default_read_profile: settings.default_read_profile ?? null,
     default_write_profiles: settings.default_write_profiles ?? [],
     display_frame_id_format: settings.display_frame_id_format === "decimal" ? "decimal" : "hex",

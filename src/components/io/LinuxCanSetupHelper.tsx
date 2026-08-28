@@ -5,10 +5,10 @@
 
 import { useState, useEffect } from "react";
 import { Copy, Check, Terminal } from "lucide-react";
-import { iconMd, flexRowGap2 } from "../../../styles/spacing";
-import { getCanSetupCommand } from "../../../api/gs_usb";
-import { alertWarning, helpText } from "../../../styles";
-import { COPY_FEEDBACK_TIMEOUT_MS } from "../../../constants";
+import { iconMd, flexRowGap2 } from "../../styles/spacing";
+import { getCanSetupCommand } from "../../api/gs_usb";
+import { alertWarning, helpText } from "../../styles";
+import { COPY_FEEDBACK_TIMEOUT_MS } from "../../constants";
 
 interface Props {
   /** CAN interface name (e.g., "can0") */

@@ -13,6 +13,7 @@ import { useIOSourcePickerHandlers } from "../../hooks/useIOSourcePickerHandlers
 import { useDialogManager } from "../../hooks/useDialogManager";
 import { useMenuSessionControl } from "../../hooks/useMenuSessionControl";
 import { useSettings, type IOProfile } from "../../hooks/useSettings";
+import { useAllIOProfiles } from "../../hooks/useAllIOProfiles";
 import { withFrameIdFormat } from "../../hooks/useFrameIdFormat";
 import { useTransmitHandlers } from "./hooks/useTransmitHandlers";
 import { useTransmitHistorySubscription } from "./hooks/useTransmitHistorySubscription";
@@ -84,7 +85,7 @@ function TransmitInner() {
   const { t } = useTranslation("transmit");
   // Settings for IO profiles
   const { settings } = useSettings();
-  const ioProfiles = settings?.io_profiles ?? [];
+  const ioProfiles = useAllIOProfiles();
 
   // Get all CAN/serial profiles that could potentially be used for transmit
   const transmitProfiles = useMemo(

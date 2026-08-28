@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { emit } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { useSettings, getSaveFrameIdFormat } from "../../hooks/useSettings";
+import { useAllIOProfiles } from "../../hooks/useAllIOProfiles";
 import { useFrameIdFormat, withFrameIdFormat } from "../../hooks/useFrameIdFormat";
 import { useIOSessionManager, type SessionReconfigurationInfo } from '../../hooks/useIOSessionManager';
 import { useIOSourcePickerHandlers } from '../../hooks/useIOSourcePickerHandlers';
@@ -69,6 +70,8 @@ function protocolOf(frameInfoMap: Map<string, { protocol?: string }>): string | 
 function DiscoveryInner() {
   const { t, i18n } = useTranslation("discovery");
   const { settings } = useSettings();
+  // Saved devices plus any created ad-hoc in the source picker.
+  const allIOProfiles = useAllIOProfiles();
 
 
 
@@ -440,7 +443,7 @@ function DiscoveryInner() {
   // Use the IO session manager hook - manages session lifecycle, ingest, multi-bus, and derived state
   const manager = useIOSessionManager({
     appName: "discovery",
-    ioProfiles: settings?.io_profiles ?? [],
+    ioProfiles: allIOProfiles,
     store: { ioProfile, setIoProfile },
     enableIngest: true,
     onIngestComplete: handleIngestComplete,
@@ -530,18 +533,16 @@ function DiscoveryInner() {
     // Resolution answers "which session", not "is anyone reading it" — a session
     // whose source ended keeps its Modbus capabilities, so this stays non-null
     // while nothing polls. `live` below is what answers the second half.
-    if (!sessionId || !settings?.io_profiles) return null;
+    if (!sessionId) return null;
     if (!capabilities?.traits?.protocols?.includes("modbus")) return null;
     const candidates = ioProfiles.length > 0 ? ioProfiles : sourceProfileId ? [sourceProfileId] : [];
     for (const profileId of candidates) {
-      const profile = settings.io_profiles.find(
-        (p: import("../../types/common").IOProfile) => p.id === profileId
-      );
+      const profile = allIOProfiles.find((p) => p.id === profileId);
       if (profile?.kind !== 'modbus_tcp') continue;
       return { sessionId, profileId, name: profile.name || profileId };
     }
     return null;
-  }, [ioProfiles, sourceProfileId, sessionId, settings?.io_profiles, capabilities?.traits?.protocols]);
+  }, [ioProfiles, sourceProfileId, sessionId, allIOProfiles, capabilities?.traits?.protocols]);
 
   const onScanSession = isModbusScanSession(sessionId);
 
@@ -1083,7 +1084,7 @@ function DiscoveryInner() {
     <AppLayout
       topBar={
         <DiscoveryTopBar
-          ioProfiles={settings?.io_profiles || []}
+          ioProfiles={allIOProfiles}
           ioProfile={ioProfile}
           onIoProfileChange={handlers.handleIoProfileChange}
           defaultReadProfileId={settings?.default_read_profile}
@@ -1274,7 +1275,7 @@ function DiscoveryInner() {
       <IoSourcePickerDialog
         isOpen={dialogs.ioSessionPicker.isOpen}
         onClose={() => dialogs.ioSessionPicker.close()}
-        ioProfiles={settings?.io_profiles || []}
+        ioProfiles={allIOProfiles}
         selectedId={ioProfile}
         selectedIds={ioProfiles.length > 0 ? ioProfiles : undefined}
         defaultId={settings?.default_read_profile}

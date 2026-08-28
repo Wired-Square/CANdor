@@ -11,7 +11,7 @@ import { UploadCloud } from "lucide-react";
 import Dialog from "../components/Dialog";
 import Input from "../components/forms/Input";
 import Select from "../components/forms/Select";
-import { useSettings } from "../hooks/useSettings";
+import { useAllIOProfiles } from "../hooks/useAllIOProfiles";
 import {
   apiCreateDatabase,
   apiImportCapture,
@@ -38,11 +38,11 @@ export default function SendCaptureToBackendDialog({
   captureName,
 }: Props) {
   const { t } = useTranslation("common");
-  const { settings } = useSettings();
+  const allIOProfiles = useAllIOProfiles();
 
   const wiretapProfiles = useMemo(
-    () => (settings?.io_profiles ?? []).filter((p) => p.kind === "wiretap"),
-    [settings?.io_profiles],
+    () => allIOProfiles.filter((p) => p.kind === "wiretap"),
+    [allIOProfiles],
   );
 
   const [profileId, setProfileId] = useState("");

@@ -75,11 +75,18 @@ fn get_cached_probe(profile_id: &str) -> Option<DeviceProbeResult> {
 }
 
 /// Clear the cached probe result for a profile (called when device errors or disconnects)
-#[allow(dead_code)]
 pub fn clear_probe_cache(profile_id: &str) {
     if let Ok(mut cache) = PROBE_CACHE.lock() {
         cache.remove(profile_id);
     }
+}
+
+/// Drop a profile's cached probe after its connection parameters changed.
+/// Editing a saved device keeps its id, so without this the next probe would
+/// report the device it used to point at.
+#[tauri::command(rename_all = "snake_case")]
+pub fn clear_profile_probe_cache(profile_id: String) {
+    clear_probe_cache(&profile_id);
 }
 
 /// Track that a session is using a specific profile.

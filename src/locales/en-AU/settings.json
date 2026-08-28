@@ -355,6 +355,13 @@
       "unit": "unit",
       "config": "config",
       "notSet": "(not set)"
+    },
+    "unsaved": {
+      "heading": "Unsaved devices",
+      "description": "Created in a source picker and kept for this run only. Save one to keep it after a restart.",
+      "badge": "This run only",
+      "save": "Save to Settings",
+      "discard": "Discard"
     }
   },
   "dialogs": {

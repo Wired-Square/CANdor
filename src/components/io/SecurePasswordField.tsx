@@ -1,9 +1,9 @@
 // ui/src/apps/settings/components/SecurePasswordField.tsx
 import { useState } from "react";
 import { Shield, ShieldAlert, Eye, EyeOff } from "lucide-react";
-import { iconMd, iconXs, flexRowGap2 } from "../../../styles/spacing";
-import { Input } from "../../../components/forms";
-import { labelDefault, helpText, alertWarning, hoverLight, roundedDefault } from "../../../styles";
+import { iconMd, iconXs, flexRowGap2 } from "../../styles/spacing";
+import { Input } from "../../components/forms";
+import { labelDefault, helpText, alertWarning, hoverLight, roundedDefault } from "../../styles";
 
 type Props = {
   value: string;

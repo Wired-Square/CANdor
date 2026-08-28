@@ -249,6 +249,87 @@ gets `[Connect]`; a `recorded` source gets `[Load]` and `[Connect]`. An
 existing session gets `[Join]` / `[Restart]` / `[Resume & Join]`. Joinability
 is gated by `InterfaceTraits.multi_source`.
 
+### Where a device lives — saved and ad-hoc profiles
+
+A device is an `IOProfile`, and it lives in one of two places:
+
+| | Saved | Ad-hoc |
+|---|---|---|
+| Stored in | `settings.json` (`io_profiles`) | `io::ephemeral`, in memory |
+| Id | `io_<epoch_ms>` | `adhoc_<epoch_ms>` |
+| Lifetime | Forever | This run |
+| `IOProfile.ephemeral` | `false` (skipped on serialise) | `true` |
+
+**Every profile consumer sees both, with no code of its own.**
+`settings::load_settings` (and `load_settings_sync`) call
+[`ephemeral::overlay`](../src-tauri/src/io/ephemeral.rs), which appends the
+ad-hoc devices to `io_profiles` on the way out; `save_settings` drops them again
+on the way in. So `choose_profile_by_id`, `resolve_source_config`, the broker
+spawner, `probe_device`, transmit, Modbus and MCP all resolve an ad-hoc device by
+id exactly as they resolve a saved one. The alternative — a resolver threaded
+through ~22 lookup sites, several returning a borrowed `&'a IOProfile` — is what
+this avoids.
+
+Two rules hold the design up, both enforced in Rust:
+
+- **A saved profile wins an id collision** (`overlay` skips an id already
+  present), and `register_ephemeral_profile` rejects a saved id up front so the
+  collision cannot be created by accident.
+- **An ad-hoc device cannot be discarded while a session holds it** — the
+  session would be left pointing at a profile nothing can resolve. The UI hides
+  the affordance; `unregister_ephemeral_profile` enforces it against races.
+
+The frontend keeps the two apart: `normalizeSettings` filters `ephemeral` out of
+`io_profiles`, and [`useAllIOProfiles`](../src/hooks/useAllIOProfiles.ts) merges
+the settings store with `adHocProfileStore` for anything that feeds session
+start. `useIOSessionManager` resolves ids through a `findProfile` that also
+reads the ad-hoc store imperatively — a device registered and connected in the
+same handler is not in the prop array's closure yet.
+
+### Reconfiguring a device
+
+Changing a device's connection parameters — bitrate, baud rate, 8N1, host, port
+— is **one backend command**,
+[`io::profiles::reconfigure_device`](../src-tauri/src/io/profiles.rs):
+
+```
+reconfigure_device(profile_id, connection, session_id?)
+        │
+        ├─ credentials::split_secrets     secrets → keyring, markers stay
+        ├─ write                          settings.json, or the ephemeral registry
+        ├─ clear_probe_cache              the id is unchanged; the device may not be
+        └─ reload_session_source          if a session is streaming it
+```
+
+The steps are inseparable, which is why it is one command rather than a frontend
+sequence: the profile must be written *before* the source respawns, or the device
+comes back on the settings that were just replaced.
+
+`reload_session_source` re-applies the bus mappings the source already has, which
+is a remove-then-add through the broker — and the merge task re-reads the profile
+when it respawns the source. **The session id does not change**, so every app
+watching simply sees the device reconnect.
+
+Reconnecting is a session-lifecycle operation, not a device capability: no device
+can re-tune a bitrate or a baud rate in place, so there is nothing per-type to
+dispatch on. It needs `broker_configs()`, so a single-source session (which boxes
+its device directly) reports the limit rather than failing obscurely.
+
+Two surfaces open this, both landing on the same command:
+
+- **The session menu's interface rows** ([SessionControls](../src/components/SessionControls.tsx)),
+  one row per interface, so a multi-bus session needs no "which device?" step.
+- **The pencil on a device row** in the source picker.
+
+Both open [DeviceSettingsDialog](../src/dialogs/DeviceSettingsDialog.tsx), hosted
+once at the app root and driven by `deviceEditorStore`. It dispatches globally
+rather than taking a prop because the action is app-agnostic — the backend does
+the whole thing from `(profileId, sessionId)` — and the alternative is a prop
+threaded through six app top bars.
+[DeviceEditor](../src/dialogs/io-source-picker/DeviceEditor.tsx) inside the
+picker is **creation only**; it needs the kind selector, the name and the connect
+that follows, none of which apply to a device that already exists.
+
 ---
 
 ## 3. From dialog to backend
@@ -297,6 +378,16 @@ message it returns.
 
 Only the prefixed marker is recognised. Unprefixed variants (`password_stored`)
 were never written by any release and their read support has been removed.
+
+Writing is the mirror of that, and equally not to be re-implemented:
+**`credentials::split_secrets(&mut profile)`** moves any plaintext secret out of
+`connection` into the keyring and leaves the marker. Every path that persists a
+profile goes through it — a password left in `connection` would be serialised
+into `settings.json`, which `save_settings` does nothing to prevent. A field the
+caller did not supply is left alone, so an edit that never touched the password
+keeps the stored one rather than clearing it. Ad-hoc devices deliberately skip
+it: they never reach disk, and `resolve_secret` falls back to the inline value
+when there is no marker.
 
 **Legacy namespace drain (transitional).** Entries written before the CANdor →
 WireTAP rename sit under `com.candor.io-profiles`. `get_credential` falls back to
@@ -847,7 +938,7 @@ it (marks it persistent). The Speed item is always present but disabled
 ### `replace_session_source` — the shared primitive
 
 All three transitions (stop→capture, capture→live, recorded→capture replay) go
-through [`replace_session_source`](../src-tauri/src/io/mod.rs#L1920):
+through [`replace_session_source`](../src-tauri/src/io/mod.rs):
 
 1. Stop old device (idempotent — no-op if already stopped).
 2. Record old device type.
@@ -1442,6 +1533,13 @@ per-task interval can't express.
 |------|------|
 | [src/components/SessionControls.tsx](../src/components/SessionControls.tsx) | Session chip + click-to-open session menu (details, change source, playback, capture actions, disconnect, destroy) |
 | [src/dialogs/IoSourcePickerDialog.tsx](../src/dialogs/IoSourcePickerDialog.tsx) | Unified source selection dialog |
+| [src/dialogs/DeviceSettingsDialog.tsx](../src/dialogs/DeviceSettingsDialog.tsx) | Change a device's connection parameters, live or not (see [Reconfiguring a device](#reconfiguring-a-device)) |
+| [src/dialogs/io-source-picker/DeviceEditor.tsx](../src/dialogs/io-source-picker/DeviceEditor.tsx) | Create a device from the picker (creation only) |
+| [src/components/io/IOConnectionFields.tsx](../src/components/io/IOConnectionFields.tsx) | Per-kind connection fields, shared by every device form |
+| [src/components/io/useConnectionProbe.ts](../src/components/io/useConnectionProbe.ts) | Debounced device probing while a form is edited |
+| [src/hooks/useAllIOProfiles.ts](../src/hooks/useAllIOProfiles.ts) | Saved profiles + ad-hoc devices — the list that feeds session start |
+| [src/stores/adHocProfileStore.ts](../src/stores/adHocProfileStore.ts) | Mirror of the Rust ephemeral registry |
+| [src/stores/deviceEditorStore.ts](../src/stores/deviceEditorStore.ts) | Which device the device-settings dialog is open on |
 | [src/dialogs/io-source-picker/ActionButtons.tsx](../src/dialogs/io-source-picker/ActionButtons.tsx) | Trait-driven action buttons |
 | [src/dialogs/io-source-picker/LoadOptions.tsx](../src/dialogs/io-source-picker/LoadOptions.tsx) | Recorded source options (time bounds, speed) |
 | [src/dialogs/io-source-picker/FramingOptions.tsx](../src/dialogs/io-source-picker/FramingOptions.tsx) | Serial framing options |
@@ -1459,6 +1557,8 @@ per-task interval can't express.
 |------|------|
 | [src-tauri/src/io/mod.rs](../src-tauri/src/io/mod.rs) | `IOSource` trait, `IOSession`, lifecycle, `replace_session_source`, heartbeat watchdog |
 | [src-tauri/src/io/traits.rs](../src-tauri/src/io/traits.rs) | `InterfaceTraits`, `SessionDataStreams`, validation/merge |
+| [src-tauri/src/io/ephemeral.rs](../src-tauri/src/io/ephemeral.rs) | Ad-hoc device registry, overlaid onto `io_profiles` (see [Where a device lives](#where-a-device-lives--saved-and-ad-hoc-profiles)) |
+| [src-tauri/src/io/profiles.rs](../src-tauri/src/io/profiles.rs) | `reconfigure_device` — write a device's settings and reconnect it |
 | [src-tauri/src/io/broker/](../src-tauri/src/io/broker/) | `IOBroker` — source aggregator / merge task |
 | [src-tauri/src/io/signal_throttle.rs](../src-tauri/src/io/signal_throttle.rs) | 2 Hz per-signal rate limiter |
 | [src-tauri/src/io/periodic.rs](../src-tauri/src/io/periodic.rs) | `Cadence` — shared interval/cancel/pause primitive for repeat-transmit and Modbus polling |
@@ -1467,4 +1567,4 @@ per-task interval can't express.
 | [src-tauri/src/ws/protocol.rs](../src-tauri/src/ws/protocol.rs) | Binary message format, `MsgType`, `encode_frame_batch` |
 | [src-tauri/src/ws/dispatch.rs](../src-tauri/src/ws/dispatch.rs) | `send_new_frames`, `send_session_state`, `send_stream_ended`, etc. |
 | [src-tauri/src/capture_store.rs](../src-tauri/src/capture_store.rs) | Session-scoped capture registry (see [capture-flow.md](capture-flow.md)) |
-| [src-tauri/src/credentials.rs](../src-tauri/src/credentials.rs) | Keyring namespaces, `resolve_secret`, legacy-namespace drain (see [IO-profile secrets](#io-profile-secrets)) |
+| [src-tauri/src/credentials.rs](../src-tauri/src/credentials.rs) | Keyring namespaces, `resolve_secret`, `split_secrets`, legacy-namespace drain (see [IO-profile secrets](#io-profile-secrets)) |

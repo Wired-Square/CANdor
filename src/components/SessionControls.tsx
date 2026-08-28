@@ -8,8 +8,8 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { Star, FileText, Play, Pause, Gauge, Bookmark, LogOut, Pencil, Pin, PinOff, Trash2, ArrowRightLeft, Power, Square } from "lucide-react";
-import { iconSm } from "../styles/spacing";
+import { Star, FileText, Play, Pause, Gauge, Bookmark, LogOut, Pencil, Pin, PinOff, Trash2, ArrowRightLeft, Power, Square, Settings2 } from "lucide-react";
+import { iconSm, roundedDefault } from "../styles/spacing";
 import type { IOProfile } from "../types/common";
 import type { CaptureMetadata } from "../api/capture";
 import type { BusSourceInfo } from "../utils/busFormat";
@@ -18,6 +18,7 @@ import { buttonBase } from "../styles/buttonStyles";
 import { menuClasses, menuItem, menuDivider } from "../styles/menuStyles";
 import { getIOKindLabel } from "../utils/ioKindLabel";
 import { useSessionStore } from "../stores/sessionStore";
+import { useDeviceEditorStore } from "../stores/deviceEditorStore";
 
 // ============================================================================
 // Activity dot - status dot that emits a sonar ripple whose cadence scales with
@@ -209,7 +210,7 @@ export function SessionButton({
 interface SessionDetails {
   statusLabel: { label: string; colour: string } | null;
   typeLabel: string;
-  interfaceEntries: { label: string; kind: string }[];
+  interfaceEntries: { label: string; kind: string; profileId: string }[];
 }
 
 function getSessionDetails({
@@ -252,13 +253,18 @@ function getSessionDetails({
     interfaceEntries = Array.from(outputBusToSource.entries())
       .sort(([a], [b]) => a - b)
       .map(([bus, info]) => {
-        const profile = ioProfiles.find((p) => p.name === info.profileName);
-        const kind = profile?.kind ? getIOKindLabel(profile.kind) : "";
-        return { label: `bus${bus}: ${info.profileName}`, kind };
+        const profile = ioProfiles.find((p) => p.id === info.profileId);
+        return {
+          label: `bus${bus}: ${info.profileName}`,
+          kind: profile?.kind ? getIOKindLabel(profile.kind) : "",
+          profileId: info.profileId,
+        };
       });
   } else if (selectedProfile) {
     const kind = selectedProfile.kind ? getIOKindLabel(selectedProfile.kind) : "";
-    interfaceEntries = [{ label: selectedProfile.name, kind }];
+    interfaceEntries = [
+      { label: selectedProfile.name, kind, profileId: selectedProfile.id },
+    ];
   }
 
   return { statusLabel, typeLabel, interfaceEntries };
@@ -417,6 +423,9 @@ export function IOSessionControls({
 
   // --- Kebab menu state (click-to-open, portal-rendered, viewport-clamped) ---
   const [menuOpen, setMenuOpen] = useState(false);
+  // Reconfiguring a device is app-agnostic — the backend does the work — so the
+  // menu opens the shared dialog directly rather than routing through the app.
+  const openDeviceSettings = useDeviceEditorStore((s) => s.open);
   const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({ visibility: "hidden" });
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -576,14 +585,30 @@ export function IOSessionControls({
             )}
             {interfaceEntries.length > 0 && (
               <div className="flex items-start justify-between gap-3 mt-1 pt-1 border-t border-[color:var(--border-default)]">
-                <span className={`${detailKey} shrink-0`}>
+                <span className={`${detailKey} shrink-0 pt-1`}>
                   {interfaceEntries.length > 1 ? "Interfaces" : "Interface"}
                 </span>
-                <div className="flex flex-col items-end">
-                  {interfaceEntries.map((entry, i) => (
-                    <span key={i} className="text-[color:var(--text-primary)] truncate max-w-[170px]">
-                      {entry.label}{entry.kind ? ` (${entry.kind})` : ""}
-                    </span>
+                <div className="flex flex-col items-stretch gap-0.5 min-w-0">
+                  {/* Each interface opens its own settings, so a multi-bus
+                      session needs no "which device?" step. */}
+                  {interfaceEntries.map((entry) => (
+                    <button
+                      key={entry.profileId}
+                      onClick={() => {
+                        setMenuOpen(false);
+                        openDeviceSettings(entry.profileId, isStreaming ? sessionId ?? null : null);
+                      }}
+                      title={t("session.interfaceSettings", { name: entry.label })}
+                      className={`group flex items-center gap-1.5 justify-end -mr-1.5 px-1.5 py-1 ${roundedDefault} hover:bg-[var(--hover-bg)] transition-colors text-right`}
+                    >
+                      <span className="text-[color:var(--text-primary)] truncate max-w-[170px]">
+                        {entry.label}
+                        {entry.kind ? ` (${entry.kind})` : ""}
+                      </span>
+                      <Settings2
+                        className={`${iconSm} shrink-0 text-[color:var(--text-muted)] opacity-0 group-hover:opacity-100 transition-opacity`}
+                      />
+                    </button>
                   ))}
                 </div>
               </div>

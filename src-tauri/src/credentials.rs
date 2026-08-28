@@ -82,6 +82,32 @@ pub fn resolve_secret(profile: &IOProfile, field: &str) -> Option<String> {
     }
 }
 
+/// Move a profile's secrets out of `connection` and into the keyring, leaving a
+/// `_<field>_stored` marker behind.
+///
+/// Every path that writes a profile to settings.json must call this — a password
+/// left in `connection` would be serialised in plaintext. A field the caller did
+/// not supply is left alone, so an edit that never touched the password keeps
+/// the stored one rather than clearing it.
+pub fn split_secrets(profile: &mut IOProfile) -> Result<(), String> {
+    for field in SECURE_FIELDS {
+        let plaintext = profile
+            .connection
+            .get(field)
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        profile.connection.remove(field);
+
+        if let Some(value) = plaintext.filter(|v| !v.trim().is_empty()) {
+            set_secret(IO_PROFILE_SERVICE, &account_name(&profile.id, field), &value)?;
+            profile
+                .connection
+                .insert(format!("_{field}_stored"), serde_json::Value::Bool(true));
+        }
+    }
+    Ok(())
+}
+
 // ── Service-parameterised core ───────────────────────────────────────────────
 
 /// Store a secret under an explicit service namespace.
