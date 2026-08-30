@@ -68,6 +68,21 @@ export interface FrameChecksum {
   calcEndByte?: number;
 }
 
+/** The protocol carried inside a tunnel frame's payload. */
+export type TunnelProtocol = 'modbus_rtu';
+
+/**
+ * A frame carrying a tunnelled protocol rather than a fixed bit layout
+ * (`[frame.can.<key>.tunnel]`). Consecutive payloads on the id concatenate into
+ * one byte stream, which Rust reassembles — see `wiretap_catalog::tunnel`.
+ */
+export interface FrameTunnel {
+  protocol: TunnelProtocol;
+  /** Modbus slave address to sync on; absent means any valid address. */
+  deviceAddress?: number;
+  notes?: string[];
+}
+
 export interface Frame {
   /** Authored catalogue table key (CAN: `"0x103"`; serial/modbus: the name) —
    *  the stable identifier for the editor tree path and edits. */
@@ -86,6 +101,8 @@ export interface Frame {
   isFd?: boolean;
   signals: Signal[];
   mux?: Mux;
+  /** Set when the frame carries a tunnelled protocol instead of a bit layout. */
+  tunnel?: FrameTunnel;
   mirrorOf?: string;
   copyFrom?: string;
   modbusRegisterType?: RegisterType;

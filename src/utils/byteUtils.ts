@@ -11,6 +11,15 @@ export function byteToHex(byte: number): string {
 }
 
 /**
+ * Convert a 16-bit word to a prefixed, zero-padded hex string — the way a
+ * Modbus register address or value is conventionally written.
+ * @example u16ToHex(19938) => "0x4DE2"
+ */
+export function u16ToHex(word: number): string {
+  return `0x${word.toString(16).padStart(4, '0').toUpperCase()}`;
+}
+
+/**
  * Convert a byte array to uppercase hex string without separators.
  * @example bytesToHex([10, 255]) => "0AFF"
  */

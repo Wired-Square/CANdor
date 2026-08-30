@@ -36,5 +36,13 @@
     "resumePolling": "Resume polling",
     "startPolling": "Start polling",
     "pollRegisterCount": "{{polls}} polls · {{registers}} regs"
+  },
+  "tunnelView": {
+    "tab": "Modbus",
+    "request": "Request",
+    "response": "Response",
+    "unit": "unit {{device}}",
+    "frameSpan": "{{count}} frames",
+    "empty": "No tunnelled Modbus messages yet."
   }
 }

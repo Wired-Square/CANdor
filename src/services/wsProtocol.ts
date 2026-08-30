@@ -277,6 +277,33 @@ export interface DecodedMirrorVerdict {
   mismatchedByteIndices: number[];
 }
 
+/**
+ * One Modbus RTU message recovered from a tunnel frame, reassembled in Rust
+ * (`wiretap_catalog::tunnel`). A message may span several CAN frames; it rides
+ * the frame that completed it, so `t` on the parent entry is when the exchange
+ * became readable.
+ */
+export interface DecodedTunnelMessage {
+  protocol: 'modbus_rtu';
+  direction: 'request' | 'response';
+  /** Modbus slave address. */
+  device: number;
+  function: number;
+  functionLabel: string;
+  /** Start register. Null when a read response had no request to inherit from. */
+  register?: number | null;
+  quantity?: number | null;
+  values: number[];
+  exception?: number | null;
+  exceptionLabel?: string | null;
+  /** Catalogue register frame the values decoded through, if one matched. */
+  frame?: string | null;
+  /** The reassembled message, CRC included. */
+  raw: number[];
+  /** How many CAN frames the message spanned. */
+  frames: number;
+}
+
 export interface DecodedFrameMsg {
   frameId: number;
   bus: number;
@@ -292,6 +319,8 @@ export interface DecodedFrameMsg {
   bytes?: number[];
   /** Mirror comparison verdict; absent when this frame is not a mirror. */
   mirror?: DecodedMirrorVerdict;
+  /** Tunnel messages this frame completed; absent on non-tunnel frames. */
+  tunnel?: DecodedTunnelMessage[];
 }
 
 const wsJsonDecoder = new TextDecoder();

@@ -16,4 +16,18 @@ describe("sbrxxx.toml", () => {
     expect(obj).toBeTruthy();
     expect(typeof obj).toBe("object");
   });
+
+  // The fixture is the only place a tunnel declaration and a mixed CAN+Modbus
+  // frame set go through the TS parser, which is a different implementation
+  // from the Rust one that decodes them.
+  it("parses the 0x1E0 tunnel declaration and its register frames", () => {
+    const obj = tomlParse(readFileSync(fixturePath, "utf-8")) as Record<string, any>;
+
+    expect(obj.frame.can["0x1E0"].tunnel).toEqual({
+      protocol: "modbus_rtu",
+      device_address: 1,
+    });
+    expect(obj.frame.modbus.tunnel_4de2_input.register_number).toBe(19938);
+    expect(obj.frame.modbus.tunnel_4de2_holding.register_type).toBe("holding");
+  });
 });

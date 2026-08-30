@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { useSettings } from "../../hooks/useSettings";
 import { useAllIOProfiles } from "../../hooks/useAllIOProfiles";
 import { useFrameIdFormat, withFrameIdFormat } from "../../hooks/useFrameIdFormat";
-import { useDecoderStore, getDecodedFrames, getDecodedPerSource, getUnmatchedFrames, getFilteredFrames } from "../../stores/decoderStore";
+import { useDecoderStore, getDecodedFrames, getDecodedPerSource, getUnmatchedFrames, getFilteredFrames, getTunnelTransactions } from "../../stores/decoderStore";
 import { useIOSessionManager, type SessionReconfigurationInfo } from '../../hooks/useIOSessionManager';
 import { useIOSourcePickerHandlers } from '../../hooks/useIOSourcePickerHandlers';
 import { useMenuSessionControl } from '../../hooks/useMenuSessionControl';
@@ -114,6 +114,8 @@ function DecoderInner() {
   const decodedPerSource = getDecodedPerSource();
   const unmatchedFrames = getUnmatchedFrames();
   const filteredFrames = getFilteredFrames();
+  const tunnelTransactions = getTunnelTransactions();
+  const hasTunnel = useDecoderStore((state) => state.hasTunnel);
   const startTime = useDecoderStore((state) => state.startTime);
   const endTime = useDecoderStore((state) => state.endTime);
   const currentTime = useDecoderStore((state) => state.currentTime);
@@ -1157,6 +1159,8 @@ function DecoderInner() {
           serialConfig={serialConfig}
           unmatchedFrames={unmatchedFrames}
           filteredFrames={filteredFrames}
+          tunnelTransactions={tunnelTransactions}
+          hasTunnel={hasTunnel}
           isReady={isReady}
           playbackState={getPlaybackState()}
           playbackDirection={playbackDirection}

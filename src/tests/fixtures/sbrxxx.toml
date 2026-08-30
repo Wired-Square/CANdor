@@ -1,6 +1,6 @@
 [meta]
 name = "SBRXXX"
-version = 10
+version = 11
 
 [meta.can]
 default_byte_order = "little"
@@ -359,14 +359,11 @@ format = "hex"
 [frame.can."0x1E0"]
 length = 8
 transmitter = "Inverter"
-notes = "Modbus-over-CAN tunnel. The inverter initiates and the BMS replies on this same CAN id, so both nodes transmit it — transmitter records the initiator only. The 8 bytes carry a tunnelled Modbus RTU frame (function code, register address, data) rather than a fixed signal layout, so the single 64-bit signal is a placeholder for the raw payload. Distinct from the 0x1F0 firmware-service tunnel, which is catalogued in sbr_modbus.toml."
+notes = "Modbus-over-CAN tunnel. The inverter initiates and the BMS replies on this same CAN id, so both nodes transmit it — transmitter records the initiator only. Payloads concatenate into one Modbus RTU byte stream with no transport header: a 9- or 17-byte response arrives as 8+1 or 8+8+1. The `tunnel` table below hands it to the reassembler, which recovers each message by the RTU length rules and validates CRC-16/Modbus. Distinct from the 0x1F0 firmware-service tunnel, which is catalogued in sbr_modbus.toml."
 
-[[frame.can."0x1E0".signals]]
-name = "Modbus_Over_CAN"
-start_bit = 0
-bit_length = 64
-signed = false
-confidence = "high"
+[frame.can."0x1E0".tunnel]
+protocol = "modbus_rtu"
+device_address = 1
 
 [frame.can."0x400"]
 length = 8
@@ -1773,6 +1770,92 @@ start_bit = 16
 bit_length = 48
 format = "utf8"
 confidence = "high"
+
+# ---------------------------------------------------------------------------
+# Registers read over the 0x1E0 tunnel (slave 1, 0-based wire addresses).
+#
+# `disabled = true` on both: these describe what the inverter polls over CAN,
+# so the Modbus poller must never drive them itself. They exist to name the
+# values the tunnel decoder recovers.
+#
+# The BMS answers 0x4DE2 in both banks. The inverter polls two registers with
+# FC04 every ~1.2 s, and read six with FC03 once during a startup capture.
+# Observed in every capture to date, unchanging: FC04 -> 500, 0; FC03 -> 500,
+# 0, 300, 0, 200, 0. Each pair reads as a word-swapped 32-bit value (500, 300,
+# 200), which is Sungrow's usual "CDAB" order, but nothing seen on the wire has
+# ever varied them — so they stay 16-bit and unnamed rather than being given a
+# meaning the data does not support.
+# ---------------------------------------------------------------------------
+
+[frame.modbus.tunnel_4de2_input]      # reg 0x4DE2, FC04
+register_number = 19938
+register_type = "input"
+length = 2
+disabled = true
+node_address = 1
+
+[[frame.modbus.tunnel_4de2_input.signals]]
+name = "Tunnel_4DE2_Input_0"
+start_bit = 0
+bit_length = 16
+format = "hex"
+confidence = "none"
+
+[[frame.modbus.tunnel_4de2_input.signals]]
+name = "Tunnel_4DE2_Input_1"
+start_bit = 16
+bit_length = 16
+format = "hex"
+confidence = "none"
+
+[frame.modbus.tunnel_4de2_holding]    # reg 0x4DE2, FC03
+register_number = 19938
+register_type = "holding"
+length = 6
+disabled = true
+node_address = 1
+
+[[frame.modbus.tunnel_4de2_holding.signals]]
+name = "Tunnel_4DE2_Holding_0"
+start_bit = 0
+bit_length = 16
+format = "hex"
+confidence = "none"
+
+[[frame.modbus.tunnel_4de2_holding.signals]]
+name = "Tunnel_4DE2_Holding_1"
+start_bit = 16
+bit_length = 16
+format = "hex"
+confidence = "none"
+
+[[frame.modbus.tunnel_4de2_holding.signals]]
+name = "Tunnel_4DE2_Holding_2"
+start_bit = 32
+bit_length = 16
+format = "hex"
+confidence = "none"
+
+[[frame.modbus.tunnel_4de2_holding.signals]]
+name = "Tunnel_4DE2_Holding_3"
+start_bit = 48
+bit_length = 16
+format = "hex"
+confidence = "none"
+
+[[frame.modbus.tunnel_4de2_holding.signals]]
+name = "Tunnel_4DE2_Holding_4"
+start_bit = 64
+bit_length = 16
+format = "hex"
+confidence = "none"
+
+[[frame.modbus.tunnel_4de2_holding.signals]]
+name = "Tunnel_4DE2_Holding_5"
+start_bit = 80
+bit_length = 16
+format = "hex"
+confidence = "none"
 
 [node.Inverter]
 [node.BMS]

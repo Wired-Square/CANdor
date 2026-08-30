@@ -1084,7 +1084,7 @@ re-decodes every frame. Two surfaces, both over this WebSocket:
 - **`DecodedSignals` push** (0x14): while a catalogue is attached,
   `send_new_frames` decodes the same batch via `decode_by_id` (applying
   `frame_id_mask`) and pushes a parallel JSON message
-  (`[{ frameId, bus, t, bytes[], signals[], selectors[], headerFields[], sourceAddress, mirror? }]`).
+  (`[{ frameId, bus, t, bytes[], signals[], selectors[], headerFields[], sourceAddress, mirror?, tunnel? }]`).
   Each entry carries `bytes` — the raw payload decode ran on — so the Decoder can
   render a hex/ASCII byte row **per mux value** (stored as `rawBytesByMux`); the
   frame-level `rawBytes` from the `FrameData` path is last-writer-wins, so a
@@ -1101,6 +1101,76 @@ re-decodes every frame. Two surfaces, both over this WebSocket:
   Discovery/Analysis/raw-hex/Calculator. **Decoder and Graph** both
   consume the decoded stream — there is no longer a TypeScript decode engine.
   Attachments auto-detach on final unsubscribe.
+
+### Tunnelled protocols
+
+Some devices carry a whole other protocol inside one CAN id. A Sungrow SBR's
+`0x1E0` is a **Modbus RTU byte stream**: payloads concatenate, a message longer
+than 8 bytes is split across consecutive frames (a 17-byte response arrives as
+8+8+1), and the inverter's request and the BMS's reply share the id. There is no
+transport header — no sequence number, no length prefix, no first/consecutive
+distinction — so boundaries come from the RTU length rules alone, gated by
+CRC-16/Modbus.
+
+A catalogue declares it on the frame:
+
+```toml
+[frame.can."0x1E0".tunnel]
+protocol = "modbus_rtu"
+device_address = 1        # optional; absent = sync on any address 1..=247
+```
+
+Reassembly is `wiretap_catalog::tunnel::ModbusTunnel`, held in `ws/dispatch.rs`
+as `TUNNEL_DECODERS` beside `MIRROR_TRACKERS` and built at `catalog.attach`.
+Four things about it differ from every other decode:
+
+- **It is order-dependent.** `encode_decoded_batch` feeds a tunnel frame
+  *before* the "skip frames that decoded nothing" filter — a skipped frame is a
+  hole that desyncs every message after it. `reset_frame_offset` and
+  `redecode_delivered` drop the buffers for the same reason `MirrorTracker`
+  resets there: a stream fed the same bytes twice, or fed a rewind mid-message,
+  desyncs.
+- **One buffer per `(bus, frame id)`, not per id.** A multi-bus capture carries
+  the same tunnel id on each bus and those are separate serial lines. On a
+  two-bus SBR capture, sharing one buffer loses 3 of 499 responses; a buffer per
+  bus recovers all 499 with no unconsumed bytes.
+- **A message rides the frame that *completed* it**, so its timestamp is when
+  the exchange became readable, and `tunnel[].frames` says how many frames it
+  spanned.
+- **Rendering is capped** at `MAX_RENDERED_TUNNEL_MESSAGES` (500, mirroring the
+  frontend's `MAX_TUNNEL_TRANSACTIONS`). The reassembler still sees every frame;
+  only the newest messages are serialised. Without it `redecode_delivered` over
+  a long capture builds a message nobody reads — one 1M-frame capture completes
+  47,562 exchanges at roughly 1 KB of JSON each.
+
+Interpretation is `ws/tunnel_signals.rs`. Each message yields:
+
+- **Signals**, so a tunnelled register reaches the signal table, graphs and
+  dashboards like any other. A register the catalogue describes decodes through
+  the ordinary `decode::decode_frame` path — factor, offset, word order, enums —
+  found by `Catalog::modbus_register_frame`, which filters on protocol (`frame()`
+  matches on `frame_id` alone, so CAN `0x1E0` and Modbus register 480 are
+  otherwise the same lookup) and resolves `register_base`. Uncatalogued registers
+  fall back to `Modbus_{Request,Response}_Value_N`, so a tunnel is readable
+  before anyone has mapped it.
+- **A transaction record** (`tunnel[]` on the entry) — direction, function,
+  register, values, CRC verdict, the reassembled bytes — which drives the
+  Decoder's **Modbus** tab. That tab exists because the catalogue declares a
+  tunnel, not because messages have arrived, so it is there on a quiet bus and
+  survives *Clear decoded*.
+
+Request and response share one id, so the synthesised signals carry the
+direction in the name (`Modbus_Request_Register`, `Modbus_Response_Function`) —
+in a store keyed by name the response would otherwise silently replace the
+request. An earlier cut grouped them with a synthetic `muxValue` instead; the
+signal table renders a mux group as **"Mux 9 (0x9)"** and swaps the frame-level
+byte row for that group's payload, which for a message rebuilt from three frames
+is simply the wrong bytes. **A frame that is not multiplexed must not claim to
+be** — the MCP `decoder.signals` surface reports selectors too.
+
+Registers are catalogued as ordinary `[frame.modbus.*]` entries in the same
+file, `disabled = true` so the Modbus poller never drives what the tunnel only
+observes.
 
 ### Mirror validation
 

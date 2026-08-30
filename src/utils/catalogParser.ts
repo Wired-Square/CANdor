@@ -12,6 +12,7 @@ import type { MuxDef, MuxCaseDef, SignalDef } from '../types/decoder';
 import type {
   Catalog,
   Frame,
+  FrameTunnel,
   Signal,
   Mux,
   CanConfig,
@@ -119,6 +120,8 @@ export interface ResolvedFrame {
   mux?: MuxDef;
   mirrorOf?: string;
   copyFrom?: string;
+  /** Set when the frame carries a tunnelled protocol instead of a bit layout. */
+  tunnel?: FrameTunnel;
   /** Modbus-specific: register type (holding, input, coil, discrete) */
   modbusRegisterType?: 'holding' | 'input' | 'coil' | 'discrete';
   /** Modbus-specific: number of registers (not bytes) */
@@ -226,6 +229,7 @@ function adaptFrame(f: Frame): ResolvedFrame {
     mux: f.mux ? adaptMux(f.mux) : undefined,
     mirrorOf: f.mirrorOf,
     copyFrom: f.copyFrom,
+    tunnel: f.tunnel,
     modbusRegisterType: f.modbusRegisterType,
     modbusRegisterCount: f.modbusRegisterCount,
     modbusNode: f.modbusNode,

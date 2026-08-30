@@ -1,6 +1,6 @@
 // Copyright 2026 Wired Square Pty Ltd
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, RwLock};
 
 use once_cell::sync::Lazy;
@@ -10,6 +10,7 @@ use crate::io::{FrameMessage, IOState, PlaybackPosition};
 use crate::transmit::{RepeatStartedEvent, RepeatStoppedEvent};
 use crate::ws::protocol::{self, MsgType};
 use crate::ws::server::ws_server;
+use crate::ws::tunnel_signals;
 
 // ============================================================================
 // Frame offset tracking
@@ -41,10 +42,42 @@ type SharedMirrorTracker = Arc<Mutex<wiretap_catalog::MirrorTracker>>;
 static MIRROR_TRACKERS: Lazy<RwLock<HashMap<String, SharedMirrorTracker>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
+/// Reassembly state for the tunnel frames a session's catalogue declares. A
+/// tunnel's payloads concatenate into a byte stream, so unlike every other
+/// decode this one is order-dependent and cannot be re-run over frames it has
+/// already seen — [`reset_tunnels`] exists for exactly the moments where that
+/// would happen.
+///
+/// Held and locked like [`MIRROR_TRACKERS`], for the same reason: the per-batch
+/// work happens outside the map's lock.
+struct SessionTunnels {
+    /// What the catalogue declares, by frame id. Immutable after attach, so it
+    /// sits outside the lock — a non-tunnel frame costs one lookup, no mutex.
+    declared: HashMap<u32, wiretap_catalog::FrameTunnel>,
+    /// Live reassembly, one buffer per **(bus, frame id)**.
+    ///
+    /// Per bus, not per id: a multi-bus capture carries the same tunnel id on
+    /// each bus, and those are separate serial lines. Sharing one buffer
+    /// corrupts whichever messages happen to interleave — on a two-bus SBR
+    /// capture (1497 frames of 0x1E0 across two buses) it loses 3 of 499
+    /// responses, where a buffer per bus recovers all 499 and leaves no
+    /// unconsumed bytes.
+    active: Mutex<HashMap<(u8, u32), wiretap_catalog::ModbusTunnel>>,
+}
+
+type SharedTunnels = Arc<SessionTunnels>;
+static TUNNEL_DECODERS: Lazy<RwLock<HashMap<String, SharedTunnels>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
 /// Attach a parsed catalogue to a session, enabling the decoded stream. `path` is
 /// the source file path when known — the authoritative decoder path for the session.
 pub fn attach_catalog(session_id: &str, path: Option<String>, catalog: wiretap_catalog::Catalog) {
     let tracker = wiretap_catalog::MirrorTracker::new(&catalog);
+    let declared: HashMap<u32, wiretap_catalog::FrameTunnel> = catalog
+        .frames
+        .iter()
+        .filter_map(|f| Some((f.frame_id, f.tunnel.clone()?)))
+        .collect();
     // Catalogue first, then tracker: a batch landing between the two writes
     // should see the old pair, not a new tracker judging against the old
     // catalogue.
@@ -60,6 +93,19 @@ pub fn attach_catalog(session_id: &str, path: Option<String>, catalog: wiretap_c
             m.insert(session_id.to_string(), Arc::new(Mutex::new(tracker)));
         }
     }
+    if let Ok(mut m) = TUNNEL_DECODERS.write() {
+        // Replaced wholesale for the same reason as the mirror tracker: a
+        // half-reassembled message describes a catalogue that is gone.
+        if declared.is_empty() {
+            m.remove(session_id);
+        } else {
+            let tunnels = SessionTunnels {
+                declared,
+                active: Mutex::new(HashMap::new()),
+            };
+            m.insert(session_id.to_string(), Arc::new(tunnels));
+        }
+    }
 }
 
 fn mirror_tracker(session_id: &str) -> Option<SharedMirrorTracker> {
@@ -69,6 +115,27 @@ fn mirror_tracker(session_id: &str) -> Option<SharedMirrorTracker> {
         .and_then(|m| m.get(session_id).cloned())
 }
 
+fn tunnel_decoders(session_id: &str) -> Option<SharedTunnels> {
+    TUNNEL_DECODERS
+        .read()
+        .ok()
+        .and_then(|m| m.get(session_id).cloned())
+}
+
+/// Drop every tunnel's part-reassembled message. Call wherever the frame stream
+/// restarts or rewinds — a tunnel fed the same bytes twice, or fed a jump in the
+/// middle of a message, desyncs and takes a message or two to recover.
+fn reset_tunnels(session_id: &str) {
+    if let Some(tunnels) = tunnel_decoders(session_id) {
+        if let Ok(mut active) = tunnels.active.lock() {
+            // Dropped, not emptied in place: a bus that no longer appears
+            // should not keep a buffer, and the next frame on one that does
+            // rebuilds it.
+            active.clear();
+        }
+    }
+}
+
 /// Detach a session's catalogue (decoded stream stops). Called explicitly and
 /// on final unsubscribe.
 pub fn detach_catalog(session_id: &str) {
@@ -76,6 +143,9 @@ pub fn detach_catalog(session_id: &str) {
         m.remove(session_id);
     }
     if let Ok(mut m) = MIRROR_TRACKERS.write() {
+        m.remove(session_id);
+    }
+    if let Ok(mut m) = TUNNEL_DECODERS.write() {
         m.remove(session_id);
     }
 }
@@ -140,6 +210,53 @@ fn mirror_verdicts(session_id: &str, frames: &[FrameMessage]) -> Option<MirrorVe
     })
 }
 
+/// Feed one frame's payload to its tunnel, if it has one, and return whatever
+/// messages that completed. Non-tunnel frames cost one hash lookup.
+///
+/// `masked_id` is the catalogue-lookup id, not the raw one: a catalogue keyed
+/// by message type (a `frame_id_mask`) declares its tunnel under the masked id,
+/// which no raw id on the wire would ever equal.
+fn feed_tunnels(
+    tunnels: Option<&SharedTunnels>,
+    frame: &FrameMessage,
+    masked_id: u32,
+) -> Vec<wiretap_catalog::TunnelMessage> {
+    let Some(tunnels) = tunnels else {
+        return Vec::new();
+    };
+    let Some(declared) = tunnels.declared.get(&masked_id) else {
+        return Vec::new();
+    };
+    let Ok(mut active) = tunnels.active.lock() else {
+        return Vec::new();
+    };
+    active
+        .entry((frame.bus, masked_id))
+        .or_insert_with(|| wiretap_catalog::ModbusTunnel::new(declared))
+        .push(&frame.bytes)
+}
+
+/// One decoded signal in the `DecodedSignals` wire shape. The frontend's
+/// `DecodedSignalValue` is parsed straight from this, so tunnelled registers and
+/// ordinary ones must go through the same function or the two drift.
+fn signal_json(s: &wiretap_catalog::decode::Decoded) -> serde_json::Value {
+    serde_json::json!({
+        "name": s.name,
+        "value": s.value,
+        "scaled": s.scaled,
+        "display": s.display,
+        "unit": s.unit,
+        "muxValue": s.mux_value,
+        "format": s.format,
+    })
+}
+
+/// How many reassembled tunnel messages one batch will render. Mirrors the
+/// frontend's `MAX_TUNNEL_TRANSACTIONS`, which is all it keeps — and a backlog
+/// redecode can complete tens of thousands, each ~1 KB of JSON, so without this
+/// `redecode_delivered` over a long capture builds a message nobody reads.
+const MAX_RENDERED_TUNNEL_MESSAGES: usize = 500;
+
 /// Decode a frame batch against `catalog` into the `DecodedSignals` JSON
 /// payload (one entry per frame that has a matching catalogue frame). Returns
 /// an empty vec when nothing decoded, so the caller can skip the send.
@@ -147,36 +264,52 @@ fn encode_decoded_batch(
     frames: &[FrameMessage],
     catalog: &wiretap_catalog::Catalog,
     verdicts: Option<&MirrorVerdicts>,
+    tunnels: Option<&SharedTunnels>,
 ) -> Vec<u8> {
     let mut out: Vec<serde_json::Value> = Vec::new();
-    for f in frames {
+    let mask = wiretap_catalog::decode::frame_id_mask(catalog);
+
+    // Tunnels first, over the whole batch: a payload is a slice of a byte
+    // stream, so every frame must be fed in order whether or not it decodes to
+    // anything — a skipped frame is a hole that desyncs everything after it.
+    // Only the newest messages are then rendered, and the ring bounds what is
+    // held while the rest of the batch is still being fed.
+    let mut completed: VecDeque<(usize, wiretap_catalog::TunnelMessage)> = VecDeque::new();
+    if tunnels.is_some() {
+        for (i, f) in frames.iter().enumerate() {
+            let masked_id = mask.map_or(f.frame_id, |m| f.frame_id & m);
+            for msg in feed_tunnels(tunnels, f, masked_id) {
+                if completed.len() == MAX_RENDERED_TUNNEL_MESSAGES {
+                    completed.pop_front();
+                }
+                completed.push_back((i, msg));
+            }
+        }
+    }
+
+    for (i, f) in frames.iter().enumerate() {
+        let tunnel_messages: Vec<_> = {
+            let mut taken = Vec::new();
+            while completed.front().is_some_and(|(idx, _)| *idx == i) {
+                taken.push(completed.pop_front().expect("front checked").1);
+            }
+            taken
+        };
+
         // decode_by_id applies frame_id_mask, looks up the frame, decodes
         // signals/mux, and extracts header fields (CAN id / serial bytes).
         let Some(decoded) = wiretap_catalog::decode::decode_by_id(catalog, f.frame_id, &f.bytes)
         else {
             continue;
         };
-        if decoded.signals.is_empty()
+        if tunnel_messages.is_empty()
+            && decoded.signals.is_empty()
             && decoded.selectors.is_empty()
             && decoded.header_fields.is_empty()
         {
             continue;
         }
-        let signals: Vec<_> = decoded
-            .signals
-            .iter()
-            .map(|s| {
-                serde_json::json!({
-                    "name": s.name,
-                    "value": s.value,
-                    "scaled": s.scaled,
-                    "display": s.display,
-                    "unit": s.unit,
-                    "muxValue": s.mux_value,
-                    "format": s.format,
-                })
-            })
-            .collect();
+        let mut signals: Vec<_> = decoded.signals.iter().map(signal_json).collect();
         let selectors: Vec<_> = decoded
             .selectors
             .iter()
@@ -190,6 +323,15 @@ fn encode_decoded_batch(
                 })
             })
             .collect();
+        // Messages this frame completed. They belong to the frame that finished
+        // them, not the one that started them, so the UI's timestamp is when the
+        // exchange was actually readable.
+        let mut transactions: Vec<serde_json::Value> = Vec::new();
+        for msg in &tunnel_messages {
+            let decoded = tunnel_signals::decode_message(msg, catalog);
+            signals.extend(decoded.signals.iter().map(signal_json));
+            transactions.push(decoded.transaction);
+        }
         let header_fields: Vec<_> = decoded
             .header_fields
             .iter()
@@ -219,6 +361,9 @@ fn encode_decoded_batch(
         // "not a mirror" rather than "no verdict yet".
         if let Some(verdict) = verdicts.and_then(|v| v.get(f.frame_id)) {
             entry["mirror"] = verdict.clone();
+        }
+        if !transactions.is_empty() {
+            entry["tunnel"] = serde_json::Value::Array(transactions);
         }
         out.push(entry);
     }
@@ -275,7 +420,8 @@ pub fn send_new_frames(session_id: &str) {
     // it as a parallel DecodedSignals message — the frontend stops re-decoding.
     if let Some(catalog) = attached_catalog(session_id) {
         let verdicts = mirror_verdicts(session_id, &frames);
-        let decoded = encode_decoded_batch(&frames, &catalog, verdicts.as_ref());
+        let tunnels = tunnel_decoders(session_id);
+        let decoded = encode_decoded_batch(&frames, &catalog, verdicts.as_ref(), tunnels.as_ref());
         if !decoded.is_empty() {
             let dmsg = protocol::encode_message(MsgType::DecodedSignals, channel, &decoded);
             server.send_to_channel(channel, dmsg);
@@ -347,6 +493,7 @@ pub fn reset_frame_offset(session_id: &str) {
             tracker.reset();
         }
     }
+    reset_tunnels(session_id);
 }
 
 /// Clear frame offset for a session.
@@ -382,7 +529,12 @@ pub fn redecode_delivered(session_id: &str) {
     let (frames, _indices, _total) =
         crate::capture_store::get_capture_frames_paginated(&capture_id, 0, offset);
     let verdicts = mirror_verdicts(session_id, &frames);
-    let decoded = encode_decoded_batch(&frames, &catalog, verdicts.as_ref());
+    // These frames are about to be replayed through the tunnels. Attaching a
+    // catalogue builds them fresh, so they are already empty in practice — the
+    // reset keeps that true for any future caller.
+    reset_tunnels(session_id);
+    let tunnels = tunnel_decoders(session_id);
+    let decoded = encode_decoded_batch(&frames, &catalog, verdicts.as_ref(), tunnels.as_ref());
     if !decoded.is_empty() {
         let dmsg = protocol::encode_message(MsgType::DecodedSignals, channel, &decoded);
         server.send_to_channel(channel, dmsg);

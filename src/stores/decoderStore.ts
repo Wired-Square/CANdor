@@ -19,6 +19,53 @@ function resetDecodeBuffers() {
   _decodedPerSource = new LRUMap(limits.maxDecodedPerSource);
   _unmatchedFrames = [];
   _filteredFrames = [];
+  _tunnelTransactions = [];
+}
+
+/**
+ * Transactions kept for the Modbus tab. Fixed rather than a setting: a tunnel
+ * carries a handful of exchanges a second, so this is minutes of history, and
+ * the tab is a live trace rather than a capture.
+ */
+export const MAX_TUNNEL_TRANSACTIONS = 500;
+
+/**
+ * Append the tunnel messages a frame completed, pairing each response with the
+ * request it answers so the tab can show the round-trip time.
+ *
+ * The pairing is the last outstanding request on the same (bus, frame, device,
+ * function) — each bus is its own serial line, and on one of them an unanswered
+ * request is simply superseded by the next rather than queued. An exception
+ * response carries the request's function code with the high bit set.
+ */
+function recordTunnelMessages(msg: DecodedFrameMsg, maskedFrameId: number) {
+  for (const t of msg.tunnel ?? []) {
+    const entry: TunnelTransaction = {
+      ...t,
+      frameId: maskedFrameId,
+      bus: msg.bus,
+      timestampUs: msg.t,
+    };
+    if (t.direction === 'response') {
+      for (let i = _tunnelTransactions.length - 1; i >= 0; i--) {
+        const prior = _tunnelTransactions[i];
+        if (
+          prior.direction === 'request' &&
+          prior.frameId === maskedFrameId &&
+          prior.bus === msg.bus &&
+          prior.device === t.device &&
+          (t.function & 0x7f) === prior.function
+        ) {
+          entry.latencyUs = msg.t - prior.timestampUs;
+          break;
+        }
+      }
+    }
+    _tunnelTransactions.push(entry);
+  }
+  if (_tunnelTransactions.length > MAX_TUNNEL_TRANSACTIONS) {
+    _tunnelTransactions.splice(0, _tunnelTransactions.length - MAX_TUNNEL_TRANSACTIONS);
+  }
 }
 
 /** Read current decoder buffer limits from the settings store. */
@@ -40,6 +87,7 @@ let _decoded: LRUMap<number, DecodedFrame> = new LRUMap(DEFAULT_DECODER_MAX_DECO
 let _decodedPerSource: LRUMap<string, DecodedFrame> = new LRUMap(DEFAULT_DECODER_MAX_DECODED_PER_SOURCE);
 let _unmatchedFrames: UnmatchedFrame[] = [];
 let _filteredFrames: FilteredFrame[] = [];
+let _tunnelTransactions: TunnelTransaction[] = [];
 
 /** Direct access to the mutable decoded LRU map. Read-only. */
 export function getDecodedFrames(): LRUMap<number, DecodedFrame> { return _decoded; }
@@ -49,12 +97,14 @@ export function getDecodedPerSource(): LRUMap<string, DecodedFrame> { return _de
 export function getUnmatchedFrames(): UnmatchedFrame[] { return _unmatchedFrames; }
 /** Direct access to the mutable filtered frames array. Read-only. */
 export function getFilteredFrames(): FilteredFrame[] { return _filteredFrames; }
+/** Direct access to the mutable tunnel transaction log, oldest first. Read-only. */
+export function getTunnelTransactions(): TunnelTransaction[] { return _tunnelTransactions; }
 
 import { saveCatalog } from '../api';
 import { buildFramesToml, type SerialFrameConfig } from '../utils/frameExport';
 import { formatFrameId } from '../utils/frameIds';
 import type { FrameDetail, SignalDef } from '../types/decoder';
-import type { DecodedFrameMsg, DecodedMirrorVerdict } from '../services/wsProtocol';
+import type { DecodedFrameMsg, DecodedMirrorVerdict, DecodedTunnelMessage } from '../services/wsProtocol';
 import { selectionSetKeys, type SelectionSet } from '../utils/selectionSets';
 import type { CanHeaderField, HeaderFieldFormat } from '../apps/catalog/types';
 import type { PlaybackSpeed } from '../components/TimeController';
@@ -154,6 +204,20 @@ export type FilteredFrame = {
 };
 
 /**
+ * One tunnelled Modbus message, as the Decoder's Modbus tab shows it: the wire
+ * message plus where and when it arrived, and the latency back to the request
+ * it answers (responses only — a request has nothing to measure against yet).
+ */
+export type TunnelTransaction = DecodedTunnelMessage & {
+  frameId: number;
+  bus: number;
+  /** Host timestamp (µs) of the frame that completed the message. */
+  timestampUs: number;
+  /** µs since the matching request, for a response that answers one. */
+  latencyUs?: number;
+};
+
+/**
  * Mirror validation result for one mirror frame — the wire type verbatim.
  *
  * Computed in Rust (`wiretap_catalog::mirror::MirrorTracker`) and delivered on
@@ -165,6 +229,9 @@ export type MirrorValidationEntry = DecodedMirrorVerdict;
 interface DecoderState {
   // Catalog and frames (Map/Set keys are composite frame keys, e.g. "can:256")
   catalogPath: string | null;
+  /** The attached catalogue declares at least one tunnel frame — drives the
+   *  Decoder's Modbus tab, which must exist before any message arrives. */
+  hasTunnel: boolean;
   frames: Map<string, FrameDetail>;
   selectedFrames: Set<string>;
   seenIds: Set<string>;
@@ -304,6 +371,7 @@ interface DecoderState {
 export const useDecoderStore = create<DecoderState>((set, get) => ({
   // Initial state
   catalogPath: null,
+  hasTunnel: false,
   frames: new Map(),
   selectedFrames: new Set(),
   seenIds: new Set(),
@@ -368,6 +436,10 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
       const proto = catalog.protocol;
       const frameMap = new Map<string, FrameDetail>();
       const seenIds = new Set<string>();
+      // Whether the Modbus tab exists is a property of the catalogue, not of
+      // what has arrived: a tunnel on a quiet bus still gets its (empty) tab,
+      // and clearing decoded values does not make the tab vanish underfoot.
+      let hasTunnel = false;
 
       for (const [id, frame] of catalog.frames) {
         const fk = frameKey(proto, id);
@@ -385,6 +457,7 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
           copyFrom: frame.copyFrom,
         });
         seenIds.add(fk);
+        if (frame.tunnel) hasTunnel = true;
       }
 
       // Convert CanProtocolConfig to CanConfig (compatible structure)
@@ -490,6 +563,7 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
         frames: frameMap,
         selectedFrames: newSelected,
         catalogPath: path,
+        hasTunnel,
         seenIds,
         protocol: catalog.protocol,
         canConfig,
@@ -667,6 +741,8 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
       // Mirror verdicts are computed in Rust and only ride frames the catalogue
       // declares as mirrors.
       if (msg.mirror) nextMirrorValidation.set(maskedFrameId, msg.mirror);
+
+      if (msg.tunnel) recordTunnelMessages(msg, maskedFrameId);
 
       const headerFields: HeaderFieldValue[] = msg.headerFields.map((h) => ({
         name: h.name,

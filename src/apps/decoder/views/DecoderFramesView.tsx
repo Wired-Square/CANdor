@@ -17,8 +17,9 @@ import { sendHexDataToCalculator, openPanel } from "../../../utils/windowCommuni
 import AppTabView, { type TabDefinition, type ProtocolBadge } from "../../../components/AppTabView";
 import HeaderFieldFilter from "../../../components/HeaderFieldFilter";
 import ContextMenu, { type ContextMenuItem } from "../../../components/ContextMenu";
-import type { DecodedFrame, DecodedSignal, DecoderViewMode, UnmatchedFrame, FilteredFrame, MirrorValidationEntry } from "../../../stores/decoderStore";
-import { useDecoderStore } from "../../../stores/decoderStore";
+import type { DecodedFrame, DecodedSignal, DecoderViewMode, UnmatchedFrame, FilteredFrame, MirrorValidationEntry, TunnelTransaction } from "../../../stores/decoderStore";
+import DecoderTunnelView from "./DecoderTunnelView";
+import { useDecoderStore, MAX_TUNNEL_TRANSACTIONS } from "../../../stores/decoderStore";
 import { useSettingsStore } from "../../../apps/settings/stores/settingsStore";
 import { useTransmitStore } from "../../../stores/transmitStore";
 import { useDashboardStore } from "../../../stores/dashboardStore";
@@ -58,6 +59,11 @@ type Props = {
   unmatchedFrames?: UnmatchedFrame[];
   /** Frames that were filtered out (e.g., too short) */
   filteredFrames?: FilteredFrame[];
+  /** Modbus messages reassembled from tunnel frames; shown in the Modbus tab. */
+  tunnelTransactions?: TunnelTransaction[];
+  /** The attached catalogue declares a tunnel frame — the Modbus tab's reason
+   *  to exist, so it is there before the first message and stays after a clear. */
+  hasTunnel?: boolean;
 
   // Playback controls (for buffer replay)
   isReady: boolean;
@@ -874,6 +880,8 @@ export default function DecoderFramesView({
   serialConfig,
   unmatchedFrames = [],
   filteredFrames = [],
+  tunnelTransactions = [],
+  hasTunnel = false,
   isReady,
   playbackState,
   playbackDirection = "forward",
@@ -1026,12 +1034,22 @@ export default function DecoderFramesView({
     const { decoderMaxUnmatchedFrames, decoderMaxFilteredFrames } = useSettingsStore.getState().buffers;
     const unmatchedAtMax = unmatchedFrames.length >= decoderMaxUnmatchedFrames;
     const filteredAtMax = filteredFrames.length >= decoderMaxFilteredFrames;
-    return [
+    const tabDefs: TabDefinition[] = [
       { id: 'signals', label: 'Signals', count: selectedFrames.length, countColor: 'green' as const },
       { id: 'unmatched', label: 'Unmatched', count: unmatchedFrames.length, countColor: 'orange' as const, countPrefix: unmatchedAtMax ? '>' : undefined },
       { id: 'filtered', label: 'Filtered', count: filteredFrames.length + deselectedFrames.length, countColor: 'purple' as const, countPrefix: filteredAtMax ? '>' : undefined },
     ];
-  }, [selectedFrames.length, unmatchedFrames.length, filteredFrames.length, deselectedFrames.length]);
+    if (hasTunnel) {
+      tabDefs.push({
+        id: 'tunnel',
+        label: t("tunnelView.tab"),
+        count: tunnelTransactions.length,
+        countColor: 'gray' as const,
+        countPrefix: tunnelTransactions.length >= MAX_TUNNEL_TRANSACTIONS ? '>' : undefined,
+      });
+    }
+    return tabDefs;
+  }, [selectedFrames.length, unmatchedFrames.length, filteredFrames.length, deselectedFrames.length, hasTunnel, tunnelTransactions.length, t]);
 
   // Track active tab - use prop if provided, otherwise local state
   const [localActiveTab, setLocalActiveTab] = useState<string>('signals');
@@ -1726,6 +1744,11 @@ export default function DecoderFramesView({
               </div>
             )}
           </>
+        ) : activeTab === 'tunnel' ? (
+          <DecoderTunnelView
+            transactions={tunnelTransactions}
+            displayFrameIdFormat={displayFrameIdFormat}
+          />
         ) : null}
     </AppTabView>
 
