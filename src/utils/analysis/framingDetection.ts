@@ -2,7 +2,7 @@
 // Framing detection for raw serial byte streams
 // Identifies SLIP, Modbus RTU, and delimiter-based framing patterns
 
-import { crc16Modbus } from '../serialFramer';
+import { crc16Modbus } from '../modbusCrc';
 
 // ============================================================================
 // Types

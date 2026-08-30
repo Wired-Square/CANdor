@@ -1122,6 +1122,18 @@ device_address = 1        # optional; absent = sync on any address 1..=247
 
 Reassembly is `wiretap_catalog::tunnel::ModbusTunnel`, held in `ws/dispatch.rs`
 as `TUNNEL_DECODERS` beside `MIRROR_TRACKERS` and built at `catalog.attach`.
+
+**It is also the serial port's framer.** There used to be a second, weaker RTU
+implementation in `io/serial/framer.rs`: it tried every length from 4 upwards and
+took the first CRC hit, so a short prefix that coincidentally validated beat the
+real message, and it dropped a byte whenever nothing validated, eating the head
+of a split message before its tail arrived. `FramingEncoding::ModbusRtu` now
+constructs a `ModbusTunnel`, so a message framed off a serial port and one
+recovered from a tunnelled CAN id are framed by identical rules. Three entry
+points, one set of rules — `push` counts frames (a CAN payload is a slice of the
+stream), `push_bytes` does not (a serial line has no frames to count), and
+`interpret` takes a boundary somebody else already found.
+
 Four things about it differ from every other decode:
 
 - **It is order-dependent.** `encode_decoded_batch` feeds a tunnel frame
@@ -1320,6 +1332,20 @@ session has none) so the now-framed messages land, stream and decode. The Decode
 calls it from [`useSessionCatalog`](../src/hooks/useSessionCatalog.ts)'s sibling
 serial-config effect when the encoding first appears, falling back to a full
 re-watch if the live swap fails.
+
+**Modbus RTU framing is CRC-gated, and `validate_crc: false` is a lenient mode,
+not "no framing".** RTU has no delimiter — a message boundary is only knowable
+from the per-function-code length rules plus the CRC that confirms them, so the
+old "don't validate" path could not frame at all and emitted fixed four-byte
+chunks. It now maps to `CrcPolicy::Lenient`: boundaries still come from the
+length rules, and where strict framing would give up and drop a byte, lenient
+emits the longest *structurally plausible* candidate flagged `crc_valid: false`.
+Plausibility is what the wire format guarantees independently of the CRC — a
+byte count that matches the quantity it claims, an exception code that exists —
+so a real message is never rejected, and line noise cannot fabricate one from
+every byte pair that looks like an address and a function code. On a stream whose
+CRCs are correct the two policies are identical. The flag is the honest part: on
+a noisy line with no declared `device_address`, lenient *will* invent messages.
 
 ### Catalogue list cache
 

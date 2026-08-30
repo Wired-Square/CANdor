@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use wiretap_checksum::algorithms::crc16_modbus_checksum;
+use wiretap_catalog::{CrcPolicy, ModbusTunnel, TunnelMessage};
 
 // =============================================================================
 // SLIP Constants (RFC 1055)
@@ -39,7 +39,8 @@ pub enum FramingEncoding {
     ModbusRtu {
         /// Optional device address filter (1-247)
         device_address: Option<u8>,
-        /// Whether to validate CRC
+        /// Whether a message has to pass its CRC to be framed. `false` is a
+        /// lenient mode, not "no framing" — see [`CrcPolicy::Lenient`].
         validate_crc: bool,
     },
     /// Raw mode - no framing, emit bytes as read
@@ -57,9 +58,12 @@ impl Default for FramingEncoding {
 pub struct SerialFrame {
     /// Frame data bytes
     pub bytes: Vec<u8>,
-    /// Whether this frame came from flush() and may be incomplete
+    /// Whether these bytes are a leftover rather than a message: no delimiter
+    /// was found before the stream ended.
     pub incomplete: bool,
-    /// For Modbus RTU: whether CRC validation passed (None if validation disabled)
+    /// For Modbus RTU: whether the message's CRC matched. `None` means the
+    /// question does not apply — another encoding, or a trailing residue that is
+    /// not a message at all.
     pub crc_valid: Option<bool>,
 }
 
@@ -121,15 +125,23 @@ pub fn extract_frame_id(frame: &[u8], config: &FrameIdConfig) -> Option<u32> {
 // =============================================================================
 
 trait FramerImpl {
-    fn feed(&mut self, data: &[u8]) -> Vec<FrameResult>;
-    fn flush(&mut self) -> Option<FrameResult>;
+    fn feed(&mut self, data: &[u8]) -> Vec<SerialFrame>;
+    /// End of stream. A framer that can still recover whole messages from what
+    /// it holds returns those first, then the residue that is not a message.
+    fn flush(&mut self) -> Vec<SerialFrame>;
 }
 
-/// Result from internal framers (before frame_index assignment)
-struct FrameResult {
-    bytes: Vec<u8>,
-    incomplete: bool,
-    crc_valid: Option<bool>,
+/// The trailing bytes at end of stream, when there are any: not a message, and
+/// marked as such.
+fn residue(bytes: Vec<u8>) -> Vec<SerialFrame> {
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+    vec![SerialFrame {
+        bytes,
+        incomplete: true,
+        crc_valid: None,
+    }]
 }
 
 // =============================================================================
@@ -155,7 +167,7 @@ impl DelimiterFramer {
 }
 
 impl FramerImpl for DelimiterFramer {
-    fn feed(&mut self, data: &[u8]) -> Vec<FrameResult> {
+    fn feed(&mut self, data: &[u8]) -> Vec<SerialFrame> {
         let mut frames = Vec::new();
 
         for &byte in data {
@@ -175,7 +187,7 @@ impl FramerImpl for DelimiterFramer {
                         self.buffer.clear(); // Clear delimiter
                     }
                     if !frame.is_empty() {
-                        frames.push(FrameResult {
+                        frames.push(SerialFrame {
                             bytes: frame,
                             incomplete: false,
                             crc_valid: None,
@@ -187,7 +199,7 @@ impl FramerImpl for DelimiterFramer {
             // Force split on max length
             if self.buffer.len() >= self.max_length {
                 let frame: Vec<u8> = self.buffer.drain(..).collect();
-                frames.push(FrameResult {
+                frames.push(SerialFrame {
                     bytes: frame,
                     incomplete: false,
                     crc_valid: None,
@@ -198,17 +210,8 @@ impl FramerImpl for DelimiterFramer {
         frames
     }
 
-    fn flush(&mut self) -> Option<FrameResult> {
-        if !self.buffer.is_empty() {
-            let frame: Vec<u8> = self.buffer.drain(..).collect();
-            Some(FrameResult {
-                bytes: frame,
-                incomplete: true,
-                crc_valid: None,
-            })
-        } else {
-            None
-        }
+    fn flush(&mut self) -> Vec<SerialFrame> {
+        residue(std::mem::take(&mut self.buffer))
     }
 }
 
@@ -231,7 +234,7 @@ impl SlipFramer {
 }
 
 impl FramerImpl for SlipFramer {
-    fn feed(&mut self, data: &[u8]) -> Vec<FrameResult> {
+    fn feed(&mut self, data: &[u8]) -> Vec<SerialFrame> {
         let mut frames = Vec::new();
 
         for &byte in data {
@@ -239,7 +242,7 @@ impl FramerImpl for SlipFramer {
                 SLIP_END => {
                     if !self.buffer.is_empty() {
                         let frame: Vec<u8> = self.buffer.drain(..).collect();
-                        frames.push(FrameResult {
+                        frames.push(SerialFrame {
                             bytes: frame,
                             incomplete: false,
                             crc_valid: None,
@@ -280,17 +283,8 @@ impl FramerImpl for SlipFramer {
         frames
     }
 
-    fn flush(&mut self) -> Option<FrameResult> {
-        if !self.buffer.is_empty() {
-            let frame: Vec<u8> = self.buffer.drain(..).collect();
-            Some(FrameResult {
-                bytes: frame,
-                incomplete: true,
-                crc_valid: None,
-            })
-        } else {
-            None
-        }
+    fn flush(&mut self) -> Vec<SerialFrame> {
+        residue(std::mem::take(&mut self.buffer))
     }
 }
 
@@ -298,118 +292,53 @@ impl FramerImpl for SlipFramer {
 // Modbus RTU Framer
 // =============================================================================
 
+/// Modbus RTU framing, delegated to [`ModbusTunnel`] — the same reassembler the
+/// CAN tunnel path uses, so a message framed off a serial port and one recovered
+/// from a tunnelled CAN id are framed by identical rules.
 struct ModbusRtuFramer {
-    buffer: Vec<u8>,
-    device_address: Option<u8>,
-    validate_crc: bool,
+    tunnel: ModbusTunnel,
 }
 
 impl ModbusRtuFramer {
     fn new(device_address: Option<u8>, validate_crc: bool) -> Self {
+        let policy = if validate_crc {
+            CrcPolicy::Strict
+        } else {
+            CrcPolicy::Lenient
+        };
         ModbusRtuFramer {
-            buffer: Vec::new(),
-            device_address,
-            validate_crc,
+            tunnel: ModbusTunnel::with_crc_policy(device_address, policy),
         }
     }
+}
 
-    /// Try to extract a valid frame from the beginning of the buffer
-    fn try_extract_frame(&mut self) -> Option<FrameResult> {
-        // Check device address filter
-        if let Some(addr) = self.device_address {
-            if !self.buffer.is_empty() && self.buffer[0] != addr {
-                return None;
-            }
-        }
-
-        // Try different frame lengths (4 to min(256, buffer.length))
-        let max_len = std::cmp::min(256, self.buffer.len());
-        for len in 4..=max_len {
-            let candidate = &self.buffer[..len];
-
-            if self.validate_crc {
-                if len < 4 {
-                    continue;
-                }
-                let data_without_crc = &candidate[..len - 2];
-                let crc = crc16_modbus_checksum(data_without_crc);
-                let received_crc =
-                    (candidate[len - 2] as u16) | ((candidate[len - 1] as u16) << 8);
-
-                if crc == received_crc {
-                    // Valid frame found
-                    let frame: Vec<u8> = self.buffer.drain(..len).collect();
-                    return Some(FrameResult {
-                        bytes: frame,
-                        incomplete: false,
-                        crc_valid: Some(true),
-                    });
-                }
-            } else {
-                // Without CRC validation, we can't determine frame boundaries
-                // Just return the minimum valid frame
-                if len == 4 {
-                    let frame: Vec<u8> = self.buffer.drain(..len).collect();
-                    return Some(FrameResult {
-                        bytes: frame,
-                        incomplete: false,
-                        crc_valid: None,
-                    });
-                }
-            }
-        }
-
-        None
+/// One reassembled message as a frame. The CRC verdict rides along: under a
+/// lenient policy it is the only thing distinguishing a recovered message from a
+/// guessed one.
+fn rtu_frame(msg: TunnelMessage) -> SerialFrame {
+    SerialFrame {
+        bytes: msg.raw,
+        incomplete: false,
+        crc_valid: Some(msg.crc_valid),
     }
 }
 
 impl FramerImpl for ModbusRtuFramer {
-    fn feed(&mut self, data: &[u8]) -> Vec<FrameResult> {
-        let mut frames = Vec::new();
-        self.buffer.extend_from_slice(data);
-
-        // Try to extract valid frames from buffer
-        while self.buffer.len() >= 4 {
-            if let Some(frame) = self.try_extract_frame() {
-                frames.push(frame);
-            } else {
-                // No valid frame found at current position, shift buffer
-                self.buffer.remove(0);
-            }
-        }
-
-        frames
+    fn feed(&mut self, data: &[u8]) -> Vec<SerialFrame> {
+        self.tunnel
+            .push_bytes(data)
+            .into_iter()
+            .map(rtu_frame)
+            .collect()
     }
 
-    fn flush(&mut self) -> Option<FrameResult> {
-        if self.buffer.len() >= 4 {
-            // Try to validate remaining buffer as a frame
-            if self.validate_crc {
-                let len = self.buffer.len();
-                let data_without_crc = &self.buffer[..len - 2];
-                let crc = crc16_modbus_checksum(data_without_crc);
-                let received_crc =
-                    (self.buffer[len - 2] as u16) | ((self.buffer[len - 1] as u16) << 8);
-
-                if crc == received_crc {
-                    let frame: Vec<u8> = self.buffer.drain(..).collect();
-                    return Some(FrameResult {
-                        bytes: frame,
-                        incomplete: true,
-                        crc_valid: Some(true),
-                    });
-                }
-            } else {
-                let frame: Vec<u8> = self.buffer.drain(..).collect();
-                return Some(FrameResult {
-                    bytes: frame,
-                    incomplete: true,
-                    crc_valid: None,
-                });
-            }
-        }
-        self.buffer.clear();
-        None
+    fn flush(&mut self) -> Vec<SerialFrame> {
+        let (messages, trailing) = self.tunnel.finish();
+        messages
+            .into_iter()
+            .map(rtu_frame)
+            .chain(residue(trailing))
+            .collect()
     }
 }
 
@@ -434,7 +363,7 @@ impl RawFramer {
 }
 
 impl FramerImpl for RawFramer {
-    fn feed(&mut self, data: &[u8]) -> Vec<FrameResult> {
+    fn feed(&mut self, data: &[u8]) -> Vec<SerialFrame> {
         let mut frames = Vec::new();
 
         for &byte in data {
@@ -443,7 +372,7 @@ impl FramerImpl for RawFramer {
             // Emit frame when buffer reaches max length
             if self.buffer.len() >= self.max_length {
                 let frame: Vec<u8> = self.buffer.drain(..).collect();
-                frames.push(FrameResult {
+                frames.push(SerialFrame {
                     bytes: frame,
                     incomplete: false,
                     crc_valid: None,
@@ -454,7 +383,7 @@ impl FramerImpl for RawFramer {
         // Also emit any remaining data as a frame (for real-time display)
         if !self.buffer.is_empty() {
             let frame: Vec<u8> = self.buffer.drain(..).collect();
-            frames.push(FrameResult {
+            frames.push(SerialFrame {
                 bytes: frame,
                 incomplete: false,
                 crc_valid: None,
@@ -464,17 +393,8 @@ impl FramerImpl for RawFramer {
         frames
     }
 
-    fn flush(&mut self) -> Option<FrameResult> {
-        if self.buffer.is_empty() {
-            None
-        } else {
-            let frame: Vec<u8> = self.buffer.drain(..).collect();
-            Some(FrameResult {
-                bytes: frame,
-                incomplete: true,
-                crc_valid: None,
-            })
-        }
+    fn flush(&mut self) -> Vec<SerialFrame> {
+        residue(std::mem::take(&mut self.buffer))
     }
 }
 
@@ -515,26 +435,14 @@ impl SerialFramer {
     /// Feed raw bytes into the framer.
     /// Returns any complete frames that were parsed.
     pub fn feed(&mut self, data: &[u8]) -> Vec<SerialFrame> {
-        self.framer
-            .feed(data)
-            .into_iter()
-            .map(|r| SerialFrame {
-                bytes: r.bytes,
-                incomplete: r.incomplete,
-                crc_valid: r.crc_valid,
-            })
-            .collect()
+        self.framer.feed(data)
     }
 
-    /// Flush any remaining buffered data as a frame.
-    /// Call when stream ends.
-    /// Returns a frame marked as incomplete since no delimiter was found.
-    pub fn flush(&mut self) -> Option<SerialFrame> {
-        self.framer.flush().map(|r| SerialFrame {
-            bytes: r.bytes,
-            incomplete: r.incomplete,
-            crc_valid: r.crc_valid,
-        })
+    /// Flush at end of stream. Modbus RTU can still recover whole messages from
+    /// what it holds, so this returns those first and the residue last; the
+    /// other encodings only ever have a residue.
+    pub fn flush(&mut self) -> Vec<SerialFrame> {
+        self.framer.flush()
     }
 }
 
@@ -566,30 +474,6 @@ pub fn slip_encode(data: &[u8]) -> Vec<u8> {
 
     encoded.push(SLIP_END);
     encoded
-}
-
-/// Calculate and append CRC-16 Modbus to data
-#[allow(dead_code)]
-pub fn append_modbus_crc(data: &[u8]) -> Vec<u8> {
-    let crc = crc16_modbus_checksum(data);
-    let mut result = Vec::with_capacity(data.len() + 2);
-    result.extend_from_slice(data);
-    result.push((crc & 0xFF) as u8); // Low byte first (little-endian)
-    result.push(((crc >> 8) & 0xFF) as u8);
-    result
-}
-
-/// Validate Modbus RTU frame CRC
-#[allow(dead_code)]
-pub fn validate_modbus_crc(frame: &[u8]) -> bool {
-    if frame.len() < 4 {
-        return false;
-    }
-    let data_without_crc = &frame[..frame.len() - 2];
-    let crc = crc16_modbus_checksum(data_without_crc);
-    let received_crc =
-        (frame[frame.len() - 2] as u16) | ((frame[frame.len() - 1] as u16) << 8);
-    crc == received_crc
 }
 
 #[cfg(test)]
@@ -680,20 +564,8 @@ mod tests {
 
         // Remaining 3 bytes in buffer
         let flushed = framer.flush();
-        assert!(flushed.is_some());
-        assert_eq!(flushed.unwrap().bytes, b"678".to_vec());
-    }
-
-    #[test]
-    fn test_modbus_crc_validation() {
-        // Valid Modbus RTU frame: address 0x01, function 0x03, data, CRC
-        let valid_frame = append_modbus_crc(&[0x01, 0x03, 0x00, 0x00, 0x00, 0x0A]);
-        assert!(validate_modbus_crc(&valid_frame));
-
-        // Corrupt the frame
-        let mut invalid_frame = valid_frame.clone();
-        invalid_frame[2] = 0xFF;
-        assert!(!validate_modbus_crc(&invalid_frame));
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(flushed[0].bytes, b"678".to_vec());
     }
 
     #[test]
@@ -744,9 +616,8 @@ mod tests {
 
         // Flush should return incomplete frame
         let flushed = framer.flush();
-        assert!(flushed.is_some());
-        let frame = flushed.unwrap();
-        assert!(frame.incomplete);
-        assert_eq!(frame.bytes, vec![0x01, 0x02, 0x03]);
+        assert_eq!(flushed.len(), 1);
+        assert!(flushed[0].incomplete);
+        assert_eq!(flushed[0].bytes, vec![0x01, 0x02, 0x03]);
     }
 }

@@ -525,7 +525,7 @@
       "delimiterPlaceholder": "0A",
       "max": "Max:",
       "maxLength": "Max length:",
-      "validateCrc": "Validate CRC-16",
+      "validateCrc": "Require valid CRC-16",
       "captureRawBytes": "Capture raw bytes",
       "framingOptions": {
         "raw": "None (Raw)",

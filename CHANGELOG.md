@@ -6,6 +6,10 @@ All notable changes to WireTAP will be documented in this file.
 
 ### Fixed
 
+- **Modbus RTU over a serial port is framed properly.** It had its own framer, weaker than the one added for Modbus-over-CAN: it tried every message length in turn and took the first that passed CRC, so a short prefix that happened to validate won over the real message, and it threw away the start of any message split across two reads. Both now use the same reassembler, which works from the length rules for each function code and waits for the rest of a split message instead of discarding it. A partial message left when the stream stops is reported rather than silently dropped. If you had tuned a serial Modbus profile around the old behaviour, re-check it — you should see fewer, longer, correct messages.
+
+- **"Validate CRC-16" is now "Require valid CRC-16", and unticking it does something useful.** Modbus RTU has no start or end marker, so the CRC is what tells you where a message ends — the old option could not frame without it and just cut the stream into four-byte pieces. Unticking now keeps the framing and shows messages whose CRC disagrees, for a device with a broken checksum. Leave it ticked unless you are chasing exactly that: on a noisy line it will invent messages, especially with no device address set.
+
 - **A CAN adapter set to listen-only no longer talks on the bus.** An slcan device saved before the Silent mode switch existed was displayed as silent and opened as active, so it acknowledged frames on a bus you believed it was only listening to. Silent is now the default everywhere it is read. Check any slcan profile you use on a live vehicle: if you had relied on the old behaviour to transmit, Silent mode now has to be switched off explicitly.
 
 - **A device with a blank host is dialled where the form said it would be.** Leaving Host empty on a GVRET TCP or Modbus TCP device connected to `127.0.0.1`, while the form had shown `192.168.1.100` — so the connection went somewhere you were never told about. Both now use the address the form shows. A FrameLink timeout typed into the form is also no longer ignored.

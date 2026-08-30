@@ -206,7 +206,7 @@
     "maxFrameLengthLabelShort": "Max frame length",
     "modbusRtuTitle": "Modbus RTU",
     "modbusRtuDescription": "CRC-16 validation based framing",
-    "validateCrc": "Validate CRC-16",
+    "validateCrc": "Require valid CRC-16",
     "captureRawBytes": "Also capture raw bytes",
     "encoding": "Encoding",
     "modeNone": "None",

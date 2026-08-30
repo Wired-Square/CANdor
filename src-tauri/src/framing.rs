@@ -238,8 +238,9 @@ mod desktop {
                 }
             }
 
-            // Handle flushed frame for this interface
-            if let Some(frame) = framer.flush() {
+            // Handle flushed frames for this interface. Modbus RTU can still
+            // recover whole messages here, so this is a list, not one residue.
+            for frame in framer.flush() {
                 frame_data.push((frame.bytes, current_frame_start_idx, frame.incomplete, frame.crc_valid, *bus));
             }
         }
@@ -247,89 +248,58 @@ mod desktop {
         // Sort frames by their start index (original byte order) for consistent ordering
         frame_data.sort_by_key(|(_, start_idx, _, _, _)| *start_idx);
 
-        // Apply minimum length filter - separate into passed and filtered
+        // Apply minimum length filter - separate into passed and filtered.
+        // Partition the owned tuples, not references, so each payload moves into
+        // its FrameMessage instead of being cloned once per frame.
         let min_length = config.min_length.unwrap_or(1);
         let (passed_frames, filtered_frames): (Vec<_>, Vec<_>) = frame_data
-            .iter()
+            .into_iter()
             .enumerate()
             .partition(|(_, (frame_bytes, _, _, _, _))| frame_bytes.len() >= min_length);
 
-        // Convert passed frames to FrameMessage format
-        let frame_messages: Vec<FrameMessage> = passed_frames
-            .into_iter()
-            .map(|(idx, (frame_bytes, start_idx, incomplete, _crc_valid, bus))| {
-                // Get timestamp from first byte of frame
-                let timestamp = bytes.get(*start_idx).map(|b| b.timestamp_us).unwrap_or(0);
+        // One builder for both lists. They were byte-for-byte duplicates, which
+        // is how the live and flush paths in the serial reader had drifted apart
+        // on `incomplete`; the only thing separating these two is which side of
+        // the length filter the frame fell on.
+        //
+        // `crc_valid` is dropped here: `FrameMessage` has nowhere to put it yet,
+        // and it would not survive the capture round-trip without a schema
+        // change. It reaches the Decoder's Modbus tab on the decode path instead.
+        let to_message = |(idx, (frame_bytes, start_idx, incomplete, _crc_valid, bus)): (
+            usize,
+            (Vec<u8>, usize, bool, Option<bool>, u8),
+        )| {
+            let extract = |cfg: &Option<FrameIdConfig>| {
+                cfg.as_ref()
+                    .and_then(|c| extract_frame_id(&frame_bytes, c))
+            };
+            let frame_id = extract(&config.frame_id_config).unwrap_or(idx as u32);
+            let source_address = extract(&config.source_address_config).map(|v| v as u16);
+            let dlc = frame_bytes.len() as u8;
 
-                // Extract frame ID if configured
-                let frame_id = if let Some(ref id_config) = config.frame_id_config {
-                    extract_frame_id(frame_bytes, id_config).unwrap_or(idx as u32)
-                } else {
-                    idx as u32
-                };
+            FrameMessage {
+                protocol: "serial".to_string(),
+                // Timestamp of the frame's first byte.
+                timestamp_us: bytes.get(start_idx).map(|b| b.timestamp_us).unwrap_or(0),
+                frame_id,
+                bus,
+                dlc,
+                bytes: frame_bytes,
+                is_extended: false,
+                is_fd: false,
+                source_address,
+                incomplete: incomplete.then_some(true),
+                direction: None,
+            }
+        };
 
-                // Extract source address if configured
-                let source_address = if let Some(ref src_config) = config.source_address_config {
-                    extract_frame_id(frame_bytes, src_config).map(|v| v as u16)
-                } else {
-                    None
-                };
-
-                FrameMessage {
-                    protocol: "serial".to_string(),
-                    timestamp_us: timestamp,
-                    frame_id,
-                    bus: *bus,
-                    dlc: frame_bytes.len() as u8,
-                    bytes: frame_bytes.clone(),
-                    is_extended: false,
-                    is_fd: false,
-                    source_address,
-                    incomplete: if *incomplete { Some(true) } else { None },
-                    direction: None,
-                }
-            })
-            .collect();
+        let frame_messages: Vec<FrameMessage> =
+            passed_frames.into_iter().map(&to_message).collect();
+        let filtered_messages: Vec<FrameMessage> =
+            filtered_frames.into_iter().map(&to_message).collect();
 
         let frame_count = frame_messages.len();
-        let filtered_count = filtered_frames.len();
-
-        // Convert filtered frames to FrameMessage format (for display in Filtered tab)
-        let filtered_messages: Vec<FrameMessage> = filtered_frames
-            .into_iter()
-            .map(|(idx, (frame_bytes, start_idx, incomplete, _crc_valid, bus))| {
-                // Get timestamp from first byte of frame
-                let timestamp = bytes.get(*start_idx).map(|b| b.timestamp_us).unwrap_or(0);
-
-                // Extract frame ID if configured
-                let frame_id = if let Some(ref id_config) = config.frame_id_config {
-                    extract_frame_id(frame_bytes, id_config).unwrap_or(idx as u32)
-                } else {
-                    idx as u32
-                };
-
-                // Extract source address if configured
-                let source_address = if let Some(ref src_config) = config.source_address_config {
-                    extract_frame_id(frame_bytes, src_config).map(|v| v as u16)
-                } else {
-                    None
-                };
-
-                FrameMessage {
-                    protocol: "serial".to_string(),
-                    timestamp_us: timestamp,
-                    frame_id,
-                    bus: *bus,
-                    dlc: frame_bytes.len() as u8,
-                    bytes: frame_bytes.clone(),
-                    is_extended: false,
-                    is_fd: false,
-                    source_address,
-                    incomplete: if *incomplete { Some(true) } else { None },
-                    direction: None,
-                }
-            })
-            .collect();
+        let filtered_count = filtered_messages.len();
 
         if frame_count == 0 && filtered_count == 0 {
             return Err("No frames extracted".to_string());

@@ -20,7 +20,7 @@ use crate::io::{now_us, FrameMessage};
 
 // Re-export Parity for external use
 pub use super::utils::Parity;
-use super::framer::{extract_frame_id, FrameIdConfig, FramingEncoding, SerialFramer};
+use super::framer::{extract_frame_id, FrameIdConfig, FramingEncoding, SerialFrame, SerialFramer};
 
 // ============================================================================
 // Types
@@ -41,6 +41,47 @@ pub struct SerialPortInfo {
 // ============================================================================
 // Multi-Source Streaming
 // ============================================================================
+
+/// Frames from one batch of framed serial messages: too-short ones, and any the
+/// bus mapping drops, are left out.
+///
+/// One function for both the read loop and the end-of-stream flush, which had
+/// diverged — both hardcoded `incomplete: None`, so a trailing partial message
+/// was delivered looking like a complete one.
+fn frames_from_serial(
+    frames: Vec<SerialFrame>,
+    timestamp_us: u64,
+    min_frame_length: usize,
+    frame_id_config: Option<&FrameIdConfig>,
+    source_address_config: Option<&FrameIdConfig>,
+    bus_mappings: &[BusMapping],
+) -> Vec<FrameMessage> {
+    frames
+        .into_iter()
+        .filter(|f| f.bytes.len() >= min_frame_length)
+        .filter_map(|frame| {
+            let extract =
+                |cfg: Option<&FrameIdConfig>| cfg.and_then(|c| extract_frame_id(&frame.bytes, c));
+            let frame_id = extract(frame_id_config).unwrap_or(0);
+            let source_address = extract(source_address_config).map(|v| v as u16);
+
+            let mut msg = FrameMessage {
+                protocol: "serial".to_string(),
+                timestamp_us,
+                frame_id,
+                bus: 0,
+                dlc: frame.bytes.len() as u8,
+                bytes: frame.bytes,
+                is_extended: false,
+                is_fd: false,
+                source_address,
+                incomplete: frame.incomplete.then_some(true),
+                direction: None,
+            };
+            apply_bus_mapping(&mut msg, bus_mappings).then_some(msg)
+        })
+        .collect()
+}
 
 /// Run serial source and send frames/bytes to merge task.
 /// Can emit raw bytes and/or framed data depending on configuration.
@@ -214,47 +255,14 @@ pub async fn run_source(
 
                     // Only process through framer if we have actual framing
                     if has_framing {
-                        let mut pending_frames: Vec<FrameMessage> = Vec::new();
-
-                        // Feed bytes to framer and process resulting frames
-                        let frames = framer.feed(read_bytes);
-                        for frame in frames {
-                            // Skip frames that are too short
-                            if frame.bytes.len() < min_frame_length {
-                                continue;
-                            }
-
-                            // Extract frame ID
-                            let frame_id = frame_id_config
-                                .as_ref()
-                                .and_then(|cfg| extract_frame_id(&frame.bytes, cfg))
-                                .unwrap_or(0);
-
-                            // Extract source address
-                            let source_address = source_address_config
-                                .as_ref()
-                                .and_then(|cfg| extract_frame_id(&frame.bytes, cfg))
-                                .map(|v| v as u16);
-
-                            let mut msg = FrameMessage {
-                                protocol: "serial".to_string(),
-                                timestamp_us: base_ts,
-                                frame_id,
-                                bus: 0,
-                                dlc: frame.bytes.len() as u8,
-                                bytes: frame.bytes,
-                                is_extended: false,
-                                is_fd: false,
-                                source_address,
-                                incomplete: None,
-                                direction: None,
-                            };
-
-                            // Apply bus mapping
-                            if apply_bus_mapping(&mut msg, &bus_mappings) {
-                                pending_frames.push(msg);
-                            }
-                        }
+                        let pending_frames = frames_from_serial(
+                            framer.feed(read_bytes),
+                            base_ts,
+                            min_frame_length,
+                            frame_id_config.as_ref(),
+                            source_address_config.as_ref(),
+                            &bus_mappings,
+                        );
 
                         if !pending_frames.is_empty() {
                             let _ = tx_clone
@@ -281,38 +289,19 @@ pub async fn run_source(
             }
         }
 
-        // Flush framer for any remaining partial frame (only if we have actual framing)
+        // Flush the framer at end of stream. Modbus RTU can still recover whole
+        // messages from what it holds, so this is a list, not one residue.
         if has_framing {
-            if let Some(frame) = framer.flush() {
-                if frame.bytes.len() >= min_frame_length {
-                    let frame_id = frame_id_config
-                        .as_ref()
-                        .and_then(|cfg| extract_frame_id(&frame.bytes, cfg))
-                        .unwrap_or(0);
-
-                    let source_address = source_address_config
-                        .as_ref()
-                        .and_then(|cfg| extract_frame_id(&frame.bytes, cfg))
-                        .map(|v| v as u16);
-
-                    let mut msg = FrameMessage {
-                        protocol: "serial".to_string(),
-                        timestamp_us: now_us(),
-                        frame_id,
-                        bus: 0,
-                        dlc: frame.bytes.len() as u8,
-                        bytes: frame.bytes,
-                        is_extended: false,
-                        is_fd: false,
-                        source_address,
-                        incomplete: None,
-                        direction: None,
-                    };
-
-                    if apply_bus_mapping(&mut msg, &bus_mappings) {
-                        let _ = tx_clone.blocking_send(SourceMessage::Frames(source_idx, vec![msg]));
-                    }
-                }
+            let flushed = frames_from_serial(
+                framer.flush(),
+                now_us(),
+                min_frame_length,
+                frame_id_config.as_ref(),
+                source_address_config.as_ref(),
+                &bus_mappings,
+            );
+            if !flushed.is_empty() {
+                let _ = tx_clone.blocking_send(SourceMessage::Frames(source_idx, flushed));
             }
         }
 
