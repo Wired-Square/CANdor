@@ -42,7 +42,7 @@
     "request": "Request",
     "response": "Response",
     "unit": "unit {{device}}",
-    "frameSpan": "{{count}} frames",
+    "frameSpan_other": "{{count}} frames",
     "empty": "No tunnelled Modbus messages yet."
   }
 }

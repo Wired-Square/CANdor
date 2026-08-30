@@ -625,6 +625,12 @@ function MyView() {
 }
 ```
 
+**Always pass the namespace.** `useTranslation()` with no argument resolves
+against `defaultNS` (`common`), so a view's own keys silently render as their
+raw dot-path — `tunnelView.request` on screen instead of "Request". Nothing
+warns: not TypeScript, not the build, not a test. It shows only when someone
+opens that view. The Decoder's Modbus tab shipped that way.
+
 ### Interpolation and plurals
 
 ```json
