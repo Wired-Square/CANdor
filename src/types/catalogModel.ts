@@ -74,7 +74,7 @@ export type TunnelProtocol = 'modbus_rtu';
 /**
  * A frame carrying a tunnelled protocol rather than a fixed bit layout
  * (`[frame.can.<key>.tunnel]`). Consecutive payloads on the id concatenate into
- * one byte stream, which Rust reassembles — see `wiretap_catalog::tunnel`.
+ * one byte stream, which Rust reassembles — see `wiretap_catalog::modbus_rtu_stream`.
  */
 export interface FrameTunnel {
   protocol: TunnelProtocol;

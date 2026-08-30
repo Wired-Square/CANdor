@@ -1120,19 +1120,38 @@ protocol = "modbus_rtu"
 device_address = 1        # optional; absent = sync on any address 1..=247
 ```
 
-Reassembly is `wiretap_catalog::tunnel::ModbusTunnel`, held in `ws/dispatch.rs`
-as `TUNNEL_DECODERS` beside `MIRROR_TRACKERS` and built at `catalog.attach`.
+Reassembly is `wiretap_catalog::modbus_rtu_stream::ModbusRtuStream`, held in
+`ws/dispatch.rs` as `TUNNEL_DECODERS` beside `MIRROR_TRACKERS` and built at
+`catalog.attach`.
 
 **It is also the serial port's framer.** There used to be a second, weaker RTU
 implementation in `io/serial/framer.rs`: it tried every length from 4 upwards and
 took the first CRC hit, so a short prefix that coincidentally validated beat the
 real message, and it dropped a byte whenever nothing validated, eating the head
 of a split message before its tail arrived. `FramingEncoding::ModbusRtu` now
-constructs a `ModbusTunnel`, so a message framed off a serial port and one
+constructs a `ModbusRtuStream`, so a message framed off a serial port and one
 recovered from a tunnelled CAN id are framed by identical rules. Three entry
 points, one set of rules — `push` counts frames (a CAN payload is a slice of the
 stream), `push_bytes` does not (a serial line has no frames to count), and
 `interpret` takes a boundary somebody else already found.
+
+**A serial port reaches the Modbus tab too**, through that third entry point.
+The reader has already framed the port, so each frame is one whole message and
+there is nothing to reassemble — `feed_tunnels` calls `interpret` instead of
+`push`, and everything downstream is shared with the tunnel path. What opens it
+is the attached catalogue's protocol being `modbus`: a serial catalogue leaves
+`SessionTunnels.serial` as `None`, so some other serial framing that happens to
+parse as Modbus is never reported as a message. The stream is still kept per
+session and per bus, because a read response carries no register address and
+inherits it from the request before it. Two consequences worth knowing: the tab
+needs a catalogue attached, like the tunnel path does, and because the verdict
+is recomputed from the stored bytes it is the same live or replayed — which is
+why the framer's `crc_valid` is not persisted.
+
+`interpret` also gates on `is_plausible` when the CRC disagrees, the same bar
+`CrcPolicy::Lenient` sets for a boundary it guessed. Without it any five bytes
+opening like an address and a read function code would be reported as a response
+carrying no registers.
 
 Four things about it differ from every other decode:
 

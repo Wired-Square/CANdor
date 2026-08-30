@@ -65,6 +65,8 @@ fn frames_from_serial(
             let frame_id = extract(frame_id_config).unwrap_or(0);
             let source_address = extract(source_address_config).map(|v| v as u16);
 
+            // `frame.crc_valid` is deliberately not carried: the decode path
+            // recomputes it from these same bytes. See `framing.rs`.
             let mut msg = FrameMessage {
                 protocol: "serial".to_string(),
                 timestamp_us,

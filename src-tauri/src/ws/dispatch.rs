@@ -62,7 +62,17 @@ struct SessionTunnels {
     /// capture (1497 frames of 0x1E0 across two buses) it loses 3 of 499
     /// responses, where a buffer per bus recovers all 499 and leaves no
     /// unconsumed bytes.
-    active: Mutex<HashMap<(u8, u32), wiretap_catalog::ModbusTunnel>>,
+    active: Mutex<HashMap<(u8, u32), wiretap_catalog::ModbusRtuStream>>,
+    /// The same, for a serial port that is already RTU-framed — one stream per
+    /// bus. `Some` only when the attached catalogue is a Modbus one, which is
+    /// what says these frames are Modbus messages rather than some other
+    /// serial framing that happens to parse as one.
+    ///
+    /// Nothing is reassembled here: the reader framed the port, so each frame
+    /// is one whole message and `interpret` reads it as such. The stream is
+    /// still per-session state, because pairing a read response with the
+    /// register address it answers needs the request that came before it.
+    serial: Option<Mutex<HashMap<u8, wiretap_catalog::ModbusRtuStream>>>,
 }
 
 type SharedTunnels = Arc<SessionTunnels>;
@@ -78,6 +88,7 @@ pub fn attach_catalog(session_id: &str, path: Option<String>, catalog: wiretap_c
         .iter()
         .filter_map(|f| Some((f.frame_id, f.tunnel.clone()?)))
         .collect();
+    let modbus_catalog = matches!(catalog.protocol, wiretap_catalog::Protocol::Modbus);
     // Catalogue first, then tracker: a batch landing between the two writes
     // should see the old pair, not a new tracker judging against the old
     // catalogue.
@@ -96,12 +107,14 @@ pub fn attach_catalog(session_id: &str, path: Option<String>, catalog: wiretap_c
     if let Ok(mut m) = TUNNEL_DECODERS.write() {
         // Replaced wholesale for the same reason as the mirror tracker: a
         // half-reassembled message describes a catalogue that is gone.
-        if declared.is_empty() {
+        let serial = modbus_catalog.then(|| Mutex::new(HashMap::new()));
+        if declared.is_empty() && serial.is_none() {
             m.remove(session_id);
         } else {
             let tunnels = SessionTunnels {
                 declared,
                 active: Mutex::new(HashMap::new()),
+                serial,
             };
             m.insert(session_id.to_string(), Arc::new(tunnels));
         }
@@ -132,6 +145,12 @@ fn reset_tunnels(session_id: &str) {
             // should not keep a buffer, and the next frame on one that does
             // rebuilds it.
             active.clear();
+        }
+        // The serial streams hold no part-reassembled bytes, but they do hold
+        // the outstanding request a read response is paired against, which is
+        // just as stale after a rewind.
+        if let Some(Ok(mut streams)) = tunnels.serial.as_ref().map(|s| s.lock()) {
+            streams.clear();
         }
     }
 }
@@ -216,14 +235,36 @@ fn mirror_verdicts(session_id: &str, frames: &[FrameMessage]) -> Option<MirrorVe
 /// `masked_id` is the catalogue-lookup id, not the raw one: a catalogue keyed
 /// by message type (a `frame_id_mask`) declares its tunnel under the masked id,
 /// which no raw id on the wire would ever equal.
+///
+/// A serial frame under a Modbus catalogue takes the other path: the port was
+/// framed by the reader, so the frame is a whole message and the boundary is
+/// taken as given rather than searched for.
 fn feed_tunnels(
     tunnels: Option<&SharedTunnels>,
     frame: &FrameMessage,
     masked_id: u32,
-) -> Vec<wiretap_catalog::TunnelMessage> {
+) -> Vec<wiretap_catalog::ModbusRtuMessage> {
     let Some(tunnels) = tunnels else {
         return Vec::new();
     };
+    if frame.protocol == "serial" {
+        let Some(serial) = tunnels.serial.as_ref() else {
+            return Vec::new();
+        };
+        let Ok(mut streams) = serial.lock() else {
+            return Vec::new();
+        };
+        // No declared device address: whatever filtering the profile asked for
+        // was already applied by the framer that produced this frame, so
+        // repeating it here would only need the profile plumbed in to reject
+        // messages that cannot arrive.
+        return streams
+            .entry(frame.bus)
+            .or_insert_with(|| wiretap_catalog::ModbusRtuStream::for_address(None))
+            .interpret(&frame.bytes)
+            .into_iter()
+            .collect();
+    }
     let Some(declared) = tunnels.declared.get(&masked_id) else {
         return Vec::new();
     };
@@ -232,7 +273,7 @@ fn feed_tunnels(
     };
     active
         .entry((frame.bus, masked_id))
-        .or_insert_with(|| wiretap_catalog::ModbusTunnel::new(declared))
+        .or_insert_with(|| wiretap_catalog::ModbusRtuStream::new(declared))
         .push(&frame.bytes)
 }
 
@@ -274,7 +315,7 @@ fn encode_decoded_batch(
     // anything — a skipped frame is a hole that desyncs everything after it.
     // Only the newest messages are then rendered, and the ring bounds what is
     // held while the rest of the batch is still being fed.
-    let mut completed: VecDeque<(usize, wiretap_catalog::TunnelMessage)> = VecDeque::new();
+    let mut completed: VecDeque<(usize, wiretap_catalog::ModbusRtuMessage)> = VecDeque::new();
     if tunnels.is_some() {
         for (i, f) in frames.iter().enumerate() {
             let masked_id = mask.map_or(f.frame_id, |m| f.frame_id & m);
@@ -298,10 +339,12 @@ fn encode_decoded_batch(
 
         // decode_by_id applies frame_id_mask, looks up the frame, decodes
         // signals/mux, and extracts header fields (CAN id / serial bytes).
-        let Some(decoded) = wiretap_catalog::decode::decode_by_id(catalog, f.frame_id, &f.bytes)
-        else {
-            continue;
-        };
+        // Defaulted, not skipped, when the catalogue has no frame for this id:
+        // a serial RTU message has no frame layout of its own — its registers
+        // are decoded from the message — so a frame that decoded nothing still
+        // has something to render when it carried a message.
+        let decoded = wiretap_catalog::decode::decode_by_id(catalog, f.frame_id, &f.bytes)
+            .unwrap_or_default();
         if tunnel_messages.is_empty()
             && decoded.signals.is_empty()
             && decoded.selectors.is_empty()
@@ -968,4 +1011,103 @@ pub fn send_session_lifecycle_scoped(
 
     let msg = protocol::encode_message(MsgType::SessionLifecycle, channel, &payload);
     server.send_to_channel(channel, msg);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiretap_checksum::algorithms::crc16_modbus_checksum;
+
+    /// A Modbus RTU message: the body plus the CRC a device would append.
+    fn rtu(body: &[u8]) -> Vec<u8> {
+        let mut m = body.to_vec();
+        m.extend(crc16_modbus_checksum(body).to_le_bytes());
+        m
+    }
+
+    fn serial_frame(bytes: Vec<u8>) -> FrameMessage {
+        FrameMessage {
+            protocol: "serial".to_string(),
+            timestamp_us: 0,
+            frame_id: 0,
+            bus: 0,
+            dlc: bytes.len() as u8,
+            bytes,
+            is_extended: false,
+            is_fd: false,
+            source_address: None,
+            incomplete: None,
+            direction: None,
+        }
+    }
+
+    fn modbus_session() -> SessionTunnels {
+        SessionTunnels {
+            declared: HashMap::new(),
+            active: Mutex::new(HashMap::new()),
+            serial: Some(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// The serial port is already framed, so each frame is one whole message —
+    /// and the response inherits its register address from the request before
+    /// it, which only works because the stream is kept per session.
+    #[test]
+    fn a_framed_serial_port_yields_one_message_per_frame() {
+        let tunnels = Arc::new(modbus_session());
+        let request = serial_frame(rtu(&[0x01, 0x03, 0x00, 0x6B, 0x00, 0x03]));
+        let response = serial_frame(rtu(&[
+            0x01, 0x03, 0x06, 0x02, 0x2B, 0x00, 0x00, 0x00, 0x64,
+        ]));
+
+        let out = feed_tunnels(Some(&tunnels), &request, 0);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].direction, wiretap_catalog::Direction::Request);
+        assert_eq!(out[0].start_register, Some(0x6B));
+        assert_eq!(out[0].quantity, Some(3));
+        assert!(out[0].crc_valid);
+
+        let out = feed_tunnels(Some(&tunnels), &response, 0);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].direction, wiretap_catalog::Direction::Response);
+        // Carried over from the request: a read response has no address of its own.
+        assert_eq!(out[0].start_register, Some(0x6B));
+        assert_eq!(out[0].registers, vec![0x022B, 0x0000, 0x0064]);
+    }
+
+    /// A message whose CRC disagrees is still reported, flagged — that flag is
+    /// the whole of what a lenient policy has to be honest with.
+    #[test]
+    fn a_bad_crc_is_flagged_rather_than_dropped() {
+        let tunnels = Arc::new(modbus_session());
+        let mut bytes = rtu(&[0x01, 0x03, 0x00, 0x6B, 0x00, 0x03]);
+        *bytes.last_mut().expect("crc appended") ^= 0xFF;
+
+        let out = feed_tunnels(Some(&tunnels), &serial_frame(bytes), 0);
+        assert_eq!(out.len(), 1);
+        assert!(!out[0].crc_valid);
+    }
+
+    /// Only a Modbus catalogue opens this path. Without it a serial frame that
+    /// happens to parse as Modbus must not be reported as a message.
+    #[test]
+    fn a_non_modbus_catalogue_interprets_nothing() {
+        let tunnels = Arc::new(SessionTunnels {
+            declared: HashMap::new(),
+            active: Mutex::new(HashMap::new()),
+            serial: None,
+        });
+        let frame = serial_frame(rtu(&[0x01, 0x03, 0x00, 0x6B, 0x00, 0x03]));
+        assert!(feed_tunnels(Some(&tunnels), &frame, 0).is_empty());
+    }
+
+    /// Serial bytes that are not a whole RTU message yield nothing rather than
+    /// being buffered — the reader owns framing on this path.
+    #[test]
+    fn a_frame_that_is_not_a_whole_message_yields_nothing() {
+        let tunnels = Arc::new(modbus_session());
+        for bytes in [vec![0x01, 0x03], vec![0x01, 0x03, 0x00, 0x6B, 0x00]] {
+            assert!(feed_tunnels(Some(&tunnels), &serial_frame(bytes), 0).is_empty());
+        }
+    }
 }

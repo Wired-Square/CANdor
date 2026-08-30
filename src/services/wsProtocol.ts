@@ -278,10 +278,11 @@ export interface DecodedMirrorVerdict {
 }
 
 /**
- * One Modbus RTU message recovered from a tunnel frame, reassembled in Rust
- * (`wiretap_catalog::tunnel`). A message may span several CAN frames; it rides
- * the frame that completed it, so `t` on the parent entry is when the exchange
- * became readable.
+ * One Modbus RTU message recovered in Rust
+ * (`wiretap_catalog::modbus_rtu_stream`) — from a tunnel frame, or from a serial
+ * port the reader already framed. A tunnelled message may span several CAN
+ * frames; it rides the frame that completed it, so `t` on the parent entry is
+ * when the exchange became readable.
  */
 export interface DecodedTunnelMessage {
   protocol: 'modbus_rtu';
@@ -302,6 +303,12 @@ export interface DecodedTunnelMessage {
   raw: number[];
   /** How many CAN frames the message spanned. */
   frames: number;
+  /**
+   * Whether the trailing CRC matches the body. Only ever false when the source
+   * is not requiring a valid CRC-16, where the message boundary came from the
+   * Modbus length rules alone — so the message may have been guessed.
+   */
+  crcValid: boolean;
 }
 
 export interface DecodedFrameMsg {

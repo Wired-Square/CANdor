@@ -2,8 +2,8 @@
 
 //! Turn a reassembled tunnel message into the shapes the Decoder already renders.
 //!
-//! `wiretap_catalog::tunnel` recovers the Modbus RTU message; this decides what
-//! the Decoder *shows* for it. Two products per message:
+//! `wiretap_catalog::modbus_rtu_stream` recovers the Modbus RTU message; this
+//! decides what the Decoder *shows* for it. Two products per message:
 //!
 //! - **Signals**, so a tunnelled register lands in the signal table, graphs and
 //!   dashboards like any other. Registers the catalogue describes decode
@@ -20,7 +20,7 @@
 //! function code.
 
 use wiretap_catalog::decode::Decoded;
-use wiretap_catalog::{Catalog, Direction, RegisterType, SignalFormat, TunnelMessage};
+use wiretap_catalog::{Catalog, Direction, ModbusRtuMessage, RegisterType, SignalFormat};
 
 /// The Modbus function codes a tunnel can carry, for display.
 fn function_label(function: u8) -> String {
@@ -83,7 +83,7 @@ fn signal(name: String, value: f64, display: String, format: Option<SignalFormat
 
 /// The synthesised signals describing the message itself, named for the side
 /// they came from so a request and its response can both be on screen.
-fn header_signals(msg: &TunnelMessage, function_label: &str) -> Vec<Decoded> {
+fn header_signals(msg: &ModbusRtuMessage, function_label: &str) -> Vec<Decoded> {
     let side = match msg.direction {
         Direction::Request => "Request",
         Direction::Response => "Response",
@@ -128,7 +128,7 @@ fn header_signals(msg: &TunnelMessage, function_label: &str) -> Vec<Decoded> {
 
 /// Decode a message's register block against the catalogue, falling back to raw
 /// values. Returns the signals and the name of the register frame that matched.
-fn register_signals(msg: &TunnelMessage, catalog: &Catalog) -> (Vec<Decoded>, Option<String>) {
+fn register_signals(msg: &ModbusRtuMessage, catalog: &Catalog) -> (Vec<Decoded>, Option<String>) {
     if msg.registers.is_empty() {
         return (Vec::new(), None);
     }
@@ -173,7 +173,7 @@ pub struct DecodedTunnelMessage {
 }
 
 /// Render one reassembled message for the WS payload.
-pub fn decode_message(msg: &TunnelMessage, catalog: &Catalog) -> DecodedTunnelMessage {
+pub fn decode_message(msg: &ModbusRtuMessage, catalog: &Catalog) -> DecodedTunnelMessage {
     let label = function_label(msg.function);
     let mut signals = header_signals(msg, &label);
     let (register_signals, matched_frame) = register_signals(msg, catalog);
@@ -193,6 +193,10 @@ pub fn decode_message(msg: &TunnelMessage, catalog: &Catalog) -> DecodedTunnelMe
         "frame": matched_frame,
         "raw": msg.raw,
         "frames": msg.frame_count,
+        // Only ever false under a lenient CRC policy, where the boundary came
+        // from the length rules alone. It is what separates a recovered message
+        // from a guessed one, so it has to reach the tab that shows them.
+        "crcValid": msg.crc_valid,
     });
 
     DecodedTunnelMessage {
@@ -204,7 +208,7 @@ pub fn decode_message(msg: &TunnelMessage, catalog: &Catalog) -> DecodedTunnelMe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiretap_catalog::ModbusTunnel;
+    use wiretap_catalog::ModbusRtuStream;
 
     const CATALOG: &str = r#"
 [meta]
@@ -236,9 +240,9 @@ unit = "A"
     /// declaration, chunked into 8-byte CAN payloads. One tunnel for the whole
     /// exchange on purpose — a response inherits its register address from the
     /// request that preceded it.
-    fn exchange(catalog: &Catalog, messages: &[&str]) -> Vec<TunnelMessage> {
+    fn exchange(catalog: &Catalog, messages: &[&str]) -> Vec<ModbusRtuMessage> {
         let declared = catalog.frame(0x1E0).unwrap().tunnel.as_ref().unwrap();
-        let mut t = ModbusTunnel::new(declared);
+        let mut t = ModbusRtuStream::new(declared);
         let mut out = Vec::new();
         for hex in messages {
             let bytes: Vec<u8> = (0..hex.len())

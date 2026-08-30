@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use wiretap_catalog::{CrcPolicy, ModbusTunnel, TunnelMessage};
+use wiretap_catalog::{CrcPolicy, ModbusRtuMessage, ModbusRtuStream};
 
 // =============================================================================
 // SLIP Constants (RFC 1055)
@@ -292,11 +292,11 @@ impl FramerImpl for SlipFramer {
 // Modbus RTU Framer
 // =============================================================================
 
-/// Modbus RTU framing, delegated to [`ModbusTunnel`] — the same reassembler the
-/// CAN tunnel path uses, so a message framed off a serial port and one recovered
-/// from a tunnelled CAN id are framed by identical rules.
+/// Modbus RTU framing, delegated to [`ModbusRtuStream`] — the same reassembler
+/// the CAN tunnel path uses, so a message framed off a serial port and one
+/// recovered from a tunnelled CAN id are framed by identical rules.
 struct ModbusRtuFramer {
-    tunnel: ModbusTunnel,
+    tunnel: ModbusRtuStream,
 }
 
 impl ModbusRtuFramer {
@@ -307,7 +307,7 @@ impl ModbusRtuFramer {
             CrcPolicy::Lenient
         };
         ModbusRtuFramer {
-            tunnel: ModbusTunnel::with_crc_policy(device_address, policy),
+            tunnel: ModbusRtuStream::with_crc_policy(device_address, policy),
         }
     }
 }
@@ -315,7 +315,7 @@ impl ModbusRtuFramer {
 /// One reassembled message as a frame. The CRC verdict rides along: under a
 /// lenient policy it is the only thing distinguishing a recovered message from a
 /// guessed one.
-fn rtu_frame(msg: TunnelMessage) -> SerialFrame {
+fn rtu_frame(msg: ModbusRtuMessage) -> SerialFrame {
     SerialFrame {
         bytes: msg.raw,
         incomplete: false,

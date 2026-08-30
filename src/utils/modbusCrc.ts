@@ -1,9 +1,10 @@
 // CRC-16/Modbus, for the client-side framing *detector*.
 //
 // Framing itself is done in Rust — the serial reader and `apply_framing_to_capture`
-// both run `wiretap_catalog::tunnel::ModbusTunnel`. This file used to sit beside a
-// full TypeScript port of the framer, which went stale the moment the Rust side
-// stopped brute-forcing message lengths; only the checksum was ever imported.
+// both run `wiretap_catalog::modbus_rtu_stream::ModbusRtuStream`. This file used
+// to sit beside a full TypeScript port of the framer, which went stale the moment
+// the Rust side stopped brute-forcing message lengths; only the checksum was ever
+// imported.
 
 /**
  * Calculate CRC-16 for Modbus RTU (polynomial 0xA001)

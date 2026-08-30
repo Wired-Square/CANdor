@@ -262,9 +262,11 @@ mod desktop {
         // on `incomplete`; the only thing separating these two is which side of
         // the length filter the frame fell on.
         //
-        // `crc_valid` is dropped here: `FrameMessage` has nowhere to put it yet,
-        // and it would not survive the capture round-trip without a schema
-        // change. It reaches the Decoder's Modbus tab on the decode path instead.
+        // `crc_valid` is dropped here, and nothing is lost by it: the decode
+        // path recomputes the same verdict from the same bytes when it
+        // interprets the message, so the Decoder's Modbus tab reports it
+        // whether the frames are live or out of a capture. Persisting it would
+        // only matter to a view that wants the verdict without decoding.
         let to_message = |(idx, (frame_bytes, start_idx, incomplete, _crc_valid, bus)): (
             usize,
             (Vec<u8>, usize, bool, Option<bool>, u8),

@@ -1,13 +1,16 @@
 // Copyright 2026 Wired Square Pty Ltd
 
 /**
- * The Decoder's Modbus tab: tunnelled Modbus RTU exchanges, newest first.
+ * The Decoder's Modbus tab: Modbus RTU exchanges, newest first — tunnelled
+ * inside a CAN id, or read off a serial port.
  *
  * A tunnel frame's payload is a slice of a byte stream, so a single CAN frame
  * row tells you nothing — the request and its reply share one id and a reply
  * often spans two or three frames. This view shows what the reassembler
  * actually recovered: one row per complete message, paired request to response,
- * with the round-trip time and the reassembled bytes the CRC validated.
+ * with the round-trip time and the bytes it was rebuilt from. A row whose CRC
+ * did not match is badged rather than hidden, which is only possible with
+ * "Require valid CRC-16" unticked.
  *
  * The signals themselves land in the Signals tab like any other frame; this is
  * the protocol-level trace beside them.
@@ -27,6 +30,7 @@ import {
   textDataAmber,
   textDataGreen,
   textDanger,
+  textWarning,
 } from "../../../styles";
 import { iconXs } from "../../../styles/spacing";
 import { formatHumanUs, formatDeltaUs } from "../../../utils/timeFormat";
@@ -91,6 +95,16 @@ const TransactionRow = memo(function TransactionRow({
           </span>
         )}
         {t.frame && <span className={`${textDataCyan} text-xs`}>{t.frame}</span>}
+        {/* Only reachable with "Require valid CRC-16" unticked; under the
+            default policy a message that failed its CRC is not a message. */}
+        {!t.crcValid && (
+          <span
+            className={`${textWarning} text-xs`}
+            title={translate("tunnelView.crcInvalidHint")}
+          >
+            {translate("tunnelView.crcInvalid")}
+          </span>
+        )}
       </div>
       {t.exceptionLabel && (
         <div className={`${textDanger} text-xs`}>{t.exceptionLabel}</div>
@@ -98,7 +112,7 @@ const TransactionRow = memo(function TransactionRow({
       {t.values.length > 0 && (
         <div className={`${textDataPrimary} text-xs`}>{registerList(t)}</div>
       )}
-      {/* The reassembled message, CRC included — every row here passed it. */}
+      {/* The reassembled message, CRC included. */}
       <div className={`${textMuted} text-xs break-all`}>
         {t.raw.map(byteToHex).join(" ")}
       </div>
