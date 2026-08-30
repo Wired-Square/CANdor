@@ -110,7 +110,7 @@ export default function DecoderTunnelView({
   transactions,
   displayFrameIdFormat,
 }: DecoderTunnelViewProps) {
-  const { t } = useTranslation();
+  const { t } = useTranslation("decoder");
 
   if (transactions.length === 0) {
     return (

@@ -1155,7 +1155,14 @@ Interpretation is `ws/tunnel_signals.rs`. Each message yields:
   before anyone has mapped it.
 - **A transaction record** (`tunnel[]` on the entry) — direction, function,
   register, values, CRC verdict, the reassembled bytes — which drives the
-  Decoder's **Modbus** tab. That tab exists because the catalogue declares a
+  Decoder's **Modbus** tab. `applyDecodedBatch` also keeps the last complete
+  message *per direction* on the decoded frame (`tunnelBytes`), because **Show
+  raw bytes** would otherwise render the frame-level payload — one ≤8-byte slice
+  of the stream, and for a response split across three frames whichever fragment
+  arrived last (on `0x1E0` that is the single byte `8A`). The Signals tab shows
+  those two messages instead, labelled by direction and uncoloured: the
+  signal-to-byte colour map is index-aligned to the CAN payload and means
+  nothing over a reassembled message. That tab exists because the catalogue declares a
   tunnel, not because messages have arrived, so it is there on a quiet bus and
   survives *Clear decoded*.
 

@@ -163,6 +163,11 @@ export type DecodedFrame = {
   /** Last raw payload seen per mux value, so each mux group can show its own
    *  hex/ASCII byte row (frame-level rawBytes is last-writer-wins across muxes). */
   rawBytesByMux?: Map<number, number[]>;
+  /** Last reassembled tunnel message per direction. A tunnel frame's payload is
+   *  one ≤8-byte slice of a byte stream, so the frame-level rawBytes is a
+   *  fragment — for a response split across three frames it is whichever
+   *  fragment arrived last. These are the messages the CRC validated. */
+  tunnelBytes?: Map<TunnelTransaction['direction'], number[]>;
 };
 
 export type FrameMetadata = {
@@ -771,6 +776,14 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
       const frameBytes = msg.bytes && msg.bytes.length > 0 ? msg.bytes : null;
       let rawBytesByMux = existing?.rawBytesByMux;
 
+      // Carry each direction's last complete message forward, so a request
+      // stays on screen while its response is still being reassembled.
+      let tunnelBytes = existing?.tunnelBytes;
+      for (const tx of msg.tunnel ?? []) {
+        if (!tunnelBytes) tunnelBytes = new Map();
+        tunnelBytes.set(tx.direction, tx.raw);
+      }
+
       for (const s of msg.signals) {
         const sig: DecodedSignal = {
           name: s.name,
@@ -795,6 +808,7 @@ export const useDecoderStore = create<DecoderState>((set, get) => ({
         sourceAddress,
         muxSelectors: muxSelectors.length > 0 ? muxSelectors : undefined,
         rawBytesByMux,
+        tunnelBytes,
       };
       nextDecoded.set(maskedFrameId, decodedFrame);
 

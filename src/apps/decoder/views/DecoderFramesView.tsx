@@ -308,6 +308,10 @@ function modbusRegisterLabel(reg: number, count: number | undefined, fmt: "hex" 
   return `${formatFrameId(reg, fmt)}${end}`;
 }
 
+/** Render order for a tunnel frame's byte rows — insertion order would flip if
+ *  a response were the first message seen after a reset. */
+const TUNNEL_DIRECTIONS = ['request', 'response'] as const;
+
 function FrameCard({
   frame,
   decodedFrame,
@@ -518,17 +522,19 @@ function FrameCard({
   // group instead of the single frame-level row.
   const hasMux = decodedSignals.some(s => s.muxValue !== undefined);
   const rawBytesByMux = decodedFrame?.rawBytesByMux;
+  const tunnelBytes = decodedFrame?.tunnelBytes;
 
-  // Hex + ASCII byte row. byteColourStyles is index-aligned; per-mux payloads
-  // share the frame's DLC so the same style array applies.
-  const renderRawBytesRow = (bytes: number[]) => (
+  // Hex + ASCII byte row. `styles` is index-aligned to the frame payload, which
+  // per-mux payloads share — a reassembled tunnel message does not, so it passes
+  // an empty array and renders uncoloured.
+  const renderRawBytesRow = (bytes: number[], styles = byteColourStyles) => (
     <div className="font-mono text-xs bg-[var(--bg-surface)] px-2 py-0.5 rounded inline-flex gap-2">
       <span>
         {bytes.map((b, idx) => (
           <span
             key={idx}
             className="transition-colors duration-200"
-            style={byteColourStyles[idx]}
+            style={styles[idx]}
           >
             {idx > 0 ? ' ' : ''}
             {byteToHex(b)}
@@ -686,8 +692,20 @@ function FrameCard({
         )}
       </div>
       {/* Raw bytes on separate line — only for non-mux frames; mux frames show
-          a byte row per group below (each mux value has its own payload). */}
-      {showRawBytes && rawBytes && !hasMux && renderRawBytesRow(rawBytes)}
+          a byte row per group below (each mux value has its own payload). A
+          tunnel frame shows the messages the reassembler recovered instead: its
+          own payload is one slice of a byte stream, so the frame-level bytes
+          are whichever fragment happened to arrive last. */}
+      {showRawBytes && (tunnelBytes
+        ? TUNNEL_DIRECTIONS.filter((d) => tunnelBytes.has(d)).map((direction) => (
+            <div key={direction} className={flexRowGap2}>
+              <span className={`${textMuted} text-xs font-mono`}>
+                {t(`tunnelView.${direction}`)}
+              </span>
+              {renderRawBytesRow(tunnelBytes.get(direction)!, [])}
+            </div>
+          ))
+        : rawBytes && !hasMux && renderRawBytesRow(rawBytes))}
       <div className="rounded border border-[color:var(--border-default)]">
         {(() => {
           // Separate plain signals (no muxValue) from mux signals
