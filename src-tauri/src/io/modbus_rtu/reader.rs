@@ -342,12 +342,7 @@ async fn run_poll_loop(
 
 /// Build a Modbus RTU request frame with CRC.
 fn build_rtu_request(unit_id: u8, poll: &PollGroup) -> Vec<u8> {
-    let func_code: u8 = match poll.register_type {
-        RegisterType::Coil => 0x01,     // Read Coils
-        RegisterType::Discrete => 0x02, // Read Discrete Inputs
-        RegisterType::Holding => 0x03,  // Read Holding Registers
-        RegisterType::Input => 0x04,    // Read Input Registers
-    };
+    let func_code = poll.register_type.catalog().read_function_code();
 
     let pdu = [
         unit_id,
@@ -483,16 +478,7 @@ fn execute_rtu_request(
 
 /// Calculate expected data byte count for a response.
 fn expected_response_data_len(poll: &PollGroup) -> usize {
-    match poll.register_type {
-        RegisterType::Holding | RegisterType::Input => {
-            // 2 bytes per register
-            poll.count as usize * 2
-        }
-        RegisterType::Coil | RegisterType::Discrete => {
-            // 1 bit per coil, packed into bytes
-            (poll.count as usize + 7) / 8
-        }
-    }
+    poll.register_type.catalog().data_bytes(poll.count)
 }
 
 fn register_type_name(rt: &RegisterType) -> &'static str {

@@ -525,6 +525,13 @@ pub async fn scan_registers(
     if config.chunk_size == 0 {
         return Err("Chunk size must be > 0".to_string());
     }
+    // Clamp rather than reject: a caller asking for more than one request can
+    // carry gets the scan it wanted, in requests the device will answer. Only
+    // the frontend clamped before, so an MCP caller could ask for 500 holding
+    // registers in one read and get a truncated block or an exception back.
+    let chunk_size = config
+        .chunk_size
+        .min(config.register_type.catalog().max_per_read());
 
     let total_registers = (config.end_register as u32) - (config.start_register as u32) + 1;
     if total_registers > config.max_registers {
@@ -544,7 +551,7 @@ pub async fn scan_registers(
         config.start_register,
         config.end_register,
         total_registers,
-        config.chunk_size,
+        chunk_size,
         config.inter_request_delay_ms,
         config.timeout_ms,
         passes,
@@ -593,7 +600,7 @@ pub async fn scan_registers(
         let mut work_queue: Vec<(u16, u16)> = Vec::new();
         let mut pos = config.start_register;
         loop {
-            let count = (config.end_register - pos + 1).min(config.chunk_size);
+            let count = (config.end_register - pos + 1).min(chunk_size);
             work_queue.push((pos, count));
             match pos.checked_add(count) {
                 Some(next) if next <= config.end_register => pos = next,

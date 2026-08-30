@@ -13,10 +13,6 @@ use serde::{Deserialize, Serialize};
 
 use super::reader::{PollEmitMode, PollGroup, RegisterType};
 
-/// Modbus caps a single read at 125 holding/input registers, or 2000 coils.
-const MAX_REGISTERS_PER_READ: u16 = 125;
-const MAX_COILS_PER_READ: u16 = 2000;
-
 fn default_device_address() -> u8 {
     1
 }
@@ -24,7 +20,7 @@ fn default_interval_ms() -> u64 {
     1000
 }
 fn default_block_size() -> u16 {
-    MAX_REGISTERS_PER_READ
+    wiretap_catalog::modbus::MAX_REGISTERS_PER_READ
 }
 fn default_emit_mode() -> PollEmitMode {
     PollEmitMode::PerRegister
@@ -88,13 +84,6 @@ impl Default for ModbusRangeSpec {
     }
 }
 
-fn max_read_size(rt: &RegisterType) -> u16 {
-    match rt {
-        RegisterType::Coil | RegisterType::Discrete => MAX_COILS_PER_READ,
-        RegisterType::Holding | RegisterType::Input => MAX_REGISTERS_PER_READ,
-    }
-}
-
 /// Split each range into poll groups no larger than one Modbus request.
 ///
 /// The `max_groups` cap is load-bearing, not cosmetic: every poll group becomes
@@ -136,7 +125,7 @@ pub fn build_polls_from_ranges(spec: &ModbusRangeSpec) -> Result<Vec<PollGroup>,
 
     let mut polls = Vec::new();
     for r in &spec.ranges {
-        let block = spec.block_size.min(max_read_size(&r.register_type));
+        let block = spec.block_size.min(r.register_type.catalog().max_per_read());
         let interval_ms = r.interval_ms.unwrap_or(spec.interval_ms);
         let device_address = r.device_address.unwrap_or(spec.device_address);
 

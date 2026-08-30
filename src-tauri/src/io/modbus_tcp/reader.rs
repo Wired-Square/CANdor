@@ -43,6 +43,24 @@ pub enum RegisterType {
     Discrete,
 }
 
+impl RegisterType {
+    /// The catalogue library's equivalent, which owns the protocol facts —
+    /// read/write caps, the function-code mapping, coil packing.
+    ///
+    /// The two enums stay separate because this one is the serde shape of an
+    /// IO profile and the MCP API, and the catalogue's is part of a published
+    /// crate. The numbers behind them should not be duplicated as well, so
+    /// everything that needs a Modbus fact crosses over here to ask for it.
+    pub fn catalog(&self) -> wiretap_catalog::RegisterType {
+        match self {
+            RegisterType::Holding => wiretap_catalog::RegisterType::Holding,
+            RegisterType::Input => wiretap_catalog::RegisterType::Input,
+            RegisterType::Coil => wiretap_catalog::RegisterType::Coil,
+            RegisterType::Discrete => wiretap_catalog::RegisterType::Discrete,
+        }
+    }
+}
+
 /// How a poll response becomes frames.
 #[derive(Clone, Copy, Debug, Default, serde::Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
