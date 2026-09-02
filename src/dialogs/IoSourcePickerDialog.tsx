@@ -17,7 +17,7 @@ import {
 import { getReaderProtocols, useSettings, type IOProfile } from "../hooks/useSettings";
 import { buildCatalogPath } from "../utils/catalogUtils";
 import { isMultiBusProfile } from "../utils/profileTraits";
-import { useProfileBusStore, profileBusMappings } from "../stores/profileBusStore";
+import { useProfileBusStore, profileBusMappings, kindSupportedProtocols } from "../stores/profileBusStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { pickCsvFilesToOpen } from "../api/dialogs";
 import {
@@ -37,7 +37,7 @@ import {
   unregisterSessionSubscriber,
   updateReaderSpeed,
   probeDevice,
-  createDefaultBusMappings,
+  probedBusMappings,
   listActiveSessions,
   getProfilesUsage,
   type StreamEndedInfo,
@@ -222,12 +222,17 @@ type Props = {
 function declaredBusMappings(
   profileId: string,
   outputBusOffset: number,
+  profileKind: string | undefined,
   probedBusCount?: number,
 ): BusMapping[] {
   const declared = profileBusMappings(profileId, outputBusOffset);
   return declared.length > 0
     ? declared
-    : createDefaultBusMappings(probedBusCount || 1, outputBusOffset);
+    : probedBusMappings(
+        probedBusCount || 1,
+        outputBusOffset,
+        kindSupportedProtocols(profileKind),
+      );
 }
 
 export default function IoSourcePickerDialog({
@@ -974,7 +979,7 @@ export default function IoSourcePickerDialog({
           error: null,
         }));
         if (isMultiBus) {
-          setDeviceBusConfigMap((prev) => new Map(prev).set(profileId, declaredBusMappings(profileId, outputBusOffset)));
+          setDeviceBusConfigMap((prev) => new Map(prev).set(profileId, declaredBusMappings(profileId, outputBusOffset, profile?.kind)));
         } else {
           setSingleBusOverrideMap((prev) => new Map(prev).set(profileId, outputBusOffset));
         }
@@ -989,7 +994,7 @@ export default function IoSourcePickerDialog({
         .then((result) => {
           setDeviceProbeResultMap((prev) => new Map(prev).set(profileId, result));
           if (result.isMultiBus) {
-            setDeviceBusConfigMap((prev) => new Map(prev).set(profileId, declaredBusMappings(profileId, outputBusOffset, result.busCount)));
+            setDeviceBusConfigMap((prev) => new Map(prev).set(profileId, declaredBusMappings(profileId, outputBusOffset, profile?.kind, result.busCount)));
           } else {
             setSingleBusOverrideMap((prev) => new Map(prev).set(profileId, outputBusOffset));
           }
@@ -1008,7 +1013,7 @@ export default function IoSourcePickerDialog({
           }));
           if (isMultiBus) {
             // Probe failed — fall back to whatever the profile itself declares
-            setDeviceBusConfigMap((prev) => new Map(prev).set(profileId, declaredBusMappings(profileId, outputBusOffset)));
+            setDeviceBusConfigMap((prev) => new Map(prev).set(profileId, declaredBusMappings(profileId, outputBusOffset, profile?.kind)));
           }
         })
         .finally(() => {
@@ -1536,24 +1541,19 @@ export default function IoSourcePickerDialog({
       combinedBusMappings.set(profileId, mappings);
     }
 
-    // Convert single-bus device overrides to BusMapping format
+    // Convert single-bus device overrides to BusMapping format. No traits here:
+    // Rust derives them from `protocol` when the session is created, so anything
+    // built client-side would be discarded.
     for (const [profileId, outputBus] of singleBusOverrideMap.entries()) {
       const profile = readProfiles.find(p => p.id === profileId);
-      const readerProtocols = profile ? getReaderProtocols(profile.kind, profile.connection) : ['can'];
-      const protocol = readerProtocols[0] || 'can';
+      const protocol = (profile ? getReaderProtocols(profile.kind, profile.connection)[0] : undefined) ?? 'can';
 
       combinedBusMappings.set(profileId, [{
         deviceBus: 0,
         enabled: true,
         outputBus,
         interfaceId: `${protocol}0`,
-        traits: {
-          temporal_mode: 'realtime',
-          protocols: (protocol === 'can' ? ['can', 'canfd'] : [protocol]) as Protocol[],
-          tx_frames: true,
-          tx_bytes: false,
-          multi_source: true,
-        },
+        protocol: protocol as Protocol,
       }]);
     }
 
@@ -1860,7 +1860,7 @@ export default function IoSourcePickerDialog({
               let busConfig = deviceBusConfigMap.get(profileId);
               if (!busConfig && probeResult) {
                 const offset = outputBusOffsets.get(profileId) ?? 0;
-                busConfig = declaredBusMappings(profileId, offset, probeResult.busCount);
+                busConfig = declaredBusMappings(profileId, offset, profile.kind, probeResult.busCount);
               }
               busConfig = busConfig || [];
 
@@ -1882,6 +1882,10 @@ export default function IoSourcePickerDialog({
                   compact
                   usedOutputBuses={usedOutputBuses}
                   configLocked={configLocked}
+                  // A session-only override: the picker seeds from the profile's
+                  // saved protocol but never writes back to it. Settings is the
+                  // one place a device's protocol is persisted.
+                  showProtocol
                 />
               );
             }

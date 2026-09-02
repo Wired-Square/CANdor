@@ -16,7 +16,7 @@ use crate::{
         evict_session_subscriber, leave_session_to_capture, add_source_to_session, remove_source_from_session, update_source_bus_mappings, pause_source_in_session, resume_source_in_session, get_session_source_count,
         update_session_direction, update_session_speed, update_session_time_range, ActiveSessionInfo, IOCapabilities, IOSource, IOState,
         SubscriberInfo, RegisterSubscriberResult, ReinitializeResult, CaptureSource, step_frame, StepResult,
-        BusMapping, InterfaceTraits, Protocol, TemporalMode,
+        BusMapping, Protocol, TemporalMode,
         GvretDeviceInfo, probe_gvret_tcp,
         ModbusTcpConfig, ModbusTcpSource,
         ModbusRangeSpec, PollGroup,
@@ -33,6 +33,7 @@ use crate::{
 };
 #[cfg(not(target_os = "ios"))]
 use crate::io::device_kinds::{self, conn_f64, conn_i64, conn_str, req_str};
+use crate::io::traits::supported_protocols_for_kind;
 use crate::io::probe_gvret_usb;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -359,6 +360,19 @@ fn create_source_config_from_profile(
     })
 }
 
+/// The protocol a settings string names, defaulting to classic CAN.
+///
+/// The settings file spells these the same way the wire does, so this is the one
+/// place the string form is turned back into the enum.
+fn protocol_from_str(value: Option<&str>) -> Protocol {
+    match value {
+        Some("canfd") => Protocol::CanFd,
+        Some("modbus") => Protocol::Modbus,
+        Some("serial") => Protocol::Serial,
+        _ => Protocol::Can,
+    }
+}
+
 /// Parse interfaces configuration from profile connection field.
 /// Returns None if no interfaces are configured, otherwise returns bus mappings.
 fn parse_interfaces_from_profile(
@@ -394,32 +408,18 @@ fn parse_interfaces_from_profile(
             let obj = item.as_object()?;
             let device_bus = obj.get("device_bus")?.as_u64()? as u8;
             let enabled = obj.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
-            let protocol = obj
-                .get("protocol")
-                .and_then(|v| v.as_str())
-                .unwrap_or("can");
+            let protocol = protocol_from_str(obj.get("protocol").and_then(|v| v.as_str()));
 
             // Use bus_override for output_bus if provided, otherwise use device_bus
             let output_bus = bus_override.unwrap_or(device_bus);
-
-            // Determine protocols based on interface protocol setting
-            let protocols = match protocol {
-                "canfd" => vec![Protocol::Can, Protocol::CanFd],
-                _ => vec![Protocol::Can],
-            };
 
             Some(BusMapping {
                 device_bus,
                 enabled,
                 output_bus,
                 interface_id: format!("can{}", device_bus),
-                traits: Some(InterfaceTraits {
-                    temporal_mode: TemporalMode::Realtime,
-                    protocols,
-                    tx_frames: true,
-                    tx_bytes: false,
-                    multi_source: true,
-                }),
+                supported_protocols: supported_protocols_for_kind(&profile.kind).to_vec(),
+                ..BusMapping::default().with_protocol(protocol)
             })
         })
         .collect();
@@ -462,13 +462,12 @@ fn parse_virtual_interfaces(
     profile: &IOProfile,
     bus_override: Option<u8>,
 ) -> Option<Vec<BusMapping>> {
-    let traffic_type = conn_str(profile, "traffic_type").unwrap_or_else(|| "can".to_string());
-    let traffic_type = traffic_type.as_str();
-    let (protocols, tx_frames, tx_bytes, prefix) = match traffic_type {
-        "canfd" => (vec![Protocol::Can, Protocol::CanFd], true, false, "can"),
-        "modbus" => (vec![Protocol::Modbus], false, false, "modbus"),
-        "serial" => (vec![Protocol::Serial], false, true, "serial"),
-        _ => (vec![Protocol::Can], true, false, "can"),
+    let traffic_type = conn_str(profile, "traffic_type");
+    let protocol = protocol_from_str(traffic_type.as_deref());
+    let prefix = match protocol {
+        Protocol::Modbus => "modbus",
+        Protocol::Serial => "serial",
+        Protocol::Can | Protocol::CanFd => "can",
     };
 
     let buses: Vec<u8> = match profile
@@ -497,13 +496,11 @@ fn parse_virtual_interfaces(
             enabled: true,
             output_bus: bus_override.map(|b| b + idx as u8).unwrap_or(device_bus),
             interface_id: format!("{}{}", prefix, device_bus),
-            traits: Some(InterfaceTraits {
-                temporal_mode: TemporalMode::Realtime,
-                protocols: protocols.clone(),
-                tx_frames,
-                tx_bytes,
-                multi_source: true,
-            }),
+            // A virtual adaptor generates one kind of traffic for every bus, so
+            // the protocol is the profile's `traffic_type` and there is nothing
+            // per-bus to choose.
+            supported_protocols: vec![protocol],
+            ..BusMapping::default().with_protocol(protocol)
         })
         .collect();
 
@@ -542,6 +539,22 @@ pub fn get_profile_bus_mappings(
         .iter()
         .filter_map(|p| Some((p.id.clone(), declared_bus_mappings(p)?)))
         .collect())
+}
+
+/// What each profile kind's buses may be set to, keyed by kind.
+///
+/// The options the source picker's per-bus protocol dropdown renders. Fetched
+/// once and cached beside the bus mappings, so the picker can answer
+/// synchronously for a device it has only just probed — one whose profile
+/// declares no buses yet, and so has no mapping to read the list off.
+///
+/// A kind with fewer than two entries has nothing to choose and gets no
+/// dropdown. The *values* live in `io::traits`; this only carries them across.
+#[tauri::command(rename_all = "snake_case")]
+pub fn get_supported_protocols() -> HashMap<String, Vec<Protocol>> {
+    io::traits::profile_kinds()
+        .map(|kind| (kind.to_string(), supported_protocols_for_kind(kind).to_vec()))
+        .collect()
 }
 
 /// Whether the profile itself says which buses it has.
@@ -606,45 +619,22 @@ fn create_default_bus_mapping(profile: &IOProfile, bus_override: Option<u8>) -> 
             .unwrap_or(0)
     });
 
-    // Determine interface traits based on profile kind
-    let (device_bus, interface_id, protocols, tx_frames, tx_bytes) = match profile.kind.as_str() {
-        "gvret_tcp" | "gvret-tcp" | "gvret_usb" | "gvret-usb" => {
-            (0, "can0".to_string(), vec![Protocol::Can, Protocol::CanFd], true, false)
-        }
-        "slcan" => (0, "can0".to_string(), vec![Protocol::Can], true, false),
-        "gs_usb" => (0, "can0".to_string(), vec![Protocol::Can, Protocol::CanFd], true, false),
-        "socketcan" => (0, "can0".to_string(), vec![Protocol::Can, Protocol::CanFd], true, false),
-        "modbus_tcp" => (0, "modbus0".to_string(), vec![Protocol::Modbus], false, false),
+    // The protocol this kind's single bus carries; the traits follow from it.
+    let (device_bus, interface_id, protocol) = match profile.kind.as_str() {
+        // FD is a per-profile switch on these, and until now only the frontend
+        // read it — Rust answered per kind, so an FD-enabled slcan was *shown*
+        // as FD-capable and *ran* as classic CAN.
+        "gvret_tcp" | "gvret-tcp" | "gvret_usb" | "gvret-usb" | "slcan" | "gs_usb"
+        | "socketcan" => (0, "can0".to_string(), can_protocol_for(profile)),
+        "modbus_tcp" => (0, "modbus0".to_string(), Protocol::Modbus),
         "framelink" => {
             // Grouped profile with interfaces[] array
             if let Some(interfaces) = profile.connection.get("interfaces").and_then(|v| v.as_array()) {
                 return interfaces.iter().enumerate().map(|(idx, iface)| {
                     let iface_index = iface.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
                     let iface_type = iface.get("iface_type").and_then(|v| v.as_u64()).unwrap_or(1) as u8;
-                    let (protos, tx_f, tx_b) = match iface_type {
-                        3 => (vec![Protocol::Serial], false, true),
-                        2 => (vec![Protocol::Can, Protocol::CanFd], true, false),
-                        _ => (vec![Protocol::Can], true, false),
-                    };
-                    let iface_id = if iface_type == 3 {
-                        format!("serial{}", iface_index)
-                    } else {
-                        format!("can{}", iface_index)
-                    };
                     let out_bus = bus_override.map(|b| b + idx as u8).unwrap_or(idx as u8);
-                    BusMapping {
-                        device_bus: iface_index,
-                        output_bus: out_bus,
-                        enabled: true,
-                        interface_id: iface_id,
-                        traits: Some(InterfaceTraits {
-                            temporal_mode: TemporalMode::Realtime,
-                            protocols: protos,
-                            tx_frames: tx_f,
-                            tx_bytes: tx_b,
-                            multi_source: true,
-                        }),
-                    }
+                    framelink_bus_mapping(iface_index, iface_type, out_bus)
                 }).collect();
             }
             // Legacy single-interface fallback
@@ -654,19 +644,9 @@ fn create_default_bus_mapping(profile: &IOProfile, bus_override: Option<u8>) -> 
             let iface_type = profile.connection.get("interface_type")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(1) as u8;
-            let (protos, tx_f, tx_b) = match iface_type {
-                3 => (vec![Protocol::Serial], false, true),
-                2 => (vec![Protocol::Can, Protocol::CanFd], true, false),
-                _ => (vec![Protocol::Can], true, false),
-            };
-            let iface_id = if iface_type == 3 {
-                format!("serial{}", iface_index)
-            } else {
-                format!("can{}", iface_index)
-            };
-            (iface_index, iface_id, protos, tx_f, tx_b)
+            return vec![framelink_bus_mapping(iface_index, iface_type, output_bus)];
         }
-        _ => (0, "can0".to_string(), vec![Protocol::Can], true, false),
+        _ => (0, "can0".to_string(), Protocol::Can),
     };
 
     vec![BusMapping {
@@ -674,14 +654,33 @@ fn create_default_bus_mapping(profile: &IOProfile, bus_override: Option<u8>) -> 
         output_bus,
         enabled: true,
         interface_id,
-        traits: Some(InterfaceTraits {
-            temporal_mode: TemporalMode::Realtime,
-            protocols,
-            tx_frames,
-            tx_bytes,
-            multi_source: true,
-        }),
+        supported_protocols: supported_protocols_for_kind(&profile.kind).to_vec(),
+        ..BusMapping::default().with_protocol(protocol)
     }]
+}
+
+/// Classic CAN or CAN FD, from the profile's `enable_fd` switch.
+fn can_protocol_for(profile: &IOProfile) -> Protocol {
+    match device_kinds::conn_bool(profile, "enable_fd") {
+        Some(true) => Protocol::CanFd,
+        _ => Protocol::Can,
+    }
+}
+
+/// One FrameLink interface's mapping. Its `iface_type` fixes the protocol, so
+/// there is nothing per-bus to choose — the same reading the reader applies when
+/// the device reports its interfaces, borrowed rather than restated.
+fn framelink_bus_mapping(iface_index: u8, iface_type: u8, output_bus: u8) -> BusMapping {
+    let protocol = io::framelink::reader::protocol_for_iface_type(iface_type);
+    let prefix = if protocol == Protocol::Serial { "serial" } else { "can" };
+    BusMapping {
+        device_bus: iface_index,
+        output_bus,
+        enabled: true,
+        interface_id: format!("{}{}", prefix, iface_index),
+        supported_protocols: vec![protocol],
+        ..BusMapping::default().with_protocol(protocol)
+    }
 }
 
 /// Create a new reader session
@@ -2308,7 +2307,7 @@ fn resolve_source_config(
 
     // Use provided bus mappings, or fall back to the profile's declared buses.
     // A lone bus-0 guess here is what dropped a multi-bus device's other buses.
-    let bus_mappings = if input.bus_mappings.is_empty() {
+    let mut bus_mappings = if input.bus_mappings.is_empty() {
         let mappings = offset_bus_mappings(profile_bus_mappings(profile), source_idx as u8);
         tlog!(
             "[resolve_source_config] Source {} '{}' has no bus mappings, using {} declared bus(es)",
@@ -2318,6 +2317,7 @@ fn resolve_source_config(
     } else {
         input.bus_mappings
     };
+    io::traits::normalise_bus_traits(&mut bus_mappings, &profile_kind);
 
     Ok(SourceConfig {
         profile_id: input.profile_id,
@@ -2861,12 +2861,77 @@ mod bus_mapping_tests {
     }
 
     #[test]
-    fn probed_gvret_buses_advertise_can_fd_like_every_other_gvret_default() {
-        // Regression: a hand-rolled copy of default_bus_mappings dropped CanFd,
-        // so a probed device advertised less than the same device unprobed.
-        let mappings = profile_bus_mappings(&gvret(json!({ "_probed_bus_count": 2 })));
+    fn a_probed_gvret_bus_carries_what_a_configured_one_does() {
+        // Regression: the two enumerators disagreed. A bus configured in
+        // Settings without an explicit protocol came out classic CAN, while one
+        // synthesised from a bare probe count came out CAN FD — so the same
+        // device advertised different capabilities depending on which path had
+        // described it. What they agree *on* matters less than that they agree;
+        // the picker's protocol dropdown is how a bus is told it carries FD.
+        let probed = profile_bus_mappings(&gvret(json!({ "_probed_bus_count": 2 })));
+        let configured = profile_bus_mappings(&gvret(json!({
+            "interfaces": [{ "device_bus": 0, "enabled": true }]
+        })));
+
+        assert_eq!(probed[0].protocol, configured[0].protocol);
+        assert_eq!(
+            probed[0].traits.as_ref().unwrap().protocols,
+            configured[0].traits.as_ref().unwrap().protocols,
+        );
+    }
+
+    #[test]
+    fn a_bus_protocol_decides_its_traits() {
+        // `traits` is derived output: setting the protocol is the only way to
+        // move it, so the two cannot drift apart.
+        let mappings = profile_bus_mappings(&gvret(json!({
+            "interfaces": [
+                { "device_bus": 0, "enabled": true, "protocol": "can" },
+                { "device_bus": 1, "enabled": true, "protocol": "canfd" },
+            ]
+        })));
+
+        assert_eq!(mappings[0].protocol, Protocol::Can);
+        assert!(!mappings[0].traits.as_ref().unwrap().protocols.contains(&Protocol::CanFd));
+        assert_eq!(mappings[1].protocol, Protocol::CanFd);
+        assert!(mappings[1].traits.as_ref().unwrap().protocols.contains(&Protocol::CanFd));
+    }
+
+    #[test]
+    fn traits_sent_from_the_frontend_are_rebuilt_from_the_protocol() {
+        // The frontend no longer sends traits at all, but a stale or
+        // hand-written blob must not be believed if one arrives.
+        let mut mappings = vec![BusMapping {
+            traits: Some(io::traits::traits_for_protocol(Protocol::Serial)),
+            ..BusMapping::default().with_protocol(Protocol::CanFd)
+        }];
+        // Undo `with_protocol`'s derivation so traits and protocol disagree.
+        mappings[0].traits = Some(io::traits::traits_for_protocol(Protocol::Serial));
+
+        io::traits::normalise_bus_traits(&mut mappings, "gvret_tcp");
+
         let traits = mappings[0].traits.as_ref().unwrap();
         assert!(traits.protocols.contains(&Protocol::CanFd));
+        assert!(!traits.protocols.contains(&Protocol::Serial));
+        assert!(traits.tx_frames, "a CAN FD bus transmits frames, not bytes");
+    }
+
+    #[test]
+    fn a_serial_framelink_bus_is_not_clamped_to_can() {
+        // Regression: normalising against the *kind's* protocol list rewrote a
+        // FrameLink RS485 port to CAN, because "framelink" as a kind offers
+        // [Can, CanFd] while that individual interface carries Serial. The
+        // per-bus answer is the finer one and has to win.
+        let mut mappings = profile_bus_mappings(&profile("framelink", json!({
+            "interfaces": [{ "index": 2, "iface_type": 3 }]
+        })));
+
+        io::traits::normalise_bus_traits(&mut mappings, "framelink");
+
+        assert_eq!(mappings[0].protocol, Protocol::Serial);
+        let traits = mappings[0].traits.as_ref().unwrap();
+        assert!(traits.protocols.contains(&Protocol::Serial));
+        assert!(traits.tx_bytes, "a serial port transmits raw bytes");
     }
 
     #[test]

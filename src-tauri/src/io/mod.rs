@@ -244,10 +244,11 @@ pub enum TemporalMode {
 }
 
 /// Protocol family for frame-based communication
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Protocol {
     /// CAN 2.0A/2.0B (standard/extended)
+    #[default]
     Can,
     /// CAN FD (flexible data rate) - compatible with Can
     #[serde(rename = "canfd")]
@@ -3300,7 +3301,7 @@ pub async fn resume_source_in_session(
 pub async fn update_source_bus_mappings(
     session_id: &str,
     profile_id: &str,
-    bus_mappings: Vec<BusMapping>,
+    mut bus_mappings: Vec<BusMapping>,
 ) -> Result<IOCapabilities, String> {
     let mut sessions = IO_SESSIONS.lock().await;
     let session = sessions
@@ -3308,8 +3309,19 @@ pub async fn update_source_bus_mappings(
         .ok_or_else(|| format!("Session '{}' not found", session_id))?;
 
     // Only multi-source sessions support this
-    session.source.broker_configs()
+    let configs = session.source.broker_configs()
         .ok_or_else(|| "Session does not support multi-source — cannot update bus mappings".to_string())?;
+
+    // Traits are derived, never accepted — the same normalisation the create
+    // path applies, so a hot-swap cannot leave a session in a state
+    // `create_multi_source_session` would never have produced. The live source
+    // already knows its kind, so the caller needn't say.
+    let kind = configs
+        .iter()
+        .find(|c| c.profile_id == profile_id)
+        .map(|c| c.profile_kind.clone())
+        .ok_or_else(|| format!("Source '{}' is not part of session '{}'", profile_id, session_id))?;
+    traits::normalise_bus_traits(&mut bus_mappings, &kind);
 
     // Delegate to the device implementation (handles hot-swap internally)
     session.source.update_source_bus_mappings(profile_id, bus_mappings)?;

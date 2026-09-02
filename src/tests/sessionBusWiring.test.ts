@@ -8,8 +8,18 @@
 // un-remapped), so only the graph and the bus selector ever showed the loss.
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { offsetBusMappings, type ActiveSessionInfo, type BusMapping } from "../api/io";
-import { useProfileBusStore, profileBusMappings } from "../stores/profileBusStore";
+import {
+  encodeBusMapping,
+  offsetBusMappings,
+  probedBusMappings,
+  type ActiveSessionInfo,
+  type BusMapping,
+} from "../api/io";
+import {
+  useProfileBusStore,
+  profileBusMappings,
+  kindSupportedProtocols,
+} from "../stores/profileBusStore";
 import { buildSessionGraph } from "../apps/session-manager/utils/layoutUtils";
 import type { SourceNodeData } from "../apps/session-manager/nodes/SourceNode";
 import type { SessionNodeData } from "../apps/session-manager/nodes/SessionNode";
@@ -68,6 +78,7 @@ describe("profileBusStore accessors", () => {
   beforeEach(() => {
     useProfileBusStore.setState({
       mappings: new Map([["io_declared", [mapping(0, 0), mapping(1, 1)]]]),
+      supportedProtocols: new Map([["gvret_tcp", ["can", "canfd"]]]),
       loaded: true,
     });
   });
@@ -84,6 +95,41 @@ describe("profileBusStore accessors", () => {
 
   it("applies an output bus offset on read", () => {
     expect(profileBusMappings("io_declared", 4).map((m) => m.outputBus)).toEqual([4, 5]);
+  });
+
+  it("offers no protocol options for a kind it has not heard of", () => {
+    expect(kindSupportedProtocols("io_nonesuch")).toEqual([]);
+    expect(kindSupportedProtocols(undefined)).toEqual([]);
+  });
+
+  it("reports the protocols a kind's bus may be set to", () => {
+    expect(kindSupportedProtocols("gvret_tcp")).toEqual(["can", "canfd"]);
+  });
+});
+
+describe("per-bus protocol → session payload", () => {
+  it("carries the picker's protocol choice, and sends no traits with it", () => {
+    // The dropdown's whole job: `protocol` is the input, and Rust derives the
+    // traits from it. Sending traits too would let the two disagree.
+    const encoded = [
+      { ...mapping(0, 0), protocol: "can" as const },
+      { ...mapping(1, 1), protocol: "canfd" as const },
+    ].map(encodeBusMapping);
+
+    expect(encoded.map((m) => m.protocol)).toEqual(["can", "canfd"]);
+    expect(encoded.every((m) => !("traits" in m) || m.traits === undefined)).toBe(true);
+  });
+
+  it("seeds a probed-but-unconfigured device with the kind's options", () => {
+    // A GVRET nobody has configured still needs a dropdown, so the options come
+    // from the kind rather than from a mapping that does not exist yet.
+    const seeded = probedBusMappings(2, 0, ["can", "canfd"]);
+
+    expect(seeded).toHaveLength(2);
+    expect(seeded[0].protocol).toBe("can");
+    expect(seeded[0].supportedProtocols).toEqual(["can", "canfd"]);
+    expect(seeded.map((m) => m.outputBus)).toEqual([0, 1]);
+    expect(seeded.every((m) => m.traits === undefined)).toBe(true);
   });
 });
 

@@ -14,7 +14,6 @@ export { default as DeviceEditor } from "./DeviceEditor";
 
 export type { SourceTab } from "./types";
 export type { FramingConfig } from "./FramingOptions";
-export type { BusMappingWithProtocol } from "./DeviceBusConfig";
 export type { InterfaceFramingConfig } from "./SingleBusConfig";
 
 export {

@@ -31,9 +31,9 @@ import GsUsbDevicePicker from "./GsUsbDevicePicker";
 import LinuxCanSetupHelper from "./LinuxCanSetupHelper";
 import SecurePasswordField from "./SecurePasswordField";
 import IODeviceStatus from "./IODeviceStatus";
-import DeviceBusConfig, {
-  type BusMappingWithProtocol,
-} from "../../dialogs/io-source-picker/DeviceBusConfig";
+import DeviceBusConfig from "../../dialogs/io-source-picker/DeviceBusConfig";
+import type { BusMapping } from "../../api/io";
+import { useKindSupportedProtocols } from "../../stores/profileBusStore";
 import {
   SLCAN_BITRATES,
   SLCAN_DATA_BITRATES,
@@ -233,22 +233,27 @@ export default function IOConnectionFields({
 
   // GVRET's bus list, in the shape DeviceBusConfig wants. A memo, not a
   // callback: it is read three times per render and never used as an identity.
-  const deviceBusConfig = useMemo((): BusMappingWithProtocol[] => {
+  const supportedProtocols = useKindSupportedProtocols(profile.kind);
+
+  const deviceBusConfig = useMemo((): BusMapping[] => {
     if (!isProfileKind(profile, "gvret_tcp") && !isProfileKind(profile, "gvret_usb")) return [];
     return (profile.connection.interfaces ?? []).map((iface) => ({
       deviceBus: iface.device_bus,
       enabled: iface.enabled,
       outputBus: iface.device_bus, // unused when showOutputBus is false
       protocol: iface.protocol,
+      supportedProtocols,
     }));
-  }, [profile]);
+  }, [profile, supportedProtocols]);
 
   const handleDeviceBusConfigChange = useCallback(
-    (config: BusMappingWithProtocol[]) => {
+    (config: BusMapping[]) => {
       const interfaces: GvretInterfaceConfig[] = config.map((m) => ({
         device_bus: m.deviceBus,
         enabled: m.enabled,
-        protocol: m.protocol || "can",
+        // Settings is the only place a protocol is persisted; the source
+        // picker's copy of this dropdown is a session-only override.
+        protocol: (m.protocol === "canfd" ? "canfd" : "can"),
       }));
       onUpdateConnectionField("interfaces", interfaces);
     },

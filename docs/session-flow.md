@@ -109,6 +109,39 @@ device bus through unchanged is what made the GVRET half invisible — the frame
 still arrived, un-remapped, while `available_buses` and `transmit_routes` never
 knew the bus existed.
 
+**A bus carries a protocol, and its traits follow from it (2026-09-03).** Each
+`BusMapping` has a `protocol` — the *input*, set from the profile's saved value
+and overridable per session by the source picker's per-bus dropdown — alongside
+two *outputs* the frontend never sends: `traits`, always
+`traits::traits_for_protocol(protocol)`, and `supported_protocols`, the options
+the dropdown renders. `traits::normalise_bus_traits` re-derives both on the way
+in, on the session-create path (`resolve_source_config`) and the running-session
+hot-swap (`io::update_source_bus_mappings`) alike, so a stale or hand-written
+traits blob cannot claim a capability the protocol beside it does not imply.
+Seven copies of the protocol→traits match had accumulated across `sessions.rs`
+and `gvret/common.rs`; there is now one.
+
+The protocol is taken as given rather than checked against the kind.
+`traits::supported_protocols_for_kind` answers per *kind* and is deliberately a
+default for the picker, not a gate: it is coarser than the truth, since a
+FrameLink RS485 port or a virtual Modbus adaptor carries a protocol its kind's
+list does not mention. A mapping that knows its own narrower list keeps it.
+
+What this changes is **capability reporting** — the traits `IOBroker::new`
+combines, and through them the FD checkbox in the transmit editor, the CAN-vs-
+serial transmit view, and toolbox gating. It selects no codec: readers still
+dispatch on `profile.kind`. Modbus on a serial port is a different mechanism
+again (`framing_encoding: "modbus_rtu"` plus the attached catalogue's protocol),
+which is why the dropdown deliberately does not offer it — a third way to say
+the same thing would be free to disagree with the other two.
+
+Two disagreements fell out and are fixed: `enable_fd` on slcan / gs_usb /
+socketcan was read by the frontend registry but ignored by Rust, so an
+FD-enabled slcan was *shown* FD-capable and *ran* classic CAN; and a probed-but-
+unconfigured GVRET advertised CAN FD while the same device with a saved bus list
+advertised plain CAN. Both now come from one derivation, and plain CAN is the
+default a bus gets until something says otherwise.
+
 **A source now revises its mappings once connected (2026-09-03).** The profile
 is the starting guess; the device gets the last word. A driver that can
 enumerate its interfaces sends `SourceMessage::MappingsResolved(source_idx,

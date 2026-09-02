@@ -8,6 +8,7 @@ import { iconMd } from "../../../styles/spacing";
 import type { IOProfile } from "../stores/settingsStore";
 import { getReaderProtocols, isReaderRealtime } from "../../../hooks/useSettings";
 import { getIOKindLabel } from "../../../utils/ioKindLabel";
+import { protocolLabel } from "../../../utils/profileTraits";
 import { PrimaryButton } from "../../../components/forms/DialogButtons";
 import {
   h2,
@@ -63,20 +64,6 @@ const getProtocolBadgeStyle = (protocol: string) => {
   }
 };
 
-const getProtocolLabel = (protocol: string) => {
-  switch (protocol) {
-    case "can":
-      return "CAN";
-    case "canfd":
-      return "CAN-FD";
-    case "serial":
-      return "Serial";
-    case "modbus":
-      return "Modbus";
-    default:
-      return protocol;
-  }
-};
 
 const SummaryBadge = ({ label, value }: { label: string; value: React.ReactNode }) => (
   <span
@@ -333,7 +320,7 @@ export default function DataIOView({
                       key={protocol}
                       className={getProtocolBadgeStyle(protocol)}
                     >
-                      {getProtocolLabel(protocol)}
+                      {protocolLabel(protocol)}
                     </span>
                   ))}
 

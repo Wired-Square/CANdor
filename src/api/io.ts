@@ -944,13 +944,7 @@ export async function addSourceToSession(
   const rustSource = {
     profile_id: source.profileId,
     display_name: source.displayName,
-    bus_mappings: source.busMappings.map((m) => ({
-      device_bus: m.deviceBus,
-      enabled: m.enabled,
-      output_bus: m.outputBus,
-      interface_id: m.interfaceId,
-      traits: m.traits,
-    })),
+    bus_mappings: source.busMappings.map(encodeBusMapping),
     framing_encoding: source.framingEncoding,
     delimiter: source.delimiter,
     max_frame_length: source.maxFrameLength,
@@ -1004,14 +998,25 @@ export async function updateSourceBusMappings(
   return invoke("update_source_bus_mappings_cmd", {
     session_id: sessionId,
     profile_id: profileId,
-    bus_mappings: busMappings.map((m) => ({
-      device_bus: m.deviceBus,
-      enabled: m.enabled,
-      output_bus: m.outputBus,
-      interface_id: m.interfaceId,
-      traits: m.traits,
-    })),
+    bus_mappings: busMappings.map(encodeBusMapping),
   });
+}
+
+/**
+ * A BusMapping on the way to Rust.
+ *
+ * `traits` and `supportedProtocols` are deliberately not sent — Rust derives
+ * both from `protocol`, so anything we sent would be discarded, and sending a
+ * stale blob only invites the two to disagree.
+ */
+export function encodeBusMapping(m: BusMapping): RawBusMapping {
+  return {
+    device_bus: m.deviceBus,
+    enabled: m.enabled,
+    output_bus: m.outputBus,
+    interface_id: m.interfaceId,
+    protocol: m.protocol,
+  };
 }
 
 /**
@@ -1104,7 +1109,18 @@ export interface BusMapping {
   outputBus: number;
   /** Human-readable interface identifier (e.g., "can0", "serial1") */
   interfaceId?: string;
-  /** Traits for this specific interface */
+  /**
+   * The protocol this bus carries. The one field of the three below that is an
+   * *input* — set it from the picker's dropdown and Rust derives the rest.
+   */
+  protocol?: Protocol;
+  /** What this bus may be set to. Rust's answer; never sent back. */
+  supportedProtocols?: Protocol[];
+  /**
+   * Traits for this specific interface. Read-only here: Rust re-derives them
+   * from `protocol` on every session create and bus-mapping update, so sending
+   * a value has no effect and a stale one is never believed.
+   */
   traits?: InterfaceTraits;
 }
 
@@ -1182,20 +1198,14 @@ export async function probeDevice(profileId: string): Promise<DeviceProbeResult>
   };
 }
 
-/**
- * Create default bus mappings for a GVRET device.
- * All buses are enabled and map to sequential output numbers starting from offset.
- * @param busCount Number of buses on the device
- * @param outputBusOffset Starting output bus number (default 0)
- * @param protocol Protocol type for all interfaces (default "can")
- * @returns Array of default bus mappings
- */
 /** A BusMapping as Rust sends it. */
 interface RawBusMapping {
   device_bus: number;
   enabled: boolean;
   output_bus: number;
   interface_id?: string;
+  protocol?: Protocol;
+  supported_protocols?: Protocol[];
   traits?: InterfaceTraits;
 }
 
@@ -1205,27 +1215,33 @@ function decodeBusMapping(m: RawBusMapping): BusMapping {
     enabled: m.enabled,
     outputBus: m.output_bus,
     interfaceId: m.interface_id,
+    protocol: m.protocol,
+    supportedProtocols: m.supported_protocols,
     traits: m.traits,
   };
 }
 
-export function createDefaultBusMappings(
+/**
+ * Bus mappings for a device the profile hasn't described yet — probed, but
+ * never configured in Settings, so `getProfileBusMappings` omits it.
+ *
+ * Carries no traits: Rust derives those from `protocol` when the session is
+ * created. `supportedProtocols` comes from the per-kind table Rust serves via
+ * `getSupportedProtocols`, so the dropdown offers the same options here as it
+ * does for a configured device.
+ */
+export function probedBusMappings(
   busCount: number,
   outputBusOffset: number = 0,
-  protocol: Protocol = "can"
+  supportedProtocols: Protocol[] = []
 ): BusMapping[] {
   return Array.from({ length: busCount }, (_, i) => ({
     deviceBus: i,
     enabled: true,
     outputBus: outputBusOffset + i,
-    interfaceId: `${protocol}${i}`,
-    traits: {
-      temporal_mode: "realtime" as TemporalMode,
-      protocols: protocol === "can" ? ["can", "canfd"] : [protocol],
-      tx_frames: true,
-      tx_bytes: false,
-      multi_source: true,
-    },
+    interfaceId: `can${i}`,
+    protocol: supportedProtocols[0] ?? "can",
+    supportedProtocols,
   }));
 }
 
@@ -1307,13 +1323,7 @@ export async function createMultiSourceSession(
   const rustSources = options.sources.map((source) => ({
     profile_id: source.profileId,
     display_name: source.displayName,
-    bus_mappings: source.busMappings.map((m) => ({
-      device_bus: m.deviceBus,
-      enabled: m.enabled,
-      output_bus: m.outputBus,
-      interface_id: m.interfaceId,
-      traits: m.traits,
-    })),
+    bus_mappings: source.busMappings.map(encodeBusMapping),
     // Serial framing options (overrides profile settings)
     framing_encoding: source.framingEncoding,
     delimiter: source.delimiter,
@@ -1439,6 +1449,17 @@ export async function getProfileBusMappings(): Promise<Map<string, BusMapping[]>
       mappings.map(decodeBusMapping),
     ]),
   );
+}
+
+/**
+ * What each profile kind's buses may be set to, keyed by kind.
+ *
+ * The option list for the source picker's per-bus protocol dropdown. Fewer than
+ * two entries means there is nothing to choose and no dropdown is drawn.
+ */
+export async function getSupportedProtocols(): Promise<Map<string, Protocol[]>> {
+  const raw: Record<string, Protocol[]> = await invoke("get_supported_protocols");
+  return new Map(Object.entries(raw));
 }
 
 /** Shift a profile's declared mappings onto a session's output bus range. */

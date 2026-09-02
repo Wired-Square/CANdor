@@ -10,7 +10,11 @@ All notable changes to WireTAP will be documented in this file.
 
 - **Adding a multi-bus device to a running session no longer drops its extra buses.** Session Manager's *Add Source* claimed one bus regardless of what the device had. The same was true of any FrameLink or virtual device with more than one interface.
 
+- **A CAN FD adapter is treated as CAN FD.** Ticking *Enable CAN FD* on an slcan, gs_usb or SocketCAN device changed how the device was shown but not how the session was set up, so FD controls were offered on a session running plain CAN. The setting now decides both. If you had FD ticked on a device you use in classic CAN, the session will now say so.
+
 ### Added
+
+- **Choose a bus's protocol when you start a session.** The Data Source dialog now offers CAN or CAN FD per bus, beside the existing bus remap, pre-filled from the device's saved setting. Picking one applies to that session only — the profile in Settings is left alone — so you can run a bus as CAN FD once without committing to it. Buses with only one sensible protocol show no dropdown.
 
 - **Wire a bus into a running session by dragging it.** Sessions → Visual now shows every bus a device has, not just the ones already in use — an unused bus appears as a dimmed connector you can drag onto a session to start carrying it, without stopping anything. Buses you turned off for that session appear the same way, so putting one back is the same gesture.
 

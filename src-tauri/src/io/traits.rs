@@ -2,6 +2,7 @@
 //
 // Interface trait validation and session trait inheritance.
 
+use super::gvret::BusMapping;
 use super::{InterfaceTraits, Protocol, TemporalMode};
 
 /// Result of validating multiple interface traits for a session
@@ -84,7 +85,7 @@ pub fn validate_session_traits(interface_traits: &[InterfaceTraits]) -> SessionT
     for traits in interface_traits.iter().skip(1) {
         for p in &traits.protocols {
             if !all_protocols.contains(p) {
-                all_protocols.push(p.clone());
+                all_protocols.push(*p);
             }
         }
     }
@@ -106,6 +107,93 @@ pub fn validate_session_traits(interface_traits: &[InterfaceTraits]) -> SessionT
             tx_bytes,
             multi_source,
         }),
+    }
+}
+
+/// The traits a bus inherits from the protocol it carries.
+///
+/// The single protocol→traits derivation. Everything that builds a `BusMapping`
+/// goes through here rather than writing the struct out, and
+/// `resolve_source_config` re-derives with it on the way in — so a `traits` blob
+/// from the frontend can never contradict the protocol beside it. Seven copies
+/// of this match had accumulated across `sessions.rs` and `gvret/common.rs`
+/// before it existed.
+///
+/// `CanFd` reports both protocols because an FD interface still carries classic
+/// CAN frames; the frontend gates its FD controls on `CanFd` being present.
+pub fn traits_for_protocol(protocol: Protocol) -> InterfaceTraits {
+    let (protocols, tx_frames, tx_bytes) = match protocol {
+        Protocol::Can => (vec![Protocol::Can], true, false),
+        Protocol::CanFd => (vec![Protocol::Can, Protocol::CanFd], true, false),
+        Protocol::Modbus => (vec![Protocol::Modbus], false, false),
+        Protocol::Serial => (vec![Protocol::Serial], false, true),
+    };
+    InterfaceTraits {
+        temporal_mode: TemporalMode::Realtime,
+        protocols,
+        tx_frames,
+        tx_bytes,
+        multi_source: true,
+    }
+}
+
+/// Every profile kind, plus the capture pseudo-kind the kind table has no entry
+/// for. Derived from `device_kinds::KINDS` rather than restated, so a kind added
+/// there cannot quietly go missing from the picker's protocol options.
+pub fn profile_kinds() -> impl Iterator<Item = &'static str> {
+    super::device_kinds::kinds().chain(std::iter::once("capture"))
+}
+
+/// What a bus of this kind may be set to, for the source picker to offer.
+///
+/// A single entry means the choice is already made and the picker renders no
+/// dropdown — which is most kinds. Only the GVRETs and FrameLink's CAN
+/// interfaces have a genuine CAN-versus-FD choice to make.
+///
+/// **Modbus is deliberately absent.** A serial port is read as Modbus by way of
+/// its framing encoding (`framing_encoding: "modbus_rtu"`) and the attached
+/// catalogue's protocol — see `io/serial/utils.rs` and `ws/dispatch.rs`. Adding
+/// it here would be a third way to say the same thing, free to disagree with the
+/// other two.
+pub fn supported_protocols_for_kind(kind: &str) -> &'static [Protocol] {
+    match super::device_kinds::canonical_kind(kind) {
+        "gvret_tcp" | "gvret_usb" | "framelink" | "slcan" | "gs_usb" | "socketcan" => {
+            &[Protocol::Can, Protocol::CanFd]
+        }
+        "modbus_tcp" => &[Protocol::Modbus],
+        "serial" => &[Protocol::Serial],
+        "mqtt" | "wiretap" | "capture" | "virtual" => &[Protocol::Can],
+        _ => &[],
+    }
+}
+
+/// Re-derive every mapping's traits from the protocol beside it.
+///
+/// The single point where a `BusMapping` crossing in from the frontend is made
+/// self-consistent — both the session-create path and the running-session
+/// hot-swap go through here, so the two cannot come to different answers.
+///
+/// `traits` is output, never input: the caller sends a protocol (the picker's
+/// per-bus dropdown, or the one the profile declared) and the traits that follow
+/// are computed here, so a stale or hand-written blob cannot claim a capability
+/// the protocol does not imply.
+///
+/// The protocol itself is taken as given rather than checked against the kind.
+/// The kind table is a *default* — what the picker offers — and it is coarser
+/// than the truth: it answers per kind, while a FrameLink RS485 port or a
+/// virtual Modbus adaptor carries a protocol its kind's list does not mention.
+/// Clamping to that list rewrote exactly those buses to CAN.
+///
+/// `supported_protocols` is only filled where the builder left it empty, so a
+/// mapping that knows its own narrower list (an RS485 port that cannot be
+/// talked into CAN) keeps it.
+pub fn normalise_bus_traits(mappings: &mut [BusMapping], profile_kind: &str) {
+    let supported = supported_protocols_for_kind(profile_kind);
+    for m in mappings.iter_mut() {
+        m.traits = Some(traits_for_protocol(m.protocol));
+        if m.supported_protocols.is_empty() {
+            m.supported_protocols = supported.to_vec();
+        }
     }
 }
 

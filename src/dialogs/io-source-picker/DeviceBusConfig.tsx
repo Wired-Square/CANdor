@@ -8,7 +8,8 @@ import { useTranslation } from "react-i18next";
 import { Loader2, AlertCircle, Bus, Lock } from "lucide-react";
 import { iconMd, iconXs } from "../../styles/spacing";
 import { caption, sectionHeaderText } from "../../styles/typography";
-import type { GvretDeviceInfo, BusMapping } from "../../api/io";
+import type { GvretDeviceInfo, BusMapping, Protocol } from "../../api/io";
+import { PROTOCOL_LABELS } from "../../utils/profileTraits";
 
 // Generic bus names - actual meaning varies by device
 const BUS_NAMES: Record<number, string> = {
@@ -19,11 +20,8 @@ const BUS_NAMES: Record<number, string> = {
   4: "Bus 4",
 };
 
-/** Extended bus mapping with optional protocol field for settings mode */
-export interface BusMappingWithProtocol extends BusMapping {
-  /** Protocol type (for settings mode) */
-  protocol?: 'can' | 'canfd';
-}
+/** Output bus numbers a mapping may be remapped onto. */
+const OUTPUT_BUS_COUNT = 8;
 
 interface DeviceBusConfigProps {
   /** Device info from probing (null while loading or on error) */
@@ -33,9 +31,9 @@ interface DeviceBusConfigProps {
   /** Error message from probe (null if success) */
   error: string | null;
   /** Current bus mapping configuration */
-  busConfig: BusMappingWithProtocol[];
+  busConfig: BusMapping[];
   /** Called when bus config changes */
-  onBusConfigChange: (config: BusMappingWithProtocol[]) => void;
+  onBusConfigChange: (config: BusMapping[]) => void;
   /** Profile name for display */
   profileName?: string;
   /** Use compact inline styling (no header, reduced padding) */
@@ -64,35 +62,74 @@ export default function DeviceBusConfig({
   configLocked = false,
 }: DeviceBusConfigProps) {
   const { t } = useTranslation("dialogs");
-  // Toggle a bus enabled/disabled
-  const toggleBus = (deviceBus: number) => {
-    const newConfig = busConfig.map((mapping) =>
-      mapping.deviceBus === deviceBus
-        ? { ...mapping, enabled: !mapping.enabled }
-        : mapping
+
+  /** Replace one field of one bus's mapping, leaving the rest alone. */
+  const updateBus = (deviceBus: number, patch: Partial<BusMapping>) => {
+    onBusConfigChange(
+      busConfig.map((mapping) =>
+        mapping.deviceBus === deviceBus ? { ...mapping, ...patch } : mapping
+      )
     );
-    onBusConfigChange(newConfig);
   };
 
-  // Change output bus number
-  const setOutputBus = (deviceBus: number, outputBus: number) => {
-    const newConfig = busConfig.map((mapping) =>
-      mapping.deviceBus === deviceBus
-        ? { ...mapping, outputBus }
-        : mapping
+  /**
+   * One row's dropdown. The compact and full layouts differ only in padding, so
+   * they share this rather than keeping two copies of the styling in step.
+   */
+  const busSelect = (
+    value: number | string,
+    onChange: (value: string) => void,
+    options: { value: number | string; label: string }[],
+    highlight = false,
+  ) => (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={configLocked}
+      className={`${compact ? "px-1" : "px-1.5"} py-0.5 rounded border text-xs ${
+        configLocked
+          ? "border-[color:var(--border-default)] bg-[var(--hover-bg)] text-[color:var(--text-muted)] cursor-not-allowed"
+          : highlight
+          ? "border-[color:var(--text-amber)] bg-[var(--status-warning-bg)] text-[color:var(--text-amber)]"
+          : "border-[color:var(--border-default)] bg-[var(--bg-primary)] text-[color:var(--text-secondary)]"
+      } focus:ring-1 focus:ring-cyan-500`}
+    >
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  );
+
+  /**
+   * The protocol dropdown for one bus, or null when there is nothing to choose.
+   *
+   * A bus with one supported protocol (an RS485 FrameLink port, a Modbus TCP
+   * source) has its answer already; a dropdown with a single option is worse
+   * than none.
+   */
+  const protocolSelect = (mapping: BusMapping) => {
+    const options = mapping.supportedProtocols ?? [];
+    if (!showProtocol || options.length < 2) return null;
+    return busSelect(
+      mapping.protocol ?? options[0],
+      (value) => updateBus(mapping.deviceBus, { protocol: value as Protocol }),
+      options.map((p) => ({ value: p, label: PROTOCOL_LABELS[p] })),
     );
-    onBusConfigChange(newConfig);
   };
 
-  // Change protocol for a bus
-  const setProtocol = (deviceBus: number, protocol: 'can' | 'canfd') => {
-    const newConfig = busConfig.map((mapping) =>
-      mapping.deviceBus === deviceBus
-        ? { ...mapping, protocol }
-        : mapping
+  /** The output-bus remap dropdown for one bus. */
+  const outputBusSelect = (mapping: BusMapping, isDuplicate: boolean) =>
+    busSelect(
+      mapping.outputBus,
+      (value) => updateBus(mapping.deviceBus, { outputBus: parseInt(value, 10) }),
+      Array.from({ length: OUTPUT_BUS_COUNT }, (_, i) => ({
+        value: i,
+        label: t("ioSourcePicker.busConfig.busLabel", { bus: i }),
+      })),
+      isDuplicate,
     );
-    onBusConfigChange(newConfig);
-  };
 
   // Compact wrapper for inline display
   const wrapperClass = compact
@@ -146,10 +183,11 @@ export default function DeviceBusConfig({
   // Compact mode - inline display below profile button
   if (compact) {
     return (
-      <div className="ml-7 mt-1 mb-2 pl-3 border-l-2 border-[color:var(--text-cyan)]">
+      <div className={wrapperClass}>
         <div className="space-y-1">
           {busConfig.map((mapping) => {
             const isDuplicate = usedOutputBuses && mapping.enabled && usedOutputBuses.has(mapping.outputBus);
+            const protocol = mapping.enabled ? protocolSelect(mapping) : null;
             return (
               <div
                 key={mapping.deviceBus}
@@ -160,7 +198,7 @@ export default function DeviceBusConfig({
                   <input
                     type="checkbox"
                     checked={mapping.enabled}
-                    onChange={() => toggleBus(mapping.deviceBus)}
+                    onChange={() => updateBus(mapping.deviceBus, { enabled: !mapping.enabled })}
                     disabled={configLocked}
                     className="w-3 h-3 rounded border-[color:var(--border-default)] text-[color:var(--text-cyan)] focus:ring-cyan-500 bg-[var(--bg-primary)] disabled:cursor-not-allowed"
                   />
@@ -169,49 +207,13 @@ export default function DeviceBusConfig({
                   </span>
                 </label>
 
-                {/* Protocol selector (only show if enabled and showProtocol is true) */}
-                {mapping.enabled && showProtocol && (
-                  <select
-                    value={mapping.protocol || 'can'}
-                    onChange={(e) =>
-                      setProtocol(mapping.deviceBus, e.target.value as 'can' | 'canfd')
-                    }
-                    disabled={configLocked}
-                    className={`px-1 py-0.5 rounded border text-xs ${
-                      configLocked
-                        ? "border-[color:var(--border-default)] bg-[var(--hover-bg)] text-[color:var(--text-muted)] cursor-not-allowed"
-                        : "border-[color:var(--border-default)] bg-[var(--bg-primary)] text-[color:var(--text-secondary)]"
-                    } focus:ring-1 focus:ring-cyan-500`}
-                  >
-                    <option value="can">CAN</option>
-                    <option value="canfd">CAN FD</option>
-                  </select>
-                )}
+                {protocol}
 
                 {/* Output bus selector (only show if enabled and showOutputBus is true) */}
                 {mapping.enabled && showOutputBus && (
                   <div className="flex items-center gap-1">
                     <span className="text-[color:var(--text-muted)]">→</span>
-                    <select
-                      value={mapping.outputBus}
-                      onChange={(e) =>
-                        setOutputBus(mapping.deviceBus, parseInt(e.target.value, 10))
-                      }
-                      disabled={configLocked}
-                      className={`px-1 py-0.5 rounded border text-xs ${
-                        configLocked
-                          ? "border-[color:var(--border-default)] bg-[var(--hover-bg)] text-[color:var(--text-muted)] cursor-not-allowed"
-                          : isDuplicate
-                          ? "border-[color:var(--text-amber)] bg-[var(--status-warning-bg)] text-[color:var(--text-amber)]"
-                          : "border-[color:var(--border-default)] bg-[var(--bg-primary)] text-[color:var(--text-secondary)]"
-                      } focus:ring-1 focus:ring-cyan-500`}
-                    >
-                      {Array.from({ length: 8 }, (_, i) => (
-                        <option key={i} value={i}>
-                          {t("ioSourcePicker.busConfig.busLabel", { bus: i })}
-                        </option>
-                      ))}
-                    </select>
+                    {outputBusSelect(mapping, !!isDuplicate)}
                     {isDuplicate && !configLocked && (
                       <span className="text-amber-500" title={t("ioSourcePicker.busConfig.duplicateBusTooltip")}>⚠</span>
                     )}
@@ -242,7 +244,7 @@ export default function DeviceBusConfig({
 
   // Full mode - separate section display
   return (
-    <div className="border-t border-[color:var(--border-default)] px-4 py-3">
+    <div className={wrapperClass}>
       <div className="flex items-center gap-2 mb-2">
         <Bus className={`${iconMd} text-cyan-500`} />
         <span className="text-xs font-medium text-[color:var(--text-secondary)] uppercase tracking-wide">
@@ -255,6 +257,7 @@ export default function DeviceBusConfig({
       <div className="space-y-1">
         {busConfig.map((mapping) => {
           const isDuplicate = usedOutputBuses && mapping.enabled && usedOutputBuses.has(mapping.outputBus);
+          const protocol = mapping.enabled ? protocolSelect(mapping) : null;
           return (
             <div
               key={mapping.deviceBus}
@@ -269,7 +272,7 @@ export default function DeviceBusConfig({
                 <input
                   type="checkbox"
                   checked={mapping.enabled}
-                  onChange={() => toggleBus(mapping.deviceBus)}
+                  onChange={() => updateBus(mapping.deviceBus, { enabled: !mapping.enabled })}
                   disabled={configLocked}
                   className="w-4 h-4 rounded border-[color:var(--border-default)] text-[color:var(--text-cyan)] focus:ring-cyan-500 bg-[var(--bg-primary)] disabled:cursor-not-allowed"
                 />
@@ -278,25 +281,10 @@ export default function DeviceBusConfig({
                 </span>
               </label>
 
-              {/* Protocol selector (only show if enabled and showProtocol is true) */}
-              {mapping.enabled && showProtocol && (
+              {protocol && (
                 <div className="flex items-center gap-1.5 text-xs">
-                  <span className={configLocked ? "text-[color:var(--text-muted)]" : "text-[color:var(--text-muted)]"}>{t("ioSourcePicker.busConfig.protocol")}</span>
-                  <select
-                    value={mapping.protocol || 'can'}
-                    onChange={(e) =>
-                      setProtocol(mapping.deviceBus, e.target.value as 'can' | 'canfd')
-                    }
-                    disabled={configLocked}
-                    className={`px-1.5 py-0.5 rounded border text-xs ${
-                      configLocked
-                        ? "border-[color:var(--border-default)] bg-[var(--hover-bg)] text-[color:var(--text-muted)] cursor-not-allowed"
-                        : "border-[color:var(--border-default)] bg-[var(--bg-primary)] text-[color:var(--text-secondary)]"
-                    } focus:ring-1 focus:ring-cyan-500`}
-                  >
-                    <option value="can">CAN</option>
-                    <option value="canfd">CAN FD</option>
-                  </select>
+                  <span className="text-[color:var(--text-muted)]">{t("ioSourcePicker.busConfig.protocol")}</span>
+                  {protocol}
                 </div>
               )}
 
@@ -304,26 +292,7 @@ export default function DeviceBusConfig({
               {mapping.enabled && showOutputBus && (
                 <div className="flex items-center gap-1.5 text-xs">
                   <span className="text-[color:var(--text-muted)]">{t("ioSourcePicker.busConfig.output")}</span>
-                  <select
-                    value={mapping.outputBus}
-                    onChange={(e) =>
-                      setOutputBus(mapping.deviceBus, parseInt(e.target.value, 10))
-                    }
-                    disabled={configLocked}
-                    className={`px-1.5 py-0.5 rounded border text-xs ${
-                      configLocked
-                        ? "border-[color:var(--border-default)] bg-[var(--hover-bg)] text-[color:var(--text-muted)] cursor-not-allowed"
-                        : isDuplicate
-                        ? "border-[color:var(--text-amber)] bg-[var(--status-warning-bg)] text-[color:var(--text-amber)]"
-                        : "border-[color:var(--border-default)] bg-[var(--bg-primary)] text-[color:var(--text-secondary)]"
-                    } focus:ring-1 focus:ring-cyan-500`}
-                  >
-                    {Array.from({ length: 8 }, (_, i) => (
-                      <option key={i} value={i}>
-                        Bus {i}
-                      </option>
-                    ))}
-                  </select>
+                  {outputBusSelect(mapping, !!isDuplicate)}
                   {isDuplicate && !configLocked && (
                     <span className="text-amber-500" title="Another source uses this bus number">⚠</span>
                   )}

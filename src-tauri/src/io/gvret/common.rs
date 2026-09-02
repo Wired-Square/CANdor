@@ -16,7 +16,8 @@
 
 use hex::ToHex;
 
-use crate::io::{now_us, CanTransmitFrame, FrameMessage, InterfaceTraits, Protocol, TemporalMode, TransmitResult};
+use crate::io::traits::traits_for_protocol;
+use crate::io::{now_us, CanTransmitFrame, FrameMessage, InterfaceTraits, Protocol, TransmitResult};
 
 // ============================================================================
 // Constants
@@ -97,9 +98,28 @@ pub struct BusMapping {
     /// Human-readable interface identifier (e.g., "can0", "serial1")
     #[serde(default)]
     pub interface_id: String,
-    /// Traits for this specific interface
+    /// The protocol this bus carries — the *input*. Set from the profile, and
+    /// overridable per session by the source picker's protocol dropdown.
+    #[serde(default)]
+    pub protocol: Protocol,
+    /// What this bus may be set to, for the picker to render. Advisory *output*:
+    /// Rust answers it from the profile kind, the frontend never sends it.
+    #[serde(default, skip_deserializing)]
+    pub supported_protocols: Vec<Protocol>,
+    /// Traits for this specific interface. Derived *output* — always
+    /// `traits_for_protocol(protocol)`, never what a caller supplied.
     #[serde(default)]
     pub traits: Option<InterfaceTraits>,
+}
+
+impl BusMapping {
+    /// Set the protocol and re-derive the traits that follow from it. The only
+    /// way `protocol` and `traits` are allowed to move, so they cannot drift.
+    pub fn with_protocol(mut self, protocol: Protocol) -> Self {
+        self.protocol = protocol;
+        self.traits = Some(traits_for_protocol(protocol));
+        self
+    }
 }
 
 impl Default for BusMapping {
@@ -109,19 +129,20 @@ impl Default for BusMapping {
             enabled: true,
             output_bus: 0,
             interface_id: "can0".to_string(),
-            traits: Some(InterfaceTraits {
-                temporal_mode: TemporalMode::Realtime,
-                protocols: vec![Protocol::Can],
-                tx_frames: true,
-                tx_bytes: false,
-                multi_source: true,
-            }),
+            protocol: Protocol::Can,
+            supported_protocols: Vec::new(),
+            traits: Some(traits_for_protocol(Protocol::Can)),
         }
     }
 }
 
 /// Create default bus mappings for a device with the given bus count.
-/// All buses are assumed to be CAN interfaces.
+///
+/// Every bus is classic CAN — the same answer a bus configured in Settings gets
+/// when its protocol is unset. These two used to disagree, so a GVRET that had
+/// been probed but never configured advertised CAN FD while the same device
+/// *with* a saved bus list advertised plain CAN. The picker's protocol dropdown
+/// is now how a bus is told it carries FD.
 pub fn default_bus_mappings(bus_count: u8) -> Vec<BusMapping> {
     (0..bus_count)
         .map(|i| BusMapping {
@@ -129,15 +150,15 @@ pub fn default_bus_mappings(bus_count: u8) -> Vec<BusMapping> {
             enabled: true,
             output_bus: i,
             interface_id: format!("can{}", i),
-            traits: Some(InterfaceTraits {
-                temporal_mode: TemporalMode::Realtime,
-                protocols: vec![Protocol::Can, Protocol::CanFd],
-                tx_frames: true,
-                tx_bytes: false,
-                multi_source: true,
-            }),
+            supported_protocols: gvret_protocols(),
+            ..BusMapping::default().with_protocol(Protocol::Can)
         })
         .collect()
+}
+
+/// What a GVRET bus may be set to, from the one per-kind table.
+fn gvret_protocols() -> Vec<Protocol> {
+    crate::io::traits::supported_protocols_for_kind("gvret_tcp").to_vec()
 }
 
 /// Build the bus mappings a session actually streams, from the bus count the
@@ -168,15 +189,12 @@ pub fn reconcile_to_bus_count(profile_mappings: &[BusMapping], bus_count: u8) ->
                     .map(|m| m.interface_id.clone())
                     .filter(|id| !id.is_empty())
                     .unwrap_or_else(|| format!("can{}", device_bus)),
-                traits: override_for.and_then(|m| m.traits.clone()).or_else(|| {
-                    Some(InterfaceTraits {
-                        temporal_mode: TemporalMode::Realtime,
-                        protocols: vec![Protocol::Can, Protocol::CanFd],
-                        tx_frames: true,
-                        tx_bytes: false,
-                        multi_source: true,
-                    })
-                }),
+                supported_protocols: gvret_protocols(),
+                // The protocol is the session's to choose, not the device's —
+                // GVRET reports a bus *count* and says nothing about FD. So it
+                // survives the reconcile, and the traits follow from it.
+                ..BusMapping::default()
+                    .with_protocol(override_for.map(|m| m.protocol).unwrap_or_default())
             }
         })
         .collect()
@@ -671,7 +689,14 @@ mod tests {
     }
 
     fn reconcile_mapping(device_bus: u8, enabled: bool, output_bus: u8) -> BusMapping {
-        BusMapping { device_bus, enabled, output_bus, interface_id: String::new(), traits: None }
+        BusMapping {
+            device_bus,
+            enabled,
+            output_bus,
+            interface_id: String::new(),
+            traits: None,
+            ..BusMapping::default()
+        }
     }
 
     /// The case this exists for: the profile was never probed and carries one

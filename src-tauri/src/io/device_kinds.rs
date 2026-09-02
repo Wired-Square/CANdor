@@ -212,12 +212,19 @@ static KINDS: &[(&str, KindSpec)] = &[
 ];
 
 /// Aliases the settings file has carried at one time or another.
-fn canonical_kind(kind: &str) -> &str {
+pub fn canonical_kind(kind: &str) -> &str {
     match kind {
         "gvret-tcp" => "gvret_tcp",
         "gvret-usb" => "gvret_usb",
         other => other,
     }
+}
+
+/// Every kind the table declares, in table order. The one enumeration of the
+/// kind list — anything else needing to iterate kinds reads it from here rather
+/// than restating the names.
+pub fn kinds() -> impl Iterator<Item = &'static str> {
+    KINDS.iter().map(|(k, _)| *k)
 }
 
 /// The spec for a kind, or `None` for one that declares nothing (captures,

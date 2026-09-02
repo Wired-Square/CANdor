@@ -17,7 +17,7 @@ use framelink::protocol::types::{IFACE_CAN, IFACE_CANFD, IFACE_RS232, IFACE_RS48
 use crate::io::error::IoError;
 use crate::io::gvret::BusMapping;
 use crate::io::types::{SourceMessage, TransmitRequest};
-use crate::io::{InterfaceTraits, Protocol, TemporalMode};
+use crate::io::Protocol;
 
 /// Frames buffered before a flush, independent of the 1 ms tick.
 const MAX_PENDING_FRAMES: usize = 256;
@@ -219,6 +219,7 @@ fn reconcile_bus_mappings(
         .enumerate()
         .map(|(slot, device_bus)| {
             let iface_type = iface_types.get(&device_bus).copied().unwrap_or(IFACE_CAN);
+            let protocol = protocol_for_iface_type(iface_type);
             let override_for = profile_mappings.iter().find(|m| m.device_bus == device_bus);
             BusMapping {
                 device_bus,
@@ -229,7 +230,10 @@ fn reconcile_bus_mappings(
                     .map(|m| m.output_bus)
                     .unwrap_or(slot as u8),
                 interface_id: interface_id_for(device_bus, iface_type),
-                traits: Some(traits_for(iface_type)),
+                // The device's interface type wins over anything the profile or
+                // the picker said — an RS485 port cannot be talked into CAN.
+                supported_protocols: vec![protocol],
+                ..BusMapping::default().with_protocol(protocol)
             }
         })
         .collect()
@@ -243,18 +247,17 @@ fn interface_id_for(index: u8, iface_type: u8) -> String {
     }
 }
 
-fn traits_for(iface_type: u8) -> InterfaceTraits {
-    let (protocols, tx_frames, tx_bytes) = match iface_type {
-        IFACE_RS485 | IFACE_RS232 => (vec![Protocol::Serial], false, true),
-        IFACE_CANFD => (vec![Protocol::Can, Protocol::CanFd], true, false),
-        _ => (vec![Protocol::Can], true, false),
-    };
-    InterfaceTraits {
-        temporal_mode: TemporalMode::Realtime,
-        protocols,
-        tx_frames,
-        tx_bytes,
-        multi_source: true,
+/// The protocol a FrameLink interface type carries. The device reports the type,
+/// so this is not a choice the session gets to make.
+///
+/// Shared with `sessions::framelink_bus_mapping`, which reads the same types out
+/// of the saved profile: the two disagreeing is how an RS232 port came up as a
+/// CAN bus before the profile side had the named constants to hand.
+pub fn protocol_for_iface_type(iface_type: u8) -> Protocol {
+    match iface_type {
+        IFACE_RS485 | IFACE_RS232 => Protocol::Serial,
+        IFACE_CANFD => Protocol::CanFd,
+        _ => Protocol::Can,
     }
 }
 
@@ -270,6 +273,7 @@ mod tests {
             output_bus,
             interface_id: String::new(),
             traits: None,
+            ..BusMapping::default()
         }
     }
 

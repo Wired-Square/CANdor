@@ -20,6 +20,23 @@ export type TemporalMode = "realtime" | "recorded";
 /** Protocol type - determines frame format and compatibility */
 export type Protocol = "can" | "canfd" | "modbus" | "serial";
 
+/**
+ * How each protocol is spelled on screen. One map so the source picker's per-bus
+ * dropdown and the Data IO list agree — they read "CAN FD" and "CAN-FD" for the
+ * same bus before this existed.
+ */
+export const PROTOCOL_LABELS: Record<Protocol, string> = {
+  can: "CAN",
+  canfd: "CAN-FD",
+  modbus: "Modbus",
+  serial: "Serial",
+};
+
+/** A protocol's display label, falling back to the raw value for an unknown one. */
+export function protocolLabel(protocol: string): string {
+  return PROTOCOL_LABELS[protocol as Protocol] ?? protocol;
+}
+
 /** Profile kind type - all supported IO profile types */
 export type ProfileKind = NonNullable<IOProfile["kind"]>;
 
