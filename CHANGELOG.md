@@ -12,6 +12,10 @@ All notable changes to WireTAP will be documented in this file.
 
 - **A CAN FD adapter is treated as CAN FD.** Ticking *Enable CAN FD* on an slcan, gs_usb or SocketCAN device changed how the device was shown but not how the session was set up, so FD controls were offered on a session running plain CAN. The setting now decides both. If you had FD ticked on a device you use in classic CAN, the session will now say so.
 
+- **Catalogue coverage no longer reports a working catalogue as empty.** A catalogue that matches on part of the frame id — the usual arrangement for J1939, where the sending node's address is ignored — was compared against the raw ids on the wire, so every frame came back missing even though the catalogue decoded all of them. Coverage now counts the way the catalogue does, and one unknown message sent by several nodes is listed once as a single frame to add.
+
+- **A device saved before the GVRET rename can transmit again.** Older profiles stored the device type slightly differently, which was enough for a session to start and stream while every transmit attempt was refused as an unsupported device. The old spelling is now recognised everywhere; affected profiles start working with no change on your part.
+
 ### Added
 
 - **Choose a bus's protocol when you start a session.** The Data Source dialog now offers CAN or CAN FD per bus, beside the existing bus remap, pre-filled from the device's saved setting. Picking one applies to that session only — the profile in Settings is left alone — so you can run a bus as CAN FD once without committing to it. Buses with only one sensible protocol show no dropdown.
