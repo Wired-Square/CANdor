@@ -73,11 +73,11 @@ pub(super) async fn run_source_reader(
 ) {
     let error_tx = tx.clone();
     let outcome = match profile.kind.as_str() {
-        "gvret_tcp" | "gvret-tcp" => {
+        "gvret_tcp" => {
             run_gvret_tcp_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await
         }
         #[cfg(not(target_os = "ios"))]
-        "gvret_usb" | "gvret-usb" => {
+        "gvret_usb" => {
             run_gvret_usb_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await
         }
         #[cfg(not(target_os = "ios"))]

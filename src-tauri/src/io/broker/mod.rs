@@ -23,7 +23,7 @@ use super::gvret::{encode_gvret_frame, validate_gvret_frame, BusMapping};
 use super::slcan::encode_transmit_frame as encode_slcan_frame;
 #[cfg(target_os = "linux")]
 use super::socketcan::{encode_frame as encode_socketcan_frame, EncodedFrame};
-use super::traits::{get_traits_for_profile_kind, validate_session_traits};
+use super::traits::validate_session_traits;
 use super::types::{SetFramingRequest, SourceMessage, TransmitRequest};
 use super::{
     CanTransmitFrame, IOCapabilities, IOSource, IOState, InterfaceTraits, SessionDataStreams,
@@ -242,12 +242,7 @@ impl IOBroker {
                     .bus_mappings
                     .iter()
                     .filter(|m| m.enabled)
-                    .filter_map(|m| {
-                        // Use interface-level traits if available, fall back to profile-level
-                        m.traits
-                            .clone()
-                            .or_else(|| Some(get_traits_for_profile_kind(&source.profile_kind)))
-                    })
+                    .map(|m| m.effective_traits())
             })
             .collect();
 
@@ -393,19 +388,16 @@ impl IOBroker {
             return self.session_traits.clone();
         }
 
+        // `effective_mappings` is already one entry per source, so there is
+        // nothing left for a zip against `sources` to line up.
         let interface_traits: Vec<InterfaceTraits> = self
-            .sources
-            .iter()
-            .zip(self.effective_mappings())
-            .flat_map(|(source, mappings)| {
-                let kind = source.profile_kind.clone();
+            .effective_mappings()
+            .into_iter()
+            .flat_map(|mappings| {
                 mappings
                     .into_iter()
                     .filter(|m| m.enabled)
-                    .map(move |m| {
-                        m.traits
-                            .unwrap_or_else(|| get_traits_for_profile_kind(&kind))
-                    })
+                    .map(|m| m.effective_traits())
             })
             .collect();
 

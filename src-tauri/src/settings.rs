@@ -590,6 +590,27 @@ fn paths_are_stale(settings: &AppSettings, app: &AppHandle) -> bool {
 /// Load settings synchronously (for use during app setup, before the async runtime
 /// is fully available). Does not perform migrations or first-run initialisation —
 /// those happen when the frontend calls `load_settings` via Tauri command.
+/// Fold the legacy kind spellings the settings file has carried onto their
+/// canonical form, in memory.
+///
+/// The one place this happens. Before it, `"gvret-tcp"` reached every consumer
+/// verbatim and each decided for itself whether to accept it — so a profile
+/// saved under the old spelling was admitted to a session by `is_realtime_device`
+/// and its reader started, then refused by `transmit_can_frame` as an
+/// "unsupported profile kind". Eleven sites spelled the alias pair out; the ones
+/// that forgot were the bug.
+///
+/// Not written back: the file keeps whatever it had, and the next ordinary save
+/// migrates it. A read must not rewrite what it read.
+fn canonicalise_kinds(profiles: &mut [IOProfile]) {
+    for p in profiles.iter_mut() {
+        let canonical = crate::io::device_kinds::canonical_kind(&p.kind);
+        if canonical != p.kind {
+            p.kind = canonical.to_string();
+        }
+    }
+}
+
 pub fn load_settings_sync(app: &AppHandle) -> Result<AppSettings, String> {
     let settings_path = get_settings_path(app)?;
     let mut settings = if settings_path.exists() {
@@ -600,6 +621,7 @@ pub fn load_settings_sync(app: &AppHandle) -> Result<AppSettings, String> {
     } else {
         AppSettings::default()
     };
+    canonicalise_kinds(&mut settings.io_profiles);
     crate::io::ephemeral::overlay(&mut settings.io_profiles);
     Ok(settings)
 }
@@ -667,6 +689,7 @@ pub async fn load_settings(app: AppHandle) -> Result<AppSettings, String> {
             save_settings(app, settings.clone()).await?;
         }
 
+        canonicalise_kinds(&mut settings.io_profiles);
         // Last, so the internal saves above persist only what is on disk.
         crate::io::ephemeral::overlay(&mut settings.io_profiles);
         Ok(settings)
@@ -890,6 +913,40 @@ pub async fn check_for_updates(app: AppHandle) -> Result<Option<UpdateInfo>, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn profile(kind: &str) -> IOProfile {
+        IOProfile {
+            id: "io_1".into(),
+            name: "Dev".into(),
+            kind: kind.into(),
+            connection: Default::default(),
+            preferred_catalog: None,
+            ephemeral: false,
+        }
+    }
+
+    /// The legacy spellings are folded once, on load, so no consumer has to know
+    /// they exist. They used to be spelled out at eleven sites, and the sites
+    /// that forgot admitted a profile to a session and then refused to transmit
+    /// on it.
+    #[test]
+    fn legacy_kind_spellings_are_folded_on_load() {
+        let mut profiles = vec![profile("gvret-tcp"), profile("gvret-usb")];
+        canonicalise_kinds(&mut profiles);
+        assert_eq!(profiles[0].kind, "gvret_tcp");
+        assert_eq!(profiles[1].kind, "gvret_usb");
+    }
+
+    #[test]
+    fn a_canonical_kind_is_left_alone() {
+        let mut profiles = vec![profile("gvret_tcp"), profile("slcan"), profile("nonesuch")];
+        canonicalise_kinds(&mut profiles);
+        assert_eq!(
+            profiles.iter().map(|p| p.kind.as_str()).collect::<Vec<_>>(),
+            ["gvret_tcp", "slcan", "nonesuch"],
+            "an unknown kind passes through — this normalises, it does not validate"
+        );
+    }
 
     /// Every key the frontend sends in `buildAppSettings`
     /// (src/apps/settings/stores/settingsStore.ts) MUST have a counterpart in

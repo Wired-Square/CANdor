@@ -120,6 +120,17 @@ impl BusMapping {
         self.traits = Some(traits_for_protocol(protocol));
         self
     }
+
+    /// This bus's traits.
+    ///
+    /// Derived at the point of use rather than read out of `traits`, so the
+    /// field's promise — always `traits_for_protocol(protocol)` — holds by
+    /// construction instead of by every writer remembering. Every producer
+    /// already sets exactly this; the only thing the stored value can add is a
+    /// blob a caller sent, which is the thing it must not be able to add.
+    pub fn effective_traits(&self) -> InterfaceTraits {
+        traits_for_protocol(self.protocol)
+    }
 }
 
 impl Default for BusMapping {

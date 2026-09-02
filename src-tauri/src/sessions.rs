@@ -245,8 +245,7 @@ fn choose_profile_by_id(settings: &AppSettings, profile_id: Option<&str>) -> Opt
 /// | "unknown"). Used to pick a session-id prefix.
 fn protocol_for_kind(kind: &str) -> &'static str {
     match kind {
-        "gvret_tcp" | "gvret-tcp" | "gvret_usb" | "gvret-usb" | "slcan" | "gs_usb"
-        | "socketcan" | "mqtt" | "framelink" | "virtual" => "can",
+        "gvret_tcp" | "gvret_usb" | "slcan" | "gs_usb" | "socketcan" | "mqtt" | "framelink" | "virtual" => "can",
         "serial" => "serial",
         "modbus_tcp" | "modbus_rtu" => "modbus",
         _ => "unknown",
@@ -307,7 +306,7 @@ pub async fn generate_session_id(
 fn is_realtime_device(kind: &str) -> bool {
     matches!(
         kind,
-        "gvret_tcp" | "gvret-tcp" | "gvret_usb" | "gvret-usb" | "slcan" | "gs_usb" | "socketcan" | "serial" | "modbus_tcp" | "virtual" | "framelink"
+        "gvret_tcp" | "gvret_usb" | "slcan" | "gs_usb" | "socketcan" | "serial" | "modbus_tcp" | "virtual" | "framelink"
     )
 }
 
@@ -385,10 +384,7 @@ fn parse_interfaces_from_profile(
     }
 
     // Only GVRET profiles have multi-bus interface configuration
-    if !matches!(
-        profile.kind.as_str(),
-        "gvret_tcp" | "gvret-tcp" | "gvret_usb" | "gvret-usb"
-    ) {
+    if !matches!(profile.kind.as_str(), "gvret_tcp" | "gvret_usb") {
         return None;
     }
 
@@ -624,8 +620,7 @@ fn create_default_bus_mapping(profile: &IOProfile, bus_override: Option<u8>) -> 
         // FD is a per-profile switch on these, and until now only the frontend
         // read it — Rust answered per kind, so an FD-enabled slcan was *shown*
         // as FD-capable and *ran* as classic CAN.
-        "gvret_tcp" | "gvret-tcp" | "gvret_usb" | "gvret-usb" | "slcan" | "gs_usb"
-        | "socketcan" => (0, "can0".to_string(), can_protocol_for(profile)),
+        "gvret_tcp" | "gvret_usb" | "slcan" | "gs_usb" | "socketcan" => (0, "can0".to_string(), can_protocol_for(profile)),
         "modbus_tcp" => (0, "modbus0".to_string(), Protocol::Modbus),
         "framelink" => {
             // Grouped profile with interfaces[] array
@@ -1668,7 +1663,7 @@ pub async fn probe_gvret_device(
         .ok_or_else(|| format!("Profile '{}' not found", profile_id))?;
 
     match profile.kind.as_str() {
-        "gvret_tcp" | "gvret-tcp" => {
+        "gvret_tcp" => {
             let host = &conn_str(profile, "host").unwrap_or_default();
             let port = conn_i64(profile, "port").unwrap_or_default() as u16;
             let timeout_sec = conn_f64(profile, "timeout").unwrap_or_default();
@@ -1680,7 +1675,7 @@ pub async fn probe_gvret_device(
                 .map_err(|e| e.user_message())
         }
         #[cfg(not(target_os = "ios"))]
-        "gvret_usb" | "gvret-usb" => {
+        "gvret_usb" => {
             let port = profile
                 .connection
                 .get("port")
@@ -1697,7 +1692,7 @@ pub async fn probe_gvret_device(
                 .map_err(|e| format!("Probe task failed: {}", e))?
         }
         #[cfg(target_os = "ios")]
-        "gvret_usb" | "gvret-usb" => {
+        "gvret_usb" => {
             Err("GVRET USB is not available on iOS".to_string())
         }
         _ => Err(format!(
@@ -1814,7 +1809,7 @@ pub async fn probe_device(
 
     let result = match profile.kind.as_str() {
         // GVRET devices - multi-bus
-        "gvret_tcp" | "gvret-tcp" => {
+        "gvret_tcp" => {
             let host = conn_str(profile, "host").unwrap_or_default();
             let port = conn_i64(profile, "port").unwrap_or_default() as u16;
             let timeout_sec = conn_f64(profile, "timeout").unwrap_or_default();
@@ -1844,7 +1839,7 @@ pub async fn probe_device(
         }
 
         #[cfg(not(target_os = "ios"))]
-        "gvret_usb" | "gvret-usb" => {
+        "gvret_usb" => {
             let port = profile.connection.get("port")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Serial port is required for GVRET USB".to_string())?;
@@ -1887,7 +1882,7 @@ pub async fn probe_device(
             }
         }
         #[cfg(target_os = "ios")]
-        "gvret_usb" | "gvret-usb" => {
+        "gvret_usb" => {
             Ok(DeviceProbeResult {
                 success: false,
                 source_type: "gvret".to_string(),
