@@ -93,6 +93,9 @@
     }
   },
   "node": {
+    "source": {
+      "unwiredBus": "Bus {{bus}} is not wired into this session — drag it onto a session to add it"
+    },
     "session": {
       "states": {
         "running": "Running",

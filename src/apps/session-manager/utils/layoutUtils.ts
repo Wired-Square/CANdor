@@ -1,7 +1,7 @@
 // src/apps/session-manager/utils/layoutUtils.ts
 
 import type { Edge } from "@xyflow/react";
-import type { ActiveSessionInfo, AppInstanceInfo } from "../../../api/io";
+import type { ActiveSessionInfo, AppInstanceInfo, BusMapping } from "../../../api/io";
 import type { IOProfile } from "../../../hooks/useSettings";
 import type { SourceNodeData } from "../nodes/SourceNode";
 import type { SessionNodeData } from "../nodes/SessionNode";
@@ -40,12 +40,15 @@ export interface CaptureInfo {
  * @param captureInfoMap Optional map of capture_id → metadata for capture source nodes.
  * @param openApps Open session-aware app instances across all windows (Rust-owned
  *   roster). Instances with `sessionId == null` become the unconnected app nodes.
+ * @param profileBuses Every bus each profile declares, from profileBusStore.
+ *   Drives the spare handles for buses not wired into a session.
  */
 export function buildSessionGraph(
   sessions: ActiveSessionInfo[],
   profiles: IOProfile[],
   captureInfoMap?: Map<string, CaptureInfo>,
   openApps?: AppInstanceInfo[],
+  profileBuses?: Map<string, BusMapping[]>,
 ): SessionGraphData {
   const nodes: FlowNode[] = [];
   const edges: Edge[] = [];
@@ -86,6 +89,18 @@ export function buildSessionGraph(
       profileDeviceBuses.set(config.profileId, enabledSet);
       profileDisabledBuses.set(config.profileId, disabledSet);
     });
+  });
+
+  // Every bus the profile declares gets a handle, wired into this session or
+  // not. An unwired one renders muted and is the drag handle for adding it.
+  profiles.forEach((profile) => {
+    if (!activeProfileIds.has(profile.id)) return;
+    const enabledSet = profileDeviceBuses.get(profile.id);
+    const disabledSet = profileDisabledBuses.get(profile.id) ?? new Set<number>();
+    for (const bus of profileBuses?.get(profile.id) ?? []) {
+      if (!enabledSet?.has(bus.deviceBus)) disabledSet.add(bus.deviceBus);
+    }
+    profileDisabledBuses.set(profile.id, disabledSet);
   });
 
   // Column 1: Source nodes (profiles feeding sessions)
@@ -151,25 +166,22 @@ export function buildSessionGraph(
 
   // Column 2: Session nodes + Column 3: Connected app nodes
   sessions.forEach((session, index) => {
-    // Collect input buses for this session
-    const inputBuses: number[] = [];
-    const disabledInputBuses: number[] = [];
+    // Collect input buses for this session. Sets, not arrays: two sources can
+    // land on the same output bus, and a duplicate would give the session node
+    // two handles sharing an id — which breaks drag-to-connect targeting.
+    const inputBusSet = new Set<number>();
+    const disabledInputBusSet = new Set<number>();
     session.sourceProfileIds.forEach((profileId) => {
       const sourceConfig = session.brokerConfigs?.find((c) => c.profileId === profileId);
       if (!sourceConfig) return;
-      const enabledOutputBuses = new Set<number>();
       for (const m of sourceConfig.busMappings) {
-        if (m.enabled) {
-          inputBuses.push(m.outputBus);
-          enabledOutputBuses.add(m.outputBus);
-        }
-      }
-      for (const m of sourceConfig.busMappings) {
-        if (!m.enabled && !enabledOutputBuses.has(m.outputBus)) {
-          disabledInputBuses.push(m.outputBus);
-        }
+        (m.enabled ? inputBusSet : disabledInputBusSet).add(m.outputBus);
       }
     });
+    // An output bus carried by any source outranks a disabled mapping on it
+    for (const bus of inputBusSet) disabledInputBusSet.delete(bus);
+    const inputBuses = [...inputBusSet].sort((a, b) => a - b);
+    const disabledInputBuses = [...disabledInputBusSet].sort((a, b) => a - b);
 
     // Build ordered app IDs for output handles
     const connectedAppIds = session.subscribers.map((l) => l.subscriber_id);

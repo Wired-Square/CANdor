@@ -6,7 +6,6 @@
 // This is the single source of truth for all profile capabilities.
 
 import type { IOProfile } from "../hooks/useSettings";
-import type { BusMapping } from "../api/io";
 
 // ============================================================================
 // Types
@@ -341,6 +340,12 @@ export function canTransmit(profile: IOProfile): boolean {
 /**
  * Check if a profile has multiple device-level buses/interfaces.
  * Uses the static hasDeviceBuses trait plus dynamic config (interface count).
+ *
+ * GVRET stays unconditionally multi-bus: `probe_device` reports every GVRET as
+ * multi-bus, and the picker keys which config map holds a source off this
+ * answer. Disagreeing with the probe would split a one-bus GVRET's state across
+ * both maps. Which buses a profile actually has — and how many — comes from
+ * `profileBusStore`, not from here.
  */
 export function isMultiBusProfile(profile: IOProfile): boolean {
   if (!profile.kind) return false;
@@ -448,58 +453,4 @@ export function validateProfileSelection(
   }
 
   return { valid: true };
-}
-
-// ============================================================================
-// Bus Mapping Helpers
-// ============================================================================
-
-/**
- * Build a default BusMapping array for a single profile.
- * Used when routing a single realtime source through the multi-source session path
- * so that `generateMultiSessionId` can determine the correct session ID prefix.
- */
-export function buildDefaultBusMappings(profile: IOProfile): BusMapping[] {
-  // Grouped FrameLink profile — one mapping per interface
-  if (profile.kind === "framelink" && Array.isArray(profile.connection?.interfaces)) {
-    const interfaces = profile.connection.interfaces;
-    return interfaces.map((iface, idx) => {
-      const isSerial = iface.iface_type === 3;
-      const isFd = iface.iface_type === 2;
-      return {
-        deviceBus: iface.index,
-        enabled: true,
-        outputBus: idx,
-        interfaceId: isSerial ? `serial${iface.index}` : `can${iface.index}`,
-        traits: {
-          temporal_mode: "realtime" as TemporalMode,
-          protocols: (isSerial ? ["serial"] : isFd ? ["can", "canfd"] : ["can"]) as Protocol[],
-          tx_frames: !isSerial,
-          tx_bytes: isSerial,
-          multi_source: true,
-        },
-      };
-    });
-  }
-
-  const traits = getProfileTraits(profile);
-  const protocol = traits?.protocols[0] ?? "can";
-  // Legacy single-interface FrameLink fallback
-  const deviceBus = profile.kind === "framelink"
-    ? (profile.connection?.interface_index ?? 0)
-    : 0;
-  const txBytes = profile.kind === "framelink" && protocol === "serial";
-  return [{
-    deviceBus,
-    enabled: true,
-    outputBus: 0,
-    interfaceId: `${protocol}${deviceBus}`,
-    traits: {
-      temporal_mode: "realtime",
-      protocols: (protocol === "can" ? ["can", "canfd"] : [protocol]) as Protocol[],
-      tx_frames: traits?.canTransmit ?? false,
-      tx_bytes: txBytes,
-      multi_source: traits?.multiSource ?? true,
-    },
-  }];
 }

@@ -23,6 +23,7 @@ import SessionNode from "../nodes/SessionNode";
 import AppNode from "../nodes/AppNode";
 import InterfaceEdge from "../edges/InterfaceEdge";
 import { buildSessionGraph, calculateFitViewPadding, type CaptureInfo } from "../utils/layoutUtils";
+import { useProfileBusStore } from "../../../stores/profileBusStore";
 import { useSessionManagerStore } from "../stores/sessionManagerStore";
 import type { ActiveSessionInfo, AppInstanceInfo } from "../../../api/io";
 import type { IOProfile } from "../../../hooks/useSettings";
@@ -80,9 +81,13 @@ export default function SessionCanvas({
       .catch(console.error);
   }, [sessions]);
 
+  // Every bus each profile declares — drives the spare handles for buses not
+  // yet wired into a session.
+  const profileBuses = useProfileBusStore((s) => s.mappings);
+
   const graphData = useMemo(
-    () => buildSessionGraph(sessions, profiles, captureInfoMap, openApps),
-    [sessions, profiles, captureInfoMap, openApps]
+    () => buildSessionGraph(sessions, profiles, captureInfoMap, openApps, profileBuses),
+    [sessions, profiles, captureInfoMap, openApps, profileBuses]
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(graphData.nodes as Node[]);
@@ -215,6 +220,15 @@ export default function SessionCanvas({
 
         const session = sessions.find((s) => s.sessionId === sessionId);
         const config = session?.brokerConfigs?.find((c) => c.profileId === profileId);
+
+        // Two sources on one output bus merge into an indistinguishable stream,
+        // and Rust's transmit routing gives the bus to whichever source was
+        // added last. Refuse the drop rather than create that.
+        const takenByOther = session?.brokerConfigs?.some(
+          (c) => c.profileId !== profileId &&
+                 c.busMappings.some((m) => m.enabled && m.outputBus === outputBus)
+        );
+        if (takenByOther) return false;
 
         // Allow re-enabling disabled mappings
         if (config?.busMappings.some((m) => m.deviceBus === deviceBus && m.outputBus === outputBus && !m.enabled)) {

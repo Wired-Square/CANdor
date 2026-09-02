@@ -1,6 +1,7 @@
 // src/apps/session-manager/nodes/SourceNode.tsx
 
 import { memo } from "react";
+import { useTranslation } from "react-i18next";
 import { Handle, Position } from "@xyflow/react";
 import { Wifi, Database, Radio, Pin } from "lucide-react";
 import { iconSm, iconXs } from "../../../styles/spacing";
@@ -32,6 +33,7 @@ interface SourceNodeProps {
 }
 
 function SourceNode({ data, selected }: SourceNodeProps) {
+  const { t } = useTranslation("sessionManager");
   const { profileName, sourceType, isRealtime, isActive, outputBuses, disabledBuses, captureName, isPersistent, captureCount, captureKind } = data;
   // Merge enabled + disabled buses for handle layout (disabled shown as muted)
   const allBuses = [
@@ -85,7 +87,11 @@ function SourceNode({ data, selected }: SourceNodeProps) {
       {allBuses.length > 0 ? (
         <div className="mt-2 flex flex-col gap-1">
           {allBuses.map(({ bus, enabled }) => (
-            <div key={bus} className="flex items-center justify-end gap-1.5 relative">
+            <div
+              key={bus}
+              className="flex items-center justify-end gap-1.5 relative"
+              title={enabled ? undefined : t("node.source.unwiredBus", { bus })}
+            >
               <span
                 className={`text-[10px] font-mono ${
                   enabled ? textDataPurple : textDataDisabled

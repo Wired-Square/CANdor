@@ -2832,6 +2832,23 @@ pub async fn transmit_serial(session_id: &str, bytes: &[u8]) -> Result<TransmitR
     session_transmit(session_id, &TransmitPayload::RawBytes(bytes.to_vec())).await
 }
 
+/// Re-read a session's capabilities and push them to the frontend.
+///
+/// For changes that originate in the backend — a source revising its bus
+/// mappings once it has seen the device — where no command is on the stack to
+/// return the new set to. Silently does nothing if the session has since gone.
+pub async fn refresh_session_capabilities(session_id: &str) {
+    let sessions = IO_SESSIONS.lock().await;
+    let Some(session) = sessions.get(session_id) else {
+        return;
+    };
+    let capabilities = session.source.capabilities();
+    let state = session.source.state();
+    drop(sessions);
+
+    crate::ws::dispatch::send_session_lifecycle_scoped(session_id, &state, &capabilities);
+}
+
 /// Change serial framing on a running session in place (no device reconnect),
 /// then broadcast the updated capabilities (rx_frames flips when framing turns
 /// a Raw byte stream into framed messages). Returns the new capabilities.

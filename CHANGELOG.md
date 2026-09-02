@@ -2,6 +2,18 @@
 
 All notable changes to WireTAP will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **A multi-bus adapter offers every one of its buses again.** A two-bus GVRET was treated as single-bus everywhere you choose one: the source picker listed only Bus 0, and the Sessions → Visual graph drew a single wire. Frames from the second bus still arrived, which is what made it easy to miss — but the bus was never really part of the session, so it could not be transmitted on and could not be given its own bus number when combined with another device. Pick your device again and both buses will be there; no profile changes are needed.
+
+- **Adding a multi-bus device to a running session no longer drops its extra buses.** Session Manager's *Add Source* claimed one bus regardless of what the device had. The same was true of any FrameLink or virtual device with more than one interface.
+
+### Added
+
+- **Wire a bus into a running session by dragging it.** Sessions → Visual now shows every bus a device has, not just the ones already in use — an unused bus appears as a dimmed connector you can drag onto a session to start carrying it, without stopping anything. Buses you turned off for that session appear the same way, so putting one back is the same gesture.
+
 ## [0.11.1] - 2026-08-30
 
 ### Fixed

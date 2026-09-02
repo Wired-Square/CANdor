@@ -32,7 +32,8 @@ import { setSessionSubscriberActive, reconfigureReaderSession, switchSessionToCa
 import { markFavoriteUsed, type TimeRangeFavorite } from "../utils/favorites";
 import { localToUtc } from "../utils/timeFormat";
 import { isRealtimeProfile, generateLoadSessionId } from "../dialogs/io-source-picker/utils";
-import { isMultiSourceCapable, buildDefaultBusMappings } from "../utils/profileTraits";
+import { isMultiSourceCapable } from "../utils/profileTraits";
+import { useProfileBusStore, profileBusMappings } from "../stores/profileBusStore";
 import { useAdHocProfileStore } from "../stores/adHocProfileStore";
 import { WINDOW_EVENTS } from "../events/registry";
 
@@ -771,15 +772,21 @@ export function useIOSessionManager(
       sessionIdOverride,
     } = opts;
 
-    // Ensure every profile has bus mappings (fill defaults for any missing)
+    // Ensure every profile has bus mappings (fill defaults for any missing).
+    // Rust owns which buses a profile declares, so wait for that to be loaded
+    // rather than guessing a single bus 0 here.
+    await useProfileBusStore.getState().ensureLoaded();
     const effectiveBusMappings = new Map(busMappings ?? []);
+    let nextOutputBus = 0;
+    for (const mappings of effectiveBusMappings.values()) {
+      for (const m of mappings) nextOutputBus = Math.max(nextOutputBus, m.outputBus + 1);
+    }
     for (const profileId of profileIds) {
-      if (!effectiveBusMappings.has(profileId)) {
-        const profile = findProfile(profileId);
-        if (profile) {
-          effectiveBusMappings.set(profileId, buildDefaultBusMappings(profile));
-        }
-      }
+      if (effectiveBusMappings.has(profileId)) continue;
+      const declared = profileBusMappings(profileId, nextOutputBus);
+      if (declared.length === 0) continue;
+      effectiveBusMappings.set(profileId, declared);
+      nextOutputBus += declared.length;
     }
 
     // Use provided session ID, otherwise let Rust generate one (it infers the
@@ -825,17 +832,15 @@ export function useIOSessionManager(
     // prop array: a device registered moments ago in the picker is not in that
     // closure yet, and the bus would be labelled with its raw id.
     const busToSource = new Map<number, BusSourceInfo>();
-    if (busMappings) {
-      for (const [profileId, mappings] of busMappings) {
-        const profileName = findProfile(profileId)?.name ?? profileId;
-        for (const mapping of mappings) {
-          if (mapping.enabled) {
-            busToSource.set(mapping.outputBus, {
-              profileName,
-              deviceBus: mapping.deviceBus,
-              profileId,
-            });
-          }
+    for (const [profileId, mappings] of effectiveBusMappings) {
+      const profileName = findProfile(profileId)?.name ?? profileId;
+      for (const mapping of mappings) {
+        if (mapping.enabled) {
+          busToSource.set(mapping.outputBus, {
+            profileName,
+            deviceBus: mapping.deviceBus,
+            profileId,
+          });
         }
       }
     }
@@ -939,13 +944,9 @@ export function useIOSessionManager(
         onBeforeMultiWatch?.();
       }
 
-      // Ensure bus mappings exist for single-profile case
-      if (profileIds.length === 1 && !opts.busMappings && profiles[0]) {
-        const busMappings = new Map([[profileIds[0], buildDefaultBusMappings(profiles[0])]]);
-        await startMultiBusSession(profileIds, { ...opts, busMappings });
-      } else {
-        await startMultiBusSession(profileIds, opts);
-      }
+      // startMultiBusSession fills in any missing mappings from the profile's
+      // declared bus list, so a single profile needs nothing special here.
+      await startMultiBusSession(profileIds, opts);
 
       if (profileIds.length === 1) {
         setSourceProfileId(profileIds[0]);

@@ -12,9 +12,50 @@ use tokio::sync::mpsc;
 use crate::io::error::IoError;
 use crate::io::types::{SourceMessage, TransmitRequest};
 use super::common::{
-    apply_bus_mappings_gvret, parse_gvret_frames, parse_numbuses_response, BusMapping,
-    BINARY_MODE_ENABLE, DEVICE_INFO_PROBE, GVRET_CMD_NUMBUSES, GvretDeviceInfo,
+    apply_bus_mappings_gvret, parse_gvret_frames, parse_numbuses_response,
+    reconcile_to_bus_count, BusMapping, BINARY_MODE_ENABLE, DEVICE_INFO_PROBE,
+    GVRET_CMD_NUMBUSES, GvretDeviceInfo,
 };
+
+/// How long the streaming reader waits for the device to answer GET_NUMBUSES.
+const NUMBUSES_TIMEOUT: Duration = Duration::from_millis(1500);
+
+/// Ask a connected device how many buses it has.
+///
+/// Anything read while waiting is appended to `buffer` rather than discarded —
+/// a device that is already streaming will interleave frames with the reply,
+/// and dropping them would lose traffic the session is meant to capture.
+async fn query_num_buses(
+    write_half: &mut tokio::net::tcp::OwnedWriteHalf,
+    read_half: &mut tokio::net::tcp::OwnedReadHalf,
+    buffer: &mut Vec<u8>,
+) -> Option<u8> {
+    if write_half.write_all(&GVRET_CMD_NUMBUSES).await.is_err() {
+        return None;
+    }
+    let _ = write_half.flush().await;
+
+    let read = async {
+        let mut read_buf = [0u8; 2048];
+        loop {
+            match read_half.read(&mut read_buf).await {
+                Ok(0) | Err(_) => return None,
+                Ok(n) => {
+                    // Scan only what is new (less the 2-byte header overlap): a
+                    // busy bus can pile up hundreds of KB while the device stays
+                    // silent, and rescanning from 0 each read is quadratic.
+                    let scan_from = buffer.len().saturating_sub(2);
+                    buffer.extend_from_slice(&read_buf[..n]);
+                    if let Some(count) = parse_numbuses_response(&buffer[scan_from..]) {
+                        return Some(count);
+                    }
+                }
+            }
+        }
+    };
+
+    tokio::time::timeout(NUMBUSES_TIMEOUT, read).await.ok().flatten()
+}
 
 // ============================================================================
 // Device Probing
@@ -188,6 +229,35 @@ pub async fn run_source(
     let _ = write_half.write_all(&DEVICE_INFO_PROBE).await;
     let _ = write_half.flush().await;
 
+    // Ask the device how many buses it has, and keep the answer. The mappings
+    // we were handed came off the profile before this connection existed, so
+    // they can carry a bus this device does not have — or, expensively, miss
+    // one it does. Anything read while waiting is kept: it is frame traffic.
+    let mut buffer = Vec::with_capacity(4096);
+    let bus_count = match query_num_buses(&mut write_half, &mut read_half, &mut buffer).await {
+        Some(count) => count,
+        None => {
+            let _ = tx
+                .send(SourceMessage::Error(
+                    source_idx,
+                    format!(
+                        "{}:{} did not answer GET_NUMBUSES, so its buses cannot be determined",
+                        host, port
+                    ),
+                ))
+                .await;
+            return;
+        }
+    };
+
+    let bus_mappings = reconcile_to_bus_count(&bus_mappings, bus_count);
+    let _ = tx
+        .send(SourceMessage::MappingsResolved(
+            source_idx,
+            bus_mappings.clone(),
+        ))
+        .await;
+
     // Create transmit channel and send it to the merge task
     let (transmit_tx, transmit_rx) = std_mpsc::sync_channel::<TransmitRequest>(32);
     let _ = tx
@@ -237,7 +307,7 @@ pub async fn run_source(
     });
 
     // Read loop - now only handles reading, transmit is handled by separate task
-    let mut buffer = Vec::with_capacity(4096);
+    // `buffer` already holds whatever arrived during the NUMBUSES exchange.
     let mut read_buf = [0u8; 2048];
 
     while !stop_flag.load(Ordering::SeqCst) {

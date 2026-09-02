@@ -226,6 +226,11 @@ export default function DeviceBusConfig({
             );
           })}
         </div>
+        {enabledCount === 0 && !configLocked && (
+          <p className="text-[10px] text-[color:var(--text-amber)] mt-1">
+            {t("ioSourcePicker.busConfig.noBusesEnabled")}
+          </p>
+        )}
         {hasDuplicates && (
           <p className="text-[10px] text-[color:var(--text-amber)] mt-1">
             {t("ioSourcePicker.busConfig.duplicateWarning")}

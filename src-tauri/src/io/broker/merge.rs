@@ -14,6 +14,7 @@ use super::types::{ControlChannels, SourceConfig, TransmitChannels};
 use super::{MergeCommand, VirtualBusCommand, VirtualBusControls, VirtualCmdTx};
 use crate::settings;
 use crate::capture_store::{self, TimestampedByte};
+use crate::io::gvret::BusMapping;
 use crate::io::types::SourceMessage;
 use crate::io::{emit_device_connected, emit_session_error, emit_stream_ended, signal_bytes_ready, signal_frames_ready, FrameMessage, SignalThrottle};
 
@@ -43,6 +44,7 @@ pub(super) async fn run_merge_task(
     mut merge_cmd_rx: mpsc::UnboundedReceiver<MergeCommand>,
     virtual_cmd_txs: Arc<Mutex<HashMap<usize, VirtualCmdTx>>>,
     fatal_error: Arc<Mutex<Option<String>>>,
+    resolved_mappings: Arc<Mutex<HashMap<String, Vec<BusMapping>>>>,
 ) {
     // Profiles for the initial spawn only — hot-adds re-read, since they exist
     // to pick up a profile that has changed. Narrowed from the whole AppSettings
@@ -63,6 +65,10 @@ pub(super) async fn run_merge_task(
     let mut source_stop_flags: HashMap<String, Arc<AtomicBool>> = HashMap::new();
     // Per-source pause flags for pause/resume polling
     let mut source_pause_flags: HashMap<String, Arc<AtomicBool>> = HashMap::new();
+    // A reader identifies itself by source index; everything that has to
+    // survive a hot add/remove is keyed by profile id, because `next_source_idx`
+    // only ever grows while the broker's `sources` vec is compacted on removal.
+    let mut source_profiles: HashMap<usize, String> = HashMap::new();
     for (index, source_config) in sources.iter().enumerate() {
         let profile = match io_profiles.iter().find(|p| p.id == source_config.profile_id) {
             Some(p) => p.clone(),
@@ -79,6 +85,7 @@ pub(super) async fn run_merge_task(
         source_stop_flags.insert(source_config.profile_id.clone(), source_stop.clone());
         let source_pause = Arc::new(AtomicBool::new(false));
         source_pause_flags.insert(source_config.profile_id.clone(), source_pause.clone());
+        source_profiles.insert(index, source_config.profile_id.clone());
 
         let handle = spawn_source(
             index,
@@ -172,6 +179,46 @@ pub(super) async fn run_merge_task(
                         tlog!("[IOBroker] Source {} connected: {} at {}", source_idx, device_type, address);
                         emit_device_connected(&session_id, &device_type, &address, bus_number);
                     }
+                    Some(SourceMessage::MappingsResolved(source_idx, mappings)) => {
+                        tlog!(
+                            "[IOBroker] Source {} resolved {} bus mapping(s) from the device: {:?}",
+                            source_idx,
+                            mappings.len(),
+                            mappings
+                                .iter()
+                                .filter(|m| m.enabled)
+                                .map(|m| (m.device_bus, m.output_bus))
+                                .collect::<Vec<_>>()
+                        );
+                        // Compare on what capabilities and routing actually read,
+                        // so a re-send of the same set does not churn the frontend.
+                        let routable = |ms: &[BusMapping]| -> Vec<(u8, u8)> {
+                            ms.iter().filter(|m| m.enabled).map(|m| (m.device_bus, m.output_bus)).collect()
+                        };
+                        let Some(profile_id) = source_profiles.get(&source_idx).cloned() else {
+                            tlog!("[IOBroker] Source {} resolved mappings but is unknown", source_idx);
+                            continue;
+                        };
+                        let changed = resolved_mappings
+                            .lock()
+                            .map(|mut resolved| {
+                                let before = resolved.get(&profile_id).map(|ms| routable(ms));
+                                let after = routable(&mappings);
+                                resolved.insert(profile_id, mappings);
+                                before.as_ref() != Some(&after)
+                            })
+                            .unwrap_or(false);
+                        // Capabilities are read off the session, which this task
+                        // does not hold — and taking that lock here could sit
+                        // behind a command waiting on this very loop. Hand the
+                        // re-emit to a detached task instead.
+                        if changed {
+                            let session_id = session_id.clone();
+                            tokio::spawn(async move {
+                                crate::io::refresh_session_capabilities(&session_id).await;
+                            });
+                        }
+                    }
                     None => {
                         // Channel closed
                         break;
@@ -208,6 +255,12 @@ pub(super) async fn run_merge_task(
                         source_stop_flags.insert(source_config.profile_id.clone(), source_stop.clone());
                         let source_pause = Arc::new(AtomicBool::new(false));
                         source_pause_flags.insert(source_config.profile_id.clone(), source_pause.clone());
+                        source_profiles.insert(idx, source_config.profile_id.clone());
+                        // A re-added source re-reconciles once it connects; drop
+                        // the previous answer so a stale one is never served.
+                        if let Ok(mut resolved) = resolved_mappings.lock() {
+                            resolved.remove(&source_config.profile_id);
+                        }
                         let handle = spawn_source(
                             idx,
                             &source_config,

@@ -31,6 +31,11 @@ pub const CAN_EFF_MASK: u32 = 0x1FFF_FFFF;
 
 /// GVRET sync byte
 pub const GVRET_SYNC: u8 = 0xF1;
+
+/// Most CAN buses a GVRET device reports. The NUMBUSES sanity check and any
+/// bus list synthesised from a bare count share this bound.
+pub const MAX_BUSES: u8 = 5;
+
 /// GVRET command: CAN frame data
 pub const GVRET_CMD_FRAME: u8 = 0x00;
 /// Binary mode enable bytes
@@ -58,9 +63,9 @@ pub fn parse_numbuses_response(buffer: &[u8]) -> Option<u8> {
     for i in 0..buffer.len().saturating_sub(2) {
         if buffer[i] == GVRET_SYNC && buffer[i + 1] == 0x0C && i + 2 < buffer.len() {
             let bus_count = buffer[i + 2];
-            // Sanity check: GVRET devices have 1-5 buses
-            return Some(if bus_count == 0 || bus_count > 5 {
-                5 // Default to 5 if response is invalid
+            // Sanity check: GVRET devices have 1..=MAX_BUSES buses
+            return Some(if bus_count == 0 || bus_count > MAX_BUSES {
+                MAX_BUSES // Default to the maximum if the response is invalid
             } else {
                 bus_count
             });
@@ -117,7 +122,6 @@ impl Default for BusMapping {
 
 /// Create default bus mappings for a device with the given bus count.
 /// All buses are assumed to be CAN interfaces.
-#[allow(dead_code)]
 pub fn default_bus_mappings(bus_count: u8) -> Vec<BusMapping> {
     (0..bus_count)
         .map(|i| BusMapping {
@@ -132,6 +136,48 @@ pub fn default_bus_mappings(bus_count: u8) -> Vec<BusMapping> {
                 tx_bytes: false,
                 multi_source: true,
             }),
+        })
+        .collect()
+}
+
+/// Build the bus mappings a session actually streams, from the bus count the
+/// device reported plus whatever the profile has to say about them.
+///
+/// The GVRET counterpart of FrameLink's `reconcile_bus_mappings`: GVRET reports
+/// a *count* rather than an interface list, so device buses are `0..count`. The
+/// same rule applies either way — the device decides which buses exist, the
+/// profile only decides which to stream and where they land.
+pub fn reconcile_to_bus_count(profile_mappings: &[BusMapping], bus_count: u8) -> Vec<BusMapping> {
+    // Nothing to reconcile against — honour the profile rather than silently
+    // streaming nothing.
+    if bus_count == 0 {
+        return profile_mappings.to_vec();
+    }
+
+    (0..bus_count)
+        .enumerate()
+        .map(|(slot, device_bus)| {
+            let override_for = profile_mappings.iter().find(|m| m.device_bus == device_bus);
+            BusMapping {
+                device_bus,
+                // A bus the profile has never heard of streams by default; one
+                // it has been told to mute stays muted.
+                enabled: override_for.map(|m| m.enabled).unwrap_or(true),
+                output_bus: override_for.map(|m| m.output_bus).unwrap_or(slot as u8),
+                interface_id: override_for
+                    .map(|m| m.interface_id.clone())
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or_else(|| format!("can{}", device_bus)),
+                traits: override_for.and_then(|m| m.traits.clone()).or_else(|| {
+                    Some(InterfaceTraits {
+                        temporal_mode: TemporalMode::Realtime,
+                        protocols: vec![Protocol::Can, Protocol::CanFd],
+                        tx_frames: true,
+                        tx_bytes: false,
+                        multi_source: true,
+                    })
+                }),
+            }
         })
         .collect()
 }
@@ -622,6 +668,48 @@ mod tests {
 
         let result = validate_gvret_frame(&frame);
         assert!(result.is_ok());
+    }
+
+    fn reconcile_mapping(device_bus: u8, enabled: bool, output_bus: u8) -> BusMapping {
+        BusMapping { device_bus, enabled, output_bus, interface_id: String::new(), traits: None }
+    }
+
+    /// The case this exists for: the profile was never probed and carries one
+    /// bus 0, while the device in front of us has two.
+    #[test]
+    fn a_device_bus_the_profile_never_saw_still_streams() {
+        let mappings = reconcile_to_bus_count(&[reconcile_mapping(0, true, 0)], 2);
+        assert_eq!(mappings.len(), 2);
+        assert!(mappings.iter().all(|m| m.enabled));
+        assert_eq!(mappings[1].device_bus, 1);
+        assert_eq!(mappings[1].interface_id, "can1");
+    }
+
+    #[test]
+    fn the_profile_still_decides_enabled_and_output_bus() {
+        let mappings =
+            reconcile_to_bus_count(&[reconcile_mapping(0, false, 7), reconcile_mapping(1, true, 9)], 2);
+        assert!(!mappings[0].enabled, "a muted bus stays muted");
+        assert_eq!(mappings[0].output_bus, 7);
+        assert_eq!(mappings[1].output_bus, 9);
+    }
+
+    #[test]
+    fn a_bus_the_device_does_not_have_is_dropped() {
+        let mappings =
+            reconcile_to_bus_count(&[reconcile_mapping(0, true, 0), reconcile_mapping(3, true, 3)], 1);
+        assert_eq!(mappings.len(), 1);
+        assert_eq!(mappings[0].device_bus, 0);
+    }
+
+    /// A count of zero means the device told us nothing useful; honour the
+    /// profile rather than zeroing the session.
+    #[test]
+    fn no_reported_buses_leaves_the_profile_alone() {
+        let mappings = reconcile_to_bus_count(&[reconcile_mapping(2, true, 5)], 0);
+        assert_eq!(mappings.len(), 1);
+        assert_eq!(mappings[0].device_bus, 2);
+        assert_eq!(mappings[0].output_bus, 5);
     }
 
     #[test]

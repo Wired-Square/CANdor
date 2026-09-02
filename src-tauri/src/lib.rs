@@ -1283,6 +1283,7 @@ pub fn run() {
             sessions::probe_device,
             sessions::create_multi_source_session,
             sessions::list_active_sessions,
+            sessions::get_profile_bus_mappings,
             sessions::generate_session_id,
             // Profile-to-session mapping API
             sessions::get_profile_sessions,

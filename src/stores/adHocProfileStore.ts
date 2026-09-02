@@ -16,6 +16,7 @@ import {
   unregisterEphemeralProfile,
 } from "../api/ephemeralProfiles";
 import type { IOProfile } from "../settings/appSettings";
+import { useProfileBusStore } from "./profileBusStore";
 
 /** Mint an id for an ad-hoc device, disjoint from the saved `io_` namespace. */
 export function newAdHocProfileId(): string {
@@ -42,9 +43,13 @@ export const useAdHocProfileStore = create<AdHocProfileState>((set) => ({
   register: async (profile) => {
     // Rust stamps `ephemeral` itself, and returns the new list.
     set({ profiles: await registerEphemeralProfile(profile) });
+    // load_settings overlays ad-hoc devices onto io_profiles, so the declared
+    // bus list Rust hands out has just changed.
+    useProfileBusStore.getState().invalidate();
   },
 
   discard: async (profileId) => {
     set({ profiles: await unregisterEphemeralProfile(profileId) });
+    useProfileBusStore.getState().invalidate();
   },
 }));

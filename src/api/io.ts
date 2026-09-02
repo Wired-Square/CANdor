@@ -1190,6 +1190,25 @@ export async function probeDevice(profileId: string): Promise<DeviceProbeResult>
  * @param protocol Protocol type for all interfaces (default "can")
  * @returns Array of default bus mappings
  */
+/** A BusMapping as Rust sends it. */
+interface RawBusMapping {
+  device_bus: number;
+  enabled: boolean;
+  output_bus: number;
+  interface_id?: string;
+  traits?: InterfaceTraits;
+}
+
+function decodeBusMapping(m: RawBusMapping): BusMapping {
+  return {
+    deviceBus: m.device_bus,
+    enabled: m.enabled,
+    outputBus: m.output_bus,
+    interfaceId: m.interface_id,
+    traits: m.traits,
+  };
+}
+
 export function createDefaultBusMappings(
   busCount: number,
   outputBusOffset: number = 0,
@@ -1371,13 +1390,7 @@ export async function listActiveSessions(): Promise<ActiveSessionInfo[]> {
     broker_configs: Array<{
       profile_id: string;
       display_name: string;
-      bus_mappings: Array<{
-        device_bus: number;
-        enabled: boolean;
-        output_bus: number;
-        interface_id?: string;
-        traits?: InterfaceTraits;
-      }>;
+      bus_mappings: RawBusMapping[];
     }> | null;
     source_profile_ids: string[];
     capture_id: string | null;
@@ -1397,13 +1410,7 @@ export async function listActiveSessions(): Promise<ActiveSessionInfo[]> {
     brokerConfigs: s.broker_configs?.map((c) => ({
       profileId: c.profile_id,
       displayName: c.display_name,
-      busMappings: c.bus_mappings.map((m) => ({
-        deviceBus: m.device_bus,
-        enabled: m.enabled,
-        outputBus: m.output_bus,
-        interfaceId: m.interface_id,
-        traits: m.traits,
-      })),
+      busMappings: c.bus_mappings.map(decodeBusMapping),
     })) ?? null,
     sourceProfileIds: s.source_profile_ids ?? [],
     captureId: s.capture_id ?? null,
@@ -1412,6 +1419,33 @@ export async function listActiveSessions(): Promise<ActiveSessionInfo[]> {
     isStreaming: s.is_streaming ?? false,
     catalogPath: s.catalog_path ?? null,
   }));
+}
+
+/**
+ * The bus mappings every IO profile declares, keyed by profile ID, with output
+ * buses numbered densely from 0.
+ *
+ * Rust owns the enumeration — which buses a profile has, and their protocols
+ * and traits — because it reads the same `connection.interfaces` the readers
+ * do. Callers apply their own output-bus offset on top; they must not re-derive
+ * the bus list. See `sessions::profile_bus_mappings`.
+ */
+export async function getProfileBusMappings(): Promise<Map<string, BusMapping[]>> {
+  const raw: Record<string, RawBusMapping[]> = await invoke("get_profile_bus_mappings");
+
+  return new Map(
+    Object.entries(raw).map(([profileId, mappings]) => [
+      profileId,
+      mappings.map(decodeBusMapping),
+    ]),
+  );
+}
+
+/** Shift a profile's declared mappings onto a session's output bus range. */
+export function offsetBusMappings(mappings: BusMapping[], outputBusOffset: number): BusMapping[] {
+  return outputBusOffset === 0
+    ? mappings
+    : mappings.map((m, i) => ({ ...m, outputBus: outputBusOffset + i }));
 }
 
 // ============================================================================

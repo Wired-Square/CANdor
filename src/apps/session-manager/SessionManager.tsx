@@ -20,6 +20,7 @@ import {
   type ActiveSessionInfo,
 } from "../../api/io";
 import Dialog from "../../components/Dialog";
+import { useProfileBusStore, profileBusMappings } from "../../stores/profileBusStore";
 import { useSettingsStore } from "../settings/stores/settingsStore";
 import { useOpenAppsStore } from "../../stores/openAppsStore";
 import { useSessionStore } from "../../stores/sessionStore";
@@ -66,6 +67,13 @@ export default function SessionManager() {
     ],
     [logEntryCount, t]
   );
+
+  // Rust owns which buses each profile declares; the graph draws a handle per
+  // declared bus. SessionCanvas re-renders off the store once this lands, and
+  // the store refetches itself when a profile changes.
+  useEffect(() => {
+    void useProfileBusStore.getState().ensureLoaded();
+  }, []);
 
   // Fetch sessions
   const fetchSessions = useCallback(async () => {
@@ -155,16 +163,24 @@ export default function SessionManager() {
   const handleAddSourceConfirm = useCallback(async (profileId: string) => {
     if (!addSourceSessionId) return;
     try {
+      // Send the profile's real bus list. An empty array makes Rust fall back to
+      // its own enumeration without knowing which output buses this session has
+      // already spoken for, so offset past them here.
+      const usedOutputBuses = sessions
+        .find((s) => s.sessionId === addSourceSessionId)
+        ?.brokerConfigs?.flatMap((c) => c.busMappings.map((m) => m.outputBus)) ?? [];
+      const offset = usedOutputBuses.length > 0 ? Math.max(...usedOutputBuses) + 1 : 0;
+
       await addSourceToSession(addSourceSessionId, {
         profileId,
-        busMappings: [],
+        busMappings: profileBusMappings(profileId, offset),
       });
       setAddSourceSessionId(null);
       await fetchSessions();
     } catch (error) {
       console.error("[SessionManager] Failed to add source:", error);
     }
-  }, [addSourceSessionId, fetchSessions]);
+  }, [addSourceSessionId, fetchSessions, sessions]);
 
   const handleRemoveSource = useCallback(async (sessionId: string, profileId: string) => {
     try {
@@ -228,11 +244,23 @@ export default function SessionManager() {
     const config = session?.brokerConfigs?.find((c) => c.profileId === profileId);
     if (!config) return;
 
-    // Add a new enabled mapping
-    const updatedMappings = [
-      ...config.busMappings,
-      { deviceBus, outputBus: newOutputBus, enabled: true },
-    ];
+    // Carry the profile's interface id and traits so a CAN-FD bus wired by drag
+    // isn't validated as plain CAN.
+    const declared = profileBusMappings(profileId).find((b) => b.deviceBus === deviceBus);
+    const existing = config.busMappings.find((m) => m.deviceBus === deviceBus);
+    const mapping = {
+      deviceBus,
+      outputBus: newOutputBus,
+      enabled: true,
+      interfaceId: existing?.interfaceId ?? declared?.interfaceId,
+      traits: existing?.traits ?? declared?.traits,
+    };
+
+    // Replace any mapping for this device bus rather than appending — Rust's
+    // apply_bus_mapping takes the first match, so a second entry is dead config.
+    const updatedMappings = existing
+      ? config.busMappings.map((m) => (m.deviceBus === deviceBus ? mapping : m))
+      : [...config.busMappings, mapping];
 
     try {
       await updateSourceBusMappings(sessionId, profileId, updatedMappings);

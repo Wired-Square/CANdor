@@ -40,6 +40,16 @@ pub enum SourceMessage {
     ControlReady(usize, ControlSender),
     /// Source connected successfully (source_index, device_type, address, bus_number)
     Connected(usize, String, String, Option<u8>),
+    /// A source has reconciled its bus mappings against the connected device
+    /// (source_index, mappings).
+    ///
+    /// The mappings a session starts with are built from the profile before any
+    /// connection exists, so they can be wrong in both directions: a bus the
+    /// device does not have, or — the expensive one — a bus it does have that
+    /// nothing is listening to. A driver that can enumerate its interfaces sends
+    /// this once connected; the broker adopts it for `available_buses` and
+    /// transmit routing so receive and transmit agree on the same set.
+    MappingsResolved(usize, Vec<crate::io::gvret::BusMapping>),
 }
 
 // ============================================================================

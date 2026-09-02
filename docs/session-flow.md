@@ -78,31 +78,63 @@ with `multi_source: false` cannot be combined with others.
   It cannot be paused (there is no coherent half-way state to pause into) and it
   ends itself when the sweep finishes.
 
-**FrameLink bus mappings are still built from the profile, and that is a known
-gap.** `create_default_bus_mapping` runs before a connection exists, so it can
-only read the profile's `interfaces[]` — an array the frontend writes after a
-successful probe. When that probe never ran the array is absent and the mapping
-falls back to a single hardcoded `can0`. That is a **silent drop, not a
-mislabel**: the device does send `iface_index 1` frames and `reader.rs` discards
-them at `if !my_interfaces.contains(&sf.iface_index)`, with nothing logged and no
-bus dimension in the view to suggest anything is missing. Measured against the
-Home Assistant add-on, which serves the same interfaces on both its endpoints, an
-unprobed FrameLink profile saw 20 of the 26 ids GVRET saw — the 6 it lost were
-all on bus 1. Probing the profile takes it to `available_buses: [0, 1]` and 90
-unique ids, i.e. parity with GVRET, which is why the always-visible Probe button
-is the answer until the gap below is closed. The obvious fix — reconciling against the `CAPABILITIES_RESP` the reader
-already has — was tried and reverted, because it only fixes half the problem:
-`IOBroker::combined_capabilities` builds `available_buses` from
-`self.sources[..].bus_mappings` and `transmit_routes` is built once in
-`IOBroker::new`, both from the *pre-connect* set. Frames from the discovered
-interface would arrive tagged `bus: 1` while transmit rejected bus 1 as having
-no source, and an RS-485 interface would stream under CAN traits. Doing this
-properly needs a session-layer mechanism — a source revising its mappings once
-connected, with the broker rebuilding `transmit_routes`/`session_traits` and
-re-emitting capabilities — which GVRET needs too (it probes `bus_count` at
-connect and discards the answer). Until then the route to a correct multi-bus
-FrameLink profile is the Probe button, which populates `interfaces[]` through
-the path that *does* feed capabilities consistently.
+**Bus mappings are built from the profile, and that is a known gap.**
+`sessions::profile_bus_mappings` runs before a connection exists, so the only
+thing it can read is the profile's `interfaces[]` — an array the frontend writes
+after a successful probe. When that probe never ran the array is absent and the
+mapping falls back to a single `can0`. For FrameLink that is a **silent drop, not
+a mislabel**: the device does send `iface_index 1` frames and `reader.rs`
+discards them at `if !my_interfaces.contains(&sf.iface_index)`, with nothing
+logged and no bus dimension in the view to suggest anything is missing. Measured
+against the Home Assistant add-on, which serves the same interfaces on both its
+endpoints, an unprobed FrameLink profile saw 20 of the 26 ids GVRET saw — the 6
+it lost were all on bus 1. Probing the profile takes it to
+`available_buses: [0, 1]` and 90 unique ids, i.e. parity with GVRET, which is why
+the always-visible Probe button is the answer until the gap below is closed.
+
+**One enumerator, in Rust (2026-09-03).** `profile_bus_mappings` is now the only
+thing that answers "which buses does this profile declare", for every kind:
+`parse_interfaces_from_profile` (GVRET `interfaces[]`, its `_probed_bus_count`
+fallback, and virtual) falling through to `create_default_bus_mapping` (FrameLink
+`interfaces[]` and the legacy single-bus tail). `get_profile_bus_mappings`
+exposes it to the frontend, which caches it in `stores/profileBusStore.ts` and
+applies only an output-bus offset on top — the picker and the session graph no
+longer derive a bus list of their own. Two bugs fell out of the old arrangement
+and are fixed: the TypeScript copy read `interfaces[]` for FrameLink but *not*
+for GVRET or virtual, so a probed 2-bus GVRET reached a multi-source session as
+one bus-0 mapping; and `resolve_source_config` synthesised a lone `device_bus: 0`
+mapping whenever the frontend sent none, which is how *any* multi-interface
+device lost its extra buses on that path. `apply_bus_mapping` passing an unmapped
+device bus through unchanged is what made the GVRET half invisible — the frames
+still arrived, un-remapped, while `available_buses` and `transmit_routes` never
+knew the bus existed.
+
+**A source now revises its mappings once connected (2026-09-03).** The profile
+is the starting guess; the device gets the last word. A driver that can
+enumerate its interfaces sends `SourceMessage::MappingsResolved(source_idx,
+mappings)`, the merge task records it under that source's **profile id**, and
+`IOBroker` reads through it in all four places that matter —
+`combined_capabilities().available_buses`, `effective_session_traits()`,
+`route_for_bus()` for transmit, and `broker_configs()`, which is what the
+session graph draws its bus handles from. Reconciliation rule, shared by both
+drivers: the device decides which buses exist; a profile entry overrides only
+`enabled` and `output_bus`; a bus the profile has never seen streams by default;
+one the device does not report is dropped.
+
+An earlier attempt (`91396ac`, reverted in `e2ad44d`) did the FrameLink half only
+and was pulled because `available_buses` and `transmit_routes` were both built
+pre-connect: frames arrived tagged `bus: 1` while transmit rejected bus 1 as
+having no source. That objection is what the read-through closes — the eager
+`transmit_routes` table is gone entirely, so there is one definition of the
+routing rules rather than a pre-connect one and a post-connect one.
+
+**Residual gaps.** `data_streams.rx_bytes` is still computed once in
+`IOBroker::new` (from `profile_kind == "serial"` alone), so a FrameLink RS-485
+interface discovered at connect does not flip a session into byte mode.
+`gvret/usb.rs` does not reconcile — it queries `GET_NUMBUSES` in `probe_gvret_usb`
+and throws the answer away, exactly as the TCP path used to. And the two drivers
+disagree on an unanswered enumeration: FrameLink keeps the profile's mappings,
+GVRET TCP fails the source.
 
 **A FrameLink device serves exactly one TCP client**, so `io/framelink/shared.rs`
 pools one connection per device and every consumer — the reader and the ~40

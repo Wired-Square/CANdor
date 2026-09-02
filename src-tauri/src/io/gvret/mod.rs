@@ -12,7 +12,7 @@ mod usb;
 
 // Re-export public items
 pub use codec::GvretCodec;
-pub use common::{BusMapping, GvretDeviceInfo};
+pub use common::{default_bus_mappings, BusMapping, GvretDeviceInfo, MAX_BUSES};
 pub use tcp::probe_gvret_tcp;
 #[cfg(not(target_os = "ios"))]
 pub use usb::probe_gvret_usb;

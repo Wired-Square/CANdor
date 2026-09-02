@@ -104,8 +104,6 @@ pub struct IOBroker {
     rx: Option<mpsc::Receiver<SourceMessage>>,
     /// Sender for sub-readers to send messages (kept for cloning)
     tx: mpsc::Sender<SourceMessage>,
-    /// Mapping from output bus number to transmit route (source_idx, device_bus)
-    transmit_routes: HashMap<u8, TransmitRoute>,
     /// Transmit channels by source index (populated when sources connect)
     transmit_channels: TransmitChannels,
     /// Control channels by source index for live framing changes (serial only)
@@ -113,6 +111,14 @@ pub struct IOBroker {
     /// Live framing-encoding overrides by source index (set via `set_framing`),
     /// consulted by `combined_capabilities` so `rx_frames` reflects the change.
     framing_overrides: Arc<Mutex<HashMap<usize, String>>>,
+    /// Bus mappings a source revised for itself once connected, by source index.
+    ///
+    /// The mappings in `sources` are a pre-connect guess read off the profile.
+    /// A driver that can enumerate its interfaces replaces them here, and both
+    /// `available_buses` and transmit routing read through this — otherwise
+    /// receive and transmit disagree about which buses exist, which is why the
+    /// first attempt at this was reverted.
+    resolved_mappings: Arc<Mutex<HashMap<String, Vec<BusMapping>>>>,
     /// Derived session traits from all interfaces
     session_traits: InterfaceTraits,
     /// Whether this session emits raw bytes (for serial sources without framing)
@@ -256,24 +262,6 @@ impl IOBroker {
 
         let (tx, rx) = mpsc::channel(SOURCE_CHANNEL_CAPACITY);
 
-        // Build transmit routing table: output_bus -> (source_idx, device_bus, kind)
-        let mut transmit_routes = HashMap::new();
-        for (source_idx, source) in sources.iter().enumerate() {
-            for mapping in &source.bus_mappings {
-                if mapping.enabled {
-                    transmit_routes.insert(
-                        mapping.output_bus,
-                        TransmitRoute {
-                            source_idx,
-                            profile_id: source.profile_id.clone(),
-                            profile_kind: source.profile_kind.clone(),
-                            device_bus: mapping.device_bus,
-                        },
-                    );
-                }
-            }
-        }
-
         // Determine if this session emits raw bytes
         // Raw bytes are emitted if any serial source either:
         // 1. Has no framing (raw mode), or
@@ -302,10 +290,10 @@ impl IOBroker {
             task_handles: Vec::new(),
             rx: Some(rx),
             tx,
-            transmit_routes,
             transmit_channels: Arc::new(Mutex::new(HashMap::new())),
             control_channels: Arc::new(Mutex::new(HashMap::new())),
             framing_overrides: Arc::new(Mutex::new(HashMap::new())),
+            resolved_mappings: Arc::new(Mutex::new(HashMap::new())),
             session_traits,
             emits_raw_bytes,
             virtual_bus_controls: Arc::new(Mutex::new(HashMap::new())),
@@ -322,6 +310,110 @@ impl IOBroker {
         &self.sources
     }
 
+    /// The bus mappings in force for every source, in `self.sources` order:
+    /// what the device reported once it connected, or the profile's pre-connect
+    /// guess where it has not reported.
+    ///
+    /// Keyed by profile id, not source index — the merge task's index only ever
+    /// grows while `self.sources` is compacted on removal, so the two spaces
+    /// diverge on the first hot-remove.
+    fn effective_mappings(&self) -> Vec<Vec<BusMapping>> {
+        let resolved = self.resolved_mappings.lock().ok();
+        self.sources
+            .iter()
+            .map(|source| {
+                resolved
+                    .as_ref()
+                    .and_then(|r| r.get(&source.profile_id))
+                    .unwrap_or(&source.bus_mappings)
+                    .clone()
+            })
+            .collect()
+    }
+
+    /// Output bus → route, from whatever mappings are in force.
+    ///
+    /// The only definition of the routing rules: only enabled mappings route,
+    /// and the last mapping wins a contested output bus.
+    fn current_transmit_routes(&self) -> HashMap<u8, TransmitRoute> {
+        let mut routes = HashMap::new();
+        for (source_idx, (source, mappings)) in
+            self.sources.iter().zip(self.effective_mappings()).enumerate()
+        {
+            for mapping in mappings.into_iter().filter(|m| m.enabled) {
+                routes.insert(
+                    mapping.output_bus,
+                    TransmitRoute {
+                        source_idx,
+                        profile_id: source.profile_id.clone(),
+                        profile_kind: source.profile_kind.clone(),
+                        device_bus: mapping.device_bus,
+                    },
+                );
+            }
+        }
+        routes
+    }
+
+    /// The route for one output bus, without building the whole table.
+    ///
+    /// Transmit is the hot path — a repeat queue runs at up to 1 kHz and replay
+    /// bursts with no delay at all — so this scans for the one answer rather
+    /// than allocating a map and two Strings per source per frame.
+    fn route_for_bus(&self, output_bus: u8) -> Option<TransmitRoute> {
+        let resolved = self.resolved_mappings.lock().ok();
+        let mut found = None;
+        for (source_idx, source) in self.sources.iter().enumerate() {
+            let mappings = resolved
+                .as_ref()
+                .and_then(|r| r.get(&source.profile_id))
+                .unwrap_or(&source.bus_mappings);
+            for mapping in mappings.iter().filter(|m| m.enabled) {
+                // Last match wins, matching the table's insert semantics.
+                if mapping.output_bus == output_bus {
+                    found = Some(TransmitRoute {
+                        source_idx,
+                        profile_id: source.profile_id.clone(),
+                        profile_kind: source.profile_kind.clone(),
+                        device_bus: mapping.device_bus,
+                    });
+                }
+            }
+        }
+        found
+    }
+
+    /// Session traits derived from the mappings in force.
+    ///
+    /// Falls back to the set computed at construction when nothing has been
+    /// revised, or when the revised set does not validate — capabilities are
+    /// read on a poll and have nowhere to report an error to.
+    fn effective_session_traits(&self) -> InterfaceTraits {
+        if self.resolved_mappings.lock().map(|m| m.is_empty()).unwrap_or(true) {
+            return self.session_traits.clone();
+        }
+
+        let interface_traits: Vec<InterfaceTraits> = self
+            .sources
+            .iter()
+            .zip(self.effective_mappings())
+            .flat_map(|(source, mappings)| {
+                let kind = source.profile_kind.clone();
+                mappings
+                    .into_iter()
+                    .filter(|m| m.enabled)
+                    .map(move |m| {
+                        m.traits
+                            .unwrap_or_else(|| get_traits_for_profile_kind(&kind))
+                    })
+            })
+            .collect();
+
+        validate_session_traits(&interface_traits)
+            .session_traits
+            .unwrap_or_else(|| self.session_traits.clone())
+    }
+
     /// Get combined capabilities from all sources
     fn combined_capabilities(&self) -> IOCapabilities {
         // Multi-source sessions have limited capabilities
@@ -332,26 +424,17 @@ impl IOBroker {
 
         // Check if we have any CAN-capable sources that can transmit
         // Serial sources don't count for CAN transmit capability
-        let has_can_transmit_routes = self.transmit_routes.values().any(|route| {
+        let session_traits = self.effective_session_traits();
+        let routes = self.current_transmit_routes();
+        let has_can_transmit_routes = routes.values().any(|route| {
             matches!(
                 route.profile_kind.as_str(),
                 "gvret_tcp" | "gvret_usb" | "slcan" | "gs_usb" | "socketcan" | "virtual" | "framelink"
             )
         });
 
-        // Collect all output bus numbers from all source mappings (sorted)
-        let mut buses: Vec<u8> = self
-            .sources
-            .iter()
-            .flat_map(|s| {
-                s.bus_mappings
-                    .iter()
-                    .filter(|m| m.enabled)
-                    .map(|m| m.output_bus)
-            })
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect();
+        // The routed output buses are exactly the enabled ones, already deduped
+        let mut buses: Vec<u8> = routes.keys().copied().collect();
         buses.sort();
 
         // Emits frames if any source is non-serial, or if any serial source has
@@ -377,9 +460,9 @@ impl IOBroker {
             supports_rtr: true,
             available_buses: buses,
             traits: InterfaceTraits {
-                tx_frames: self.session_traits.tx_frames && has_can_transmit_routes,
-                tx_bytes: self.session_traits.tx_bytes,
-                ..self.session_traits.clone()
+                tx_frames: session_traits.tx_frames && has_can_transmit_routes,
+                tx_bytes: session_traits.tx_bytes,
+                ..session_traits.clone()
             },
             data_streams: SessionDataStreams {
                 rx_frames,
@@ -390,13 +473,16 @@ impl IOBroker {
 
     /// Route a CAN frame transmit to the appropriate source based on bus number
     fn transmit_can_frame(&self, frame: &CanTransmitFrame) -> Result<TransmitResult, String> {
-        let route = self.transmit_routes.get(&frame.bus).ok_or_else(|| {
+        // Read through the routes in force: a source that revised its mappings
+        // once connected must be transmittable on the buses it actually has.
+        let route = self.route_for_bus(frame.bus).ok_or_else(|| {
             format!(
                 "No source configured for bus {} (available: {:?})",
                 frame.bus,
-                self.transmit_routes.keys().collect::<Vec<_>>()
+                self.current_transmit_routes().keys().collect::<Vec<_>>()
             )
         })?;
+        let route = &route;
 
         // Create a modified frame with the device bus number (reverse the mapping)
         let mut routed_frame = frame.clone();
@@ -478,8 +564,8 @@ impl IOBroker {
             return Ok(TransmitResult::error("No bytes to transmit".to_string()));
         }
 
-        let serial_route = self
-            .transmit_routes
+        let routes = self.current_transmit_routes();
+        let serial_route = routes
             .values()
             .find(|route| route.profile_kind == "serial" || route.profile_kind == "framelink")
             .ok_or_else(|| "No serial or FrameLink source configured in this session".to_string())?;
@@ -628,6 +714,12 @@ impl IOSource for IOBroker {
         }
         let virtual_cmd_txs = self.virtual_cmd_txs.clone();
         let fatal_error = self.fatal_error.clone();
+        // A source that revises its mappings once connected writes them here;
+        // capabilities and transmit routing read through it.
+        if let Ok(mut resolved) = self.resolved_mappings.lock() {
+            resolved.clear();
+        }
+        let resolved_mappings = self.resolved_mappings.clone();
         self.ended.store(false, Ordering::SeqCst);
         let ended = self.ended.clone();
 
@@ -655,6 +747,7 @@ impl IOSource for IOBroker {
                 merge_cmd_rx,
                 virtual_cmd_txs,
                 fatal_error,
+                resolved_mappings,
             )
             .await;
             // Set here rather than inside the task: `run_merge_task` returns
@@ -902,7 +995,20 @@ impl IOSource for IOBroker {
     }
 
     fn broker_configs(&self) -> Option<Vec<SourceConfig>> {
-        Some(self.sources.clone())
+        // Report the mappings in force, not the pre-connect guess: this is what
+        // the session graph draws its bus handles from, and showing a bus the
+        // session is not carrying (or hiding one it is) is the bug this whole
+        // reconciliation exists to fix.
+        Some(
+            self.sources
+                .iter()
+                .zip(self.effective_mappings())
+                .map(|(source, bus_mappings)| SourceConfig {
+                    bus_mappings,
+                    ..source.clone()
+                })
+                .collect(),
+        )
     }
 
     fn pause_source_polling(&self, profile_id: &str) -> Result<(), String> {

@@ -16,7 +16,8 @@ import {
 } from "../styles";
 import { getReaderProtocols, useSettings, type IOProfile } from "../hooks/useSettings";
 import { buildCatalogPath } from "../utils/catalogUtils";
-import { buildDefaultBusMappings, isMultiBusProfile } from "../utils/profileTraits";
+import { isMultiBusProfile } from "../utils/profileTraits";
+import { useProfileBusStore, profileBusMappings } from "../stores/profileBusStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { pickCsvFilesToOpen } from "../api/dialogs";
 import {
@@ -210,6 +211,24 @@ type Props = {
   /** Called when the decoder catalogue selection changes (lets the host app mirror it). */
   onCatalogSelect?: (path: string | null) => void;
 };
+
+/**
+ * The buses a profile declares, shifted onto this source's output bus range.
+ *
+ * Rust is the authority (it reads the same `connection.interfaces` the readers
+ * do). `probedBusCount` is only a seed for a device the backend has never seen
+ * — an ad-hoc profile registered moments ago, or a cache not yet loaded.
+ */
+function declaredBusMappings(
+  profileId: string,
+  outputBusOffset: number,
+  probedBusCount?: number,
+): BusMapping[] {
+  const declared = profileBusMappings(profileId, outputBusOffset);
+  return declared.length > 0
+    ? declared
+    : createDefaultBusMappings(probedBusCount || 1, outputBusOffset);
+}
 
 export default function IoSourcePickerDialog({
   mode = "streaming",
@@ -812,9 +831,41 @@ export default function IoSourcePickerDialog({
   // Multi-bus mode is active when at least one profile is selected in multi-select
   const isMultiBusMode = checkedSourceIds.length > 0;
 
+  // Rust owns which buses a profile declares; load it before the probe effect
+  // needs the counts. The store invalidates itself on settings changes, so this
+  // only refetches when the answer can actually have changed.
+  const profileBuses = useProfileBusStore((s) => s.mappings);
+  const profileBusesLoaded = useProfileBusStore((s) => s.loaded);
+  useEffect(() => {
+    if (isOpen) void useProfileBusStore.getState().ensureLoaded();
+  }, [isOpen]);
+
+  // First output bus for each selected realtime source: the running sum of the
+  // buses every preceding source claims, so two 2-bus devices land on 0,1 and
+  // 2,3 rather than colliding on 1.
+  const outputBusOffsets = useMemo(() => {
+    const offsets = new Map<string, number>();
+    let next = 0;
+    for (const id of checkedSourceIds) {
+      const profile = readProfiles.find((p) => p.id === id);
+      if (!profile || !isRealtimeProfile(profile)) continue;
+      offsets.set(id, next);
+      // A profile that declares nothing still has a real bus count once probed.
+      next += profileBuses.get(id)?.length ?? deviceProbeResultMap.get(id)?.busCount ?? 1;
+    }
+    return offsets;
+  }, [checkedSourceIds, readProfiles, profileBuses, deviceProbeResultMap]);
+
   // Probe all real-time devices in multi-bus mode
   useEffect(() => {
     if (!isOpen || checkedSourceIds.length === 0) {
+      return;
+    }
+    // Wait for Rust's bus counts — probing now would seed every multi-bus
+    // device with the single-bus placeholder and never revisit it. The map is
+    // legitimately empty when no profile declares its buses, so gate on the
+    // load having happened rather than on it having entries.
+    if (!profileBusesLoaded) {
       return;
     }
 
@@ -891,7 +942,7 @@ export default function IoSourcePickerDialog({
 
     // Probe each profile that we haven't probed yet
     // Use getState() to access store functions without adding them to dependencies
-    realtimeProfileIds.forEach((profileId, profileIndex) => {
+    realtimeProfileIds.forEach((profileId) => {
       // Skip if we've already started probing this profile
       if (probedProfilesRef.current.has(profileId)) {
         return;
@@ -905,20 +956,9 @@ export default function IoSourcePickerDialog({
       const profile = readProfiles.find((p) => p.id === profileId);
       const isMultiBus = profile ? isMultiBusProfile(profile) : false;
 
-      // Calculate output bus offset based on position in selection list
-      const outputBusOffset = profileIndex;
-
-      // Helper: build profile-aware bus mappings with output bus offset
-      const buildProfileBusMappings = (busCount: number) => {
-        if (profile && isMultiBus) {
-          // Use profile-aware mappings (correct deviceBus + per-interface protocols)
-          return buildDefaultBusMappings(profile).map((m, i) => ({
-            ...m,
-            outputBus: outputBusOffset + i,
-          }));
-        }
-        return createDefaultBusMappings(busCount, outputBusOffset);
-      };
+      // Output bus offset: cumulative across preceding sources, so a multi-bus
+      // device doesn't overlap the next source's buses.
+      const outputBusOffset = outputBusOffsets.get(profileId) ?? 0;
 
       if (isLive && !isStopped) {
         // Use default config for live session
@@ -927,14 +967,14 @@ export default function IoSourcePickerDialog({
           success: true,
           sourceType: isMultiBus ? "multi" : "single",
           isMultiBus,
-          busCount: isMultiBus ? (profile ? buildDefaultBusMappings(profile).length : 5) : 1,
+          busCount: profileBusMappings(profileId).length || 1,
           primaryInfo: "Session active",
           secondaryInfo: null,
           supports_fd: null,
           error: null,
         }));
         if (isMultiBus) {
-          setDeviceBusConfigMap((prev) => new Map(prev).set(profileId, buildProfileBusMappings(5)));
+          setDeviceBusConfigMap((prev) => new Map(prev).set(profileId, declaredBusMappings(profileId, outputBusOffset)));
         } else {
           setSingleBusOverrideMap((prev) => new Map(prev).set(profileId, outputBusOffset));
         }
@@ -949,7 +989,7 @@ export default function IoSourcePickerDialog({
         .then((result) => {
           setDeviceProbeResultMap((prev) => new Map(prev).set(profileId, result));
           if (result.isMultiBus) {
-            setDeviceBusConfigMap((prev) => new Map(prev).set(profileId, buildProfileBusMappings(result.busCount)));
+            setDeviceBusConfigMap((prev) => new Map(prev).set(profileId, declaredBusMappings(profileId, outputBusOffset, result.busCount)));
           } else {
             setSingleBusOverrideMap((prev) => new Map(prev).set(profileId, outputBusOffset));
           }
@@ -967,7 +1007,8 @@ export default function IoSourcePickerDialog({
             error: String(err),
           }));
           if (isMultiBus) {
-            setDeviceBusConfigMap((prev) => new Map(prev).set(profileId, buildProfileBusMappings(5)));
+            // Probe failed — fall back to whatever the profile itself declares
+            setDeviceBusConfigMap((prev) => new Map(prev).set(profileId, declaredBusMappings(profileId, outputBusOffset)));
           }
         })
         .finally(() => {
@@ -981,7 +1022,7 @@ export default function IoSourcePickerDialog({
     // Note: isProfileInUse and getSessionForProfile are stable store functions,
     // intentionally excluded from deps to prevent infinite loops
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, checkedSourceIds, readProfiles]);
+  }, [isOpen, checkedSourceIds, readProfiles, outputBusOffsets, profileBusesLoaded]);
 
   // Cleanup listeners on unmount
   useEffect(() => {
@@ -1522,7 +1563,10 @@ export default function IoSourcePickerDialog({
       if (!combinedBusMappings.has(profileId)) {
         const profile = readProfiles.find(p => p.id === profileId);
         if (profile) {
-          combinedBusMappings.set(profileId, buildDefaultBusMappings(profile));
+          combinedBusMappings.set(
+            profileId,
+            profileBusMappings(profileId, outputBusOffsets.get(profileId) ?? 0),
+          );
         }
       }
     }
@@ -1815,18 +1859,15 @@ export default function IoSourcePickerDialog({
             if (isDeviceMultiBus || probeResult?.isMultiBus) {
               let busConfig = deviceBusConfigMap.get(profileId);
               if (!busConfig && probeResult) {
-                const profileIndex = checkedSourceIds.indexOf(profileId);
-                const offset = profileIndex >= 0 ? profileIndex : 0;
-                // Use profile-aware mappings for devices with interfaces[]
-                busConfig = isDeviceMultiBus
-                  ? buildDefaultBusMappings(profile).map((m, i) => ({ ...m, outputBus: offset + i }))
-                  : createDefaultBusMappings(probeResult.busCount || 5, offset);
+                const offset = outputBusOffsets.get(profileId) ?? 0;
+                busConfig = declaredBusMappings(profileId, offset, probeResult.busCount);
               }
               busConfig = busConfig || [];
 
-              // Create GvretDeviceInfo-compatible object from probe result
+              // Counted off the rows themselves, or the "(n/m enabled)" header
+              // disagrees with what is rendered under it.
               const deviceInfo: GvretDeviceInfo | null = probeResult
-                ? { bus_count: probeResult.busCount || 5 }
+                ? { bus_count: busConfig.length }
                 : null;
 
               return (

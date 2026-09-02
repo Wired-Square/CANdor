@@ -32,7 +32,7 @@ use crate::{
     settings::{self, AppSettings, IOProfile},
 };
 #[cfg(not(target_os = "ios"))]
-use crate::io::device_kinds::{conn_f64, conn_i64, conn_str, req_str};
+use crate::io::device_kinds::{self, conn_f64, conn_i64, conn_str, req_str};
 use crate::io::probe_gvret_usb;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -365,6 +365,11 @@ fn parse_interfaces_from_profile(
     profile: &IOProfile,
     bus_override: Option<u8>,
 ) -> Option<Vec<BusMapping>> {
+    // Virtual adaptors carry their buses in the same field, shaped differently
+    if matches!(profile.kind.as_str(), "virtual") {
+        return parse_virtual_interfaces(profile, bus_override);
+    }
+
     // Only GVRET profiles have multi-bus interface configuration
     if !matches!(
         profile.kind.as_str(),
@@ -373,10 +378,15 @@ fn parse_interfaces_from_profile(
         return None;
     }
 
-    let interfaces = profile.connection.get("interfaces")?.as_array()?;
-    if interfaces.is_empty() {
-        return None;
-    }
+    let Some(interfaces) = profile
+        .connection
+        .get("interfaces")
+        .and_then(|v| v.as_array())
+        .filter(|a| !a.is_empty())
+    else {
+        // Never configured in Settings, but a probe counted the buses
+        return parse_gvret_probed_bus_count(profile, bus_override);
+    };
 
     let mappings: Vec<BusMapping> = interfaces
         .iter()
@@ -419,6 +429,170 @@ fn parse_interfaces_from_profile(
     } else {
         Some(mappings)
     }
+}
+
+/// GVRET that was probed but never configured: synthesise one CAN bus per
+/// bus the probe counted, so a 2-bus device is not treated as single-bus.
+fn parse_gvret_probed_bus_count(
+    profile: &IOProfile,
+    bus_override: Option<u8>,
+) -> Option<Vec<BusMapping>> {
+    let count = profile
+        .connection
+        .get("_probed_bus_count")
+        .and_then(|v| v.as_u64())
+        .filter(|c| *c > 0)?
+        .min(io::gvret::MAX_BUSES as u64) as u8;
+
+    let mappings = io::gvret::default_bus_mappings(count);
+    Some(match bus_override {
+        Some(offset) => offset_bus_mappings(mappings, offset),
+        None => mappings,
+    })
+}
+
+/// Virtual adaptor buses: `interfaces: [{ bus, .. }]`, else the legacy
+/// `bus_count`. Protocol comes from `traffic_type`.
+///
+/// The `bus` / `bus_count` coercions match the two other readers of this same
+/// config (`create_reader_session` and `broker::spawner::run_virtual_reader`) —
+/// the settings form writes these as strings, so a number-only parse silently
+/// yields no buses.
+fn parse_virtual_interfaces(
+    profile: &IOProfile,
+    bus_override: Option<u8>,
+) -> Option<Vec<BusMapping>> {
+    let traffic_type = conn_str(profile, "traffic_type").unwrap_or_else(|| "can".to_string());
+    let traffic_type = traffic_type.as_str();
+    let (protocols, tx_frames, tx_bytes, prefix) = match traffic_type {
+        "canfd" => (vec![Protocol::Can, Protocol::CanFd], true, false, "can"),
+        "modbus" => (vec![Protocol::Modbus], false, false, "modbus"),
+        "serial" => (vec![Protocol::Serial], false, true, "serial"),
+        _ => (vec![Protocol::Can], true, false, "can"),
+    };
+
+    let buses: Vec<u8> = match profile
+        .connection
+        .get("interfaces")
+        .and_then(|v| v.as_array())
+        .filter(|a| !a.is_empty())
+    {
+        Some(interfaces) => interfaces
+            .iter()
+            .filter_map(|item| coerce_u8(item.as_object()?.get("bus")?))
+            .collect(),
+        // Legacy profile: a bus count instead of an interface list
+        None => {
+            let (min, max) = device_kinds::VIRTUAL_BUS_COUNT_RANGE;
+            let count = (conn_i64(profile, "bus_count").unwrap_or(1) as u8).clamp(min, max);
+            (0..count).collect()
+        }
+    };
+
+    let mappings: Vec<BusMapping> = buses
+        .into_iter()
+        .enumerate()
+        .map(|(idx, device_bus)| BusMapping {
+            device_bus,
+            enabled: true,
+            output_bus: bus_override.map(|b| b + idx as u8).unwrap_or(device_bus),
+            interface_id: format!("{}{}", prefix, device_bus),
+            traits: Some(InterfaceTraits {
+                temporal_mode: TemporalMode::Realtime,
+                protocols: protocols.clone(),
+                tx_frames,
+                tx_bytes,
+                multi_source: true,
+            }),
+        })
+        .collect();
+
+    (!mappings.is_empty()).then_some(mappings)
+}
+
+/// Settings values arrive as either JSON numbers or strings, depending on
+/// which form wrote them. For whole-profile fields prefer `device_kinds::conn_*`,
+/// which also consult the kind table's declared default; this is for values
+/// inside an `interfaces[]` entry, which those helpers cannot address.
+fn coerce_u8(value: &serde_json::Value) -> Option<u8> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
+        .map(|n| n as u8)
+}
+
+/// Bus mappings every IO profile declares, keyed by profile id.
+///
+/// One round trip for the whole profile list: callers cache this and read it
+/// synchronously, so the picker and the session graph stay non-async.
+#[tauri::command(rename_all = "snake_case")]
+pub fn get_profile_bus_mappings(
+    app: tauri::AppHandle,
+) -> Result<HashMap<String, Vec<BusMapping>>, String> {
+    // Sync load deliberately: `load_settings` can *write* settings.json on its
+    // migration paths, and a read-only getter has no business doing that.
+    let settings = settings::load_settings_sync(&app)
+        .map_err(|e| format!("Failed to load settings: {}", e))?;
+
+    // Only profiles that actually declare their buses. A profile that declares
+    // nothing is omitted rather than sent as a synthetic single bus, so the
+    // caller can prefer a live probe over our guess.
+    Ok(settings
+        .io_profiles
+        .iter()
+        .filter_map(|p| Some((p.id.clone(), declared_bus_mappings(p)?)))
+        .collect())
+}
+
+/// Whether the profile itself says which buses it has.
+///
+/// A GVRET profile saved before anyone pressed Probe carries only host and
+/// port; `profile_bus_mappings` still has to answer something, and answers
+/// "one bus". That guess must not outrank a live probe that found two, so the
+/// two questions are kept separate.
+fn declares_buses(profile: &IOProfile) -> bool {
+    let has_interfaces = profile
+        .connection
+        .get("interfaces")
+        .and_then(|v| v.as_array())
+        .is_some_and(|a| !a.is_empty());
+
+    has_interfaces
+        || profile.connection.contains_key("_probed_bus_count")
+        || (profile.kind == "virtual" && profile.connection.contains_key("bus_count"))
+        || (profile.kind == "framelink" && profile.connection.contains_key("interface_index"))
+}
+
+/// The buses a profile explicitly declares, or None when it declares none.
+pub fn declared_bus_mappings(profile: &IOProfile) -> Option<Vec<BusMapping>> {
+    declares_buses(profile).then(|| profile_bus_mappings(profile))
+}
+
+/// Shift a profile's declared mappings onto a session's output bus range.
+/// Enumerators number from 0; the offset is applied once, here.
+pub fn offset_bus_mappings(mut mappings: Vec<BusMapping>, output_bus_offset: u8) -> Vec<BusMapping> {
+    if output_bus_offset == 0 {
+        return mappings;
+    }
+    for (i, m) in mappings.iter_mut().enumerate() {
+        m.output_bus = output_bus_offset + i as u8;
+    }
+    mappings
+}
+
+/// Every bus mapping a profile declares, output buses numbered densely from 0.
+///
+/// The single source of truth for "what buses does this profile have". The
+/// frontend applies its own output-bus offset on top rather than re-deriving
+/// the bus list — a second implementation there drifted out of step once and
+/// shipped a 2-bus GVRET as a single bus.
+pub fn profile_bus_mappings(profile: &IOProfile) -> Vec<BusMapping> {
+    let mut mappings = parse_interfaces_from_profile(profile, None)
+        .unwrap_or_else(|| create_default_bus_mapping(profile, None));
+    for (i, m) in mappings.iter_mut().enumerate() {
+        m.output_bus = i as u8;
+    }
+    mappings
 }
 
 /// Create default single-bus mapping for devices without interface configuration.
@@ -2132,38 +2306,15 @@ fn resolve_source_config(
     let display_name = input.display_name.unwrap_or_else(|| profile.name.clone());
     let profile_kind = profile.kind.clone();
 
-    // Determine interface traits based on profile kind
-    let (default_interface_id, default_protocols, default_tx_frames) = match profile_kind.as_str() {
-        "gvret_tcp" | "gvret-tcp" | "gvret_usb" | "gvret-usb" => {
-            ("can0".to_string(), vec![Protocol::Can, Protocol::CanFd], true)
-        }
-        "slcan" => ("can0".to_string(), vec![Protocol::Can], true),
-        "gs_usb" => ("can0".to_string(), vec![Protocol::Can, Protocol::CanFd], true),
-        "socketcan" => ("can0".to_string(), vec![Protocol::Can, Protocol::CanFd], true),
-        "modbus_tcp" => ("modbus0".to_string(), vec![Protocol::Modbus], false),
-        _ => ("can0".to_string(), vec![Protocol::Can], true),
-    };
-
-    // Use provided bus mappings, or auto-assign if none provided
+    // Use provided bus mappings, or fall back to the profile's declared buses.
+    // A lone bus-0 guess here is what dropped a multi-bus device's other buses.
     let bus_mappings = if input.bus_mappings.is_empty() {
-        let output_bus = source_idx as u8;
+        let mappings = offset_bus_mappings(profile_bus_mappings(profile), source_idx as u8);
         tlog!(
-            "[resolve_source_config] Source {} '{}' has no bus mappings, auto-assigning output bus {}",
-            source_idx, display_name, output_bus
+            "[resolve_source_config] Source {} '{}' has no bus mappings, using {} declared bus(es)",
+            source_idx, display_name, mappings.len()
         );
-        vec![BusMapping {
-            device_bus: 0,
-            enabled: true,
-            output_bus,
-            interface_id: default_interface_id,
-            traits: Some(InterfaceTraits {
-                temporal_mode: TemporalMode::Realtime,
-                protocols: default_protocols,
-                tx_frames: default_tx_frames,
-                tx_bytes: false,
-                multi_source: true,
-            }),
-        }]
+        mappings
     } else {
         input.bus_mappings
     };
@@ -2583,4 +2734,331 @@ pub fn get_session_sources(session_id: String) -> Vec<io::post_session::SourceIn
 #[tauri::command(rename_all = "snake_case")]
 pub fn get_orphaned_capture_ids(session_id: String) -> Vec<String> {
     io::post_session::get_orphaned_capture_ids(&session_id)
+}
+
+#[cfg(test)]
+mod bus_mapping_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Minimal profile — only the fields the bus enumeration reads.
+    fn profile(kind: &str, connection: serde_json::Value) -> IOProfile {
+        IOProfile {
+            id: format!("p-{}", kind),
+            name: kind.to_string(),
+            kind: kind.to_string(),
+            connection: connection
+                .as_object()
+                .expect("connection must be an object")
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            preferred_catalog: None,
+            ephemeral: false,
+        }
+    }
+
+    fn gvret(connection: serde_json::Value) -> IOProfile {
+        profile("gvret_tcp", connection)
+    }
+
+    #[test]
+    fn gvret_yields_one_mapping_per_declared_interface() {
+        let mappings = profile_bus_mappings(&gvret(json!({
+            "interfaces": [
+                { "device_bus": 0, "enabled": true, "protocol": "can" },
+                { "device_bus": 1, "enabled": true, "protocol": "canfd" },
+            ]
+        })));
+
+        assert_eq!(mappings.len(), 2);
+        assert_eq!(mappings[0].device_bus, 0);
+        assert_eq!(mappings[1].device_bus, 1);
+        assert_eq!(mappings[0].output_bus, 0);
+        assert_eq!(mappings[1].output_bus, 1);
+        assert_eq!(mappings[1].interface_id, "can1");
+        let traits = mappings[1].traits.as_ref().unwrap();
+        assert!(traits.protocols.contains(&Protocol::CanFd));
+    }
+
+    #[test]
+    fn gvret_keeps_a_profile_disabled_bus_marked_disabled() {
+        let mappings = profile_bus_mappings(&gvret(json!({
+            "interfaces": [
+                { "device_bus": 0, "enabled": true, "protocol": "can" },
+                { "device_bus": 1, "enabled": false, "protocol": "can" },
+            ]
+        })));
+
+        assert_eq!(mappings.len(), 2, "a disabled bus stays in the list");
+        assert!(mappings[0].enabled);
+        assert!(!mappings[1].enabled);
+    }
+
+    #[test]
+    fn gvret_falls_back_to_the_probed_bus_count() {
+        let mappings = profile_bus_mappings(&gvret(json!({ "_probed_bus_count": 3 })));
+        assert_eq!(mappings.len(), 3);
+        assert!(mappings.iter().all(|m| m.enabled));
+        assert_eq!(mappings[2].device_bus, 2);
+    }
+
+    #[test]
+    fn gvret_prefers_saved_interfaces_over_the_probe_count() {
+        let mappings = profile_bus_mappings(&gvret(json!({
+            "_probed_bus_count": 4,
+            "interfaces": [{ "device_bus": 0, "enabled": true, "protocol": "can" }]
+        })));
+        assert_eq!(mappings.len(), 1, "the user's saved config wins");
+    }
+
+    #[test]
+    fn never_probed_gvret_yields_a_single_bus() {
+        assert_eq!(profile_bus_mappings(&gvret(json!({}))).len(), 1);
+    }
+
+    #[test]
+    fn output_buses_stay_dense_for_sparse_device_buses() {
+        let mappings = profile_bus_mappings(&gvret(json!({
+            "interfaces": [
+                { "device_bus": 0, "enabled": true, "protocol": "can" },
+                { "device_bus": 3, "enabled": true, "protocol": "can" },
+            ]
+        })));
+        assert_eq!(mappings[1].device_bus, 3);
+        assert_eq!(mappings[1].output_bus, 1);
+    }
+
+    #[test]
+    fn framelink_types_each_interface_by_iface_type() {
+        let mappings = profile_bus_mappings(&profile("framelink", json!({
+            "interfaces": [
+                { "index": 0, "iface_type": 1 },
+                { "index": 1, "iface_type": 2 },
+                { "index": 2, "iface_type": 3 },
+            ]
+        })));
+
+        assert_eq!(mappings.len(), 3);
+        assert_eq!(mappings[2].interface_id, "serial2");
+        let serial = mappings[2].traits.as_ref().unwrap();
+        assert!(serial.tx_bytes);
+        assert!(!serial.tx_frames);
+        let fd = mappings[1].traits.as_ref().unwrap();
+        assert!(fd.protocols.contains(&Protocol::CanFd));
+    }
+
+    #[test]
+    fn virtual_yields_one_mapping_per_interface() {
+        let mappings = profile_bus_mappings(&profile("virtual", json!({
+            "traffic_type": "canfd",
+            "interfaces": [{ "bus": 0 }, { "bus": 1 }, { "bus": 2 }]
+        })));
+
+        assert_eq!(mappings.len(), 3, "virtual multi-bus must not collapse to one");
+        assert_eq!(mappings[2].device_bus, 2);
+        assert!(mappings[0].traits.as_ref().unwrap().protocols.contains(&Protocol::CanFd));
+    }
+
+    #[test]
+    fn probed_gvret_buses_advertise_can_fd_like_every_other_gvret_default() {
+        // Regression: a hand-rolled copy of default_bus_mappings dropped CanFd,
+        // so a probed device advertised less than the same device unprobed.
+        let mappings = profile_bus_mappings(&gvret(json!({ "_probed_bus_count": 2 })));
+        let traits = mappings[0].traits.as_ref().unwrap();
+        assert!(traits.protocols.contains(&Protocol::CanFd));
+    }
+
+    #[test]
+    fn virtual_accepts_a_bus_written_as_a_string() {
+        // The settings form writes these as strings; a number-only parse
+        // yielded zero buses and silently fell back to a single bus.
+        let mappings = profile_bus_mappings(&profile("virtual", json!({
+            "interfaces": [{ "bus": "0" }, { "bus": "1" }]
+        })));
+        assert_eq!(mappings.len(), 2);
+        assert_eq!(mappings[1].device_bus, 1);
+    }
+
+    #[test]
+    fn virtual_falls_back_to_the_legacy_bus_count() {
+        let mappings = profile_bus_mappings(&profile("virtual", json!({ "bus_count": "3" })));
+        assert_eq!(mappings.len(), 3);
+    }
+
+    #[test]
+    fn framelink_with_no_mappings_keeps_all_its_interfaces() {
+        // resolve_source_config used to hand FrameLink a lone bus-0 default
+        // because parse_interfaces_from_profile returns None for it.
+        let mappings = profile_bus_mappings(&profile("framelink", json!({
+            "interfaces": [{ "index": 0, "iface_type": 1 }, { "index": 1, "iface_type": 3 }]
+        })));
+        assert_eq!(mappings.len(), 2);
+    }
+
+    #[test]
+    fn offset_shifts_output_buses_and_leaves_device_buses_alone() {
+        let mappings = offset_bus_mappings(
+            profile_bus_mappings(&gvret(json!({
+                "interfaces": [
+                    { "device_bus": 0, "enabled": true, "protocol": "can" },
+                    { "device_bus": 1, "enabled": true, "protocol": "can" },
+                ]
+            }))),
+            2,
+        );
+        assert_eq!(mappings.iter().map(|m| m.output_bus).collect::<Vec<_>>(), vec![2, 3]);
+        assert_eq!(mappings.iter().map(|m| m.device_bus).collect::<Vec<_>>(), vec![0, 1]);
+    }
+
+    #[test]
+    fn a_profile_that_declares_nothing_declares_nothing() {
+        // A GVRET saved before anyone pressed Probe carries only host and port.
+        // profile_bus_mappings still has to answer, and answers "one bus" — but
+        // that guess must not reach the picker as a declaration, or it outranks
+        // a live probe that found two.
+        let bare = gvret(json!({ "host": "127.0.0.1", "port": "2323" }));
+        assert_eq!(profile_bus_mappings(&bare).len(), 1);
+        assert!(declared_bus_mappings(&bare).is_none());
+    }
+
+    #[test]
+    fn a_probed_or_configured_profile_does_declare() {
+        assert!(declared_bus_mappings(&gvret(json!({ "_probed_bus_count": 2 }))).is_some());
+        assert!(declared_bus_mappings(&gvret(json!({
+            "interfaces": [{ "device_bus": 0, "enabled": true, "protocol": "can" }]
+        }))).is_some());
+        assert!(declared_bus_mappings(&profile("virtual", json!({ "bus_count": "2" }))).is_some());
+        assert!(declared_bus_mappings(&profile("slcan", json!({}))).is_none());
+    }
+
+    #[test]
+    fn single_bus_kinds_yield_one_mapping() {
+        assert_eq!(profile_bus_mappings(&profile("slcan", json!({}))).len(), 1);
+    }
+
+    // ── session creation ────────────────────────────────────────────────────
+    // resolve_source_config is the funnel every multi-source session goes
+    // through. What it does with an *empty* bus_mappings is what silently
+    // dropped a multi-bus device's extra buses.
+
+    fn settings_with(profiles: Vec<IOProfile>) -> AppSettings {
+        let mut settings = AppSettings::default();
+        settings.io_profiles = profiles;
+        settings
+    }
+
+    fn input_for(profile_id: &str, bus_mappings: serde_json::Value) -> MultiSourceInput {
+        serde_json::from_value(json!({
+            "profile_id": profile_id,
+            "display_name": null,
+            "bus_mappings": bus_mappings,
+        }))
+        .expect("MultiSourceInput should deserialise")
+    }
+
+    fn resolve(profile: IOProfile, bus_mappings: serde_json::Value, source_idx: usize) -> SourceConfig {
+        let id = profile.id.clone();
+        let settings = settings_with(vec![profile]);
+        resolve_source_config(input_for(&id, bus_mappings), source_idx, &settings)
+            .expect("profile is present, so this resolves")
+    }
+
+    #[test]
+    fn no_mappings_falls_back_to_every_bus_the_profile_declares() {
+        let config = resolve(
+            gvret(json!({
+                "interfaces": [
+                    { "device_bus": 0, "enabled": true, "protocol": "can" },
+                    { "device_bus": 1, "enabled": true, "protocol": "can" },
+                ]
+            })),
+            json!([]),
+            0,
+        );
+
+        assert_eq!(config.bus_mappings.len(), 2, "a 2-bus device must not resolve to one bus");
+        assert_eq!(
+            config.bus_mappings.iter().map(|m| m.device_bus).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn no_mappings_keeps_framelink_interfaces_too() {
+        // Regression: this path consulted a GVRET-only parser, so FrameLink fell
+        // through to a hand-rolled single bus 0 even though its interfaces were
+        // right there in the profile.
+        let config = resolve(
+            profile("framelink", json!({
+                "interfaces": [
+                    { "index": 0, "iface_type": 1 },
+                    { "index": 1, "iface_type": 2 },
+                    { "index": 2, "iface_type": 3 },
+                ]
+            })),
+            json!([]),
+            0,
+        );
+
+        assert_eq!(config.bus_mappings.len(), 3);
+        assert_eq!(config.bus_mappings[2].interface_id, "serial2");
+    }
+
+    #[test]
+    fn a_second_source_does_not_land_on_the_first_ones_buses() {
+        let config = resolve(
+            gvret(json!({
+                "interfaces": [
+                    { "device_bus": 0, "enabled": true, "protocol": "can" },
+                    { "device_bus": 1, "enabled": true, "protocol": "can" },
+                ]
+            })),
+            json!([]),
+            1,
+        );
+
+        assert_eq!(
+            config.bus_mappings.iter().map(|m| m.output_bus).collect::<Vec<_>>(),
+            vec![1, 2],
+            "source 1 starts at output bus 1, and its second bus follows on"
+        );
+    }
+
+    #[test]
+    fn explicit_mappings_from_the_picker_win_untouched() {
+        // The picker resolves buses itself (probe included), so whatever it
+        // sends is authoritative — including a deliberate remap and a bus the
+        // user unticked for this session only.
+        let config = resolve(
+            gvret(json!({
+                "interfaces": [
+                    { "device_bus": 0, "enabled": true, "protocol": "can" },
+                    { "device_bus": 1, "enabled": true, "protocol": "can" },
+                ]
+            })),
+            json!([
+                { "device_bus": 0, "enabled": true, "output_bus": 4 },
+                { "device_bus": 1, "enabled": false, "output_bus": 5 },
+            ]),
+            0,
+        );
+
+        assert_eq!(config.bus_mappings.len(), 2);
+        assert_eq!(config.bus_mappings[0].output_bus, 4);
+        assert!(!config.bus_mappings[1].enabled);
+    }
+
+    #[test]
+    fn a_profile_that_declares_nothing_still_resolves_to_one_bus() {
+        let config = resolve(gvret(json!({ "host": "127.0.0.1", "port": "2323" })), json!([]), 0);
+        assert_eq!(config.bus_mappings.len(), 1);
+        assert_eq!(config.bus_mappings[0].device_bus, 0);
+    }
+
+    #[test]
+    fn an_unknown_profile_is_an_error_not_a_default_session() {
+        let settings = settings_with(vec![]);
+        assert!(resolve_source_config(input_for("io_missing", json!([])), 0, &settings).is_err());
+    }
 }
