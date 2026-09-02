@@ -333,16 +333,25 @@ pub struct MissingFrame {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UncataloguedFrame {
+    /// The id to add to the catalogue — masked, when the catalogue is.
     pub frame_id: u32,
     pub frame_id_hex: String,
     pub is_extended: bool,
     pub count: i64,
+    /// A raw id this was actually seen as, when that differs from `frame_id`.
+    /// Absent without a `frame_id_mask`, so an ordinary report is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seen_as_hex: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CoverageReport {
     pub catalog: String,
     pub catalog_frames: usize,
+    /// Distinct frames in the data, counted the way the catalogue counts them.
+    /// Under a `frame_id_mask` that is fewer than the ids on the wire — 292
+    /// against 583 on the SBR inter-tower bus — so it stays comparable with
+    /// `catalog_frames` and with the `uncatalogued` list beside it.
     pub data_frames: usize,
     pub present: Vec<PresentFrame>,
     pub missing: Vec<MissingFrame>,
@@ -394,6 +403,55 @@ fn frame_label(f: &wiretap_catalog::model::Frame) -> Option<String> {
     f.name.clone().or_else(|| f.transmitter.clone())
 }
 
+/// The data side of one catalogue frame: every inventory row whose id maps onto
+/// it, rolled up.
+///
+/// Without a `frame_id_mask` that is a single id, and this is the old
+/// keep-the-bigger-row rule for a std/extended pair. With one it is genuinely
+/// many — 583 raw ids collapse to 292 catalogue frames on the SBR inter-tower
+/// bus — so the counts sum and the window widens rather than one row winning.
+struct DataFrame<'a> {
+    /// The most-seen contributing row. Decides how the id renders, and supplies
+    /// the raw id payloads are sampled by — a masked catalogue frame has no id
+    /// of its own that appears in the data, so asking for the masked one samples
+    /// nothing.
+    top: &'a InventoryRow,
+    count: i64,
+    first_us: i64,
+    last_us: i64,
+}
+
+impl<'a> DataFrame<'a> {
+    fn new(row: &'a InventoryRow) -> Self {
+        Self { top: row, count: row.count, first_us: row.first_us, last_us: row.last_us }
+    }
+
+    fn merge(&mut self, row: &'a InventoryRow) {
+        self.count += row.count;
+        self.first_us = self.first_us.min(row.first_us);
+        self.last_us = self.last_us.max(row.last_us);
+        if row.count > self.top.count {
+            self.top = row;
+        }
+    }
+}
+
+/// Roll the inventory up onto the ids the catalogue is keyed by.
+///
+/// `mask` is the catalogue's `frame_id_mask`, or `u32::MAX` when it declares
+/// none — in which case this is one entry per id and the merge only ever folds a
+/// std/extended pair.
+fn roll_up(inventory: &[InventoryRow], mask: u32) -> HashMap<u32, DataFrame<'_>> {
+    let mut by_id: HashMap<u32, DataFrame> = HashMap::new();
+    for row in inventory {
+        by_id
+            .entry(row.frame_id & mask)
+            .and_modify(|d| d.merge(row))
+            .or_insert_with(|| DataFrame::new(row));
+    }
+    by_id
+}
+
 pub async fn catalog_coverage(
     app: &AppHandle,
     src: &QuerySource,
@@ -412,20 +470,17 @@ pub async fn catalog_coverage(
     let toml = crate::catalog::open_catalog(entry.path.clone()).await?;
     let catalog = wiretap_catalog::Catalog::parse(&toml).map_err(|e| e.to_string())?;
 
-    // 2. Inventory the data source.
+    // 2. Inventory the data source, keyed the way the catalogue is keyed.
+    //
+    // A catalogue may declare a `frame_id_mask` — a J1939 one strips the source
+    // address, so it names each message once and matches whichever node sent it.
+    // Diffing raw ids against a masked catalogue reports every frame missing:
+    // measured at `present=0, missing=292` on a bus the catalogue decodes in
+    // full. `decode_by_id` has always masked; this is the same rule applied to
+    // the other side of the comparison.
+    let mask = wiretap_catalog::decode::frame_id_mask(&catalog).unwrap_or(u32::MAX);
     let inventory = frame_inventory(app, src, start_time, end_time).await?;
-    let mut data_by_id: HashMap<u32, &InventoryRow> = HashMap::new();
-    for row in &inventory {
-        // Keep the highest-count row when an id appears as both std/extended.
-        data_by_id
-            .entry(row.frame_id)
-            .and_modify(|e| {
-                if row.count > e.count {
-                    *e = row;
-                }
-            })
-            .or_insert(row);
-    }
+    let data_by_id = roll_up(&inventory, mask);
 
     // 3. Diff + confidence rollup.
     let mut confidence = ConfidenceTally::default();
@@ -440,17 +495,22 @@ pub async fn catalog_coverage(
         }
 
         match data_by_id.get(&frame.frame_id) {
-            Some(row) => {
+            Some(data) => {
                 let byte_roles = if include_byte_roles {
-                    // `data_by_id` is keyed on the bare id, so this row is not
+                    // `data_by_id` is keyed on the masked id, so this row is not
                     // authoritative about protocol — asking for any keeps the
                     // roles describing the same frames the row was counted from.
+                    // Sampled by a raw id that actually occurs: under a mask the
+                    // catalogue's own id never does.
                     let payloads = fetch_payloads(
                         app,
                         src,
                         None,
-                        frame.frame_id,
-                        frame.is_extended,
+                        data.top.frame_id,
+                        // The sampled row's own answer, not the catalogue's — a
+                        // disagreement here filters out the very id being
+                        // sampled and returns nothing.
+                        Some(data.top.is_extended),
                         sample_limit,
                     )
                     .await
@@ -461,11 +521,11 @@ pub async fn catalog_coverage(
                 };
                 present.push(PresentFrame {
                     frame_id: frame.frame_id,
-                    frame_id_hex: hex_id(frame.frame_id, row.is_extended),
+                    frame_id_hex: hex_id(frame.frame_id, data.top.is_extended),
                     name: frame_label(frame),
-                    count: row.count,
-                    first_us: row.first_us,
-                    last_us: row.last_us,
+                    count: data.count,
+                    first_us: data.first_us,
+                    last_us: data.last_us,
                     signals: sigs
                         .iter()
                         .filter_map(|s| {
@@ -486,20 +546,25 @@ pub async fn catalog_coverage(
         }
     }
 
-    // 4. Data frames the catalog doesn't describe.
-    let mut uncatalogued: Vec<UncataloguedFrame> = inventory
+    // 4. Data frames the catalog doesn't describe — read off the same rollup, so
+    //    all three sections of the report count the same things. Reported by the
+    //    id you would *add to the catalogue*: under a mask, one unknown message
+    //    sent by five nodes is one missing frame, not five. The raw id rides
+    //    along so it can still be found on the wire. (The rollup already merged
+    //    the std/extended pair, so there is nothing left to de-dup.)
+    let mut uncatalogued: Vec<UncataloguedFrame> = data_by_id
         .iter()
-        .filter(|r| !catalog_ids.contains(&r.frame_id))
-        .map(|r| UncataloguedFrame {
-            frame_id: r.frame_id,
-            frame_id_hex: r.frame_id_hex.clone(),
-            is_extended: r.is_extended,
-            count: r.count,
+        .filter(|(id, _)| !catalog_ids.contains(id))
+        .map(|(id, d)| UncataloguedFrame {
+            frame_id: *id,
+            frame_id_hex: hex_id(*id, d.top.is_extended),
+            is_extended: d.top.is_extended,
+            count: d.count,
+            seen_as_hex: (d.top.frame_id != *id)
+                .then(|| hex_id(d.top.frame_id, d.top.is_extended)),
         })
         .collect();
     uncatalogued.sort_by_key(|f| f.frame_id);
-    // De-dup ids that appeared as both std + extended.
-    uncatalogued.dedup_by_key(|f| f.frame_id);
 
     Ok(CoverageReport {
         catalog: entry.name.clone(),
@@ -510,4 +575,61 @@ pub async fn catalog_coverage(
         uncatalogued,
         confidence,
     })
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+
+    fn row(frame_id: u32, count: i64, first_us: i64, last_us: i64) -> InventoryRow {
+        InventoryRow::new("can", frame_id, true, count, first_us, last_us, 8)
+    }
+
+    /// A J1939 mask strips the source address, so several ids on the wire are
+    /// one catalogue frame. Diffing raw ids reported `present=0` on a bus the
+    /// catalogue decoded in full.
+    #[test]
+    fn a_masked_catalogue_frame_rolls_up_every_id_that_maps_onto_it() {
+        let inventory = [
+            row(0x1802_FF01, 10, 500, 900),
+            row(0x1802_FF02, 30, 100, 700),
+            row(0x1802_FF03, 5, 300, 3000),
+        ];
+        let rolled = roll_up(&inventory, 0x1FFF_FF00);
+
+        assert_eq!(rolled.len(), 1, "three source addresses, one catalogue frame");
+        let data = &rolled[&0x1802_FF00];
+        assert_eq!(data.count, 45, "counts sum across contributing ids");
+        assert_eq!(data.first_us, 100, "the window starts at the earliest");
+        assert_eq!(data.last_us, 3000, "and ends at the latest");
+        assert_eq!(
+            data.top.frame_id, 0x1802_FF02,
+            "payloads sample by the most-seen raw id — the masked id is not on the wire"
+        );
+    }
+
+    /// `u32::MAX` is what a catalogue declaring no mask resolves to, and must
+    /// leave every id in its own bucket.
+    #[test]
+    fn no_mask_keeps_every_id_apart() {
+        let inventory = [row(0x1802_FF01, 10, 0, 1), row(0x1802_FF02, 30, 0, 1)];
+        assert_eq!(roll_up(&inventory, u32::MAX).len(), 2);
+    }
+
+    /// Without a mask the only merge is a std/extended pair, and the bigger row
+    /// still decides how the id renders.
+    #[test]
+    fn an_unmasked_frame_keeps_the_bigger_rows_identity() {
+        let inventory = [
+            InventoryRow::new("can", 0x100, false, 3, 10, 20, 8),
+            InventoryRow::new("can", 0x100, true, 90, 5, 50, 8),
+        ];
+        let rolled = roll_up(&inventory, u32::MAX);
+        let data = &rolled[&0x100];
+
+        assert!(data.top.is_extended, "the most-seen row decides how the id renders");
+        assert_eq!(data.count, 93);
+        assert_eq!(data.first_us, 5);
+        assert_eq!(data.last_us, 50);
+    }
 }
