@@ -14,9 +14,9 @@ import {
   hoverLight,
   roundedDefault,
 } from "../styles";
-import { getReaderProtocols, useSettings, type IOProfile } from "../hooks/useSettings";
+import { useSettings, type IOProfile } from "../hooks/useSettings";
 import { buildCatalogPath } from "../utils/catalogUtils";
-import { isMultiBusProfile } from "../utils/profileTraits";
+import { isMultiBusProfile, busProtocol } from "../utils/profileTraits";
 import { useProfileBusStore, profileBusMappings, kindSupportedProtocols } from "../stores/profileBusStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { pickCsvFilesToOpen } from "../api/dialogs";
@@ -1546,14 +1546,17 @@ export default function IoSourcePickerDialog({
     // built client-side would be discarded.
     for (const [profileId, outputBus] of singleBusOverrideMap.entries()) {
       const profile = readProfiles.find(p => p.id === profileId);
-      const protocol = (profile ? getReaderProtocols(profile.kind, profile.connection)[0] : undefined) ?? 'can';
+      const protocol = busProtocol(profile);
 
       combinedBusMappings.set(profileId, [{
         deviceBus: 0,
         enabled: true,
         outputBus,
-        interfaceId: `${protocol}0`,
-        protocol: protocol as Protocol,
+        // `can0` whether or not the bus runs FD — every other producer of an
+        // interface id spells it that way, and Session Manager carries this one
+        // forward when a bus is re-wired.
+        interfaceId: protocol === "can" || protocol === "canfd" ? "can0" : `${protocol}0`,
+        protocol,
       }]);
     }
 

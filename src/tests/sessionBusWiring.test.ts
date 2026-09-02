@@ -20,6 +20,7 @@ import {
   profileBusMappings,
   kindSupportedProtocols,
 } from "../stores/profileBusStore";
+import { busProtocol } from "../utils/profileTraits";
 import { buildSessionGraph } from "../apps/session-manager/utils/layoutUtils";
 import type { SourceNodeData } from "../apps/session-manager/nodes/SourceNode";
 import type { SessionNodeData } from "../apps/session-manager/nodes/SessionNode";
@@ -206,5 +207,44 @@ describe("buildSessionGraph — bus wiring", () => {
 
     const ids = graph.edges.map((e) => e.id);
     expect(ids).toEqual([...new Set(ids)]);
+  });
+});
+
+describe("busProtocol — the single-bus source's one protocol", () => {
+  const slcan = (connection: Record<string, unknown>): IOProfile =>
+    ({ id: "io_1", name: "CANable", kind: "slcan", connection }) as unknown as IOProfile;
+
+  it("reads CAN FD off the device's own enable_fd", () => {
+    expect(busProtocol(slcan({ enable_fd: true }))).toBe("canfd");
+  });
+
+  it("is classic CAN when FD is off", () => {
+    expect(busProtocol(slcan({ enable_fd: false }))).toBe("can");
+    expect(busProtocol(slcan({}))).toBe("can");
+  });
+
+  it("answers for a non-CAN kind too", () => {
+    const modbus = { id: "io_2", name: "PLC", kind: "modbus_tcp", connection: {} };
+    expect(busProtocol(modbus as unknown as IOProfile)).toBe("modbus");
+  });
+
+  it("falls back to CAN for a kind it has no traits for, or no profile at all", () => {
+    const unknown = { id: "io_3", name: "?", kind: undefined, connection: {} };
+    expect(busProtocol(unknown as unknown as IOProfile)).toBe("can");
+    expect(busProtocol(undefined)).toBe("can");
+  });
+
+  /// What the picker actually hands Rust for a single-bus source. The helper
+  /// being right is only half of it; the mapping has to carry the answer.
+  it("reaches the session payload as the bus's protocol", () => {
+    const mapping = {
+      deviceBus: 0,
+      enabled: true,
+      outputBus: 2,
+      interfaceId: "can0",
+      protocol: busProtocol(slcan({ enable_fd: true })),
+    };
+    expect(encodeBusMapping(mapping).protocol).toBe("canfd");
+    expect(encodeBusMapping(mapping).interface_id).toBe("can0");
   });
 });

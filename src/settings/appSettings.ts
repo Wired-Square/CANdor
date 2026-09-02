@@ -9,7 +9,7 @@
 // from here (and re-export for their existing consumers), which breaks the old
 // import cycle between them and removes the duplicated type + default definitions.
 
-import { getTraitsForKind, getProfileTraits, type Protocol } from "../utils/profileTraits";
+import { getTraitsForKind, type Protocol } from "../utils/profileTraits";
 
 // ============================================================================
 // Profile Kind Type
@@ -239,31 +239,6 @@ export type ConnectionFieldValue =
 
 /** @deprecated Use Protocol from profileTraits.ts instead */
 export type ReaderProtocol = Protocol;
-
-/**
- * Get display-friendly protocol(s) for a reader kind.
- * Delegates to getProfileTraits() for config-aware protocol detection,
- * then filters for display (e.g., shows only "CAN-FD" when FD is enabled,
- * since CAN is implied by CAN-FD).
- */
-export function getReaderProtocols(
-  kind: IOProfile["kind"],
-  connection?: IOProfile["connection"],
-): ReaderProtocol[] {
-  const traits = getProfileTraits({ id: "", name: "", kind, connection: connection ?? {} } as IOProfile);
-  if (!traits) return ["can"];
-
-  const protocols = traits.protocols.filter((p): p is ReaderProtocol =>
-    ["can", "canfd", "serial", "modbus"].includes(p),
-  );
-
-  // For display: if CAN-FD is present, omit base "can" (CAN-FD implies CAN)
-  if (protocols.includes("canfd") && protocols.includes("can")) {
-    return protocols.filter((p) => p !== "can");
-  }
-
-  return protocols.length > 0 ? protocols : ["can"];
-}
 
 /** Check if a reader kind is realtime (hardware) vs historical (replay) */
 export function isReaderRealtime(kind: IOProfile["kind"]): boolean {

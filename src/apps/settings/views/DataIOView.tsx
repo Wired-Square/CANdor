@@ -6,9 +6,9 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { iconMd } from "../../../styles/spacing";
 import type { IOProfile } from "../stores/settingsStore";
-import { getReaderProtocols, isReaderRealtime } from "../../../hooks/useSettings";
+import { isReaderRealtime } from "../../../hooks/useSettings";
 import { getIOKindLabel } from "../../../utils/ioKindLabel";
-import { protocolLabel } from "../../../utils/profileTraits";
+import { displayProtocols, protocolLabel } from "../../../utils/profileTraits";
 import { PrimaryButton } from "../../../components/forms/DialogButtons";
 import {
   h2,
@@ -315,7 +315,7 @@ export default function DataIOView({
                   </span>
 
                   {/* Protocol badge(s) */}
-                  {getReaderProtocols(profile.kind, profile.connection).map((protocol) => (
+                  {displayProtocols(profile).map((protocol) => (
                     <span
                       key={protocol}
                       className={getProtocolBadgeStyle(protocol)}

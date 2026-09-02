@@ -314,6 +314,39 @@ export function getAvailableProfileKinds(platform: Platform): ProfileKind[] {
 // ============================================================================
 
 /**
+ * The protocol a single-bus device's one bus carries.
+ *
+ * Multi-bus sources read this off the `BusMapping` Rust hands them; a single-bus
+ * source has no mapping to read, so it is derived here from the same traits.
+ *
+ * Deliberately not `getReaderProtocols(...)[0]`, which this replaced: that
+ * function drops base `"can"` whenever `"canfd"` is present *for display*, so
+ * its first element was only incidentally the right answer. A change to how the
+ * badges render would have silently downgraded every FD session to classic CAN.
+ */
+export function busProtocol(profile: IOProfile | undefined): Protocol {
+  const protocols = (profile && getProfileTraits(profile)?.protocols) || [];
+  // CAN FD subsumes CAN, so it wins when a device declares both.
+  if (protocols.includes("canfd")) return "canfd";
+  return protocols[0] ?? "can";
+}
+
+/**
+ * The protocols to *show* for a profile, as badges.
+ *
+ * Same CAN-FD-subsumes-CAN rule as `busProtocol`, applied for a different
+ * purpose: that one picks the single protocol a bus runs as, this one trims a
+ * list so a device does not advertise both CAN and CAN FD. Kept beside it
+ * because the two used to state the rule in different files, and the session
+ * path was reading the display answer.
+ */
+export function displayProtocols(profile: IOProfile): Protocol[] {
+  const protocols = getProfileTraits(profile)?.protocols ?? [];
+  if (protocols.includes("canfd")) return protocols.filter((p) => p !== "can");
+  return protocols.length > 0 ? protocols : ["can"];
+}
+
+/**
  * Check if a profile is realtime (live data source).
  */
 export function isRealtimeProfile(profile: IOProfile): boolean {
