@@ -87,7 +87,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # transports for firmware upgrade are all provided by framelink (which
 # vendors btleplug 0.12, mdns-sd, and mcumgr-smp internally — we don't
 # depend on any of them directly any more).
-framelink = { git = "ssh://git@github.com/Wired-Square/framelink-rs.git", branch = "main", features = ["discovery", "ble", "wifi-prov", "smp"] }
+# Pinned by tag, not `branch = "main"`: the tag names the wire contracts this
+# build speaks — p3 = protocol version, r2 = rule format, b1 = BLE advert schema
+# — and tracking a branch made the resolved revision arbitrary, so crate/firmware
+# drift was invisible. Move this and the sibling checkout together.
+framelink = { git = "ssh://git@github.com/Wired-Square/framelink-rs.git", tag = "v0.2.0+p3.r2.b1", features = ["discovery", "ble", "wifi-prov", "smp"] }
 # Canonical WireTAP catalogue library — parse/validate/decode/encode + DBC for
 # CAN, Serial and Modbus; shared with the ESS add-on. Pinned by tag; a local
 # `.cargo/config.toml` paths override points at a sibling checkout for the dev

@@ -2372,8 +2372,8 @@ dependencies = [
 
 [[package]]
 name = "framelink"
-version = "0.1.1"
-source = "git+ssh://git@github.com/Wired-Square/framelink-rs.git?branch=main#962688eda5a31ce4873c1ef0505ad0f1f3fb581b"
+version = "0.2.0"
+source = "git+ssh://git@github.com/Wired-Square/framelink-rs.git?tag=v0.2.0%2Bp3.r2.b1#dfb5dd517d42ee99be72212e9ad2193f0c692252"
 dependencies = [
  "async-trait",
  "btleplug",
