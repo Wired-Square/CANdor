@@ -31,6 +31,26 @@ pub enum CaptureKind {
     Bytes,
 }
 
+impl CaptureKind {
+    /// The wire spelling, as persisted and as reported to the frontend. Must match the
+    /// `rename_all` derive above, which is what serialised `CaptureMetadata` carries.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CaptureKind::Frames => "frames",
+            CaptureKind::Bytes => "bytes",
+        }
+    }
+
+    /// Inverse of `as_str`. Anything unrecognised reads as `Frames`, which is what the
+    /// persisted column has always defaulted to.
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "bytes" => CaptureKind::Bytes,
+            _ => CaptureKind::Frames,
+        }
+    }
+}
+
 /// Timestamped byte for raw serial data
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimestampedByte {
@@ -81,9 +101,26 @@ pub struct CaptureMetadata {
 // Internal Types
 // ============================================================================
 
+/// Why a session holds a capture. A session's own capture and one it merely owns are
+/// not interchangeable: ownership alone was the wrong test for "which capture is this
+/// session's", because client-side framing derives its output into session-owned
+/// captures. See docs/capture-flow.md § Registry state.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CaptureRole {
+    /// The session's own capture — the one it streams into, or replays from.
+    Stream,
+    /// Owned for cleanup only: a framing result the session derived but never wrote
+    /// to. Never answers as "the session's capture".
+    Derived,
+}
+
 /// A named capture — metadata only, data lives in SQLite.
 struct NamedCapture {
     metadata: CaptureMetadata,
+    /// Why the owning session holds it — written with `owning_session_id` and cleared
+    /// with it, so the pair cannot drift. In memory only: `hydrate_from_db` orphans
+    /// every capture, so no owner and no role survives a restart.
+    owner_role: Option<CaptureRole>,
     /// In-memory set for efficient bus tracking during streaming
     seen_buses: HashSet<u8>,
     /// Distinct frame ids per protocol seen during streaming, for a cheap O(1)
@@ -228,18 +265,24 @@ pub fn has_streaming_captures() -> bool {
 // Public API - Capture Creation & Management
 // ============================================================================
 
-/// Create a new capture and set it as active for streaming.
-/// Returns the capture ID.
-pub fn create_capture(kind: CaptureKind, name: String) -> String {
-    create_capture_internal(kind, name, true)
+/// Create a capture as `session_id`'s own — the one it streams into — and hand back
+/// its ID. It becomes the live append target; use `create_session_capture_inactive`
+/// for the byte capture beside a framed serial session's frames capture, which fills
+/// only if the source also emits raw bytes.
+pub fn create_session_capture(session_id: &str, kind: CaptureKind, name: String) -> String {
+    create_capture_internal(kind, name, true, Some((session_id, CaptureRole::Stream)))
 }
 
-/// Create a new capture WITHOUT setting it as active.
-/// Use this when creating derived captures (e.g., framing results) that shouldn't
-/// disrupt the current streaming capture.
-/// Returns the capture ID.
-pub fn create_capture_inactive(kind: CaptureKind, name: String) -> String {
-    create_capture_internal(kind, name, false)
+/// As `create_session_capture`, but not the live append target.
+pub fn create_session_capture_inactive(session_id: &str, kind: CaptureKind, name: String) -> String {
+    create_capture_internal(kind, name, false, Some((session_id, CaptureRole::Stream)))
+}
+
+/// Create a capture derived from a session's data — a framing result. Owned by the
+/// session so it is cleaned up with it, but never "the session's capture", and never
+/// the live append target.
+pub fn create_derived_capture(session_id: &str, kind: CaptureKind, name: String) -> String {
+    create_capture_internal(kind, name, false, Some((session_id, CaptureRole::Derived)))
 }
 
 /// Generate a random 6-character lowercase alphanumeric capture ID.
@@ -266,8 +309,15 @@ fn generate_capture_id(registry: &CaptureRegistry) -> String {
     }
 }
 
-/// Internal helper to create a capture with optional streaming activation.
-fn create_capture_internal(kind: CaptureKind, name: String, set_streaming: bool) -> String {
+/// Internal helper to create a capture, with optional streaming activation and an
+/// owning session. Owner and role are set as the capture is built, so it is never
+/// briefly visible as unowned and the row is written to SQLite once.
+fn create_capture_internal(
+    kind: CaptureKind,
+    name: String,
+    set_streaming: bool,
+    owner: Option<(&str, CaptureRole)>,
+) -> String {
     let mut registry = CAPTURE_REGISTRY.write().unwrap();
 
     let id = generate_capture_id(&registry);
@@ -286,12 +336,17 @@ fn create_capture_internal(kind: CaptureKind, name: String, set_streaming: bool)
         end_time_us: None,
         created_at,
         is_streaming: false,
-        owning_session_id: None,
+        owning_session_id: owner.map(|(session_id, _)| session_id.to_string()),
         persistent: false,
         buses: Vec::new(),
     };
 
-    let capture = NamedCapture { metadata: metadata.clone(), seen_buses: HashSet::new(), unique_frames: HashMap::new() };
+    let capture = NamedCapture {
+        metadata: metadata.clone(),
+        owner_role: owner.map(|(_, role)| role),
+        seen_buses: HashSet::new(),
+        unique_frames: HashMap::new(),
+    };
     registry.captures.insert(id.clone(), capture);
 
     if set_streaming {
@@ -307,8 +362,8 @@ fn create_capture_internal(kind: CaptureKind, name: String, set_streaming: bool)
     }
 
     tlog!(
-        "[CaptureStore] Created capture '{}' ({:?}) - '{}' [streaming={}]",
-        id, kind, name, set_streaming
+        "[CaptureStore] Created capture '{}' ({:?}) - '{}' [streaming={}, owner={:?}]",
+        id, kind, name, set_streaming, owner
     );
 
     id
@@ -544,6 +599,7 @@ pub fn hydrate_from_db() {
                 buses: buses.clone(),
                 ..meta
             },
+            owner_role: None, // no owner, so no role
             seen_buses,
             unique_frames: HashMap::new(),
         };
@@ -564,16 +620,23 @@ pub fn hydrate_from_db() {
 // Public API - Session Ownership
 // ============================================================================
 
-/// Assign a capture to a session.
-/// The capture will only be accessible through this session until orphaned.
-pub fn set_capture_owner(capture_id: &str, session_id: &str) -> Result<(), String> {
+/// Assign an existing capture to a session — it is only reachable through this session
+/// until orphaned. `role` says whether it is the session's own (a replay source binding
+/// the capture it plays back) or merely derived from it; the role is required precisely
+/// so the choice cannot be made by omission.
+pub fn set_capture_owner(
+    capture_id: &str,
+    session_id: &str,
+    role: CaptureRole,
+) -> Result<(), String> {
     let meta = {
         let mut registry = CAPTURE_REGISTRY.write().unwrap();
         if let Some(cap) = registry.captures.get_mut(capture_id) {
             cap.metadata.owning_session_id = Some(session_id.to_string());
+            cap.owner_role = Some(role);
             tlog!(
-                "[CaptureStore] Assigned capture '{}' to session '{}'",
-                capture_id, session_id
+                "[CaptureStore] Assigned capture '{}' to session '{}' as {:?}",
+                capture_id, session_id, role
             );
             Some(cap.metadata.clone())
         } else {
@@ -613,6 +676,7 @@ pub fn orphan_captures_for_session(session_id: &str) -> Vec<OrphanedCaptureInfo>
         for cap in registry.captures.values_mut() {
             if cap.metadata.owning_session_id.as_deref() == Some(session_id) {
                 cap.metadata.owning_session_id = None;
+                cap.owner_role = None;
                 orphaned.push(OrphanedCaptureInfo {
                     capture_id: cap.metadata.id.clone(),
                     name: cap.metadata.name.clone(),
@@ -645,17 +709,6 @@ pub fn orphan_captures_for_session(session_id: &str) -> Vec<OrphanedCaptureInfo>
     orphaned
 }
 
-/// Get all capture IDs owned by a session (frames + bytes).
-pub fn get_session_capture_ids(session_id: &str) -> Vec<String> {
-    let registry = CAPTURE_REGISTRY.read().unwrap();
-    registry
-        .captures
-        .values()
-        .filter(|b| b.metadata.owning_session_id.as_deref() == Some(session_id))
-        .map(|b| b.metadata.id.clone())
-        .collect()
-}
-
 /// Next unique "{base}_{n}" capture name — n is the highest existing such suffix + 1.
 /// Gives each per-app "Leave session" snapshot a distinct, sortable name.
 pub fn next_indexed_name(base: &str) -> String {
@@ -675,16 +728,34 @@ pub fn next_indexed_name(base: &str) -> String {
     format!("{}_{}", base, max_n + 1)
 }
 
-/// The capture of `kind` owned by `session_id`, if one exists. A session owns at most
-/// one of each kind, so this identifies it uniquely.
+/// Whether this capture is `session_id`'s own — owned by it *and* held as a stream
+/// target rather than as a derived result. Ownership alone is the wrong test: a raw
+/// serial session owns the Frames capture client-side framing derived from its bytes,
+/// but never streamed a frame into it. See docs/capture-flow.md § Registry state.
+fn is_session_stream(capture: &NamedCapture, session_id: &str) -> bool {
+    capture.metadata.owning_session_id.as_deref() == Some(session_id)
+        && capture.owner_role == Some(CaptureRole::Stream)
+}
+
+/// Whether `capture_id` is a capture derived from `session_id`'s data rather than the
+/// session's own. Framing may clear and refill one of these; doing that to the
+/// session's own capture would destroy what it is still recording.
+pub fn is_derived_capture(capture_id: &str, session_id: &str) -> bool {
+    CAPTURE_REGISTRY.read().unwrap().captures.get(capture_id).is_some_and(|c| {
+        c.metadata.owning_session_id.as_deref() == Some(session_id)
+            && c.owner_role == Some(CaptureRole::Derived)
+    })
+}
+
+/// The capture of `kind` that `session_id` streams into, if one exists. A session has
+/// at most one of each kind, so this identifies it uniquely.
 fn session_capture_id(session_id: &str, kind: CaptureKind) -> Option<String> {
-    let registry = CAPTURE_REGISTRY.read().unwrap();
-    registry
+    CAPTURE_REGISTRY
+        .read()
+        .unwrap()
         .captures
         .values()
-        .find(|b| {
-            b.metadata.owning_session_id.as_deref() == Some(session_id) && b.metadata.kind == kind
-        })
+        .find(|b| is_session_stream(b, session_id) && b.metadata.kind == kind)
         .map(|b| b.metadata.id.clone())
 }
 
@@ -698,23 +769,23 @@ pub fn get_session_bytes_capture_id(session_id: &str) -> Option<String> {
     session_capture_id(session_id, CaptureKind::Bytes)
 }
 
-/// The frame capture a session is actively streaming into, if any.
-///
-/// Narrower than `get_session_frame_capture_id`: a session also owns captures it never
-/// streamed into, so ownership alone is the wrong test for "this session's capture".
-/// See docs/capture-flow.md § Registry state. Only meaningful before `stop()`, which
-/// finalises the captures out of `streaming_ids`.
-pub fn get_session_streaming_frame_capture_id(session_id: &str) -> Option<String> {
+/// The session's own capture and its kind, frames first. A session that streams both
+/// (framed serial with raw bytes alongside) is a frames session; one that streams only
+/// bytes reports bytes, which is what tells a joining app it is looking at a serial
+/// link rather than a CAN one.
+pub fn get_session_capture(session_id: &str) -> Option<(String, CaptureKind)> {
     let registry = CAPTURE_REGISTRY.read().unwrap();
-    registry
-        .captures
-        .values()
-        .find(|b| {
-            b.metadata.owning_session_id.as_deref() == Some(session_id)
-                && b.metadata.kind == CaptureKind::Frames
-                && registry.streaming_ids.contains(&b.metadata.id)
-        })
-        .map(|b| b.metadata.id.clone())
+    let mut bytes = None;
+    for capture in registry.captures.values() {
+        if !is_session_stream(capture, session_id) {
+            continue;
+        }
+        match capture.metadata.kind {
+            CaptureKind::Frames => return Some((capture.metadata.id.clone(), CaptureKind::Frames)),
+            CaptureKind::Bytes => bytes = Some(capture.metadata.id.clone()),
+        }
+    }
+    bytes.map(|id| (id, CaptureKind::Bytes))
 }
 
 /// Append frames to this session's frame capture.
@@ -845,7 +916,13 @@ pub fn copy_capture(source_capture_id: &str, new_name: String) -> Result<String,
         };
 
         let seen_buses: HashSet<u8> = source_metadata.buses.iter().copied().collect();
-        let entry = NamedCapture { metadata: metadata.clone(), seen_buses, unique_frames: HashMap::new() };
+        // A snapshot belongs to nobody — it is handed to a detaching app to review.
+        let entry = NamedCapture {
+            metadata: metadata.clone(),
+            owner_role: None,
+            seen_buses,
+            unique_frames: HashMap::new(),
+        };
         registry.captures.insert(id.clone(), entry);
         (id, metadata)
     };
@@ -1360,27 +1437,69 @@ mod tests {
     #[test]
     fn a_derived_frame_capture_is_not_the_session_stream_target() {
         let session = "test_session_streaming_only";
-        let streamed = create_capture(CaptureKind::Bytes, "raw serial".to_string());
-        let derived = create_capture_inactive(CaptureKind::Frames, "Framed from raw".to_string());
-        set_capture_owner(&streamed, session).unwrap();
-        set_capture_owner(&derived, session).unwrap();
+        let streamed = create_session_capture(session, CaptureKind::Bytes, "raw serial".into());
+        let derived = create_derived_capture(session, CaptureKind::Frames, "Framed from raw".into());
 
-        // Ownership finds it; streaming does not. That difference is the whole fix.
-        assert_eq!(get_session_frame_capture_id(session), Some(derived));
-        assert_eq!(get_session_streaming_frame_capture_id(session), None);
+        assert_eq!(get_session_frame_capture_id(session), None);
+        assert_eq!(get_session_capture(session), Some((streamed, CaptureKind::Bytes)));
+        // ...and framing may refill that one, having not been told it is the session's.
+        assert!(is_derived_capture(&derived, session));
     }
 
-    /// Once the session stops, its captures are finalised out of the streaming set, so
-    /// the lookup must be made before stopping rather than after.
+    /// The role outlives the streaming set, so the answer does not change under the
+    /// caller when a session stops — which is what forced `stop_and_switch_to_capture`
+    /// to read the capture before `stop()` and made the ordering load-bearing.
     #[test]
-    fn finalising_clears_the_streaming_frame_capture() {
+    fn stopping_does_not_change_the_session_capture() {
         let session = "test_session_finalise";
-        let streamed = create_capture(CaptureKind::Frames, "can".to_string());
-        set_capture_owner(&streamed, session).unwrap();
-        assert_eq!(get_session_streaming_frame_capture_id(session), Some(streamed));
+        let streamed = create_session_capture(session, CaptureKind::Frames, "can".into());
+        assert_eq!(get_session_frame_capture_id(session), Some(streamed.clone()));
 
         finalize_session_captures(session);
 
-        assert_eq!(get_session_streaming_frame_capture_id(session), None);
+        assert_eq!(get_session_frame_capture_id(session), Some(streamed));
+    }
+
+    /// A replay session adopts an orphaned capture it did not create. Owning it is not
+    /// enough — without the Stream role it would still answer None and WS dispatch
+    /// would send nothing.
+    #[test]
+    fn an_adopted_capture_becomes_the_session_capture() {
+        let recorder = "test_session_recorder";
+        let replay = "test_session_adopt";
+        let existing = create_session_capture(recorder, CaptureKind::Frames, "recording".into());
+        orphan_captures_for_session(recorder);
+        assert_eq!(get_session_frame_capture_id(replay), None);
+
+        set_capture_owner(&existing, replay, CaptureRole::Stream).unwrap();
+
+        assert_eq!(get_session_frame_capture_id(replay), Some(existing));
+    }
+
+    /// Orphaning clears the role with the owner, so a capture re-owned as a derived
+    /// result cannot inherit a stale claim from the session that streamed it.
+    #[test]
+    fn orphaning_releases_the_role_with_the_owner() {
+        let first = "test_session_first";
+        let second = "test_session_second";
+        let capture = create_session_capture(first, CaptureKind::Frames, "can".into());
+        orphan_captures_for_session(first);
+
+        set_capture_owner(&capture, second, CaptureRole::Derived).unwrap();
+
+        assert_eq!(get_session_frame_capture_id(second), None);
+        assert!(is_derived_capture(&capture, second));
+    }
+
+    /// Framed serial streams both kinds; frames is the session's identity, and the
+    /// byte capture beside it must not be reported as the thing a joiner renders.
+    #[test]
+    fn frames_win_over_bytes_for_a_session_that_streams_both() {
+        let session = "test_session_both";
+        let frames = create_session_capture(session, CaptureKind::Frames, "framed".into());
+        let bytes = create_session_capture_inactive(session, CaptureKind::Bytes, "raw".into());
+
+        assert_eq!(get_session_capture(session), Some((frames, CaptureKind::Frames)));
+        assert_eq!(get_session_bytes_capture_id(session), Some(bytes));
     }
 }

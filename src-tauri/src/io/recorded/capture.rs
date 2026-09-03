@@ -16,6 +16,9 @@ use super::base::{PlaybackControl, RecordedSourceState};
 use crate::io::{emit_session_error, post_session, signal_frames_ready, signal_playback_position, FrameMessage, IOCapabilities, IOSource, IOState, PlaybackPosition, SignalThrottle, TemporalMode};
 use crate::{capture_db, capture_store};
 
+/// `source_type()` for a session replaying a capture.
+pub const CAPTURE_SOURCE_TYPE: &str = "capture";
+
 /// Sentinel value meaning "no seek requested"
 const NO_SEEK: i64 = i64::MIN;
 /// Sentinel value meaning "no frame seek requested"
@@ -45,14 +48,18 @@ impl CaptureSource {
             .map(|m| m.buses)
             .unwrap_or_default();
 
-        // Bind the capture to this session so WS frame dispatch
+        // Claim the capture as this session's own so WS frame dispatch
         // (send_new_frames) can locate it via get_session_frame_capture_id.
         // Without this, no FrameData is broadcast and apps that rely on the
         // onFrames callback (Decoder, etc.) see nothing while playback runs.
         // Ownership is released by orphan_captures_for_session on session destroy.
-        if let Err(e) = capture_store::set_capture_owner(&capture_id, &session_id) {
+        if let Err(e) = capture_store::set_capture_owner(
+            &capture_id,
+            &session_id,
+            capture_store::CaptureRole::Stream,
+        ) {
             tlog!(
-                "[CaptureSource] Failed to set capture owner for '{}' on session '{}': {}",
+                "[CaptureSource] Failed to claim capture '{}' for session '{}': {}",
                 capture_id, session_id, e
             );
         }
@@ -181,7 +188,7 @@ impl IOSource for CaptureSource {
     }
 
     fn source_type(&self) -> &'static str {
-        "capture"
+        CAPTURE_SOURCE_TYPE
     }
 }
 
@@ -803,7 +810,7 @@ async fn run_capture_stream(
         reason: "paused".to_string(),
         capture_available: true,
         capture_id: Some(buf_id.clone()),
-        capture_kind: Some("frames".to_string()),
+        capture_kind: Some(capture_store::CaptureKind::Frames.as_str().to_string()),
         count: frame_count,
         time_range: None,
     };
@@ -866,7 +873,7 @@ async fn run_capture_stream(
                 reason: "paused".to_string(),
                 capture_available: true,
                 capture_id: Some(buf_id.clone()),
-                capture_kind: Some("frames".to_string()),
+                capture_kind: Some(capture_store::CaptureKind::Frames.as_str().to_string()),
                 count: frame_count,
                 time_range: None,
             };

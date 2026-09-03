@@ -73,8 +73,7 @@ impl IOSource for BackendApiSource {
 
         // Create capture synchronously before spawning (recorded sources create theirs in start())
         let _orphaned = capture_store::orphan_captures_for_session(&session_id);
-        let capture_id = capture_store::create_capture(CaptureKind::Frames, session_id.clone());
-        let _ = capture_store::set_capture_owner(&capture_id, &session_id);
+        capture_store::create_session_capture(&session_id, CaptureKind::Frames, session_id.clone());
         emit_capture_changed(&session_id);
 
         let config = self.config.clone();

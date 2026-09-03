@@ -5,6 +5,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type { ProtocolFrames } from "../utils/frameKey";
+import type { CaptureKind } from "./capture";
 import type { ModbusPollGroup } from "./catalog";
 import type { SerialFrameConfig } from "../utils/frameExport";
 
@@ -1370,6 +1371,8 @@ export interface ActiveSessionInfo {
   sourceProfileIds: string[];
   /** Capture ID owned by this session (if any) */
   captureId: string | null;
+  /** Kind of the capture named by `captureId` — travels with the id so the two cannot desync */
+  captureKind: CaptureKind | null;
   /** Frame count in the owned capture */
   captureFrameCount: number | null;
   /** Distinct (bus, frame_id) count in the owned capture (live streaming only) */
@@ -1404,6 +1407,7 @@ export async function listActiveSessions(): Promise<ActiveSessionInfo[]> {
     }> | null;
     source_profile_ids: string[];
     capture_id: string | null;
+    capture_kind: CaptureKind | null;
     capture_frame_count: number | null;
     capture_unique_frame_count: number | null;
     is_streaming: boolean;
@@ -1424,6 +1428,7 @@ export async function listActiveSessions(): Promise<ActiveSessionInfo[]> {
     })) ?? null,
     sourceProfileIds: s.source_profile_ids ?? [],
     captureId: s.capture_id ?? null,
+    captureKind: s.capture_kind ?? null,
     captureFrameCount: s.capture_frame_count ?? null,
     captureUniqueFrameCount: s.capture_unique_frame_count ?? null,
     isStreaming: s.is_streaming ?? false,

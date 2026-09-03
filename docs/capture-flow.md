@@ -59,32 +59,50 @@ own `b_`-prefixed session ID (see
 
 ```rust
 struct CaptureRegistry {
-    buffers: HashMap<String, NamedCapture>,
-    streaming_ids: HashSet<String>,   // receiving appends from a live source
-    active_ids:    HashSet<String>,   // being rendered by a UI panel
+    captures: HashMap<String, NamedCapture>,  // each holds an Option<CaptureRole>
+    streaming_ids: HashSet<String>, // receiving appends from a live source
+    active_ids:    HashSet<String>, // being rendered by a UI panel
     ...
 }
 ```
 
-`streaming_ids` and `active_ids` are **independent** sets:
+The two sets are **independent**:
 
 - A capture in `streaming_ids` is the write target of a currently-running
   source. `is_streaming` on `CaptureMetadata` is computed from this set.
 - A capture in `active_ids` is currently visible in a UI panel. Marking a
   capture active is a pure UI concern and does not affect writing.
 
-A capture can be in both sets (live capture being rendered), either one, or
-neither (e.g. an orphaned capture that nothing is viewing).
+A capture can be in both (a live capture being rendered), either, or neither
+(e.g. an orphaned capture that nothing is viewing).
 
 **A session owns captures it never streamed into.** `apply_framing_to_capture`
 derives a `Frames` capture from a `Bytes` one and assigns it to the session so it
-is cleaned up with it, but creates it *inactive* — it is a result, not a write
-target. Anything asking "what is this session's capture?" must therefore go
-through `get_session_streaming_capture_ids`, not `get_session_capture_ids`:
-choosing by ownership alone picks the derived capture, and a raw serial session
-then looks like a frames session the moment client-side framing runs. That is
-what `stop_and_switch_to_capture` does before stopping the source — after
-`stop()` the captures are finalised and `streaming_ids` is empty.
+is cleaned up with it, but it is a result, not a write target. So ownership alone
+cannot answer "what is this session's capture?": choosing by it picks the derived
+capture, and a raw serial session looks like a frames session the moment
+client-side framing runs.
+
+`CaptureRole` is what separates the two. It sits on `NamedCapture` beside
+`owning_session_id`, is written whenever an owner is written, and is cleared with
+it by `orphan_captures_for_session` — the two are one relation, so they cannot
+drift, and a re-owned capture cannot inherit a stale claim:
+
+- `CaptureRole::Stream` — the session's own: it streams into this capture, or
+  replays from it.
+- `CaptureRole::Derived` — owned for cleanup only, never "the session's capture".
+  Framing results. `is_derived_capture` is also what lets framing refill its own
+  previous output without ever clearing a capture a session is recording into.
+
+Every session-scoped lookup filters on the role, so callers get the right answer
+without knowing any of this — `get_session_frame_capture_id`,
+`get_session_bytes_capture_id` and `get_session_capture` (frames first, with the
+kind, for a caller that just wants "the session's capture"). The role outlives
+`stop()`, unlike `streaming_ids`, so the answer no longer changes under a caller
+when the session stops.
+
+The role is in memory only: `hydrate_from_db` orphans every capture on startup,
+so no owner — and no role — survives a restart.
 
 This split replaced the old `Option<String>` globals that caused cross-session
 contamination when two sessions ran concurrently (see git commit `a320fb8`).
@@ -101,22 +119,25 @@ capture-ID calls exist for queries and pagination.
 
 | Function | Purpose |
 |----------|---------|
-| `create_capture(kind, name)` | Create and add to `streaming_ids`. Returns new `capture_id`. |
-| `create_capture_inactive(kind, name)` | Create without adding to `streaming_ids` (e.g. framing-derived captures). |
+| `create_session_capture(session_id, kind, name)` | Create as the session's own (`Stream`) and add to `streaming_ids`. Returns the new `capture_id`. |
+| `create_session_capture_inactive(session_id, kind, name)` | Same, without adding to `streaming_ids` (the bytes capture beside a framed serial session's frames capture). |
+| `create_derived_capture(session_id, kind, name)` | Create as a `Derived` result of the session — owned for cleanup, never the session's own, never a write target. |
 
-After creation the caller must `set_capture_owner(capture_id, session_id)`.
-`create_capture` no longer touches `active_ids` — starting a capture never
-hijacks the user's view.
+Every capture is created with its owner and role already set, so there is no
+window in which one is visible without the other, and the SQLite row is written
+once. Creation never touches `active_ids` — starting a capture never hijacks the
+user's view.
 
 ### Session ownership
 
 | Function | Purpose |
 |----------|---------|
-| `set_capture_owner(capture_id, session_id)` | Assign a capture to a session; persists metadata. |
-| `orphan_captures_for_session(session_id)` | Clear ownership on every capture the session owns, return `OrphanedCaptureInfo` list. |
-| `get_session_capture_ids(session_id)` | Every capture currently owned by this session (frames + bytes). |
-| `get_session_frame_capture_id(session_id)` | Convenience: the session's frames capture, if any. |
+| `set_capture_owner(capture_id, session_id, role)` | Assign an existing capture. `role` is required, so the Stream/Derived choice cannot be made by omission. Used by `CaptureSource` to adopt what it replays. |
+| `orphan_captures_for_session(session_id)` | Clear ownership **and role** on every capture the session owns, return `OrphanedCaptureInfo` list. |
+| `get_session_frame_capture_id(session_id)` | The session's frames capture, if any. |
 | `get_session_bytes_capture_id(session_id)` | Same, for the session's bytes capture. |
+| `get_session_capture(session_id)` | The session's capture and its kind, frames first — for callers that report one capture, so id and kind cannot desync. |
+| `is_derived_capture(capture_id, session_id)` | Whether framing may clear and refill this capture. |
 
 ### Data writes (session-scoped)
 
@@ -162,8 +183,7 @@ through the streaming loop.
 ```
 Source task starts (e.g. gs_usb, multi_source)
      │
-     ├─ create_capture(Frames, session_name) → new capture_id
-     ├─ set_capture_owner(capture_id, session_id)
+     ├─ create_session_capture(session_id, Frames, session_name) → new capture_id
      │  (for dual-stream sessions, also create a Bytes capture)
      │
      ▼
@@ -181,22 +201,20 @@ On stop (device.stop() or stream end):
 ```
 
 `finalize_session_captures` is idempotent — calling it on a session whose
-captures are already finalised returns an empty vec. This is critical for the
-stop-and-switch path below, where `device.stop()` indirectly finalises the
-capture before the caller calls `get_session_capture_ids`.
+captures are already finalised returns an empty vec.
 
 Call sites: [io/mod.rs:1160](../src-tauri/src/io/mod.rs#L1160) (`emit_stream_ended`).
 
 ### Stop-and-switch to capture replay
 
 ```
-stop_and_switch_to_buffer(session_id, speed)
+stop_and_switch_to_capture(session_id, speed)
+     │
+     ├─ get_session_frame_capture_id(session_id)
+     │      └─ must precede the orphan below, which releases ownership
      │
      ├─ session.source.stop()              // triggers emit_stream_ended
      │      └─ finalize_session_captures   // capture now finalised & persisted
-     │
-     ├─ get_session_capture_ids(session_id)
-     │      └─ pick the one with CaptureKind::Frames
      │
      ├─ mark_capture_active(capture_id)
      │
@@ -253,7 +271,7 @@ reopening the finalised one.
 create_modbus_scan_session(session_id, job)   // creates the session STOPPED
   └─ (frontend subscribes / joins)
        └─ start_reader_session(session_id)
-            ├─ create_capture(Frames, session_id) + set_capture_owner
+            ├─ create_session_capture(session_id, Frames, session_id)
             ├─ sweep → append_frames_to_session + throttled signal_frames_ready
             └─ emit_stream_ended(session_id, "complete"|"cancelled"|"stopped")
                  └─ finalize_session_captures
@@ -297,15 +315,15 @@ Imports are session-scoped end-to-end. The Tauri command accepts a
 Each import follows the same pattern:
 
 ```rust
-let capture_id = capture_store::create_capture(CaptureKind::Frames, name);
-capture_store::set_capture_owner(&capture_id, &session_id)?;
+capture_store::create_session_capture(&session_id, CaptureKind::Frames, name);
 capture_store::append_frames_to_session(&session_id, frames);
 capture_store::finalize_session_captures(&session_id);
 ```
 
-`apply_framing_to_capture` additionally reads the source byte capture via
-`get_session_capture_ids` and assigns the derived frame capture to the same
-session.
+`apply_framing_to_capture` reads the source byte capture via
+`get_session_bytes_capture_id` and makes its output with `create_derived_capture`
+— owned for cleanup, never mistaken for the session's own, and the only kind of
+capture it will clear and refill on a re-frame.
 
 ---
 

@@ -169,11 +169,7 @@ mod desktop {
         tlog!("[framing] apply_framing_to_capture called with min_length={:?}", config.min_length);
 
         // Get session's byte capture
-        let capture_id = capture_store::get_session_capture_ids(&session_id)
-            .into_iter()
-            .find(|id| capture_store::get_capture_metadata(id)
-                .map(|m| m.kind == capture_store::CaptureKind::Bytes)
-                .unwrap_or(false))
+        let capture_id = capture_store::get_session_bytes_capture_id(&session_id)
             .ok_or_else(|| "No byte capture found for session".to_string())?;
 
         let bytes = capture_store::get_capture_bytes(&capture_id)
@@ -307,37 +303,36 @@ mod desktop {
             return Err("No frames extracted".to_string());
         }
 
-        // Reuse existing capture if provided and valid, otherwise create a new one.
-        // This avoids capture proliferation during live streaming.
-        let target_capture_id = if let Some(ref existing_id) = reuse_capture_id {
-            if capture_store::get_capture_kind(existing_id) == Some(capture_store::CaptureKind::Frames) {
+        // Reuse the previous framing result if there is one, otherwise derive a new
+        // capture. This avoids capture proliferation during live streaming. Only a
+        // *derived* capture may be reused: clearing and refilling the session's own
+        // capture would destroy the data it is still recording.
+        let reusable = reuse_capture_id.as_ref().filter(|id| {
+            capture_store::get_capture_kind(id) == Some(capture_store::CaptureKind::Frames)
+                && capture_store::is_derived_capture(id, &session_id)
+        });
+        let target_capture_id = match reusable {
+            Some(existing_id) => {
                 capture_store::clear_and_refill_capture(existing_id, frame_messages);
                 existing_id.clone()
-            } else {
-                let new_id = capture_store::create_capture_inactive(
+            }
+            None => {
+                let new_id = capture_store::create_derived_capture(
+                    &session_id,
                     capture_store::CaptureKind::Frames,
                     format!("Framed from {}", capture_id),
                 );
-                let _ = capture_store::set_capture_owner(&new_id, &session_id);
                 capture_store::append_frames_to_capture(&new_id, frame_messages);
                 new_id
             }
-        } else {
-            let new_id = capture_store::create_capture_inactive(
-                capture_store::CaptureKind::Frames,
-                format!("Framed from {}", capture_id),
-            );
-            let _ = capture_store::set_capture_owner(&new_id, &session_id);
-            capture_store::append_frames_to_capture(&new_id, frame_messages);
-            new_id
         };
 
         let filtered_capture_id = if !filtered_messages.is_empty() {
-            let filtered_id = capture_store::create_capture_inactive(
+            let filtered_id = capture_store::create_derived_capture(
+                &session_id,
                 capture_store::CaptureKind::Frames,
                 format!("Filtered from {}", capture_id),
             );
-            let _ = capture_store::set_capture_owner(&filtered_id, &session_id);
             capture_store::append_frames_to_capture(&filtered_id, filtered_messages);
             Some(filtered_id)
         } else {

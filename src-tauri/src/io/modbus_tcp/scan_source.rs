@@ -174,8 +174,7 @@ impl IOSource for ModbusScanSource {
         self.state = IOState::Starting;
         self.cancel_flag.store(false, Ordering::Relaxed);
 
-        let capture_id = capture_store::create_capture(CaptureKind::Frames, self.session_id.clone());
-        let _ = capture_store::set_capture_owner(&capture_id, &self.session_id);
+        capture_store::create_session_capture(&self.session_id, CaptureKind::Frames, self.session_id.clone());
 
         let endpoint = self.job.endpoint();
         register_scan(&self.session_id, &endpoint);

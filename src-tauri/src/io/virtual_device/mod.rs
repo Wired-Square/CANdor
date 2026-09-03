@@ -215,8 +215,7 @@ impl IOSource for VirtualSource {
             VirtualTrafficType::Serial => CaptureKind::Bytes,
             _ => CaptureKind::Frames,
         };
-        let capture_id = capture_store::create_capture(kind, self.session_id.clone());
-        let _ = capture_store::set_capture_owner(&capture_id, &self.session_id);
+        capture_store::create_session_capture(&self.session_id, kind, self.session_id.clone());
 
         let traffic_type_name = match self.config.traffic_type {
             VirtualTrafficType::Can => "CAN",

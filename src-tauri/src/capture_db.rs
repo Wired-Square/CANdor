@@ -1633,10 +1633,7 @@ pub fn save_capture_metadata(meta: &CaptureMetadata) -> Result<(), String> {
     let guard = DB.lock().unwrap();
     let conn = guard.as_ref().ok_or("Database not initialised")?;
 
-    let kind_str = match &meta.kind {
-        CaptureKind::Frames => "frames",
-        CaptureKind::Bytes => "bytes",
-    };
+    let kind_str = meta.kind.as_str();
 
     let buses_json = serde_json::to_string(&meta.buses).unwrap_or_else(|_| "[]".to_string());
 
@@ -1673,11 +1670,7 @@ pub fn load_all_capture_metadata() -> Result<Vec<CaptureMetadata>, String> {
     let rows = stmt
         .query_map([], |row| {
             let kind_str: String = row.get("capture_kind")?;
-            let kind = if kind_str == "bytes" {
-                CaptureKind::Bytes
-            } else {
-                CaptureKind::Frames
-            };
+            let kind = CaptureKind::from_str(&kind_str);
 
             let buses_json: String = row.get::<_, String>("buses").unwrap_or_else(|_| "[]".to_string());
             let buses: Vec<u8> = serde_json::from_str(&buses_json).unwrap_or_default();

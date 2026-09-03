@@ -75,6 +75,26 @@ describe("reconcileKnownSessions", () => {
     expect(next.f_mcp1).toBe(owned); // stable identity — avoids needless re-renders
   });
 
+  const withCapture = (sessionId: string, id: string, kind: "frames" | "bytes") =>
+    ({ ...info(sessionId), captureId: id, captureKind: kind }) as ActiveSessionInfo;
+
+  // The roster used to report an id with no kind, so a raw serial session was adopted
+  // as `kind: null` and read as frames. Kind now travels with the id.
+  it("adopts the capture kind alongside the id", () => {
+    const next = reconcileKnownSessions({}, [withCapture("b_serial", "xk9m2p", "bytes")]);
+    expect(next.b_serial.capture.id).toBe("xk9m2p");
+    expect(next.b_serial.capture.kind).toBe("bytes");
+  });
+
+  it("refreshes the capture kind on an entry already in the store", () => {
+    const owned = ownedSession({ ioState: "running", subscriberCount: 1, capabilities: caps });
+    const next = reconcileKnownSessions({ f_mcp1: owned }, [
+      withCapture("f_mcp1", "xk9m2p", "bytes"),
+    ]);
+    expect(next.f_mcp1).not.toBe(owned);
+    expect(next.f_mcp1.capture.kind).toBe("bytes");
+  });
+
   it("removes an external entry that vanished from the roster", () => {
     const adopted = reconcileKnownSessions({}, [info("f_mcp1")]);
     const next = reconcileKnownSessions(adopted, []);

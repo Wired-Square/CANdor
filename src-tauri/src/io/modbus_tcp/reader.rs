@@ -187,8 +187,7 @@ impl IOSource for ModbusTcpSource {
         let ctx: Arc<Mutex<client::Context>> = Arc::new(Mutex::new(ctx));
 
         // Create frame capture
-        let capture_id = capture_store::create_capture(CaptureKind::Frames, self.session_id.clone());
-        let _ = capture_store::set_capture_owner(&capture_id, &self.session_id);
+        capture_store::create_session_capture(&self.session_id, CaptureKind::Frames, self.session_id.clone());
 
         // Emit connected event
         let address = format!("{}:{}", self.config.host, self.config.port);

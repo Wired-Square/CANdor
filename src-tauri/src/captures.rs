@@ -68,8 +68,7 @@ pub async fn import_csv_to_capture(session_id: String, file_path: String) -> Res
         return Err("CSV file contains no valid frames".to_string());
     }
 
-    let capture_id = capture_store::create_capture(capture_store::CaptureKind::Frames, filename);
-    let _ = capture_store::set_capture_owner(&capture_id, &session_id);
+    capture_store::create_session_capture(&session_id, capture_store::CaptureKind::Frames, filename);
     capture_store::append_frames_to_session(&session_id, frames);
     let finalized = capture_store::finalize_session_captures(&session_id);
     finalized.into_iter().next()
@@ -114,8 +113,7 @@ pub async fn import_csv_with_mapping(
     let total_dropped = sequence_gaps.iter().map(|g| g.dropped).sum();
     let wrap_points = detect_wrap_points(&sequence_gaps);
 
-    let capture_id = capture_store::create_capture(capture_store::CaptureKind::Frames, filename);
-    let _ = capture_store::set_capture_owner(&capture_id, &session_id);
+    capture_store::create_session_capture(&session_id, capture_store::CaptureKind::Frames, filename);
     capture_store::append_frames_to_session(&session_id, result.frames);
     let finalized = capture_store::finalize_session_captures(&session_id);
     let metadata = finalized.into_iter().next()
@@ -154,8 +152,7 @@ pub async fn import_csv_batch_with_mapping(
     };
 
     // Create a single capture for all files, owned by the session
-    let capture_id = capture_store::create_capture(capture_store::CaptureKind::Frames, name);
-    let _ = capture_store::set_capture_owner(&capture_id, &session_id);
+    let capture_id = capture_store::create_session_capture(&session_id, capture_store::CaptureKind::Frames, name);
 
     let total_files = file_paths.len();
     let mut total_frames: usize = 0;
@@ -454,8 +451,7 @@ pub async fn create_frame_capture_from_frames(
         return Err("No frames to create capture from".to_string());
     }
 
-    let capture_id = capture_store::create_capture(capture_store::CaptureKind::Frames, name);
-    let _ = capture_store::set_capture_owner(&capture_id, &session_id);
+    let capture_id = capture_store::create_session_capture(&session_id, capture_store::CaptureKind::Frames, name);
     capture_store::append_frames_to_session(&session_id, frames);
     let finalized = capture_store::finalize_session_captures(&session_id);
     finalized.into_iter().next()

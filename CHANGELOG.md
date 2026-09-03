@@ -22,6 +22,8 @@ All notable changes to WireTAP will be documented in this file.
 
 - **Probing a GVRET adapter on a busy bus reports its real bus count.** The probe read a little way into the stream looking for the device's answer and gave up early, so on a bus carrying traffic it stopped before the answer arrived and reported a single bus — the more traffic, the more likely. Re-probe any GVRET device you set up while its bus was live; a second bus that was missing should now appear.
 
+- **A serial session stays a serial session after you frame its bytes.** Framing raw bytes creates a second, derived capture, and several parts of the app then could not tell it apart from the one the session was actually recording into — so stopping the session could replay the derived frames instead of suspending, a rejoining panel could show a CAN frame table over a serial link, and detaching a panel could snapshot the wrong capture. The session's own capture is now tracked directly rather than guessed at, and a panel joining or reloading is told which kind it is. No action needed; if you had a serial session behave this way, reopen it.
+
 - **A device saved before the GVRET rename can transmit again.** Older profiles stored the device type slightly differently, which was enough for a session to start and stream while every transmit attempt was refused as an unsupported device. The old spelling is now recognised everywhere; affected profiles start working with no change on your part.
 
 ### Added

@@ -37,7 +37,7 @@ pub mod framelink;
 mod socketcan;
 
 // Re-export recorded sources
-pub use recorded::{step_frame, CaptureSource, StepResult};
+pub use recorded::{step_frame, CaptureSource, StepResult, CAPTURE_SOURCE_TYPE};
 pub use recorded::{
     parse_csv_file, parse_csv_with_mapping, preview_csv_file, CsvColumnMapping, CsvPreview,
     Delimiter, SequenceGap, TimestampUnit,
@@ -1477,20 +1477,17 @@ pub fn emit_stream_ended(
     use crate::capture_store::{self, CaptureKind};
 
     let finalized = capture_store::finalize_session_captures(session_id);
-    // Use the frame capture metadata (primary), fall back to first finalized
+    // Frames first, same precedence as `get_session_capture` — but read off what was
+    // just finalised rather than the registry, which no longer lists these as streaming.
     let metadata = finalized.iter()
         .find(|m| m.kind == CaptureKind::Frames)
         .or(finalized.first());
 
     let (capture_id, capture_kind, count, time_range, capture_available) = match metadata {
         Some(m) => {
-            let kind_str = match m.kind {
-                CaptureKind::Frames => "frames",
-                CaptureKind::Bytes => "bytes",
-            };
             (
                 Some(m.id.clone()),
-                Some(kind_str.to_string()),
+                Some(m.kind.as_str().to_string()),
                 m.count,
                 match (m.start_time_us, m.end_time_us) {
                     (Some(start), Some(end)) => Some((start, end)),
@@ -2233,10 +2230,15 @@ pub async fn replace_session_source(
 pub async fn stop_and_switch_to_capture(app: &AppHandle, session_id: &str, speed: f64) -> Result<IOCapabilities, String> {
     let mut sessions = IO_SESSIONS.lock().await;
 
-    // Must be read before stop(), which finalises the captures out of streaming_ids.
-    // Ownership alone would also match a capture the session never streamed into — see
-    // docs/capture-flow.md § Registry state.
-    let streaming_capture_id = capture_store::get_session_streaming_frame_capture_id(session_id);
+    // A session already replaying has no realtime source to stop, and re-switching it
+    // would restart playback from the beginning. The streaming-set lookup this replaced
+    // refused that case by accident, having no capture to offer once one was finalised.
+    if sessions.get(session_id).is_some_and(|s| s.source.source_type() == CAPTURE_SOURCE_TYPE) {
+        return Err(format!("Session '{}' is already replaying a capture", session_id));
+    }
+
+    // Must be read before orphan_captures_for_session below, which releases ownership.
+    let streamed_capture_id = capture_store::get_session_frame_capture_id(session_id);
 
     // Stop the device first — stop() triggers emit_stream_ended which calls
     // finalize_capture(), so we must stop before looking up the capture.
@@ -2252,7 +2254,7 @@ pub async fn stop_and_switch_to_capture(app: &AppHandle, session_id: &str, speed
 
     // CaptureSource replays frames only, so a session that streamed bytes has nothing to
     // switch to and the caller falls back to suspending it.
-    let capture_id = streaming_capture_id;
+    let capture_id = streamed_capture_id;
 
     // Try to switch to capture replay
     if let Some(ref bid) = capture_id {
@@ -2579,12 +2581,8 @@ pub async fn update_session_direction(session_id: &str, reverse: bool) -> Result
 /// owned capture. The session stays alive and all listeners remain connected.
 /// Use this after ingest completes to enable playback without destroying the session.
 pub async fn switch_to_capture_replay(app: &AppHandle, session_id: &str, speed: f64) -> Result<IOCapabilities, String> {
-    // Get the session's owned frame capture
-    let capture_ids = crate::capture_store::get_session_capture_ids(session_id);
-    let capture_id = capture_ids.iter()
-        .filter_map(|id| crate::capture_store::get_capture_metadata(id).map(|m| (id.clone(), m)))
-        .find(|(_id, m)| m.kind == crate::capture_store::CaptureKind::Frames)
-        .map(|(id, _m)| id)
+    // Get the frame capture this session streamed into
+    let capture_id = crate::capture_store::get_session_frame_capture_id(session_id)
         .ok_or_else(|| {
             let captures = crate::capture_store::list_captures();
             tlog!(
@@ -2739,6 +2737,9 @@ pub struct ActiveSessionInfo {
     /// Capture ID owned by this session (if any)
     #[serde(default)]
     pub capture_id: Option<String>,
+    /// Kind of the capture named by `capture_id` ("frames" or "bytes")
+    #[serde(default)]
+    pub capture_kind: Option<String>,
     /// Frame count in the owned capture
     #[serde(default)]
     pub capture_frame_count: Option<usize>,
@@ -2763,8 +2764,12 @@ pub async fn list_sessions() -> Vec<ActiveSessionInfo> {
             // Get source profile IDs from the session tracking
             let source_profile_ids = sessions::get_session_profile_ids(session_id);
 
-            // Get capture info if this session owns a capture
-            let capture_id = capture_store::get_session_capture_ids(session_id).into_iter().next();
+            // Get capture info if this session has one of its own. Kind travels with the
+            // id — picking an arbitrary owned capture and leaving the roster to assume
+            // "frames" is how the two came apart.
+            let (capture_id, capture_kind) = capture_store::get_session_capture(session_id)
+                .map(|(id, kind)| (id, kind.as_str().to_string()))
+                .unzip();
             let capture_frame_count = capture_id
                 .as_ref()
                 .map(|id| capture_store::get_capture_count(id));
@@ -2788,6 +2793,7 @@ pub async fn list_sessions() -> Vec<ActiveSessionInfo> {
                 broker_configs: session.source.broker_configs(),
                 source_profile_ids,
                 capture_id,
+                capture_kind,
                 capture_frame_count,
                 capture_unique_frame_count,
                 is_streaming,
@@ -2949,13 +2955,12 @@ pub async fn register_subscriber(session_id: &str, subscriber_id: &str, app_name
         );
         emit_joiner_count_change(session_id, count, Some(subscriber_id), Some(&resolved_app_name), Some("joined"));
 
-        // Get session's frame capture
-        let capture_ids = crate::capture_store::get_session_capture_ids(session_id);
-        let (capture_id, capture_kind) = capture_ids.iter()
-            .filter_map(|id| crate::capture_store::get_capture_metadata(id))
-            .find(|m| m.kind == crate::capture_store::CaptureKind::Frames)
-            .map(|m| (Some(m.id), Some("frames".to_string())))
-            .unwrap_or((None, None));
+        // Get the session's own capture. Reporting its real kind is what lets a joining
+        // app tell a raw serial link from a CAN one — Discovery keys its serial view off
+        // exactly this, and used to be told "frames" or nothing at all.
+        let (capture_id, capture_kind) = crate::capture_store::get_session_capture(session_id)
+            .map(|(id, kind)| (id, kind.as_str().to_string()))
+            .unzip();
 
         let session = sessions
             .get_mut(session_id)
@@ -3078,7 +3083,7 @@ async fn detach_subscriber_to_capture_copy(
 ) -> Result<Vec<String>, String> {
     // Copy the capture before unregistering (so the detached subscriber gets a snapshot).
     let mut copied_capture_ids = Vec::new();
-    if let Some(capture_id) = crate::capture_store::get_session_capture_ids(session_id).into_iter().next() {
+    if let Some((capture_id, _kind)) = crate::capture_store::get_session_capture(session_id) {
         // Derive the snapshot name from the original capture's name.
         let base = crate::capture_store::get_capture_metadata(&capture_id)
             .map(|m| m.name)

@@ -38,6 +38,7 @@ export function reconcileKnownSessions(
     if (existing) {
       // Already in the store (UI-owned or adopted) — refresh authoritative state.
       const captureCount = info.captureFrameCount ?? existing.capture.count;
+      const captureKind = info.captureKind ?? existing.capture.kind;
       const frameCount = info.captureFrameCount ?? existing.frameCount;
       const uniqueFrameCount = info.captureUniqueFrameCount ?? existing.uniqueFrameCount;
       const catalogPath = info.catalogPath ?? null;
@@ -45,6 +46,7 @@ export function reconcileKnownSessions(
         existing.ioState !== info.state ||
         existing.subscriberCount !== info.subscriberCount ||
         existing.capture.id !== info.captureId ||
+        existing.capture.kind !== captureKind ||
         existing.capture.count !== captureCount ||
         existing.frameCount !== frameCount ||
         existing.uniqueFrameCount !== uniqueFrameCount ||
@@ -64,6 +66,9 @@ export function reconcileKnownSessions(
           capture: {
             ...existing.capture,
             id: info.captureId ?? existing.capture.id,
+            // Kind comes from the roster alongside the id. Adopting one without the
+            // other is what let a byte capture be rendered as frames.
+            kind: captureKind,
             count: captureCount,
           },
         };
@@ -87,7 +92,7 @@ export function reconcileKnownSessions(
       capture: {
         available: false,
         id: info.captureId,
-        kind: null,
+        kind: info.captureKind,
         count: info.captureFrameCount ?? 0,
         owningSessionId: null,
         startTimeUs: null,

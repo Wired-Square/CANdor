@@ -200,9 +200,11 @@ impl IOBroker {
         if framing_on
             && capture_store::get_session_frame_capture_id(&self.session_id).is_none()
         {
-            let capture_id =
-                capture_store::create_capture(CaptureKind::Frames, self.session_id.clone());
-            let _ = capture_store::set_capture_owner(&capture_id, &self.session_id);
+            let capture_id = capture_store::create_session_capture(
+                &self.session_id,
+                CaptureKind::Frames,
+                self.session_id.clone(),
+            );
             emit_capture_changed(&self.session_id);
             tlog!(
                 "[IOBroker] Created frame capture {} for session {} after live framing change",
@@ -646,26 +648,28 @@ impl IOSource for IOBroker {
 
         if has_framing {
             // Create a frames capture as active (for frame operations)
-            let capture_id = capture_store::create_capture(CaptureKind::Frames, self.session_id.clone());
-            // Assign capture ownership to this session
-            let _ = capture_store::set_capture_owner(&capture_id, &self.session_id);
+            capture_store::create_session_capture(
+                &self.session_id,
+                CaptureKind::Frames,
+                self.session_id.clone(),
+            );
         }
 
         if self.emits_raw_bytes {
             if has_framing {
                 // Create a bytes capture in addition to frames capture (not as active)
-                let bytes_id = capture_store::create_capture_inactive(
+                bytes_capture_id = Some(capture_store::create_session_capture_inactive(
+                    &self.session_id,
+                    CaptureKind::Bytes,
+                    self.session_id.clone(),
+                ));
+            } else {
+                // Only raw bytes - create a bytes capture as active
+                capture_store::create_session_capture(
+                    &self.session_id,
                     CaptureKind::Bytes,
                     self.session_id.clone(),
                 );
-                // Assign capture ownership to this session
-                let _ = capture_store::set_capture_owner(&bytes_id, &self.session_id);
-                bytes_capture_id = Some(bytes_id);
-            } else {
-                // Only raw bytes - create a bytes capture as active
-                let capture_id = capture_store::create_capture(CaptureKind::Bytes, self.session_id.clone());
-                // Assign capture ownership to this session
-                let _ = capture_store::set_capture_owner(&capture_id, &self.session_id);
             }
         }
 
