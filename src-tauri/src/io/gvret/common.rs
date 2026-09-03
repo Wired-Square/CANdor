@@ -15,8 +15,10 @@
 //   - Extended (29-bit): Lower 29 bits, bit 31 = 1 (0x80000000)
 
 use hex::ToHex;
+use std::time::Duration;
 
 use crate::io::traits::traits_for_protocol;
+use crate::io::types::SourceMessage;
 use crate::io::{now_us, CanTransmitFrame, FrameMessage, InterfaceTraits, Protocol, TransmitResult};
 
 // ============================================================================
@@ -52,6 +54,20 @@ pub const DLC_LEN: [usize; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32,
 // ============================================================================
 // Device Probing Helpers
 // ============================================================================
+
+/// Append a read to `buffer` and say whether the NUMBUSES reply is now in it.
+///
+/// Scans only what is new, less the reply's own header overlap, so a reply split
+/// across two reads is still found: a busy bus piles up hundreds of KB while the
+/// device stays silent, and rescanning from 0 on every read is quadratic. The
+/// overlap is a fact about [`parse_numbuses_response`]'s pattern, so it lives
+/// here rather than in each transport's read loop.
+pub fn absorb_num_buses_reply(buffer: &mut Vec<u8>, chunk: &[u8]) -> Option<u8> {
+    const HEADER_OVERLAP: usize = 2; // [0xF1][0x0C] before the count byte
+    let scan_from = buffer.len().saturating_sub(HEADER_OVERLAP);
+    buffer.extend_from_slice(chunk);
+    parse_numbuses_response(&buffer[scan_from..])
+}
 
 /// Parse NUMBUSES response from a buffer.
 ///
@@ -179,13 +195,12 @@ fn gvret_protocols() -> Vec<Protocol> {
 /// a *count* rather than an interface list, so device buses are `0..count`. The
 /// same rule applies either way — the device decides which buses exist, the
 /// profile only decides which to stream and where they land.
-pub fn reconcile_to_bus_count(profile_mappings: &[BusMapping], bus_count: u8) -> Vec<BusMapping> {
-    // Nothing to reconcile against — honour the profile rather than silently
-    // streaming nothing.
-    if bus_count == 0 {
-        return profile_mappings.to_vec();
-    }
-
+///
+/// Only ever called with a count the device reported, which
+/// [`parse_numbuses_response`] clamps to `1..=MAX_BUSES`. "The device told us
+/// nothing" is not spelled as a count here — it is [`NumBusesOutcome::Silent`],
+/// and the decision to honour the profile lives in `mappings_from_num_buses`.
+fn reconcile_to_bus_count(profile_mappings: &[BusMapping], bus_count: u8) -> Vec<BusMapping> {
     (0..bus_count)
         .enumerate()
         .map(|(slot, device_bus)| {
@@ -209,6 +224,95 @@ pub fn reconcile_to_bus_count(profile_mappings: &[BusMapping], bus_count: u8) ->
             }
         })
         .collect()
+}
+
+/// How long a streaming reader waits for the device to answer GET_NUMBUSES.
+/// Shared, so the two transports cannot drift in how patient they are.
+pub const NUMBUSES_TIMEOUT: Duration = Duration::from_millis(1500);
+
+/// What happened when we asked a device how many buses it has.
+///
+/// Kept as four cases rather than an `Option` because they call for different
+/// answers: a link that is up but quiet is a device we can still stream, while a
+/// link that closed or errored is not a device at all. Collapsing them is what
+/// let a dead endpoint be reported as a device that ignores a command.
+#[derive(Debug)]
+pub enum NumBusesOutcome {
+    Answered(u8),
+    /// The peer closed the connection before answering.
+    Closed,
+    /// The link errored while we asked or waited.
+    Failed(String),
+    /// The link stayed up, and nothing arrived in time.
+    Silent,
+}
+
+/// Resolve the bus mappings a source should stream from an enumeration attempt,
+/// or the error that should fail it.
+///
+/// One policy for both transports. A device that simply did not answer keeps the
+/// profile's mappings — the same rule FrameLink follows when a device reports no
+/// interfaces, though it still states that separately in its own reader — because
+/// a GVRET-compatible bridge need not implement `GET_NUMBUSES` to be worth
+/// streaming. A connection that closed or errored is
+/// fatal, and says which of the two happened: naming one cause for every
+/// condition sends a network fault to the firmware.
+pub fn mappings_from_num_buses(
+    outcome: NumBusesOutcome,
+    profile_mappings: &[BusMapping],
+    label: &str,
+) -> Result<Vec<BusMapping>, String> {
+    match outcome {
+        NumBusesOutcome::Answered(count) => Ok(reconcile_to_bus_count(profile_mappings, count)),
+        NumBusesOutcome::Silent => {
+            tlog!(
+                "[gvret] {} did not answer GET_NUMBUSES within {:?} — streaming the {} bus(es) the profile declares",
+                label,
+                NUMBUSES_TIMEOUT,
+                profile_mappings.len()
+            );
+            Ok(profile_mappings.to_vec())
+        }
+        NumBusesOutcome::Closed => Err(format!(
+            "{} closed the connection before answering GET_NUMBUSES — check that a GVRET server is listening there",
+            label
+        )),
+        NumBusesOutcome::Failed(e) => Err(format!(
+            "{} connection error while asking GET_NUMBUSES: {}",
+            label, e
+        )),
+    }
+}
+
+/// Settle a source's bus mappings from an enumeration attempt and tell the
+/// broker, or report the failure that ends the source.
+///
+/// `None` means the caller should return. Both transports go through here so the
+/// announce cannot be forgotten in one of them — `MappingsResolved` is what feeds
+/// `available_buses` and transmit routing, so a source that streams without
+/// sending it looks single-bus to everything downstream.
+pub async fn resolve_source_mappings(
+    outcome: NumBusesOutcome,
+    profile_mappings: &[BusMapping],
+    label: &str,
+    source_idx: usize,
+    tx: &tokio::sync::mpsc::Sender<SourceMessage>,
+) -> Option<Vec<BusMapping>> {
+    match mappings_from_num_buses(outcome, profile_mappings, label) {
+        Ok(mappings) => {
+            let _ = tx
+                .send(SourceMessage::MappingsResolved(
+                    source_idx,
+                    mappings.clone(),
+                ))
+                .await;
+            Some(mappings)
+        }
+        Err(e) => {
+            let _ = tx.send(SourceMessage::Error(source_idx, e)).await;
+            None
+        }
+    }
 }
 
 /// Apply bus mappings to a frame, returning None if the bus is disabled
@@ -738,14 +842,45 @@ mod tests {
         assert_eq!(mappings[0].device_bus, 0);
     }
 
-    /// A count of zero means the device told us nothing useful; honour the
-    /// profile rather than zeroing the session.
+    /// A profile carrying a bus the device would never synthesise, so honouring
+    /// it is distinguishable from reconciling against a count.
+    fn resolve(outcome: NumBusesOutcome) -> Result<Vec<BusMapping>, String> {
+        let profile = [reconcile_mapping(2, true, 5)];
+        mappings_from_num_buses(outcome, &profile, "gvret_tcp(10.0.0.9:23)")
+    }
+
     #[test]
-    fn no_reported_buses_leaves_the_profile_alone() {
-        let mappings = reconcile_to_bus_count(&[reconcile_mapping(2, true, 5)], 0);
+    fn an_answered_enumeration_reconciles_to_the_reported_count() {
+        let mappings = resolve(NumBusesOutcome::Answered(2)).expect("should stream");
+        assert_eq!(mappings.len(), 2);
+        assert_eq!(mappings[1].device_bus, 1);
+    }
+
+    /// A live link that simply did not answer is still a device worth streaming
+    /// — a GVRET-compatible bridge need not implement GET_NUMBUSES.
+    #[test]
+    fn a_silent_device_keeps_the_profiles_buses() {
+        let mappings = resolve(NumBusesOutcome::Silent).expect("should stream");
         assert_eq!(mappings.len(), 1);
+        // A synthesised mapping would be bus 0; only the profile has bus 2.
         assert_eq!(mappings[0].device_bus, 2);
         assert_eq!(mappings[0].output_bus, 5);
+    }
+
+    /// The distinction the collapsed diagnostic used to lose: a closed socket is
+    /// not a device that ignores a command.
+    #[test]
+    fn a_closed_connection_fails_and_says_so() {
+        let err = resolve(NumBusesOutcome::Closed).expect_err("should fail the source");
+        assert!(err.contains("closed the connection"), "got: {err}");
+        assert!(err.contains("10.0.0.9:23"), "should name it: {err}");
+    }
+
+    #[test]
+    fn a_link_error_fails_and_carries_the_cause() {
+        let err = resolve(NumBusesOutcome::Failed("connection reset by peer".into()))
+            .expect_err("should fail the source");
+        assert!(err.contains("connection reset by peer"), "got: {err}");
     }
 
     #[test]

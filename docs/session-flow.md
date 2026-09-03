@@ -161,13 +161,28 @@ having no source. That objection is what the read-through closes — the eager
 `transmit_routes` table is gone entirely, so there is one definition of the
 routing rules rather than a pre-connect one and a post-connect one.
 
-**Residual gaps.** `data_streams.rx_bytes` is still computed once in
+Both GVRET transports reconcile, and share one enumeration policy in
+`gvret/common.rs::mappings_from_num_buses`: a device that answers is reconciled
+to its count; a live link that stayed quiet keeps the profile's mappings (as
+FrameLink does when a device reports no interfaces); a link that closed or
+errored fails the source immediately, naming which of the two happened. Keeping
+those apart is deliberate — collapsing them once reported a dead endpoint as a
+device that ignores the command, which sends the reader at firmware instead of
+at the network.
+
+`probe_gvret_tcp` and `probe_gvret_usb` ask through the same `query_num_buses`
+(hence its timeout parameter — a probe may wait longer than a reader), and
+differ only in what they do with silence: a probe reports single-bus rather than
+refusing, because its job is to let you add the device. Add a fifth caller by
+reusing that function, not by writing the exchange again — the two probes used to
+carry their own copy, and answered silence the opposite way from the streaming
+path. Note FrameLink still spells the keep-the-profile rule itself in
+`reconcile_bus_mappings`, so the two drivers agree by convention, not by
+construction; the register carries the entry.
+
+**Residual gap.** `data_streams.rx_bytes` is still computed once in
 `IOBroker::new` (from `profile_kind == "serial"` alone), so a FrameLink RS-485
 interface discovered at connect does not flip a session into byte mode.
-`gvret/usb.rs` does not reconcile — it queries `GET_NUMBUSES` in `probe_gvret_usb`
-and throws the answer away, exactly as the TCP path used to. And the two drivers
-disagree on an unanswered enumeration: FrameLink keeps the profile's mappings,
-GVRET TCP fails the source.
 
 **A FrameLink device serves exactly one TCP client**, so `io/framelink/shared.rs`
 pools one connection per device and every consumer — the reader and the ~40

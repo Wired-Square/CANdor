@@ -5,33 +5,34 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
 use crate::io::error::IoError;
 use crate::io::types::{SourceMessage, TransmitRequest};
 use super::common::{
-    apply_bus_mappings_gvret, parse_gvret_frames, parse_numbuses_response,
-    reconcile_to_bus_count, BusMapping, BINARY_MODE_ENABLE, DEVICE_INFO_PROBE,
-    GVRET_CMD_NUMBUSES, GvretDeviceInfo,
+    absorb_num_buses_reply, apply_bus_mappings_gvret, parse_gvret_frames, resolve_source_mappings,
+    BusMapping, NumBusesOutcome, BINARY_MODE_ENABLE, DEVICE_INFO_PROBE, GVRET_CMD_NUMBUSES,
+    GvretDeviceInfo, NUMBUSES_TIMEOUT,
 };
-
-/// How long the streaming reader waits for the device to answer GET_NUMBUSES.
-const NUMBUSES_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// Ask a connected device how many buses it has.
 ///
 /// Anything read while waiting is appended to `buffer` rather than discarded —
 /// a device that is already streaming will interleave frames with the reply,
 /// and dropping them would lose traffic the session is meant to capture.
-async fn query_num_buses(
-    write_half: &mut tokio::net::tcp::OwnedWriteHalf,
-    read_half: &mut tokio::net::tcp::OwnedReadHalf,
+///
+/// Generic over the halves so the probe, which has a borrowed split rather than
+/// an owned one, asks the question the same way the streaming path does.
+async fn query_num_buses<W: AsyncWrite + Unpin, R: AsyncRead + Unpin>(
+    write_half: &mut W,
+    read_half: &mut R,
     buffer: &mut Vec<u8>,
-) -> Option<u8> {
-    if write_half.write_all(&GVRET_CMD_NUMBUSES).await.is_err() {
-        return None;
+    timeout: Duration,
+) -> NumBusesOutcome {
+    if let Err(e) = write_half.write_all(&GVRET_CMD_NUMBUSES).await {
+        return NumBusesOutcome::Failed(e.to_string());
     }
     let _ = write_half.flush().await;
 
@@ -39,22 +40,20 @@ async fn query_num_buses(
         let mut read_buf = [0u8; 2048];
         loop {
             match read_half.read(&mut read_buf).await {
-                Ok(0) | Err(_) => return None,
+                Ok(0) => return NumBusesOutcome::Closed,
+                Err(e) => return NumBusesOutcome::Failed(e.to_string()),
                 Ok(n) => {
-                    // Scan only what is new (less the 2-byte header overlap): a
-                    // busy bus can pile up hundreds of KB while the device stays
-                    // silent, and rescanning from 0 each read is quadratic.
-                    let scan_from = buffer.len().saturating_sub(2);
-                    buffer.extend_from_slice(&read_buf[..n]);
-                    if let Some(count) = parse_numbuses_response(&buffer[scan_from..]) {
-                        return Some(count);
+                    if let Some(count) = absorb_num_buses_reply(buffer, &read_buf[..n]) {
+                        return NumBusesOutcome::Answered(count);
                     }
                 }
             }
         }
     };
 
-    tokio::time::timeout(NUMBUSES_TIMEOUT, read).await.ok().flatten()
+    tokio::time::timeout(timeout, read)
+        .await
+        .unwrap_or(NumBusesOutcome::Silent)
 }
 
 // ============================================================================
@@ -121,67 +120,29 @@ pub async fn probe_gvret_tcp(
     // Wait a moment for the device to process
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Query number of buses
-    stream
-        .write_all(&GVRET_CMD_NUMBUSES)
-        .await
-        .map_err(|e| IoError::protocol(&device, format!("send NUMBUSES command: {}", e)))?;
-
-    stream
-        .flush()
-        .await
-        .map_err(|e| IoError::protocol(&device, format!("flush: {}", e)))?;
-
-    // Read response with timeout
-    // Response format: [0xF1][0x0C][bus_count]
-    let mut buf = vec![0u8; 256];
-    let mut total_read = 0;
     let read_timeout = Duration::from_millis((timeout_sec * 1000.0) as u64);
+    let (mut read_half, mut write_half) = stream.split();
+    let mut buffer = Vec::with_capacity(4096);
+    let outcome = query_num_buses(&mut write_half, &mut read_half, &mut buffer, read_timeout).await;
 
-    let deadline = tokio::time::Instant::now() + read_timeout;
-
-    loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            break;
+    match outcome {
+        NumBusesOutcome::Answered(bus_count) => {
+            tlog!(
+                "[probe_gvret_tcp] SUCCESS: Device at {}:{} has {} buses available",
+                host, port, bus_count
+            );
+            Ok(GvretDeviceInfo { bus_count })
         }
-
-        match tokio::time::timeout(
-            remaining.min(Duration::from_millis(100)),
-            stream.read(&mut buf[total_read..]),
-        )
-        .await
-        {
-            Ok(Ok(0)) => break, // EOF
-            Ok(Ok(n)) => {
-                total_read += n;
-
-                // Check for NUMBUSES response
-                if let Some(bus_count) = parse_numbuses_response(&buf[..total_read]) {
-                    tlog!(
-                        "[probe_gvret_tcp] SUCCESS: Device at {}:{} has {} buses available",
-                        host, port, bus_count
-                    );
-                    return Ok(GvretDeviceInfo { bus_count });
-                }
-
-                // If we've read enough data without finding the response, give up
-                if total_read > 128 {
-                    break;
-                }
-            }
-            Ok(Err(e)) => {
-                return Err(IoError::read(&device, e.to_string()));
-            }
-            Err(_) => {
-                // Timeout on this read, continue if we still have time
-            }
+        NumBusesOutcome::Failed(e) => Err(IoError::read(&device, e)),
+        // A probe reports what it can rather than refusing: a device that never
+        // answers is still worth adding as single-bus, which is what the picker
+        // has always shown. The streaming path is where the distinction between
+        // quiet and dead has to be made, because that is where it costs traffic.
+        NumBusesOutcome::Closed | NumBusesOutcome::Silent => {
+            tlog!("[probe_gvret_tcp] No NUMBUSES response received, defaulting to 1 bus");
+            Ok(GvretDeviceInfo { bus_count: 1 })
         }
     }
-
-    // If we didn't get a response, assume 1 bus (safer default)
-    tlog!("[probe_gvret_tcp] No NUMBUSES response received, defaulting to 1 bus");
-    Ok(GvretDeviceInfo { bus_count: 1 })
 }
 
 // ============================================================================
@@ -234,29 +195,19 @@ pub async fn run_source(
     // they can carry a bus this device does not have — or, expensively, miss
     // one it does. Anything read while waiting is kept: it is frame traffic.
     let mut buffer = Vec::with_capacity(4096);
-    let bus_count = match query_num_buses(&mut write_half, &mut read_half, &mut buffer).await {
-        Some(count) => count,
-        None => {
-            let _ = tx
-                .send(SourceMessage::Error(
-                    source_idx,
-                    format!(
-                        "{}:{} did not answer GET_NUMBUSES, so its buses cannot be determined",
-                        host, port
-                    ),
-                ))
-                .await;
-            return;
-        }
+    let outcome =
+        query_num_buses(&mut write_half, &mut read_half, &mut buffer, NUMBUSES_TIMEOUT).await;
+    let Some(bus_mappings) = resolve_source_mappings(
+        outcome,
+        &bus_mappings,
+        &gvret_tcp_device(&host, port),
+        source_idx,
+        &tx,
+    )
+    .await
+    else {
+        return;
     };
-
-    let bus_mappings = reconcile_to_bus_count(&bus_mappings, bus_count);
-    let _ = tx
-        .send(SourceMessage::MappingsResolved(
-            source_idx,
-            bus_mappings.clone(),
-        ))
-        .await;
 
     // Create transmit channel and send it to the merge task
     let (transmit_tx, transmit_rx) = std_mpsc::sync_channel::<TransmitRequest>(32);
@@ -354,4 +305,86 @@ pub async fn run_source(
     let _ = tx
         .send(SourceMessage::Ended(source_idx, "stopped".to_string()))
         .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::gvret::common::GVRET_SYNC;
+    use tokio::net::TcpListener;
+
+    /// Serve one connection, handing it to `serve`, and ask the listener what
+    /// `query_num_buses` made of it.
+    async fn outcome_against<F, Fut>(serve: F) -> NumBusesOutcome
+    where
+        F: FnOnce(TcpStream) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.expect("accept");
+            serve(sock).await;
+        });
+
+        let stream = TcpStream::connect(addr).await.expect("connect");
+        let (mut read_half, mut write_half) = stream.into_split();
+        let mut buffer = Vec::new();
+        query_num_buses(&mut write_half, &mut read_half, &mut buffer, NUMBUSES_TIMEOUT).await
+    }
+
+    #[tokio::test]
+    async fn a_device_that_answers_reports_its_bus_count() {
+        let outcome = outcome_against(|mut sock| async move {
+            let _ = sock.write_all(&[GVRET_SYNC, 0x0C, 0x02]).await;
+            // Hold the connection open so the reply is not also a close.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        })
+        .await;
+        assert!(
+            matches!(outcome, NumBusesOutcome::Answered(2)),
+            "got {outcome:?}"
+        );
+    }
+
+    /// The reported failure: an SSH tunnel accepts locally while nothing serves
+    /// the far end, so the peer goes away before any command is answered. This
+    /// must not read as a device that ignores GET_NUMBUSES.
+    ///
+    /// A peer that drops the socket with our command still unread resets it, so
+    /// this arrives as an error rather than a clean end-of-stream — the two
+    /// halves of "there is no device there" are split across `Failed` and
+    /// `Closed` by whether the far end drained us first, not by anything the
+    /// user did. Both are immediate and both name the connection.
+    #[tokio::test]
+    async fn a_peer_that_vanishes_on_connect_is_not_a_silent_device() {
+        let outcome = outcome_against(|sock| async move { drop(sock) }).await;
+        assert!(matches!(outcome, NumBusesOutcome::Failed(_)), "got {outcome:?}");
+    }
+
+    /// The same situation where the far end reads before hanging up: a clean
+    /// end-of-stream rather than a reset.
+    #[tokio::test]
+    async fn a_peer_that_closes_cleanly_is_not_a_silent_device() {
+        let outcome = outcome_against(|mut sock| async move {
+            let mut sink = [0u8; 8];
+            let _ = sock.read(&mut sink).await;
+            let _ = sock.shutdown().await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        })
+        .await;
+        assert!(matches!(outcome, NumBusesOutcome::Closed), "got {outcome:?}");
+    }
+
+    /// A GVRET-compatible bridge that does not implement GET_NUMBUSES holds the
+    /// connection open and says nothing. That is the one case worth waiting for.
+    #[tokio::test]
+    async fn a_live_but_quiet_link_is_silent_not_closed() {
+        let outcome = outcome_against(|sock| async move {
+            tokio::time::sleep(NUMBUSES_TIMEOUT + Duration::from_millis(500)).await;
+            drop(sock);
+        })
+        .await;
+        assert!(matches!(outcome, NumBusesOutcome::Silent), "got {outcome:?}");
+    }
 }

@@ -14,6 +14,14 @@ All notable changes to WireTAP will be documented in this file.
 
 - **Catalogue coverage no longer reports a working catalogue as empty.** A catalogue that matches on part of the frame id — the usual arrangement for J1939, where the sending node's address is ignored — was compared against the raw ids on the wire, so every frame came back missing even though the catalogue decoded all of them. Coverage now counts the way the catalogue does, and one unknown message sent by several nodes is listed once as a single frame to add.
 
+- **A GVRET adapter that cannot list its buses still opens.** A device that did not answer the bus-count query had its session refused outright, so a GVRET-compatible bridge that does not implement that command could not be used at all. Such a device now connects and carries the buses its profile declares, matching how FrameLink devices have always been treated. Declare the buses you expect on the device in Settings if it cannot report them itself.
+
+- **A dead address no longer looks like a faulty device.** Every way the bus-count query could fail — a refused connection, a dropped link, or a device that simply stayed quiet — produced the same message blaming the device for ignoring the command, which sent you looking at firmware when the real problem was the network. The three are now reported separately and by name, and the two that are known immediately no longer wait out a timeout first.
+
+- **A multi-bus GVRET connected over USB offers all of its buses.** Only the TCP connection asked the device what it had; over USB the session carried whatever the profile happened to declare, so a second bus went missing unless you had configured it by hand. Both connection types now ask the device.
+
+- **Probing a GVRET adapter on a busy bus reports its real bus count.** The probe read a little way into the stream looking for the device's answer and gave up early, so on a bus carrying traffic it stopped before the answer arrived and reported a single bus — the more traffic, the more likely. Re-probe any GVRET device you set up while its bus was live; a second bus that was missing should now appear.
+
 - **A device saved before the GVRET rename can transmit again.** Older profiles stored the device type slightly differently, which was enough for a session to start and stream while every transmit attempt was refused as an unsupported device. The old spelling is now recognised everywhere; affected profiles start working with no change on your part.
 
 ### Added

@@ -15,9 +15,15 @@ use tokio::sync::mpsc;
 use crate::io::error::IoError;
 use crate::io::types::{SourceMessage, TransmitRequest};
 use super::common::{
-    apply_bus_mappings_gvret, parse_gvret_frames, parse_numbuses_response, BusMapping,
-    BINARY_MODE_ENABLE, DEVICE_INFO_PROBE, GVRET_CMD_NUMBUSES, GvretDeviceInfo,
+    absorb_num_buses_reply, apply_bus_mappings_gvret, parse_gvret_frames, resolve_source_mappings,
+    BusMapping, NumBusesOutcome, BINARY_MODE_ENABLE, DEVICE_INFO_PROBE, GVRET_CMD_NUMBUSES,
+    GvretDeviceInfo, NUMBUSES_TIMEOUT,
 };
+
+/// A probe may wait longer than a streaming reader: it is a deliberate user
+/// action against a device that may still be booting, and nothing streams until
+/// it answers.
+const PROBE_NUMBUSES_TIMEOUT: Duration = Duration::from_secs(2);
 
 // ============================================================================
 // Configuration
@@ -45,6 +51,46 @@ pub struct GvretUsbConfig {
 // Device Probing
 // ============================================================================
 
+/// The device label both the probe and the streaming path identify themselves by.
+fn gvret_usb_device(port: &str) -> String {
+    format!("gvret_usb({})", port)
+}
+
+/// Ask a connected device how many buses it has.
+///
+/// The serial counterpart of the TCP query — same outcomes, and the same reason
+/// for taking `buffer`: a device already streaming interleaves frames with the
+/// reply, and dropping them would lose traffic the session is meant to capture.
+fn query_num_buses(
+    port: &mut dyn serialport::SerialPort,
+    buffer: &mut Vec<u8>,
+    timeout: Duration,
+) -> NumBusesOutcome {
+    if let Err(e) = port.write_all(&GVRET_CMD_NUMBUSES) {
+        return NumBusesOutcome::Failed(e.to_string());
+    }
+    let _ = port.flush();
+
+    let deadline = std::time::Instant::now() + timeout;
+    let mut read_buf = [0u8; 2048];
+    while std::time::Instant::now() < deadline {
+        match port.read(&mut read_buf) {
+            // An idle port reports its own read timeout, below — so a zero-length
+            // read here is a real end of stream, not the quiet case.
+            Ok(0) => return NumBusesOutcome::Closed,
+            Ok(n) => {
+                if let Some(count) = absorb_num_buses_reply(buffer, &read_buf[..n]) {
+                    return NumBusesOutcome::Answered(count);
+                }
+            }
+            // The port's own timeout paces this loop; nothing arrived this round.
+            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(e) => return NumBusesOutcome::Failed(e.to_string()),
+        }
+    }
+    NumBusesOutcome::Silent
+}
+
 /// Probe a GVRET USB device to discover its capabilities
 ///
 /// This function opens the serial port, queries the number of available buses,
@@ -58,7 +104,7 @@ pub fn probe_gvret_usb(port: &str, baud_rate: u32) -> Result<GvretDeviceInfo, Io
         port, baud_rate
     );
 
-    let device = format!("gvret_usb({})", port);
+    let device = gvret_usb_device(port);
 
     // Open serial port
     let mut serial_port = serialport::new(port, baud_rate)
@@ -80,54 +126,22 @@ pub fn probe_gvret_usb(port: &str, baud_rate: u32) -> Result<GvretDeviceInfo, Io
     // Wait for device to process
     std::thread::sleep(Duration::from_millis(100));
 
-    // Query number of buses
-    serial_port
-        .write_all(&GVRET_CMD_NUMBUSES)
-        .map_err(|e| IoError::protocol(&device, format!("send NUMBUSES command: {}", e)))?;
-    let _ = serial_port.flush();
-
-    // Read response with timeout
-    // Response format: [0xF1][0x0C][bus_count]
-    let mut buf = vec![0u8; 256];
-    let mut total_read = 0;
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-
-    loop {
-        if std::time::Instant::now() >= deadline {
-            break;
+    let mut buffer = Vec::with_capacity(4096);
+    match query_num_buses(&mut *serial_port, &mut buffer, PROBE_NUMBUSES_TIMEOUT) {
+        NumBusesOutcome::Answered(bus_count) => {
+            tlog!(
+                "[probe_gvret_usb] SUCCESS: Device at {} has {} buses available",
+                port, bus_count
+            );
+            Ok(GvretDeviceInfo { bus_count })
         }
-
-        match serial_port.read(&mut buf[total_read..]) {
-            Ok(0) => break, // No data
-            Ok(n) => {
-                total_read += n;
-
-                // Check for NUMBUSES response
-                if let Some(bus_count) = parse_numbuses_response(&buf[..total_read]) {
-                    tlog!(
-                        "[probe_gvret_usb] SUCCESS: Device at {} has {} buses available",
-                        port, bus_count
-                    );
-                    return Ok(GvretDeviceInfo { bus_count });
-                }
-
-                // If we've read enough data without finding the response, give up
-                if total_read > 128 {
-                    break;
-                }
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                // Timeout on this read, continue if we still have time
-            }
-            Err(e) => {
-                return Err(IoError::read(&device, e.to_string()));
-            }
+        NumBusesOutcome::Failed(e) => Err(IoError::read(&device, e)),
+        // A probe reports what it can rather than refusing — see the TCP probe.
+        NumBusesOutcome::Closed | NumBusesOutcome::Silent => {
+            tlog!("[probe_gvret_usb] No NUMBUSES response received, defaulting to 1 bus");
+            Ok(GvretDeviceInfo { bus_count: 1 })
         }
     }
-
-    // If we didn't get a response, assume 1 bus (safer default)
-    tlog!("[probe_gvret_usb] No NUMBUSES response received, defaulting to 1 bus");
-    Ok(GvretDeviceInfo { bus_count: 1 })
 }
 
 // ============================================================================
@@ -183,20 +197,55 @@ pub async fn run_source(
 
     std::thread::sleep(Duration::from_millis(100));
 
-    // Send device info probe
-    let probe_err = match serial_port.lock() {
+    // Send the device-info probe and ask how many buses the device has. Both are
+    // blocking serial reads that can take the full enumeration timeout against a
+    // device that never answers, so they go to the blocking pool rather than
+    // holding a runtime worker — every source starts on its own worker, so a
+    // handful of silent adapters would otherwise stall the whole executor.
+    let probe_port = serial_port.clone();
+    let probe = tokio::task::spawn_blocking(move || match probe_port.lock() {
         Ok(mut port) => {
             let _ = port.write_all(&DEVICE_INFO_PROBE);
             let _ = port.flush();
-            None
+            let mut buffer = Vec::with_capacity(4096);
+            let outcome = query_num_buses(&mut **port, &mut buffer, NUMBUSES_TIMEOUT);
+            Ok((outcome, buffer))
         }
-        Err(e) => Some(format!("Port lock poisoned: {}", e)),
+        Err(e) => Err(format!("Port lock poisoned: {}", e)),
+    })
+    .await;
+
+    let (outcome, read_ahead) = match probe {
+        Ok(Ok(probe)) => probe,
+        Ok(Err(msg)) => {
+            let _ = tx.send(SourceMessage::Error(source_idx, msg)).await;
+            return;
+        }
+        Err(e) => {
+            let _ = tx
+                .send(SourceMessage::Error(
+                    source_idx,
+                    format!("Enumeration task failed: {}", e),
+                ))
+                .await;
+            return;
+        }
     };
-    // Guard is dropped here — safe to await
-    if let Some(msg) = probe_err {
-        let _ = tx.send(SourceMessage::Error(source_idx, msg)).await;
+
+    // The mappings we were handed came off the profile before this connection
+    // existed, so they can carry a bus this device does not have — or, more
+    // expensively, miss one it does.
+    let Some(bus_mappings) = resolve_source_mappings(
+        outcome,
+        &bus_mappings,
+        &gvret_usb_device(&port),
+        source_idx,
+        &tx,
+    )
+    .await
+    else {
         return;
-    }
+    };
 
     // Create transmit channel and send it to the merge task
     let (transmit_tx, transmit_rx) = std_mpsc::sync_channel::<TransmitRequest>(32);
@@ -222,7 +271,9 @@ pub async fn run_source(
 
     // Spawn blocking task for serial reading
     let blocking_handle = tokio::task::spawn_blocking(move || {
-        let mut buffer = Vec::with_capacity(4096);
+        // Whatever arrived while we were asking for the bus count is frame
+        // traffic, so the loop starts from it rather than a fresh buffer.
+        let mut buffer = read_ahead;
         let mut read_buf = [0u8; 2048];
 
         while !stop_flag_clone.load(Ordering::SeqCst) {
