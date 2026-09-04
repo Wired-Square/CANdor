@@ -6,6 +6,20 @@ All notable changes to WireTAP will be documented in this file.
 
 ### Fixed
 
+- **A serial device you frame in the picker now shows its frames.** Choosing SLIP or Modbus RTU for a single serial device, or ticking *Capture raw bytes*, had no effect: the session ran with whatever framing the device profile had saved, and if that differed the framed messages were discarded as they arrived, leaving an empty Raw Bytes tab and nothing else. The picker's choice is now what the session runs with, and a framed serial link records its frames. Devices opened together as a multi-source session were never affected.
+
+- **A device unplugged mid-session is reported as an error.** A GVRET adapter or serial port that went away while streaming ended the session as though it had finished normally, so nothing told you the capture had stopped early. Such a session now names the device that disappeared.
+
+- **A session that has finished says so.** A completed Modbus sweep, a dropped MQTT connection and a removed gs_usb adapter all went on reporting themselves as running, which could leave a panel waiting for data that was never coming and could wrongly block a Modbus sweep from starting.
+
+- **An unreachable MQTT broker or WireTAP backend gives up.** Both waited on the operating system's own connection timeout, so a wrong address or a downed VPN left the session sitting in "connecting" for minutes. They now fail within ten seconds and say why. This covers running a query against the backend as well as streaming from it.
+
+- **A serial device's framing settings reach a multi-source session too.** The minimum frame length chosen in the picker was dropped when several devices were opened together, so short frames it should have filtered came through.
+
+- **The Modbus poll switch shows the device's real state.** It displayed whatever it had last been asked to do, so two panels on one session could disagree, and reloading the window showed a paused device as polling. The switch now reads the session itself and every panel follows a change immediately. Resuming polling while a discovery sweep holds the same device is now refused rather than quietly contending for it.
+
+- **Re-framing serial bytes no longer leaves a trail of captures.** With a minimum frame length set, every re-frame created another capture for the discarded short frames and never cleaned up the previous one — and framing runs each time the stream stops. The two framing results are now reused in place.
+
 - **A multi-bus adapter offers every one of its buses again.** A two-bus GVRET was treated as single-bus everywhere you choose one: the source picker listed only Bus 0, and the Sessions → Visual graph drew a single wire. Frames from the second bus still arrived, which is what made it easy to miss — but the bus was never really part of the session, so it could not be transmitted on and could not be given its own bus number when combined with another device. Pick your device again and both buses will be there; no profile changes are needed.
 
 - **Adding a multi-bus device to a running session no longer drops its extra buses.** Session Manager's *Add Source* claimed one bus regardless of what the device had. The same was true of any FrameLink or virtual device with more than one interface.

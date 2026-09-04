@@ -46,8 +46,18 @@ Every IO source declares its capabilities via two embedded structs on
 │  SessionDataStreams                                      │
 │    rx_frames:      bool  (produces FrameMessage batches) │
 │    rx_bytes:       bool  (produces raw serial bytes)     │
+│  serial_link:      bool  (the transport is a serial link)│
 └──────────────────────────────────────────────────────────┘
 ```
+
+**`serial_link` is not `rx_bytes`.** The first says the transport is a serial
+link the Discovery serial view belongs on; the second says raw bytes are actually
+on the wire. A SLIP or Modbus RTU port is the first without the second, and the
+two were one field until it had to mean both — Discovery tested `rx_bytes` to
+decide whether to show the serial view at all, so making `rx_bytes` truthful
+would have hidden the Raw Bytes and Framed tabs from every framed-serial source.
+A FrameLink RS-485 interface is neither: it contributes `Protocol::Serial` to the
+trait union but delivers framed messages, and its kind is `framelink`.
 
 Both fields are non-optional on `IOCapabilities`. When multiple interfaces are
 combined through `IOBroker`, `validate_session_traits()` merges them:
@@ -180,9 +190,23 @@ path. Note FrameLink still spells the keep-the-profile rule itself in
 `reconcile_bus_mappings`, so the two drivers agree by convention, not by
 construction; the register carries the entry.
 
-**Residual gap.** `data_streams.rx_bytes` is still computed once in
-`IOBroker::new` (from `profile_kind == "serial"` alone), so a FrameLink RS-485
-interface discovered at connect does not flip a session into byte mode.
+**Residual gap.** The serial half of `IOCapabilities` is settled before any
+driver runs: `device_kinds::resolve_serial_framing` resolves a source's framing
+from the session override, then the profile, then the kind default, and writes it
+onto `SourceConfig` at creation — so `IOBroker` reads a settled answer rather
+than an absence. That fixed the fields being *wrong*; they are still a
+pre-connect guess, and a FrameLink RS-485 interface discovered at connect does
+not flip a session into byte mode.
+
+**Resolve serial framing once, at session creation.** `SourceConfig.framing_encoding`
+used to be `None` for single-source sessions, on the reasoning that the reader
+would read it off the profile — and it did. But `IOBroker` reads that same field
+to decide `emits_raw_bytes`, `has_framing` and `rx_frames`, all *before* the
+reader exists, and an absent framing read as `"raw"`. A SLIP or Modbus RTU device
+opened on its own therefore got a bytes capture nothing wrote to, **no frames
+capture at all**, and every framed row dropped by `append_frames_to_session`. Two
+consumers deriving the same fact from the same optional field, one of them ahead
+of the value being known, is the shape to watch for.
 
 **A FrameLink device serves exactly one TCP client**, so `io/framelink/shared.rs`
 pools one connection per device and every consumer — the reader and the ~40
@@ -209,9 +233,15 @@ helper — parsing `"host:port"` straight into a `SocketAddr` accepts only numer
 IPs and rejects any DNS name with "invalid socket address syntax".
 
 MQTT and the WireTAP backend API are the exceptions: their client libraries
-(rumqttc, reqwest) resolve internally, so the helper cannot wrap them. Neither
-sets a library-level connect timeout either, so a DNS outage on those two can
-still hang.
+(rumqttc, reqwest) resolve internally, so the helper cannot wrap them. They get a
+library-level bound instead — `net::CONNECT_TIMEOUT`, applied through
+`NetworkOptions::set_connection_timeout` for MQTT and `connect_timeout` on the
+one `apiclient::HTTP` client the backend's query *and* stream paths share — so an
+unroutable address fails in seconds rather than inheriting the OS default.
+Neither kind declares a `timeout` in `device_kinds`, so the bound is fixed rather
+than per-profile. **New backend HTTP work goes through `apiclient::http()`**; a
+second `reqwest::Client` is a second connection pool that has to be told about
+the bound separately, which is how the streaming path came to lack one.
 
 **Resolve first, then connect to the returned `SocketAddr`.** Passing a
 `(host, port)` tuple to `TcpStream::connect` resolves *inside* the connect
@@ -264,8 +294,16 @@ nothing** — no dialog, no error state, `Running` throughout. A device that can
 describe itself is not a device we have connected to: the failure is now an
 `IoError::Timeout`/`IoError::Protocol` and the session errors out. Likewise a
 FrameLink stream channel closing unasked-for is an `Error`, not the `Ended` it
-used to send — `Ended` stops at the merge task, so a device dropping mid-session
-was invisible until every other source had gone too.
+used to send.
+
+**`Ended` now carries an `EndReason`, and the merge task branches on it.**
+*`Ended` = we asked; `Error` = we didn't* was a convention every producer agreed
+on by spelling `"stopped"` or `"disconnected"` into a free-text reason, and the
+merge task read neither — so a GVRET adapter pulled out of its socket, or a
+serial port that returned EOF, ended the run as `"complete"`. `EndReason::Disconnected`
+is the one variant `is_fault()` returns true for, and the merge arm raises
+`emit_session_error` for it exactly as the `Error` arm does. A new driver has to
+choose a variant, which is the point: the contract is checked rather than spelled.
 
 **A FrameLink timeout is diagnosed, not just reported.** The protocol has no
 handshake — `connect` writes nothing, so a successful TCP connect proves only
@@ -528,7 +566,15 @@ well established.
 ### Session ID prefixes
 
 Session IDs are independent of profile IDs. Format: `{prefix}_{6-hex}`. The
-prefix is **cosmetic** (logs/debugging — nothing parses the id).
+prefix is **cosmetic** (logs/debugging), with one exception: Discovery reads the
+`m_scan` prefix to tell a sweep from a poller in the beat before the roster
+reconcile gives it `source_type`. Add no others.
+
+`generate_session_id` resolves the `b_` vs `f_` choice for a serial profile
+itself, through `device_kinds::resolve_serial_framing` — the frontend cannot know
+a profile's framing before the session exists, so it always said `false` and
+every raw serial session came out `f_`. An explicit `emit_raw_bytes` from the
+picker still wins.
 
 | Prefix | Meaning                                                    | Generated in |
 |--------|------------------------------------------------------------|--------------|
@@ -796,7 +842,10 @@ Once a sweep starts, Discovery joins the scan session, which reports
 `Protocol::Modbus` too — so from then on the app's "current Modbus device" is the
 sweep, not the poller. The frontend latches the last non-sweep Modbus target, and
 the poll switch addresses that latch rather than the current session, so it does
-not start driving the sweep it is sitting beside.
+not start driving the sweep it is sitting beside. Sweep-vs-poller is decided by
+`ActiveSessionInfo.source_type` (`"modbus_scan"`), carried onto `Session` by the
+roster reconcile. The `m_scan` id prefix survives only as the fallback for the
+beat between minting the scan session and the first reconcile.
 
 **A broker session tells the truth about having stopped.** The gate reads
 `isStreaming`, so the backend has to be honest about when a session stopped
@@ -806,32 +855,51 @@ source with no poll groups ends within a millisecond of session creation —
 reliably *before* the frontend subscribes to that channel — so the push was
 missed and the state went on saying "running" forever.
 
-Two pieces close it, and neither is a new event. An `ended: Arc<AtomicBool>` is
-set where the merge task *returns* — in the spawn wrapper, not at the end of the
-body, so an early return covers too — and `state()` reports `Stopped` when it is
-set. That follows the `fatal_error` field beside it, and `CaptureSource`'s
-`completed_flag`, which solve the same problem the same way. Then
-`registerSessionSubscriber`'s reported state is adopted by the multi-source
-create and join paths, which had been discarding it: registration is the first
-moment a subscriber exists, so its answer is the one that cannot be missed.
-A push nobody is listening for wants a pull at the point of listening, not a
-second broadcast.
+Two pieces close it, and neither is a new event. `SourceLifecycle`
+([`io/lifecycle.rs`](../src-tauri/src/io/lifecycle.rs)) is a terminal-state slot
+stamped by a `Drop` guard the merge task holds for its life — a guard rather than
+an explicit store, because `run_merge_task` also returns early when settings fail
+to load, and a flag written at one of two exit points is exactly the hole this
+closes. Taking a guard also clears the previous ending, so "a new run is
+starting" cannot be forgotten separately from "this run has one". `state()` reads
+through it. Then `registerSessionSubscriber`'s reported state is adopted by the
+multi-source create and join paths, which had been discarding it: registration is
+the first moment a subscriber exists, so its answer is the one that cannot be
+missed. A push nobody is listening for wants a pull at the point of listening,
+not a second broadcast.
 
-**The paused flag is the frontend's, and that is the weak point.** Per-source
-pause is write-only: the broker's `source_pause_flags` is a local in the detached
-merge task, reachable one way through `MergeCommand` and readable from nowhere —
-the same "local inside `start()`, no registry" shape as the poll socket above. So
-`useModbusPollControl` holds `isPolling` as optimistic React state, seeded `true`
-and reset whenever the session or profile changes (without that reset it outlives
-what it describes: pause device A, switch to device B, and the switch still reads
-paused over a device that is polling).
+Three more sources had the same shape and now use the same primitive: the Modbus
+scan source, MQTT and gs_usb each spawn a detached task and left `self.state` on
+`Running` forever. `CaptureSource`'s `completed_flag` is deliberately *not*
+folded in — `start()` reads it to choose resume-vs-restart, so it is not purely a
+terminal-state slot — and neither is `fatal_error`, which carries a message
+rather than a state.
 
-One consequence worth knowing before relying on it: it is per-component, so two
-panels on one session each keep their own copy and a reload starts again at
-"polling". Making `ActiveSessionInfo` carry the paused source ids would fix that
-and let a sweep's refusal check "is the target actually paused" in Rust rather
-than trusting the UI. See the register for the sizing — the stakes dropped when
-the switch stopped gating the tools.
+⚠ **It is opt-in, and three sources have not opted in**: `modbus_tcp::reader`,
+`modbus_rtu::reader` and `virtual_device` all spawn detached work and return a
+bare `self.state`, so they can still report `Running` after their task has ended.
+Adoption is four mechanical edits (field, `new`, `guard()` at start, `state_or`
+in `state()`), which is exactly the "a rule applied at N call sites" shape — the
+end state is one `SourceState` every `IOSource` holds, so a source cannot keep a
+bare `IOState` that lies. The register carries the entry.
+
+**Per-source pause is readable, so nothing has to remember it.** The broker owns
+`source_pause_flags` (the merge task still creates each flag, into the shared
+map), `IOSource::paused_source_profile_ids()` reports them, and
+`ActiveSessionInfo` carries the list. `pause_source_polling` and
+`resume_source_polling` broadcast a `SessionLifecycle` event with event type
+`"updated"`, because `useSessionRosterSync` re-fetches on a lifecycle push, on
+mount and on reconnect — and on nothing else. `useModbusPollControl` reads the
+store, so two panels on one session agree and a reload comes back correct; it
+used to hold `isPolling` as optimistic React state because there was nothing to
+read.
+
+That also makes the sweep guard checkable. `endpoint_in_use_by_poller` excludes
+the caller's `target_session_id` only when `stop_target` is set; it used to do so
+unconditionally, on the caller's word. Note that "is it paused?" is *not* the
+test that earns the exemption — a paused poller keeps its socket, which is why
+`holds_socket` counts it. `resume_source_polling` carries the mirror check
+against `scan_holding`.
 
 ---
 

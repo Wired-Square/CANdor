@@ -21,7 +21,21 @@ use crate::queryresults::{
 };
 use crate::settings::IOProfile;
 
-static HTTP: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
+/// The one client for the WireTAP backend gateway — queries here and the frame
+/// stream in `io/recorded/backend_api.rs` alike, so both share a connection pool
+/// and both inherit the connect bound. Without it an unroutable gateway waits out
+/// the OS default, which is minutes.
+static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .connect_timeout(crate::io::net::CONNECT_TIMEOUT)
+        .build()
+        .unwrap_or_default()
+});
+
+/// The shared backend client, for the streaming path in `io/`.
+pub fn http() -> &'static reqwest::Client {
+    &HTTP
+}
 
 /// Queries currently in flight, keyed by `query_id`: what to DELETE to cancel
 /// one, and enough about it to be worth printing in the session status log.

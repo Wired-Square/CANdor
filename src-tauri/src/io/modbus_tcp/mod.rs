@@ -33,6 +33,17 @@ pub fn modbus_endpoint(profile: &crate::settings::IOProfile) -> (String, u16, u8
     )
 }
 
+/// A Modbus profile's `host:port`, spelled the one way.
+///
+/// The contention guards — `scan_holding`, `endpoint_in_use_by_poller` and the
+/// resume check — compare these strings against each other and against
+/// `ScanJob::endpoint()`, so the spelling has to come from one place or the
+/// guards silently stop matching.
+pub fn modbus_endpoint_str(profile: &crate::settings::IOProfile) -> String {
+    let (host, port, _) = modbus_endpoint(profile);
+    format!("{host}:{port}")
+}
+
 /// The session's first *Modbus* source profile — not simply its first, since a
 /// multi-source session may list a CAN source ahead of the Modbus one.
 ///

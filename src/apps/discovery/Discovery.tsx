@@ -544,7 +544,10 @@ function DiscoveryInner() {
     return null;
   }, [ioProfiles, sourceProfileId, sessionId, allIOProfiles, capabilities?.traits?.protocols]);
 
-  const onScanSession = isModbusScanSession(sessionId);
+  // Rust names what it is (`source_type`); the id prefix only covers the beat
+  // between minting the scan session and the roster reconcile landing.
+  const scanSourceType = useSessionStore((s) => s.sessions[sessionId]?.sourceType);
+  const onScanSession = isModbusScanSession(sessionId, scanSourceType);
 
   // The session whose poller the top-bar switch drives, and whether it is
   // actually polling — one fact, so one piece of state.
@@ -736,11 +739,12 @@ function DiscoveryInner() {
       // Capture mode: check capture metadata for bytes type
       newIsSerialMode = captureMetadata?.kind === "bytes" || captureKind === "bytes" || framedCaptureId !== null;
     } else {
-      // Live session: Serial view is for sessions that emit raw byte streams.
-      // Framelink RS-485 interfaces contribute Protocol::Serial to the trait
-      // union but emit framed messages (not raw bytes), so the authoritative
-      // signal is data_streams.rx_bytes — not protocols.
-      newIsSerialMode = capabilities?.data_streams?.rx_bytes ?? false;
+      // Live session: the Serial view belongs to a serial *link*, framed or not.
+      // Not data_streams.rx_bytes — that says whether raw bytes are on the wire,
+      // so a SLIP or Modbus RTU port would lose the view it exists for. Not
+      // protocols either: a FrameLink RS-485 interface contributes
+      // Protocol::Serial but delivers framed messages, and its kind is framelink.
+      newIsSerialMode = capabilities?.serial_link ?? false;
     }
 
     setSerialMode(newIsSerialMode);
@@ -1154,7 +1158,7 @@ function DiscoveryInner() {
             isStreaming={isStreaming}
             displayTimeFormat={displayTimeFormat}
             isRecorded={isRecorded}
-            emitsRawBytes={capabilities?.data_streams.rx_bytes ?? true}
+            emitsRawBytes={capabilities?.data_streams.rx_bytes ?? false}
           />
         ) : (
           <DiscoveryFramesView

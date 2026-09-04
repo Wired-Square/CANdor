@@ -10,6 +10,7 @@ pub mod device_kinds; // Per-kind connection defaults and required fields — on
 pub mod ephemeral; // Ad-hoc devices, overlaid onto settings.io_profiles for this run
 pub mod profiles; // Profile lifecycle: reconfigure a device and reconnect it
 mod error;
+pub mod lifecycle; // Terminal state left behind by a detached source task
 pub mod net; // Shared host/port resolution for TCP transports
 pub(crate) mod periodic; // Shared cadence primitive for interval-driven loops
 mod signal_throttle;
@@ -315,6 +316,20 @@ pub struct IOCapabilities {
     pub traits: InterfaceTraits,
     /// Declares which data streams this session produces (frames, bytes, or both)
     pub data_streams: SessionDataStreams,
+    /// Whether the session's transport is a serial link — a byte stream the user
+    /// can look at and frame for themselves.
+    ///
+    /// Deliberately not the same question as `data_streams.rx_bytes`, which says
+    /// whether raw bytes are actually on the wire *right now*. A framed serial
+    /// link is a serial link with no raw bytes, and the two answers were one
+    /// field until it had to mean both: Discovery used `rx_bytes` to decide
+    /// whether to show the serial view at all, so making that field truthful
+    /// would have hidden the Raw Bytes and Framed tabs from every framed-serial
+    /// source. A FrameLink RS-485 interface is *not* one of these — it puts
+    /// `Protocol::Serial` in the trait union but delivers framed messages, and
+    /// its kind is `framelink`.
+    #[serde(default)]
+    pub serial_link: bool,
 }
 
 impl IOCapabilities {
@@ -347,6 +362,7 @@ impl IOCapabilities {
                 rx_frames: true,
                 rx_bytes: false,
             },
+            serial_link: false,
         }
     }
 
@@ -377,6 +393,7 @@ impl IOCapabilities {
                 rx_frames: true,
                 rx_bytes: false,
             },
+            serial_link: false,
         }
     }
 
@@ -586,6 +603,16 @@ pub trait IOSource: Send + Sync {
     /// Resume polling for a paused source within a multi-source session.
     fn resume_source_polling(&self, _profile_id: &str) -> Result<(), String> {
         Err("This device does not support per-source resume".to_string())
+    }
+
+    /// Profile IDs whose polling is currently paused.
+    ///
+    /// The counterpart to the two calls above, and the reason they can be
+    /// trusted: without it, pause was write-only — the caller had to remember
+    /// what it had asked for, so two panels on one session disagreed and a
+    /// webview reload came back claiming a paused device was polling.
+    fn paused_source_profile_ids(&self) -> Vec<String> {
+        vec![]
     }
 
     /// Add a virtual bus generator to a running session.
@@ -2753,6 +2780,11 @@ pub struct ActiveSessionInfo {
     /// decoder is bound). Authoritative — the frontend mirrors this one-way.
     #[serde(default)]
     pub catalog_path: Option<String>,
+    /// Profile IDs within this session whose polling is paused. Authoritative,
+    /// like `catalog_path`: the poll switch reads it rather than remembering
+    /// what it last asked for.
+    #[serde(default)]
+    pub paused_source_profile_ids: Vec<String>,
 }
 
 /// List all active sessions
@@ -2798,6 +2830,7 @@ pub async fn list_sessions() -> Vec<ActiveSessionInfo> {
                 capture_unique_frame_count,
                 is_streaming,
                 catalog_path: crate::ws::dispatch::attached_catalog_path(session_id),
+                paused_source_profile_ids: session.source.paused_source_profile_ids(),
             }
         })
         .collect()
@@ -3273,31 +3306,44 @@ pub async fn remove_source_from_session(
     Ok(capabilities)
 }
 
-/// Pause polling for a specific source within a running session.
+/// Pause or resume one source, then tell every window the roster moved.
+///
 /// The session stays active and other sources continue normally.
-pub async fn pause_source_in_session(
+///
+/// The broadcast is the half that makes `paused_source_profile_ids` worth
+/// reporting: `useSessionRosterSync` re-fetches on a lifecycle push, on mount and
+/// on reconnect, and nothing else. Without it a second panel on the same session
+/// would keep showing the state it last set for itself.
+pub async fn set_source_polling(
     session_id: &str,
     profile_id: &str,
+    polling: bool,
 ) -> Result<(), String> {
     let sessions = IO_SESSIONS.lock().await;
     let session = sessions
         .get(session_id)
         .ok_or_else(|| format!("Session '{}' not found", session_id))?;
 
-    session.source.pause_source_polling(profile_id)
-}
+    if polling {
+        session.source.resume_source_polling(profile_id)?;
+    } else {
+        session.source.pause_source_polling(profile_id)?;
+    }
 
-/// Resume polling for a paused source within a running session.
-pub async fn resume_source_in_session(
-    session_id: &str,
-    profile_id: &str,
-) -> Result<(), String> {
-    let sessions = IO_SESSIONS.lock().await;
-    let session = sessions
-        .get(session_id)
-        .ok_or_else(|| format!("Session '{}' not found", session_id))?;
-
-    session.source.resume_source_polling(profile_id)
+    emit_session_lifecycle(
+        &session.app,
+        SessionLifecyclePayload {
+            session_id: session_id.to_string(),
+            event_type: "updated".to_string(),
+            source_type: Some(session.source.source_type().to_string()),
+            state: None,
+            subscriber_count: subscriber_count_for_session(session_id),
+            source_profile_ids: sessions::get_session_profile_ids(session_id),
+            creator_subscriber_id: None,
+            reset: false,
+        },
+    );
+    Ok(())
 }
 
 /// Update bus mappings for a source in a multi-source session.

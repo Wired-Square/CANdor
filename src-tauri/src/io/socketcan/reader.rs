@@ -465,7 +465,7 @@ mod linux_impl {
                 }
             }
 
-            let _ = tx_clone.blocking_send(SourceMessage::Ended(source_idx, "stopped".to_string()));
+            let _ = tx_clone.blocking_send(SourceMessage::Ended(source_idx, EndReason::Stopped));
         });
 
         let _ = blocking_handle.await;

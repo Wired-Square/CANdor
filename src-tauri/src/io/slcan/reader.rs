@@ -23,7 +23,7 @@ use tokio::sync::mpsc;
 use crate::io::error::IoError;
 use crate::io::gvret::{apply_bus_mapping, BusMapping};
 use crate::io::serial::utils as serial_utils;
-use crate::io::types::{SourceMessage, TransmitRequest};
+use crate::io::types::{EndReason, SourceMessage, TransmitRequest};
 use crate::io::{now_us, CanTransmitFrame, FrameMessage};
 
 // ============================================================================
@@ -790,7 +790,7 @@ pub async fn run_source(
         let _ = serial_port.write_all(b"C\r");
         let _ = serial_port.flush();
 
-        let _ = tx_clone.blocking_send(SourceMessage::Ended(source_idx, "stopped".to_string()));
+        let _ = tx_clone.blocking_send(SourceMessage::Ended(source_idx, EndReason::Stopped));
     });
 
     let _ = blocking_handle.await;

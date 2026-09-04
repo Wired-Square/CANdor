@@ -45,6 +45,7 @@ mod ios_stub {
     pub async fn apply_framing_to_capture(
         _config: BackendFramingConfig,
         _reuse_capture_id: Option<String>,
+        _reuse_filtered_capture_id: Option<String>,
     ) -> Result<FramingResult, String> {
         Err("Framing is not available on iOS".to_string())
     }
@@ -156,15 +157,59 @@ mod desktop {
         }
     }
 
+    /// Clear and refill `reuse` if it is a derived capture of this session,
+    /// otherwise derive a fresh one. The session's *own* capture is never
+    /// reusable — clearing it would destroy what it is still recording.
+    fn refill_or_derive(
+        session_id: &str,
+        reuse: Option<&str>,
+        name: String,
+        frames: Vec<crate::io::FrameMessage>,
+    ) -> String {
+        let reusable = reuse.filter(|id| {
+            capture_store::get_capture_kind(id) == Some(capture_store::CaptureKind::Frames)
+                && capture_store::is_derived_capture(id, session_id)
+        });
+        match reusable {
+            Some(existing_id) => {
+                capture_store::clear_and_refill_capture(existing_id, frames);
+                existing_id.to_string()
+            }
+            None => {
+                let new_id = capture_store::create_derived_capture(
+                    session_id,
+                    capture_store::CaptureKind::Frames,
+                    name,
+                );
+                capture_store::append_frames_to_capture(&new_id, frames);
+                new_id
+            }
+        }
+    }
+
+    /// Remove a derived capture this run no longer produces, rather than leaving
+    /// it behind showing the previous run's rows.
+    fn drop_derived_capture(session_id: &str, id: Option<&str>) {
+        let Some(id) = id.filter(|id| capture_store::is_derived_capture(id, session_id)) else {
+            return;
+        };
+        if let Err(e) = capture_store::delete_capture(id) {
+            tlog!("[framing] Could not delete stale capture '{}': {}", id, e);
+        }
+    }
+
     /// Apply framing to the active byte capture.
-    /// If `reuse_capture_id` is provided and valid, that capture will be cleared and reused.
-    /// Otherwise, a new frame capture is created.
-    /// This avoids capture proliferation during live framing.
+    ///
+    /// `reuse_capture_id` and `reuse_filtered_capture_id` name the previous run's
+    /// two outputs. Both are cleared and refilled when they are still this
+    /// session's derived captures, so re-framing does not leave a trail of them —
+    /// which is what happened to the filtered one, on every stop.
     #[tauri::command(rename_all = "snake_case")]
     pub async fn apply_framing_to_capture(
         session_id: String,
         config: BackendFramingConfig,
         reuse_capture_id: Option<String>,
+        reuse_filtered_capture_id: Option<String>,
     ) -> Result<FramingResult, String> {
         tlog!("[framing] apply_framing_to_capture called with min_length={:?}", config.min_length);
 
@@ -303,40 +348,27 @@ mod desktop {
             return Err("No frames extracted".to_string());
         }
 
-        // Reuse the previous framing result if there is one, otherwise derive a new
-        // capture. This avoids capture proliferation during live streaming. Only a
-        // *derived* capture may be reused: clearing and refilling the session's own
-        // capture would destroy the data it is still recording.
-        let reusable = reuse_capture_id.as_ref().filter(|id| {
-            capture_store::get_capture_kind(id) == Some(capture_store::CaptureKind::Frames)
-                && capture_store::is_derived_capture(id, &session_id)
-        });
-        let target_capture_id = match reusable {
-            Some(existing_id) => {
-                capture_store::clear_and_refill_capture(existing_id, frame_messages);
-                existing_id.clone()
-            }
-            None => {
-                let new_id = capture_store::create_derived_capture(
-                    &session_id,
-                    capture_store::CaptureKind::Frames,
-                    format!("Framed from {}", capture_id),
-                );
-                capture_store::append_frames_to_capture(&new_id, frame_messages);
-                new_id
-            }
-        };
+        let target_capture_id = refill_or_derive(
+            &session_id,
+            reuse_capture_id.as_deref(),
+            format!("Framed from {}", capture_id),
+            frame_messages,
+        );
 
-        let filtered_capture_id = if !filtered_messages.is_empty() {
-            let filtered_id = capture_store::create_derived_capture(
-                &session_id,
-                capture_store::CaptureKind::Frames,
-                format!("Filtered from {}", capture_id),
-            );
-            capture_store::append_frames_to_capture(&filtered_id, filtered_messages);
-            Some(filtered_id)
-        } else {
+        // The filtered capture gets the same treatment. It used to be created
+        // fresh every call and never reused or deleted, so with a min-length
+        // filter set, each re-frame left another session-owned capture behind —
+        // and framing runs on every stop.
+        let filtered_capture_id = if filtered_messages.is_empty() {
+            drop_derived_capture(&session_id, reuse_filtered_capture_id.as_deref());
             None
+        } else {
+            Some(refill_or_derive(
+                &session_id,
+                reuse_filtered_capture_id.as_deref(),
+                format!("Filtered from {}", capture_id),
+                filtered_messages,
+            ))
         };
 
         // Note: We don't finalize here - the bytes capture stays active for HexDump,

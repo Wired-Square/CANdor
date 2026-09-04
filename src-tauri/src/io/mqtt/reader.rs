@@ -14,7 +14,7 @@
 // }
 
 use async_trait::async_trait;
-use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
+use rumqttc::{AsyncClient, Event, MqttOptions, NetworkOptions, Packet, QoS};
 use serde::Deserialize;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -23,6 +23,7 @@ use std::sync::{
 use tauri::AppHandle;
 use tokio::time::Duration;
 
+use crate::io::lifecycle::{SourceLifecycle, SourceLifecycleGuard};
 use crate::io::{emit_device_connected, emit_session_error, emit_stream_ended, now_us, signal_frames_ready, FrameMessage, IOCapabilities, IOSource, IOState, Protocol, SignalThrottle};
 use crate::capture_store::{self, CaptureKind};
 
@@ -134,6 +135,9 @@ pub struct MqttSource {
     session_id: String,
     config: MqttConfig,
     state: IOState,
+    /// The event loop runs on a detached task; a broker that drops the connection
+    /// ends it without anything calling `stop`.
+    lifecycle: SourceLifecycle,
     cancel_flag: Arc<AtomicBool>,
     task_handle: Option<tauri::async_runtime::JoinHandle<()>>,
 }
@@ -145,6 +149,7 @@ impl MqttSource {
             session_id,
             config,
             state: IOState::Stopped,
+            lifecycle: SourceLifecycle::new(),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             task_handle: None,
         }
@@ -172,7 +177,13 @@ impl IOSource for MqttSource {
         let config = self.config.clone();
         let cancel_flag = self.cancel_flag.clone();
 
-        let handle = spawn_mqtt_stream(app, session_id, config, cancel_flag);
+        let handle = spawn_mqtt_stream(
+            app,
+            session_id,
+            config,
+            cancel_flag,
+            self.lifecycle.guard(IOState::Stopped),
+        );
         self.task_handle = Some(handle);
         self.state = IOState::Running;
 
@@ -211,7 +222,7 @@ impl IOSource for MqttSource {
     }
 
     fn state(&self) -> IOState {
-        self.state.clone()
+        self.lifecycle.state_or(&self.state)
     }
 
     fn session_id(&self) -> &str {
@@ -228,8 +239,12 @@ fn spawn_mqtt_stream(
     session_id: String,
     config: MqttConfig,
     cancel_flag: Arc<AtomicBool>,
+    ended: SourceLifecycleGuard,
 ) -> tauri::async_runtime::JoinHandle<()> {
     tauri::async_runtime::spawn(async move {
+        // Held for the task's life: however this returns — subscribe failure,
+        // broker drop, cancel — the source stops claiming it is running.
+        let _ended = ended;
         // Create a frame capture for this MQTT session (named after session ID)
         capture_store::create_session_capture(&session_id, CaptureKind::Frames, session_id.clone());
 
@@ -254,6 +269,14 @@ fn spawn_mqtt_stream(
 
         // Create async client
         let (client, mut eventloop) = AsyncClient::new(mqttoptions, 100);
+
+        // rumqttc resolves and connects inside its own event loop, so
+        // `io::net::resolve_host_port` cannot wrap it. Without this bound an
+        // unroutable broker leaves the session sitting in "connecting" for as
+        // long as the OS keeps retrying.
+        let mut network_options = NetworkOptions::new();
+        network_options.set_connection_timeout(crate::io::net::CONNECT_TIMEOUT.as_secs());
+        eventloop.set_network_options(network_options);
 
         // Subscribe to topic
         if let Err(e) = client.subscribe(&config.topic, QoS::AtMostOnce).await {

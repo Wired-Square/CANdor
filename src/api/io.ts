@@ -90,6 +90,13 @@ export interface IOCapabilities {
   traits: InterfaceTraits;
   /** Declares which data streams this session produces */
   data_streams: SessionDataStreams;
+  /**
+   * Whether the session's transport is a serial link — a byte stream the user
+   * can look at and frame themselves. Not the same question as
+   * `data_streams.rx_bytes`, which says whether raw bytes are on the wire right
+   * now: a framed serial link is a serial link with no raw bytes.
+   */
+  serial_link?: boolean;
 }
 
 /**
@@ -195,6 +202,43 @@ export interface CreateIOSessionOptions {
  * Create a new IO session.
  * Returns the capabilities of the created IO device.
  */
+/** The eleven serial settings a source can carry, in the spelling Rust reads. */
+interface SerialSettings {
+  framingEncoding?: string;
+  delimiter?: number[];
+  maxFrameLength?: number;
+  minFrameLength?: number;
+  emitRawBytes?: boolean;
+  frameIdStartByte?: number;
+  frameIdBytes?: number;
+  frameIdBigEndian?: boolean;
+  sourceAddressStartByte?: number;
+  sourceAddressBytes?: number;
+  sourceAddressBigEndian?: boolean;
+}
+
+/**
+ * Rust's `SerialOverrides`, from any of the option objects that carry these
+ * fields. Written once because the three send sites had already drifted —
+ * `createMultiSourceSession` was omitting `min_frame_length` — and a silently
+ * dropped serial setting is the bug this whole area exists to stop.
+ */
+function serialPayload(source: SerialSettings): Record<string, unknown> {
+  return {
+    framing_encoding: source.framingEncoding,
+    delimiter: source.delimiter,
+    max_frame_length: source.maxFrameLength,
+    min_frame_length: source.minFrameLength,
+    emit_raw_bytes: source.emitRawBytes,
+    frame_id_start_byte: source.frameIdStartByte,
+    frame_id_bytes: source.frameIdBytes,
+    frame_id_big_endian: source.frameIdBigEndian,
+    source_address_start_byte: source.sourceAddressStartByte,
+    source_address_bytes: source.sourceAddressBytes,
+    source_address_big_endian: source.sourceAddressBigEndian,
+  };
+}
+
 export async function createIOSession(
   options: CreateIOSessionOptions
 ): Promise<IOCapabilities> {
@@ -215,21 +259,6 @@ export async function createIOSession(
     speed: options.speed,
     limit: options.limit,
     file_path: options.filePath,
-    // Framing configuration
-    framing_encoding: options.framingEncoding,
-    delimiter: options.delimiter,
-    max_frame_length: options.maxFrameLength,
-    // Frame ID extraction
-    frame_id_start_byte: options.frameIdStartByte,
-    frame_id_bytes: options.frameIdBytes,
-    frame_id_big_endian: options.frameIdBigEndian,
-    // Source address extraction
-    source_address_start_byte: options.sourceAddressStartByte,
-    source_address_bytes: options.sourceAddressBytes,
-    source_address_big_endian: options.sourceAddressBigEndian,
-    // Other options
-    min_frame_length: options.minFrameLength,
-    emit_raw_bytes: options.emitRawBytes,
     // Bus override for single-bus devices
     bus_override: options.busOverride,
     // Listener ID for session logging
@@ -238,6 +267,10 @@ export async function createIOSession(
     app_name: options.appName,
     // Modbus TCP poll groups (catalog-derived)
     modbus_polls: options.modbusPollsJson,
+    // Serial settings chosen for this session, overriding the device profile.
+    // One object rather than eleven loose keys: as loose keys they were dropped
+    // silently for months when the Rust side stopped declaring them.
+    serial: serialPayload(options),
   });
 }
 
@@ -941,26 +974,14 @@ export async function addSourceToSession(
   sessionId: string,
   source: MultiSourceInput
 ): Promise<IOCapabilities> {
-  // Convert TypeScript camelCase to Rust snake_case
-  const rustSource = {
-    profile_id: source.profileId,
-    display_name: source.displayName,
-    bus_mappings: source.busMappings.map(encodeBusMapping),
-    framing_encoding: source.framingEncoding,
-    delimiter: source.delimiter,
-    max_frame_length: source.maxFrameLength,
-    min_frame_length: source.minFrameLength,
-    emit_raw_bytes: source.emitRawBytes,
-    frame_id_start_byte: source.frameIdStartByte,
-    frame_id_bytes: source.frameIdBytes,
-    frame_id_big_endian: source.frameIdBigEndian,
-    source_address_start_byte: source.sourceAddressStartByte,
-    source_address_bytes: source.sourceAddressBytes,
-    source_address_big_endian: source.sourceAddressBigEndian,
-  };
   return invoke("add_source_to_session_cmd", {
     session_id: sessionId,
-    source: rustSource,
+    source: {
+      profile_id: source.profileId,
+      display_name: source.displayName,
+      bus_mappings: source.busMappings.map(encodeBusMapping),
+      ...serialPayload(source),
+    },
   });
 }
 
@@ -1320,29 +1341,16 @@ export interface CreateMultiSourceSessionOptions {
 export async function createMultiSourceSession(
   options: CreateMultiSourceSessionOptions
 ): Promise<IOCapabilities> {
-  // Convert TypeScript camelCase to Rust snake_case for the sources
-  const rustSources = options.sources.map((source) => ({
-    profile_id: source.profileId,
-    display_name: source.displayName,
-    bus_mappings: source.busMappings.map(encodeBusMapping),
-    // Serial framing options (overrides profile settings)
-    framing_encoding: source.framingEncoding,
-    delimiter: source.delimiter,
-    max_frame_length: source.maxFrameLength,
-    emit_raw_bytes: source.emitRawBytes,
-    // Frame ID extraction options (from catalog config)
-    frame_id_start_byte: source.frameIdStartByte,
-    frame_id_bytes: source.frameIdBytes,
-    frame_id_big_endian: source.frameIdBigEndian,
-    source_address_start_byte: source.sourceAddressStartByte,
-    source_address_bytes: source.sourceAddressBytes,
-    source_address_big_endian: source.sourceAddressBigEndian,
-    modbus_role: source.modbusRole,
-  }));
-
   return invoke("create_multi_source_session", {
     session_id: options.sessionId,
-    sources: rustSources,
+    // Convert TypeScript camelCase to Rust snake_case for the sources
+    sources: options.sources.map((source) => ({
+      profile_id: source.profileId,
+      display_name: source.displayName,
+      bus_mappings: source.busMappings.map(encodeBusMapping),
+      modbus_role: source.modbusRole,
+      ...serialPayload(source),
+    })),
     subscriber_id: options.subscriberId,
     app_name: options.appName,
     modbus_polls: options.modbusPollsJson,
@@ -1381,6 +1389,8 @@ export interface ActiveSessionInfo {
   isStreaming: boolean;
   /** Source path of the catalogue attached for live decode (Rust-authoritative). */
   catalogPath: string | null;
+  /** Profile IDs in this session whose polling is paused (Rust-authoritative). */
+  pausedSourceProfileIds: string[];
 }
 
 /**
@@ -1412,6 +1422,7 @@ export async function listActiveSessions(): Promise<ActiveSessionInfo[]> {
     capture_unique_frame_count: number | null;
     is_streaming: boolean;
     catalog_path: string | null;
+    paused_source_profile_ids: string[] | null;
   }> = await invoke("list_active_sessions");
 
   return raw.map((s) => ({
@@ -1433,6 +1444,7 @@ export async function listActiveSessions(): Promise<ActiveSessionInfo[]> {
     captureUniqueFrameCount: s.capture_unique_frame_count ?? null,
     isStreaming: s.is_streaming ?? false,
     catalogPath: s.catalog_path ?? null,
+    pausedSourceProfileIds: s.paused_source_profile_ids ?? [],
   }));
 }
 

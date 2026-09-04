@@ -90,6 +90,17 @@ import {
  */
 const EXPECTED_MISSING_ENTITY = /^(Session|Capture)\b.*\bnot found$/;
 
+/**
+ * One register group the device declined, which a poller reports and then keeps
+ * polling through — routine on a device whose map does not match the catalogue.
+ *
+ * Anchored for the same reason as the clause above: as a bare substring test it
+ * would swallow any message that merely quoted this text, and the poller's own
+ * shape is exact — `poll.rs` formats `Modbus read error (<type> @ <reg>): …`.
+ * A connection-level Modbus failure is phrased differently and still surfaces.
+ */
+const EXPECTED_MODBUS_READ_ERROR = /^Modbus read error \(.+ @ \d+\):/;
+
 /** Stream-end reasons that mean something other than a plain stop. */
 const IO_STATE_FOR_STREAM_END: Partial<Record<string, IOStateType>> = {
   paused: "paused",
@@ -242,6 +253,14 @@ export interface Session {
   catalogPath: string | null;
   /** Capture ID for raw byte streams (Rust-authoritative, arrives with the byte count) */
   bytesCaptureId: string | null;
+  /**
+   * What kind of source is behind this session ("modbus_scan", "gvret_tcp", …),
+   * from the roster. Undefined until the first reconcile, which is why the
+   * `m_scan` id prefix stays as a fallback for the beat before it lands.
+   */
+  sourceType?: string;
+  /** Profile IDs in this session whose polling is paused (Rust-authoritative). */
+  pausedSourceProfileIds: string[];
   /** True when adopted from the backend roster (known-only, not UI-owned). */
   external?: boolean;
 }
@@ -600,7 +619,7 @@ async function setupSessionEventSubscribers(
           const isExpectedError =
             error === "No IO profile configured" ||
             EXPECTED_MISSING_ENTITY.test(error) ||
-            error.includes("Modbus read error");
+            EXPECTED_MODBUS_READ_ERROR.test(error);
           if (!isExpectedError) {
             invokeCallbacks(eventListeners, "onError", error);
             if (typeof getGlobalShowAppError === "function") {
@@ -1019,6 +1038,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             playbackPosition: null,
             catalogPath: null,
             bytesCaptureId: null,
+            pausedSourceProfileIds: [],
           };
           set((s) => ({
             sessions: { ...s.sessions, [sessionId]: errorSession },
@@ -1163,6 +1183,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         playbackPosition: existingSession?.playbackPosition ?? null,
         catalogPath: existingSession?.catalogPath ?? null,
         bytesCaptureId: existingSession?.bytesCaptureId ?? null,
+        sourceType: existingSession?.sourceType,
+        // Rust owns this; the next roster reconcile fills it in. A session that
+        // has only just been created has nothing paused yet.
+        pausedSourceProfileIds: existingSession?.pausedSourceProfileIds ?? [],
       };
 
       return {

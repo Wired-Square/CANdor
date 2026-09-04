@@ -30,7 +30,8 @@ use tokio::sync::mpsc;
 use crate::capture_store::{self, CaptureKind};
 use crate::io::error::IoError;
 use crate::io::gvret::{apply_bus_mapping, BusMapping};
-use crate::io::types::{SourceMessage, TransmitRequest, TransmitSender};
+use crate::io::lifecycle::SourceLifecycle;
+use crate::io::types::{EndReason, SourceMessage, TransmitRequest, TransmitSender};
 use crate::io::{
     emit_session_error, emit_stream_ended, now_us, signal_frames_ready, CanTransmitFrame,
     FrameMessage, IOCapabilities, IOSource, IOState, SignalThrottle, TransmitPayload,
@@ -346,6 +347,9 @@ pub struct GsUsbSource {
     session_id: String,
     config: GsUsbConfig,
     state: IOState,
+    /// The read loop runs on a detached task; a device unplugged mid-session ends
+    /// it without anything calling `stop`.
+    lifecycle: SourceLifecycle,
     cancel_flag: Arc<AtomicBool>,
     task_handle: Option<tauri::async_runtime::JoinHandle<()>>,
     /// Channel sender for transmit requests (allows sync transmit_frame calls)
@@ -359,6 +363,7 @@ impl GsUsbSource {
             session_id,
             config,
             state: IOState::Stopped,
+            lifecycle: SourceLifecycle::new(),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             task_handle: None,
             transmit_tx: Arc::new(Mutex::new(None)),
@@ -403,8 +408,13 @@ impl IOSource for GsUsbSource {
         let config = self.config.clone();
         let cancel_flag = self.cancel_flag.clone();
 
-        let handle = spawn_gs_usb_stream(app, session_id, config, cancel_flag, transmit_rx);
-        self.task_handle = Some(handle);
+        // Held for the task's life, so an open failure or a device that goes away
+        // mid-stream stops the source claiming it is running.
+        let ended = self.lifecycle.guard(IOState::Stopped);
+        self.task_handle = Some(tauri::async_runtime::spawn(async move {
+            let _ended = ended;
+            run_gs_usb_stream(app, session_id, config, cancel_flag, transmit_rx).await;
+        }));
         self.state = IOState::Running;
 
         Ok(())
@@ -447,7 +457,7 @@ impl IOSource for GsUsbSource {
     }
 
     fn state(&self) -> IOState {
-        self.state.clone()
+        self.lifecycle.state_or(&self.state)
     }
 
     fn session_id(&self) -> &str {
@@ -511,18 +521,6 @@ impl IOSource for GsUsbSource {
 // ============================================================================
 // Stream Implementation
 // ============================================================================
-
-fn spawn_gs_usb_stream(
-    app_handle: AppHandle,
-    session_id: String,
-    config: GsUsbConfig,
-    cancel_flag: Arc<AtomicBool>,
-    transmit_rx: Option<std_mpsc::Receiver<TransmitRequest>>,
-) -> tauri::async_runtime::JoinHandle<()> {
-    tauri::async_runtime::spawn(async move {
-        run_gs_usb_stream(app_handle, session_id, config, cancel_flag, transmit_rx).await;
-    })
-}
 
 async fn run_gs_usb_stream(
     _app_handle: AppHandle,
@@ -1458,6 +1456,6 @@ pub async fn run_source(
     let _ = stop_device(&interface, &config).await;
 
     let _ = tx
-        .send(SourceMessage::Ended(source_idx, "stopped".to_string()))
+        .send(SourceMessage::Ended(source_idx, EndReason::Stopped))
         .await;
 }

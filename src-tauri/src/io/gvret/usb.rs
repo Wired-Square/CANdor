@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::io::error::IoError;
-use crate::io::types::{SourceMessage, TransmitRequest};
+use crate::io::types::{EndReason, SourceMessage, TransmitRequest};
 use super::common::{
     absorb_num_buses_reply, apply_bus_mappings_gvret, parse_gvret_frames, resolve_source_mappings,
     BusMapping, NumBusesOutcome, BINARY_MODE_ENABLE, DEVICE_INFO_PROBE, GVRET_CMD_NUMBUSES,
@@ -329,7 +329,7 @@ pub async fn run_source(
             }
         }
 
-        let _ = tx_clone.blocking_send(SourceMessage::Ended(source_idx, "stopped".to_string()));
+        let _ = tx_clone.blocking_send(SourceMessage::Ended(source_idx, EndReason::Stopped));
     });
 
     // Wait for the blocking task

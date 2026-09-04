@@ -19,6 +19,20 @@ use crate::io::error::IoError;
 /// thread stays parked until libc gives up.
 pub const DNS_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long to wait for a TCP connection that a client library opens for itself.
+///
+/// [`resolve_host_port`] cannot wrap a transport that resolves *inside* its own
+/// client — rumqttc and reqwest both do — so those two get a library-level bound
+/// instead. Without one they inherit the OS default, which on an unreachable host
+/// is a couple of minutes of a session that looks like it is still connecting.
+///
+/// A fixed value rather than a profile field: neither `mqtt` nor `wiretap`
+/// declares a `timeout` in `device_kinds`, and inventing one for two kinds when
+/// the setting would be identical everywhere is not worth the settings surface.
+/// It bounds the connect only; a slow *response* from a broker or backend that
+/// answered is a different problem with a different fix.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Resolve a `host` (IP literal or DNS name) and `port` to a [`SocketAddr`].
 ///
 /// Parsing `"host:port"` straight into a [`SocketAddr`] only accepts numeric IP

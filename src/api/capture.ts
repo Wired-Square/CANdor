@@ -701,17 +701,21 @@ export interface FramingResult {
  *
  * @param config - Framing configuration
  * @param reuseCaptureId - Optional ID of existing framing capture to reuse (avoids proliferation)
+ * @param reuseFilteredCaptureId - Same, for the too-short frames the min-length
+ *   filter sets aside. Pass it or each re-frame leaves the previous one behind.
  * @returns Result with frame count and capture ID (same as reuseCaptureId if reused, or new ID)
  */
 export async function applyFramingToCapture(
   sessionId: string,
   config: BackendFramingConfig,
-  reuseCaptureId?: string | null
+  reuseCaptureId?: string | null,
+  reuseFilteredCaptureId?: string | null
 ): Promise<FramingResult> {
   return invoke("apply_framing_to_capture", {
     session_id: sessionId,
     config,
     reuse_capture_id: reuseCaptureId ?? null,
+    reuse_filtered_capture_id: reuseFilteredCaptureId ?? null,
   });
 }
 

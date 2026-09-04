@@ -10,7 +10,7 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
 use crate::io::error::IoError;
-use crate::io::types::{SourceMessage, TransmitRequest};
+use crate::io::types::{EndReason, SourceMessage, TransmitRequest};
 use super::common::{
     absorb_num_buses_reply, apply_bus_mappings_gvret, parse_gvret_frames, resolve_source_mappings,
     BusMapping, NumBusesOutcome, BINARY_MODE_ENABLE, DEVICE_INFO_PROBE, GVRET_CMD_NUMBUSES,
@@ -267,7 +267,7 @@ pub async fn run_source(
             Ok(Ok(0)) => {
                 // Connection closed
                 let _ = tx
-                    .send(SourceMessage::Ended(source_idx, "disconnected".to_string()))
+                    .send(SourceMessage::Ended(source_idx, EndReason::Disconnected))
                     .await;
                 return;
             }
@@ -303,7 +303,7 @@ pub async fn run_source(
     transmit_task.abort();
 
     let _ = tx
-        .send(SourceMessage::Ended(source_idx, "stopped".to_string()))
+        .send(SourceMessage::Ended(source_idx, EndReason::Stopped))
         .await;
 }
 

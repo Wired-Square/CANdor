@@ -338,6 +338,37 @@ pub fn conn_bool(profile: &IOProfile, key: &str) -> Option<bool> {
     })
 }
 
+/// What a serial source will actually run with: the framing name, and whether
+/// raw bytes go on the wire alongside any frames.
+///
+/// A session override wins, then the profile's saved setting, then the kind
+/// default. Raw framing *is* the byte stream, so it always emits bytes; every
+/// other framing does so only when asked.
+///
+/// **This has to be resolved once, before the session exists.** The reader
+/// resolves the same pair for itself in `serial::utils::parse_profile_for_source`,
+/// but that runs on a background task long after `IOBroker` has decided which
+/// captures to create and what to put in `IOCapabilities`. When the two
+/// disagreed, a framed serial profile opened as a single source got a bytes
+/// capture nothing ever wrote to, no frames capture at all, and every framed row
+/// dropped on the floor.
+pub fn resolve_serial_framing(
+    profile: &IOProfile,
+    framing_override: Option<&str>,
+    emit_raw_bytes_override: Option<bool>,
+) -> (String, bool) {
+    // `conn_str` falls through to the kind's declared default, so for a serial
+    // profile — the only kind that reaches here in practice — the last arm is
+    // unreachable and the table's `("framing_encoding", "raw")` decides.
+    let framing = framing_override
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| conn_str(profile, "framing_encoding"))
+        .unwrap_or_else(|| "raw".to_string());
+    let emit_raw_bytes = framing == "raw" || emit_raw_bytes_override.unwrap_or(false);
+    (framing, emit_raw_bytes)
+}
+
 /// The error a reader reports for a field it could not resolve. For a field the
 /// table declares this is unreachable — pinned by `every_default_reads_back` —
 /// so the message is phrased for the case that does happen: a *required* field
@@ -668,5 +699,62 @@ mod tests {
         let mut p = profile("modbus_tcp");
         apply_defaults(&mut p);
         assert!(validate_profile(&p, &[]).is_ok());
+    }
+
+    fn serial_profile(framing: &str) -> IOProfile {
+        let mut p = profile("serial");
+        p.connection.insert(
+            "framing_encoding".to_string(),
+            serde_json::Value::String(framing.to_string()),
+        );
+        p
+    }
+
+    /// The broker decides which captures a session gets from these two answers,
+    /// before any reader runs. A framed serial profile that resolved to "raw"
+    /// here got a bytes capture nothing wrote to and no frames capture at all.
+    #[test]
+    fn a_framed_serial_profile_does_not_resolve_to_raw_bytes() {
+        assert_eq!(
+            resolve_serial_framing(&serial_profile("slip"), None, None),
+            ("slip".to_string(), false)
+        );
+        assert_eq!(
+            resolve_serial_framing(&serial_profile("raw"), None, None),
+            ("raw".to_string(), true)
+        );
+    }
+
+    /// An unset framing falls to the kind default, which is raw — so a profile
+    /// predating the field still streams bytes rather than nothing.
+    #[test]
+    fn an_unset_framing_falls_back_to_the_kind_default() {
+        assert_eq!(
+            resolve_serial_framing(&profile("serial"), None, None),
+            ("raw".to_string(), true)
+        );
+    }
+
+    /// The picker's dropdown and its "Capture raw bytes" tick, which the single-
+    /// source path used to drop on the floor.
+    #[test]
+    fn a_session_override_wins_over_the_profile() {
+        assert_eq!(
+            resolve_serial_framing(&serial_profile("raw"), Some("modbus_rtu"), None),
+            ("modbus_rtu".to_string(), false)
+        );
+        assert_eq!(
+            resolve_serial_framing(&serial_profile("slip"), None, Some(true)),
+            ("slip".to_string(), true)
+        );
+    }
+
+    /// A cleared form field writes `""`, which must not read as a framing name.
+    #[test]
+    fn a_blank_override_is_not_a_framing() {
+        assert_eq!(
+            resolve_serial_framing(&serial_profile("slip"), Some(""), None),
+            ("slip".to_string(), false)
+        );
     }
 }

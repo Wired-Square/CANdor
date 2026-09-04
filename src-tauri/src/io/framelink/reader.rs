@@ -16,7 +16,7 @@ use framelink::protocol::types::{IFACE_CAN, IFACE_CANFD, IFACE_RS232, IFACE_RS48
 
 use crate::io::error::IoError;
 use crate::io::gvret::BusMapping;
-use crate::io::types::{SourceMessage, TransmitRequest};
+use crate::io::types::{EndReason, SourceMessage, TransmitRequest};
 use crate::io::Protocol;
 
 /// Frames buffered before a flush, independent of the 1 ms tick.
@@ -189,7 +189,7 @@ pub async fn run_source(
     }
 
     let _ = tx
-        .send(SourceMessage::Ended(source_idx, "stopped".to_string()))
+        .send(SourceMessage::Ended(source_idx, EndReason::Stopped))
         .await;
 }
 /// Build the bus mappings a session actually streams, from the interfaces the

@@ -13,7 +13,7 @@ use crate::{
         reconfigure_session, register_subscriber, reinitialize_session_if_safe, resume_session,
         resume_session_fresh, seek_session, seek_session_by_frame, set_subscriber_active, start_session, stop_session,
         stop_and_switch_to_capture, suspend_session, switch_to_capture_replay, resume_to_live_session, transmit_frame, unregister_subscriber,
-        evict_session_subscriber, leave_session_to_capture, add_source_to_session, remove_source_from_session, update_source_bus_mappings, pause_source_in_session, resume_source_in_session, get_session_source_count,
+        evict_session_subscriber, leave_session_to_capture, add_source_to_session, remove_source_from_session, update_source_bus_mappings, set_source_polling, get_session_source_count,
         update_session_direction, update_session_speed, update_session_time_range, ActiveSessionInfo, IOCapabilities, IOSource, IOState,
         SubscriberInfo, RegisterSubscriberResult, ReinitializeResult, CaptureSource, step_frame, StepResult,
         BusMapping, Protocol, TemporalMode,
@@ -270,6 +270,12 @@ fn random_hex6() -> String {
 /// type. It is cosmetic — nothing parses the id — but owned here, not in the
 /// frontend. Modbus anywhere wins; otherwise the first resolvable profile decides
 /// (matches the old frontend behaviour of keying on the first enabled mapping).
+///
+/// Whether a serial source emits bytes is resolved here rather than taken from
+/// the caller: the frontend does not know a profile's framing before the session
+/// exists, so it always said `false` and every raw serial session came out `f_`.
+/// An explicit `emit_raw_bytes` still wins — the picker's "Capture raw bytes"
+/// puts bytes on a framed link.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn generate_session_id(
     app: tauri::AppHandle,
@@ -280,9 +286,14 @@ pub async fn generate_session_id(
         .await
         .map_err(|e| format!("Failed to load settings: {}", e))?;
     let mut protocol: Option<&str> = None;
+    let mut emits_bytes = false;
     for id in &profile_ids {
         if let Some(p) = settings.io_profiles.iter().find(|p| &p.id == id) {
             let proto = protocol_for_kind(&p.kind);
+            if proto == "serial" {
+                emits_bytes |=
+                    device_kinds::resolve_serial_framing(p, None, emit_raw_bytes).1;
+            }
             if proto == "modbus" {
                 protocol = Some("modbus");
                 break;
@@ -294,7 +305,7 @@ pub async fn generate_session_id(
     }
     let prefix = match protocol {
         Some("modbus") => "m",
-        Some("serial") if emit_raw_bytes.unwrap_or(false) => "b",
+        Some("serial") if emits_bytes => "b",
         Some("can") | Some("serial") => "f",
         _ => "s",
     };
@@ -310,6 +321,69 @@ fn is_realtime_device(kind: &str) -> bool {
     )
 }
 
+/// Session-level serial settings, as the picker sends them for one source.
+/// Every field is optional: absent means "whatever the device profile says".
+///
+/// Declared once and reached by both session-creation paths — the single-device
+/// command takes it whole, `MultiSourceInput` flattens it — so a twelfth serial
+/// knob is added here rather than in three structs and two field-by-field copies.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SerialOverrides {
+    pub framing_encoding: Option<String>,
+    pub delimiter: Option<Vec<u8>>,
+    pub max_frame_length: Option<usize>,
+    pub min_frame_length: Option<usize>,
+    pub emit_raw_bytes: Option<bool>,
+    pub frame_id_start_byte: Option<i32>,
+    pub frame_id_bytes: Option<u8>,
+    pub frame_id_big_endian: Option<bool>,
+    pub source_address_start_byte: Option<i32>,
+    pub source_address_bytes: Option<u8>,
+    pub source_address_big_endian: Option<bool>,
+}
+
+impl SerialOverrides {
+    /// Copy the overrides onto a source, then settle the two fields the broker
+    /// reads before any reader runs.
+    fn apply(self, config: &mut SourceConfig, profile: &IOProfile) {
+        config.framing_encoding = self.framing_encoding;
+        config.delimiter = self.delimiter;
+        config.max_frame_length = self.max_frame_length;
+        config.min_frame_length = self.min_frame_length;
+        config.emit_raw_bytes = self.emit_raw_bytes;
+        config.frame_id_start_byte = self.frame_id_start_byte;
+        config.frame_id_bytes = self.frame_id_bytes;
+        config.frame_id_big_endian = self.frame_id_big_endian;
+        config.source_address_start_byte = self.source_address_start_byte;
+        config.source_address_bytes = self.source_address_bytes;
+        config.source_address_big_endian = self.source_address_big_endian;
+        resolve_serial_fields(config, profile);
+    }
+}
+
+/// Resolve a serial source's framing onto the config, so the broker reads a
+/// settled answer rather than an absence.
+///
+/// `IOBroker` decides which captures a session gets, and what `IOCapabilities`
+/// reports, from `SourceConfig.framing_encoding` alone — before any reader has
+/// run. Leaving it `None` meant "raw" to the broker and something else entirely
+/// to the port, and the two disagreeing is what made a framed single-source
+/// session build a bytes capture nothing wrote to, no frames capture at all, and
+/// drop every framed row.
+fn resolve_serial_fields(config: &mut SourceConfig, profile: &IOProfile) {
+    if config.profile_kind != "serial" {
+        return;
+    }
+    let (framing, emit_raw_bytes) = device_kinds::resolve_serial_framing(
+        profile,
+        config.framing_encoding.as_deref(),
+        config.emit_raw_bytes,
+    );
+    config.framing_encoding = Some(framing);
+    config.emit_raw_bytes = Some(emit_raw_bytes);
+}
+
 /// Create a SourceConfig from an IOProfile for use with IOBroker.
 /// This extracts the common device configuration logic used by both single-device
 /// and multi-device session creation.
@@ -319,6 +393,7 @@ fn is_realtime_device(kind: &str) -> bool {
 fn create_source_config_from_profile(
     profile: &IOProfile,
     bus_override: Option<u8>,
+    serial: SerialOverrides,
 ) -> Option<SourceConfig> {
     if !is_realtime_device(&profile.kind) {
         return None;
@@ -333,30 +408,19 @@ fn create_source_config_from_profile(
         create_default_bus_mapping(profile, bus_override)
     };
 
-    Some(SourceConfig {
+    let mut config = SourceConfig {
         profile_id: profile.id.clone(),
         profile_kind: profile.kind.clone(),
         display_name: profile.name.clone(),
         bus_mappings,
-        // Single-source sessions don't pass framing through session options
-        // (they use profile.connection settings or session-level reinitialize options)
-        framing_encoding: None,
-        delimiter: None,
-        max_frame_length: None,
-        min_frame_length: None,
-        emit_raw_bytes: None,
-        // Frame ID extraction - not passed for single-source (uses profile settings)
-        frame_id_start_byte: None,
-        frame_id_bytes: None,
-        frame_id_big_endian: None,
-        source_address_start_byte: None,
-        source_address_bytes: None,
-        source_address_big_endian: None,
         // Modbus fields - populated later by create_multi_source_session
         modbus_polls: None,
         modbus_role: None,
         max_register_errors: None,
-    })
+        ..SourceConfig::default()
+    };
+    serial.apply(&mut config, profile);
+    Some(config)
 }
 
 /// The protocol a settings string names, defaulting to classic CAN.
@@ -680,6 +744,7 @@ fn framelink_bus_mapping(iface_index: u8, iface_type: u8, output_bus: u8) -> Bus
 
 /// Create a new reader session
 #[tauri::command(rename_all = "snake_case")]
+#[allow(clippy::too_many_arguments)]
 pub async fn create_reader_session(
     app: tauri::AppHandle,
     session_id: String,
@@ -697,6 +762,13 @@ pub async fn create_reader_session(
     app_name: Option<String>,
     // Modbus TCP poll groups (JSON-serialised from frontend catalog)
     modbus_polls: Option<String>,
+    // Serial framing chosen in the picker, overriding the device profile.
+    // These arrived as eleven flat parameters until Feb 2026, when they were
+    // removed as unused — they were unread here, but the frontend was, and still
+    // is, sending them, so the picker's framing dropdown and its "Capture raw
+    // bytes" tick quietly went nowhere on the single-device path.
+    // Optional so a caller with nothing to say — MCP — can omit it.
+    serial: Option<SerialOverrides>,
 ) -> Result<IOCapabilities, String> {
     let settings = settings::load_settings(app.clone())
         .await
@@ -720,8 +792,11 @@ pub async fn create_reader_session(
     let is_realtime = is_realtime_device(&profile.kind);
     let reader: Box<dyn IOSource> = if is_realtime {
         // Use IOBroker for all real-time devices (unified path)
-        let source_config = create_source_config_from_profile(&profile, bus_override)
-            .ok_or_else(|| format!("Failed to create source config for profile '{}'", profile.id))?;
+        let source_config =
+            create_source_config_from_profile(&profile, bus_override, serial.unwrap_or_default())
+                .ok_or_else(|| {
+                    format!("Failed to create source config for profile '{}'", profile.id)
+                })?;
 
         Box::new(IOBroker::single_source(
             app.clone(),
@@ -1358,7 +1433,9 @@ pub async fn resume_session_to_live(
             ));
         }
 
-        let source_config = create_source_config_from_profile(profile, None)
+        // No session overrides on this path — the original ones went with the
+        // stored configs this branch is the fallback for, so the profile decides.
+        let source_config = create_source_config_from_profile(profile, None, SerialOverrides::default())
             .ok_or_else(|| format!("Failed to create source config for profile '{}'", profile_id))?;
 
         vec![source_config]
@@ -1592,16 +1669,39 @@ pub async fn pause_source_polling(
     session_id: String,
     profile_id: String,
 ) -> Result<(), String> {
-    pause_source_in_session(&session_id, &profile_id).await
+    set_source_polling(&session_id, &profile_id, false).await
 }
 
 /// Resume polling for a paused source within a running session.
+///
+/// Refuses while a sweep holds the same endpoint. `create_modbus_scan_session`
+/// has always refused the mirror image — a sweep while a poller holds the device
+/// — and the poll switch makes "resume the poller during a sweep" a one-click
+/// action from the same top bar, so guarding one direction only was an asymmetry
+/// with a UI behind it.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn resume_source_polling(
+    app: tauri::AppHandle,
     session_id: String,
     profile_id: String,
 ) -> Result<(), String> {
-    resume_source_in_session(&session_id, &profile_id).await
+    let settings = crate::settings::load_settings_sync(&app)?;
+    // `modbus_tcp` rather than any Modbus protocol: a sweep is a TCP endpoint,
+    // which is also how `session_modbus_profile` narrows.
+    if let Some(profile) = settings
+        .io_profiles
+        .iter()
+        .find(|p| p.id == profile_id && p.kind == "modbus_tcp")
+    {
+        let endpoint = crate::io::modbus_tcp::modbus_endpoint_str(profile);
+        if let Some(holder) = crate::io::modbus_tcp::scan_source::scan_holding(&endpoint) {
+            return Err(format!(
+                "A Modbus scan of {endpoint} is running as session '{holder}' — that device may \
+                 only serve one Modbus connection at a time. Wait for the scan, or stop it."
+            ));
+        }
+    }
+    set_source_polling(&session_id, &profile_id, true).await
 }
 
 /// Update bus mappings for a source in a multi-source session.
@@ -2246,39 +2346,10 @@ pub struct MultiSourceInput {
     pub display_name: Option<String>,
     /// Bus mappings for this source
     pub bus_mappings: Vec<BusMapping>,
-    /// Framing encoding for serial sources (overrides profile settings if provided)
-    #[serde(default)]
-    pub framing_encoding: Option<String>,
-    /// Delimiter bytes for delimiter-based framing
-    #[serde(default)]
-    pub delimiter: Option<Vec<u8>>,
-    /// Maximum frame length for delimiter-based framing
-    #[serde(default)]
-    pub max_frame_length: Option<usize>,
-    /// Minimum frame length - frames shorter than this are discarded
-    #[serde(default)]
-    pub min_frame_length: Option<usize>,
-    /// Whether to emit raw bytes in addition to framed data
-    #[serde(default)]
-    pub emit_raw_bytes: Option<bool>,
-    /// Frame ID extraction: start byte position (0-indexed)
-    #[serde(default)]
-    pub frame_id_start_byte: Option<i32>,
-    /// Frame ID extraction: number of bytes (1 or 2)
-    #[serde(default)]
-    pub frame_id_bytes: Option<u8>,
-    /// Frame ID extraction: byte order (true = big endian)
-    #[serde(default)]
-    pub frame_id_big_endian: Option<bool>,
-    /// Source address extraction: start byte position (0-indexed)
-    #[serde(default)]
-    pub source_address_start_byte: Option<i32>,
-    /// Source address extraction: number of bytes (1 or 2)
-    #[serde(default)]
-    pub source_address_bytes: Option<u8>,
-    /// Source address extraction: byte order (true = big endian)
-    #[serde(default)]
-    pub source_address_big_endian: Option<bool>,
+    /// Serial framing for this source, overriding the device profile. Flattened,
+    /// so the wire shape stays the flat keys the frontend has always sent.
+    #[serde(flatten)]
+    pub serial: SerialOverrides,
     /// Modbus interface role (client or server)
     #[serde(default)]
     pub modbus_role: Option<ModbusRole>,
@@ -2314,26 +2385,20 @@ fn resolve_source_config(
     };
     io::traits::normalise_bus_traits(&mut bus_mappings, &profile_kind);
 
-    Ok(SourceConfig {
+    let mut config = SourceConfig {
         profile_id: input.profile_id,
         profile_kind,
         display_name,
         bus_mappings,
-        framing_encoding: input.framing_encoding,
-        delimiter: input.delimiter,
-        max_frame_length: input.max_frame_length,
-        min_frame_length: input.min_frame_length,
-        emit_raw_bytes: input.emit_raw_bytes,
-        frame_id_start_byte: input.frame_id_start_byte,
-        frame_id_bytes: input.frame_id_bytes,
-        frame_id_big_endian: input.frame_id_big_endian,
-        source_address_start_byte: input.source_address_start_byte,
-        source_address_bytes: input.source_address_bytes,
-        source_address_big_endian: input.source_address_big_endian,
         modbus_polls: None,    // Injected by create_multi_source_session
         modbus_role: input.modbus_role,
         max_register_errors: None, // Injected by create_multi_source_session
-    })
+        ..SourceConfig::default()
+    };
+    // A multi-source serial interface the picker left alone arrives with no
+    // framing either, and the broker reads this config the same way.
+    input.serial.apply(&mut config, profile);
+    Ok(config)
 }
 
 /// Create a multi-source reader session that combines frames from multiple devices.
@@ -2567,8 +2632,7 @@ async fn endpoint_in_use_by_poller(
         else {
             continue;
         };
-        let (host, port, _) = crate::io::modbus_endpoint(profile);
-        if format!("{host}:{port}") == endpoint {
+        if crate::io::modbus_tcp::modbus_endpoint_str(profile) == endpoint {
             return Some((info.session_id.clone(), profile.name.clone()));
         }
     }
@@ -2650,12 +2714,14 @@ pub async fn create_modbus_scan_session(
     }
 
     if !allow_contention.unwrap_or(false) {
-        // The target is excluded on the caller's word that it has dealt with it —
-        // by passing `stop_target`, or by not holding the device in the first
-        // place. Anything *else* on that endpoint still conflicts. No caller
-        // passes a target today; see the note on the parameters above.
+        // The target is excluded only when the caller has asked for it to be
+        // stopped, a few lines below. It used to be excluded unconditionally on
+        // the caller's word that it had "already dealt with it" — an exemption
+        // nobody paid for, and one pausing cannot earn either: a paused poller
+        // keeps its socket, which is exactly why `holds_socket` above counts it.
+        let stopping_target = stop_target.unwrap_or(false);
         let exclude: Vec<&str> = std::iter::once(session_id.as_str())
-            .chain(target_session_id.as_deref())
+            .chain(target_session_id.as_deref().filter(|_| stopping_target))
             .collect();
         if let Some((holder, name)) =
             endpoint_in_use_by_poller(&settings, &endpoint, &exclude).await

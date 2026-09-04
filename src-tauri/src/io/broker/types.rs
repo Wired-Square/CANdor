@@ -20,7 +20,7 @@ pub enum ModbusRole {
 }
 
 /// Configuration for a single source in a multi-source session
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct SourceConfig {
     /// Profile ID for this source
     pub profile_id: String,
@@ -86,6 +86,11 @@ pub(super) struct TransmitRoute {
     /// Device bus number to use when transmitting
     pub device_bus: u8,
 }
+
+/// Whether each source's polling is paused, by profile id. Shared between the
+/// broker (which reports it) and the merge task (which creates the flags and
+/// hands each source its own).
+pub(super) type SourcePauseFlags = Arc<Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>;
 
 /// Shared transmit channels by source index
 pub(super) type TransmitChannels = Arc<Mutex<HashMap<usize, TransmitSender>>>;

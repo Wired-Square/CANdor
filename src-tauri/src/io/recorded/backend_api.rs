@@ -293,7 +293,11 @@ async fn run_api_stream(
     const NO_LIMIT_YIELD_MS: u64 = 2;
 
     let mut fetcher = CursorFetcher {
-        client: reqwest::Client::new(),
+        // The same client the query path uses — one pool for one gateway, and it
+        // carries `net::CONNECT_TIMEOUT`, which reqwest needs because it resolves
+        // inside itself where `resolve_host_port` cannot reach. Connect only: a
+        // page of frames may legitimately take a while to come back.
+        client: crate::apiclient::http().clone(),
         base_url: config.base_url.clone(),
         api_key: config.api_key.clone(),
         database: config.database.clone(),

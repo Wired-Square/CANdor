@@ -961,6 +961,9 @@ pub fn send_session_lifecycle(payload: &crate::io::SessionLifecyclePayload) {
         "error" => 4,
         _ => 0,
     });
+    // "updated" (a source paused or resumed) rides the "created" code: every
+    // global consumer re-fetches the roster on any lifecycle push and reads the
+    // answer from there, so a third code would be one nothing branches on.
     let event_type = match payload.event_type.as_str() {
         "created" => 0u8,
         "destroyed" => 1,

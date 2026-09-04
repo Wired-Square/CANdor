@@ -35,8 +35,8 @@ use super::scanner::{
 };
 use crate::capture_store::{self, CaptureKind};
 use crate::io::{
-    emit_device_connected, emit_session_error, emit_stream_ended, IOCapabilities, IOSource,
-    IOState, Protocol,
+    emit_device_connected, emit_session_error, emit_stream_ended, lifecycle::SourceLifecycle,
+    IOCapabilities, IOSource, IOState, Protocol,
 };
 
 // ============================================================================
@@ -134,6 +134,10 @@ pub struct ModbusScanSource {
     session_id: String,
     job: ScanJob,
     state: IOState,
+    /// The sweep runs on a detached task, so `state` alone would report `Running`
+    /// for a sweep that finished — which is what Discovery's poller latch was
+    /// compensating for.
+    lifecycle: SourceLifecycle,
     cancel_flag: Arc<AtomicBool>,
     handle: Option<tauri::async_runtime::JoinHandle<()>>,
 }
@@ -146,6 +150,7 @@ impl ModbusScanSource {
             session_id,
             job,
             state: IOState::Stopped,
+            lifecycle: SourceLifecycle::new(),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             handle: None,
         }
@@ -190,8 +195,10 @@ impl IOSource for ModbusScanSource {
         let session_id = self.session_id.clone();
         let job = self.job.clone();
         let cancel = self.cancel_flag.clone();
+        let ended = self.lifecycle.guard(IOState::Stopped);
 
         self.handle = Some(tauri::async_runtime::spawn(async move {
+            let _ended = ended;
             let sink = FrameSink::SessionCapture { session_id: session_id.clone() };
             let outcome = match job {
                 ScanJob::Registers { config } => {
@@ -266,7 +273,7 @@ impl IOSource for ModbusScanSource {
     }
 
     fn state(&self) -> IOState {
-        self.state.clone()
+        self.lifecycle.state_or(&self.state)
     }
 
     fn session_id(&self) -> &str {

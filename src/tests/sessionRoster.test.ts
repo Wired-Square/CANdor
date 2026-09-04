@@ -27,6 +27,7 @@ const info = (sessionId: string, profileId = "io_x") =>
     captureId: null,
     captureFrameCount: null,
     isStreaming: true,
+    pausedSourceProfileIds: [],
   }) as unknown as ActiveSessionInfo;
 
 describe("reconcileKnownSessions", () => {
@@ -46,6 +47,10 @@ describe("reconcileKnownSessions", () => {
       ioState: "stopped",
       subscriberCount: 0,
       capabilities: undefined,
+      // Matching what `info()` reports, so a test that means "nothing changed"
+      // is not quietly asserting the opposite.
+      sourceType: "framelink",
+      pausedSourceProfileIds: [],
       capture: {
         available: false, id: null, kind: null, count: 0, owningSessionId: null,
         startTimeUs: null, endTimeUs: null, name: "My capture", persistent: true,
@@ -93,6 +98,24 @@ describe("reconcileKnownSessions", () => {
     ]);
     expect(next.f_mcp1).not.toBe(owned);
     expect(next.f_mcp1.capture.kind).toBe("bytes");
+  });
+
+  // `source_type` crossed the boundary all along and was dropped here, so the
+  // poll switch keyed off the session-id prefix instead; `pausedSourceProfileIds`
+  // is new, and replaces the switch's optimistic local copy.
+  it("carries the source type and paused sources onto an adopted entry", () => {
+    const paused = { ...info("m_scan1"), pausedSourceProfileIds: ["io_x"] } as ActiveSessionInfo;
+    const next = reconcileKnownSessions({}, [paused]);
+    expect(next.m_scan1.sourceType).toBe("framelink");
+    expect(next.m_scan1.pausedSourceProfileIds).toEqual(["io_x"]);
+  });
+
+  it("rebuilds an entry when only the paused sources changed", () => {
+    const owned = ownedSession({ ioState: "running", subscriberCount: 1, capabilities: caps });
+    const paused = { ...info("f_mcp1"), pausedSourceProfileIds: ["io_x"] } as ActiveSessionInfo;
+    const next = reconcileKnownSessions({ f_mcp1: owned }, [paused]);
+    expect(next.f_mcp1).not.toBe(owned);
+    expect(next.f_mcp1.pausedSourceProfileIds).toEqual(["io_x"]);
   });
 
   it("removes an external entry that vanished from the roster", () => {

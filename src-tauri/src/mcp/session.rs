@@ -141,6 +141,8 @@ pub async fn open(
         Some("mcp".to_string()),
         Some("mcp".to_string()),
         modbus_polls,
+        // No picker, so no session-level framing: the device profile decides.
+        None,
     )
     .await?;
 

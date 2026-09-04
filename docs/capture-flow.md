@@ -325,6 +325,14 @@ capture_store::finalize_session_captures(&session_id);
 — owned for cleanup, never mistaken for the session's own, and the only kind of
 capture it will clear and refill on a re-frame.
 
+It produces **two** captures when a minimum frame length is set: the framed
+result and the too-short frames the filter set aside. Both are refilled in place
+(`refill_or_derive`), and the caller passes both previous ids back. The filtered
+one used to be created fresh every call and never reused or deleted, so with a
+filter set each re-frame left another session-owned capture behind — and framing
+runs on every stop. A run that filters nothing deletes the previous filtered
+capture rather than leaving it showing the last run's rows.
+
 ---
 
 ## 7. Persistence

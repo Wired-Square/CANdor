@@ -20,6 +20,38 @@ pub struct ByteEntry {
     pub bus: u8,
 }
 
+/// Why a source's read loop finished.
+///
+/// The rule is *`Ended` = we asked, `Error` = we didn't*, and it used to be a
+/// convention over a free-text reason: every producer sent `Ended`, the merge
+/// task counted it down, and a GVRET adapter pulled out of its socket mid-session
+/// finished the run as `"complete"`. Making the reason a type means a new driver
+/// has to say which of the two happened, and the answer is checked rather than
+/// spelled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EndReason {
+    /// The stop flag was set — the user, or the session, asked for this.
+    Stopped,
+    /// The peer closed or the device went away without being asked to.
+    Disconnected,
+}
+
+impl EndReason {
+    /// True when nobody asked for this ending, so the session must report an error.
+    pub fn is_fault(self) -> bool {
+        matches!(self, EndReason::Disconnected)
+    }
+}
+
+impl std::fmt::Display for EndReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            EndReason::Stopped => "stopped",
+            EndReason::Disconnected => "disconnected",
+        })
+    }
+}
+
 /// Internal message from sub-readers to the merge task
 pub enum SourceMessage {
     /// Frames from a source (source_index, frames)
@@ -29,7 +61,7 @@ pub enum SourceMessage {
     #[cfg_attr(target_os = "ios", allow(dead_code))]
     Bytes(usize, Vec<ByteEntry>),
     /// Source ended (source_index, reason)
-    Ended(usize, String),
+    Ended(usize, EndReason),
     /// Source error (source_index, error)
     Error(usize, String),
     /// Transmit channel is ready (source_index, transmit_sender)
@@ -91,4 +123,26 @@ pub struct SetFramingRequest {
 
 /// Sender type for control requests (sync-safe), mirroring `TransmitSender`.
 pub type ControlSender = std_mpsc::SyncSender<SetFramingRequest>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The whole point of the type: exactly one ending is a fault, and the merge
+    /// task raises a session error for it. A device pulled mid-session used to
+    /// finish the run as "complete" because every producer sent the same `Ended`.
+    #[test]
+    fn only_an_unasked_for_ending_is_a_fault() {
+        assert!(EndReason::Disconnected.is_fault());
+        assert!(!EndReason::Stopped.is_fault());
+    }
+
+    /// The log lines these replaced were free text; keeping the same words means
+    /// an existing log filter still matches.
+    #[test]
+    fn the_reason_prints_the_word_it_replaced() {
+        assert_eq!(EndReason::Stopped.to_string(), "stopped");
+        assert_eq!(EndReason::Disconnected.to_string(), "disconnected");
+    }
+}
 

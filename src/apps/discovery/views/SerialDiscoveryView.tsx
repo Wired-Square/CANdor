@@ -23,11 +23,11 @@ interface SerialDiscoveryViewProps {
   isStreaming?: boolean;
   displayTimeFormat?: 'delta-last' | 'delta-start' | 'timestamp' | 'human';
   isRecorded?: boolean;
-  /** Whether the session emits raw bytes (from capabilities) - defaults to true for standalone serial */
-  emitsRawBytes?: boolean;
+  /** Whether the session emits raw bytes (from capabilities.data_streams) */
+  emitsRawBytes: boolean;
 }
 
-export default function SerialDiscoveryView({ isStreaming = false, displayTimeFormat = 'human', isRecorded = false, emitsRawBytes = true }: SerialDiscoveryViewProps) {
+export default function SerialDiscoveryView({ isStreaming = false, displayTimeFormat = 'human', isRecorded = false, emitsRawBytes }: SerialDiscoveryViewProps) {
   const [showFramingDialog, setShowFramingDialog] = useState(false);
   const [showFilterDialog, setShowFilterDialog] = useState(false);
   const [showRawBytesViewDialog, setShowRawBytesViewDialog] = useState(false);

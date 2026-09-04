@@ -15,7 +15,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::io::gvret::{apply_bus_mapping, BusMapping};
-use crate::io::types::{ByteEntry, SetFramingRequest, SourceMessage, TransmitRequest};
+use crate::io::types::{ByteEntry, EndReason, SetFramingRequest, SourceMessage, TransmitRequest};
 use crate::io::{now_us, FrameMessage};
 
 // Re-export Parity for external use
@@ -274,10 +274,8 @@ pub async fn run_source(
                 }
                 Ok(0) => {
                     // EOF - port disconnected
-                    let _ = tx_clone.blocking_send(SourceMessage::Ended(
-                        source_idx,
-                        "disconnected".to_string(),
-                    ));
+                    let _ = tx_clone
+                        .blocking_send(SourceMessage::Ended(source_idx, EndReason::Disconnected));
                     return;
                 }
                 Ok(_) => {}
@@ -307,7 +305,7 @@ pub async fn run_source(
             }
         }
 
-        let _ = tx_clone.blocking_send(SourceMessage::Ended(source_idx, "stopped".to_string()));
+        let _ = tx_clone.blocking_send(SourceMessage::Ended(source_idx, EndReason::Stopped));
     });
 
     let _ = blocking_handle.await;

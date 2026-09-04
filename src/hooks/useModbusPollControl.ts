@@ -7,17 +7,21 @@
 // reconnect when it changes, while Discovery only needs the device to stop
 // talking so its sweeps can have it.
 //
-// The state is optimistic. Per-source pause is not reported back anywhere — it
-// is absent from `ActiveSessionInfo` — so "is it polling?" is what we last
-// successfully asked for, seeded to true because a source starts polling.
+// The state is read from the session roster, which Rust owns. It used to be
+// optimistic React state — "is it polling?" was whatever we last successfully
+// asked for — because per-source pause was write-only: the flags lived inside
+// the broker's detached merge task and nothing could read them back. Two panels
+// on one session each kept their own answer, and a webview reload came back
+// claiming a paused device was polling.
 //
 // Pausing stops requests, not the connection: the socket stays open. That is
 // deliberate and it is why a device that serves one Modbus conversation at a
 // time still has to be stopped, not merely paused, before a second client can
 // reach it.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback } from "react";
 import { pauseSourcePolling, resumeSourcePolling } from "../api/io";
+import { useSessionStore } from "../stores/sessionStore";
 import { tlog } from "../api/settings";
 
 export interface UseModbusPollControlOptions {
@@ -38,30 +42,31 @@ export function useModbusPollControl({
   sessionId,
   profileId,
 }: UseModbusPollControlOptions): UseModbusPollControlApi {
-  const [isPolling, setIsPolling] = useState(true);
+  // A source starts polling, so an unknown session or an unlisted profile reads
+  // as polling — the same seed the optimistic version used, now only covering
+  // the window before the first reconcile rather than the whole session.
+  const isPolling = useSessionStore((s) =>
+    !sessionId || !profileId
+      ? true
+      : !(s.sessions[sessionId]?.pausedSourceProfileIds ?? []).includes(profileId),
+  );
 
-  // Follow the source, not the component: a pause applies to one source in one
-  // session and does not survive either changing. Without this the flag outlives
-  // what it describes — switch to a second Modbus device while the first is
-  // paused and the switch would still read "paused" over a device that is
-  // polling.
-  useEffect(() => {
-    setIsPolling(true);
-  }, [sessionId, profileId]);
+  // Rust broadcasts a lifecycle event on pause and resume, so `useSessionRosterSync`
+  // re-fetches and every panel on the session follows. Nothing is set here.
+  const setPolling = useCallback(
+    (polling: boolean) => {
+      if (!sessionId || !profileId) return;
+      const call = polling ? resumeSourcePolling : pauseSourcePolling;
+      call(sessionId, profileId).catch((e: unknown) =>
+        tlog.info(`[useModbusPollControl] ${polling ? "Resume" : "Pause"} polling failed: ${e}`),
+      );
+    },
+    [sessionId, profileId],
+  );
 
-  const pausePolling = useCallback(() => {
-    if (!sessionId || !profileId) return;
-    pauseSourcePolling(sessionId, profileId)
-      .then(() => setIsPolling(false))
-      .catch((e: unknown) => tlog.info(`[useModbusPollControl] Pause polling failed: ${e}`));
-  }, [sessionId, profileId]);
-
-  const resumePolling = useCallback(() => {
-    if (!sessionId || !profileId) return;
-    resumeSourcePolling(sessionId, profileId)
-      .then(() => setIsPolling(true))
-      .catch((e: unknown) => tlog.info(`[useModbusPollControl] Resume polling failed: ${e}`));
-  }, [sessionId, profileId]);
-
-  return { isPolling, pausePolling, resumePolling };
+  return {
+    isPolling,
+    pausePolling: useCallback(() => setPolling(false), [setPolling]),
+    resumePolling: useCallback(() => setPolling(true), [setPolling]),
+  };
 }

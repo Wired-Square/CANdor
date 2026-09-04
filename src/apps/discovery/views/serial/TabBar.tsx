@@ -36,8 +36,8 @@ interface TabBarProps {
   onOpenFilterDialog: () => void;
   /** Whether framing has been accepted - hides Raw Bytes tab when true */
   framingAccepted?: boolean;
-  /** Whether the session emits raw bytes (from capabilities) - defaults to true for standalone serial */
-  emitsRawBytes?: boolean;
+  /** Whether the session emits raw bytes (from capabilities.data_streams) */
+  emitsRawBytes: boolean;
   /** Called when a closeable tab's close button is clicked */
   onTabClose?: (tabId: string) => void;
 }
@@ -58,7 +58,7 @@ export default function TabBar({
   onOpenFramingDialog,
   onOpenFilterDialog,
   framingAccepted = false,
-  emitsRawBytes = true, // Default true for standalone serial sessions
+  emitsRawBytes,
   onTabClose,
 }: TabBarProps) {
   const { t } = useTranslation("discovery");

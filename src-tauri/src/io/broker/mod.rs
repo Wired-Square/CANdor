@@ -23,6 +23,7 @@ use super::gvret::{encode_gvret_frame, validate_gvret_frame, BusMapping};
 use super::slcan::encode_transmit_frame as encode_slcan_frame;
 #[cfg(target_os = "linux")]
 use super::socketcan::{encode_frame as encode_socketcan_frame, EncodedFrame};
+use super::lifecycle::SourceLifecycle;
 use super::traits::validate_session_traits;
 use super::types::{SetFramingRequest, SourceMessage, TransmitRequest};
 use super::{
@@ -36,7 +37,7 @@ use super::gs_usb::encode_frame as encode_gs_usb_frame;
 
 use merge::run_merge_task;
 pub use types::{ModbusRole, SourceConfig};
-use types::{ControlChannels, TransmitChannels, TransmitRoute};
+use types::{ControlChannels, SourcePauseFlags, TransmitChannels, TransmitRoute};
 
 // ============================================================================
 // Virtual Bus Control (shared with generator tasks)
@@ -119,6 +120,16 @@ pub struct IOBroker {
     /// receive and transmit disagree about which buses exist, which is why the
     /// first attempt at this was reverted.
     resolved_mappings: Arc<Mutex<HashMap<String, Vec<BusMapping>>>>,
+    /// Whether each source's polling is paused, by profile id.
+    ///
+    /// Owned here rather than inside the merge task, which is where the map was
+    /// built: reachable one way through `MergeCommand` and readable from nowhere,
+    /// so nothing could answer "is this source paused?" and the poll switch kept
+    /// its own optimistic copy in React — two panels on one session each
+    /// believing something different, and a webview reload starting at "polling"
+    /// over a paused device. The map is shared with the merge task, which still
+    /// creates the flags (a hot-added source gets one there).
+    source_pause_flags: SourcePauseFlags,
     /// Derived session traits from all interfaces
     session_traits: InterfaceTraits,
     /// Whether this session emits raw bytes (for serial sources without framing)
@@ -134,16 +145,16 @@ pub struct IOBroker {
     /// is why a session whose sources all failed to connect used to keep
     /// reporting `Running` to `get_session_state` indefinitely.
     fatal_error: Arc<Mutex<Option<String>>>,
-    /// Set when the merge task returns, for any reason, error or not.
+    /// Stamped when the merge task returns, for any reason, error or not.
     ///
     /// `fatal_error` only covers the error case, so a session that ended
-    /// *cleanly* — a Modbus source with no poll groups ends as `no_polls` within
-    /// a millisecond of starting — went on reporting `Running` forever. That is
+    /// *cleanly* — a Modbus source with no poll groups stands down within a
+    /// millisecond of starting — went on reporting `Running` forever. That is
     /// not cosmetic: `StreamEnded` is a push on the session channel, and a
     /// subscriber that attaches after it fired never learns, so the state read
     /// at registration is the only thing left to tell it — and
     /// `endpoint_in_use_by_poller` reads it to decide whether a sweep may run.
-    ended: Arc<AtomicBool>,
+    lifecycle: SourceLifecycle,
 }
 
 impl IOBroker {
@@ -259,23 +270,14 @@ impl IOBroker {
 
         let (tx, rx) = mpsc::channel(SOURCE_CHANNEL_CAPACITY);
 
-        // Determine if this session emits raw bytes
-        // Raw bytes are emitted if any serial source either:
-        // 1. Has no framing (raw mode), or
-        // 2. Has framing but emit_raw_bytes is explicitly true
-        let emits_raw_bytes = sources.iter().any(|source| {
-            if source.profile_kind != "serial" {
-                return false;
-            }
-            let framing = source.framing_encoding.as_deref().unwrap_or("raw");
-            if framing == "raw" {
-                // No framing means raw bytes are emitted
-                true
-            } else {
-                // Has framing - only emit raw bytes if explicitly requested
-                source.emit_raw_bytes.unwrap_or(false)
-            }
-        });
+        // `sessions::resolve_serial_fields` settles both serial fields against
+        // the profile before the config reaches us, so this reads the answer
+        // rather than restating the rule. It used to derive it from
+        // `framing_encoding`, which single-source sessions left absent — read as
+        // "raw", so a framed device got a bytes capture nothing wrote to.
+        let emits_raw_bytes = sources
+            .iter()
+            .any(|s| s.profile_kind == "serial" && s.emit_raw_bytes.unwrap_or(false));
 
         Ok(Self {
             app,
@@ -291,13 +293,14 @@ impl IOBroker {
             control_channels: Arc::new(Mutex::new(HashMap::new())),
             framing_overrides: Arc::new(Mutex::new(HashMap::new())),
             resolved_mappings: Arc::new(Mutex::new(HashMap::new())),
+            source_pause_flags: Arc::new(Mutex::new(HashMap::new())),
             session_traits,
             emits_raw_bytes,
             virtual_bus_controls: Arc::new(Mutex::new(HashMap::new())),
             merge_cmd_tx: Arc::new(Mutex::new(None)),
             virtual_cmd_txs: Arc::new(Mutex::new(HashMap::new())),
             fatal_error: Arc::new(Mutex::new(None)),
-            ended: Arc::new(AtomicBool::new(false)),
+            lifecycle: SourceLifecycle::new(),
         })
     }
 
@@ -408,6 +411,26 @@ impl IOBroker {
             .unwrap_or_else(|| self.session_traits.clone())
     }
 
+    /// Whether this session produces framed messages: any non-serial source
+    /// does, and a serial source does once it has framing.
+    ///
+    /// Honours a live `set_framing` override over the static config. Both the
+    /// capability and the decision to create a frames capture in `start()` read
+    /// this — they were two copies of the rule, and only one of them knew about
+    /// overrides.
+    fn emits_frames(&self) -> bool {
+        let overrides = self.framing_overrides.lock().ok();
+        self.sources.iter().enumerate().any(|(idx, s)| {
+            let framing = overrides
+                .as_ref()
+                .and_then(|o| o.get(&idx))
+                .map(String::as_str)
+                .or(s.framing_encoding.as_deref())
+                .unwrap_or("raw");
+            s.profile_kind != "serial" || framing != "raw"
+        })
+    }
+
     /// Get combined capabilities from all sources
     fn combined_capabilities(&self) -> IOCapabilities {
         // Multi-source sessions have limited capabilities
@@ -431,19 +454,6 @@ impl IOBroker {
         let mut buses: Vec<u8> = routes.keys().copied().collect();
         buses.sort();
 
-        // Emits frames if any source is non-serial, or if any serial source has
-        // framing — honouring a live `set_framing` override over the static config.
-        let overrides = self.framing_overrides.lock().ok();
-        let rx_frames = self.sources.iter().enumerate().any(|(idx, s)| {
-            let framing = overrides
-                .as_ref()
-                .and_then(|o| o.get(&idx))
-                .map(String::as_str)
-                .or(s.framing_encoding.as_deref())
-                .unwrap_or("raw");
-            s.profile_kind != "serial" || framing != "raw"
-        });
-
         IOCapabilities {
             can_pause: false,
             supports_time_range: false,
@@ -459,9 +469,12 @@ impl IOBroker {
                 ..session_traits.clone()
             },
             data_streams: SessionDataStreams {
-                rx_frames,
+                rx_frames: self.emits_frames(),
                 rx_bytes: self.emits_raw_bytes,
             },
+            // The transport, not the stream: a framed serial link is still one
+            // the Discovery serial view belongs on, even with no raw bytes.
+            serial_link: self.sources.iter().any(|s| s.profile_kind == "serial"),
         }
     }
 
@@ -629,13 +642,7 @@ impl IOSource for IOBroker {
         }
 
         // Determine if any source produces actual frames (vs just raw bytes)
-        let has_framing = self.sources.iter().any(|source| {
-            if source.profile_kind != "serial" {
-                return true; // Non-serial sources produce frames
-            }
-            let framing = source.framing_encoding.as_deref().unwrap_or("raw");
-            framing != "raw" // Serial sources with non-raw framing produce frames
-        });
+        let has_framing = self.emits_frames();
 
         // Orphan any existing capture owned by this session (e.g., from a previous bookmark jump)
         // This makes the old capture selectable in "Orphaned Captures" while creating a fresh one
@@ -716,8 +723,13 @@ impl IOSource for IOBroker {
             resolved.clear();
         }
         let resolved_mappings = self.resolved_mappings.clone();
-        self.ended.store(false, Ordering::SeqCst);
-        let ended = self.ended.clone();
+        // A previous run's sources are gone; their pause flags must not outlive
+        // them and answer for the ones replacing them.
+        if let Ok(mut flags) = self.source_pause_flags.lock() {
+            flags.clear();
+        }
+        let source_pause_flags = self.source_pause_flags.clone();
+        let ended = self.lifecycle.guard(IOState::Stopped);
 
         // Create command channel for hot source add/remove
         let (merge_cmd_tx, merge_cmd_rx) = mpsc::unbounded_channel::<MergeCommand>();
@@ -727,6 +739,11 @@ impl IOSource for IOBroker {
 
         // Spawn the merge task that collects frames from all sources
         let merge_handle = tokio::spawn(async move {
+            // Held for the task's life rather than set at the end: `run_merge_task`
+            // also returns early when settings fail to load, and a flag stored at
+            // one of two exit points is exactly the hole this closes. The
+            // invariant is "the task has returned ⇒ nothing is running".
+            let _ended = ended;
             run_merge_task(
                 app,
                 session_id,
@@ -744,14 +761,9 @@ impl IOSource for IOBroker {
                 virtual_cmd_txs,
                 fatal_error,
                 resolved_mappings,
+                source_pause_flags,
             )
             .await;
-            // Set here rather than inside the task: `run_merge_task` returns
-            // early when settings fail to load, and a flag stored at one of two
-            // exit points is exactly the hole this exists to close. The
-            // invariant is "the task has returned ⇒ nothing is running", so it
-            // belongs where the task returns.
-            ended.store(true, Ordering::SeqCst);
         });
 
         self.task_handles.push(merge_handle);
@@ -830,10 +842,7 @@ impl IOSource for IOBroker {
         }
         // A merge task that has exited leaves nothing running, whatever `state`
         // was set to at start.
-        if self.ended.load(Ordering::SeqCst) {
-            return IOState::Stopped;
-        }
-        self.state.clone()
+        self.lifecycle.state_or(&self.state)
     }
 
     fn session_id(&self) -> &str {
@@ -1009,6 +1018,21 @@ impl IOSource for IOBroker {
 
     fn pause_source_polling(&self, profile_id: &str) -> Result<(), String> {
         self.pause_source(profile_id)
+    }
+
+    fn paused_source_profile_ids(&self) -> Vec<String> {
+        let Ok(flags) = self.source_pause_flags.lock() else {
+            return vec![];
+        };
+        let mut paused: Vec<String> = flags
+            .iter()
+            .filter(|(_, flag)| flag.load(Ordering::Relaxed))
+            .map(|(profile_id, _)| profile_id.clone())
+            .collect();
+        // A HashMap's order is arbitrary; the roster diffs this list to decide
+        // whether a session entry changed, so it has to be stable.
+        paused.sort();
+        paused
     }
 
     fn resume_source_polling(&self, profile_id: &str) -> Result<(), String> {

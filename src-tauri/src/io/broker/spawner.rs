@@ -28,7 +28,7 @@ use crate::io::serial::{parse_profile_for_source, run_source as run_serial_sourc
 #[cfg(not(target_os = "ios"))]
 use crate::io::slcan::run_slcan_source;
 use crate::io::framelink::reader::run_source as run_framelink_source;
-use crate::io::types::{SourceMessage, TransmitRequest};
+use crate::io::types::{EndReason, SourceMessage, TransmitRequest};
 use crate::settings::IOProfile;
 use super::{VirtualBusCommand, VirtualBusControl, VirtualBusControls};
 
@@ -620,7 +620,7 @@ async fn run_virtual_reader(
     }
 
     let _ = tx
-        .send(SourceMessage::Ended(source_idx, "stopped".to_string()))
+        .send(SourceMessage::Ended(source_idx, EndReason::Stopped))
         .await;
     Ok(())
 }
@@ -808,12 +808,9 @@ async fn run_modbus_tcp_client(
             "[ModbusTCP] Source {} has no poll groups — waiting for catalog reinitialise",
             source_idx
         );
-        let _ = tx
-            .send(SourceMessage::Ended(
-                source_idx,
-                "no_polls".to_string(),
-            ))
-            .await;
+        // Deliberate, not a fault: the source stands down until a catalogue
+        // gives it something to poll.
+        let _ = tx.send(SourceMessage::Ended(source_idx, EndReason::Stopped)).await;
         return Ok(());
     }
 
@@ -878,7 +875,7 @@ async fn run_modbus_tcp_client(
     }
 
     let _ = tx
-        .send(SourceMessage::Ended(source_idx, "stopped".to_string()))
+        .send(SourceMessage::Ended(source_idx, EndReason::Stopped))
         .await;
     Ok(())
 }
@@ -985,7 +982,7 @@ async fn run_modbus_tcp_server(
     }
 
     let _ = tx
-        .send(SourceMessage::Ended(source_idx, "stopped".to_string()))
+        .send(SourceMessage::Ended(source_idx, EndReason::Stopped))
         .await;
     Ok(())
 }

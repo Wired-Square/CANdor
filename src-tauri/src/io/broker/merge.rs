@@ -10,13 +10,64 @@ use tokio::sync::mpsc;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use super::spawner::run_source_reader;
-use super::types::{ControlChannels, SourceConfig, TransmitChannels};
+use super::types::{ControlChannels, SourceConfig, SourcePauseFlags, TransmitChannels};
 use super::{MergeCommand, VirtualBusCommand, VirtualBusControls, VirtualCmdTx};
 use crate::settings;
 use crate::capture_store::{self, TimestampedByte};
+use crate::io::error::IoError;
 use crate::io::gvret::BusMapping;
 use crate::io::types::SourceMessage;
 use crate::io::{emit_device_connected, emit_session_error, emit_stream_ended, signal_bytes_ready, signal_frames_ready, FrameMessage, SignalThrottle};
+
+/// Who a source index belongs to, for the two things that have to name a source
+/// after it has started: reconciled bus mappings (by profile) and a disconnect
+/// error (by the name the user gave the device).
+struct SourceIdentity {
+    profile_id: String,
+    display_name: String,
+}
+
+impl SourceIdentity {
+    fn of(config: &SourceConfig) -> Self {
+        Self {
+            profile_id: config.profile_id.clone(),
+            display_name: config.display_name.clone(),
+        }
+    }
+}
+
+/// Make a source's pause flag and publish it in the shared map, so the broker can
+/// report whether the source is paused without reaching into this task.
+fn register_pause_flag(flags: &SourcePauseFlags, profile_id: &str) -> Arc<AtomicBool> {
+    let flag = Arc::new(AtomicBool::new(false));
+    if let Ok(mut map) = flags.lock() {
+        map.insert(profile_id.to_string(), flag.clone());
+    }
+    flag
+}
+
+/// Set or clear one source's pause flag, logging what happened either way.
+fn set_pause_flag(flags: &SourcePauseFlags, profile_id: &str, paused: bool) {
+    let verb = if paused { "Paused" } else { "Resumed" };
+    match flags.lock().ok().and_then(|map| map.get(profile_id).cloned()) {
+        Some(flag) => {
+            flag.store(paused, Ordering::Relaxed);
+            tlog!("[IOBroker] {} source polling (profile '{}')", verb, profile_id);
+        }
+        None => tlog!("[IOBroker] {}: profile '{}' has no pause flag", verb, profile_id),
+    }
+}
+
+/// Forget a departing source's pause flag.
+///
+/// The map is published through `ActiveSessionInfo` and rendered by the poll
+/// switch, so a hot-removed source left in it reports a device that is no longer
+/// there as paused.
+fn forget_pause_flag(flags: &SourcePauseFlags, profile_id: &str) {
+    if let Ok(mut map) = flags.lock() {
+        map.remove(profile_id);
+    }
+}
 
 /// Minimum pending frames before emission.
 const FRAME_BATCH_THRESHOLD: usize = 100;
@@ -45,6 +96,7 @@ pub(super) async fn run_merge_task(
     virtual_cmd_txs: Arc<Mutex<HashMap<usize, VirtualCmdTx>>>,
     fatal_error: Arc<Mutex<Option<String>>>,
     resolved_mappings: Arc<Mutex<HashMap<String, Vec<BusMapping>>>>,
+    source_pause_flags: SourcePauseFlags,
 ) {
     // Profiles for the initial spawn only — hot-adds re-read, since they exist
     // to pick up a profile that has changed. Narrowed from the whole AppSettings
@@ -63,12 +115,12 @@ pub(super) async fn run_merge_task(
     let mut next_source_idx = sources.len();
     // Per-source stop flags for hot-remove
     let mut source_stop_flags: HashMap<String, Arc<AtomicBool>> = HashMap::new();
-    // Per-source pause flags for pause/resume polling
-    let mut source_pause_flags: HashMap<String, Arc<AtomicBool>> = HashMap::new();
     // A reader identifies itself by source index; everything that has to
     // survive a hot add/remove is keyed by profile id, because `next_source_idx`
     // only ever grows while the broker's `sources` vec is compacted on removal.
-    let mut source_profiles: HashMap<usize, String> = HashMap::new();
+    // The display name rides along because `sources` cannot be indexed by a
+    // hot-added source's index.
+    let mut source_profiles: HashMap<usize, SourceIdentity> = HashMap::new();
     for (index, source_config) in sources.iter().enumerate() {
         let profile = match io_profiles.iter().find(|p| p.id == source_config.profile_id) {
             Some(p) => p.clone(),
@@ -83,9 +135,8 @@ pub(super) async fn run_merge_task(
 
         let source_stop = Arc::new(AtomicBool::new(false));
         source_stop_flags.insert(source_config.profile_id.clone(), source_stop.clone());
-        let source_pause = Arc::new(AtomicBool::new(false));
-        source_pause_flags.insert(source_config.profile_id.clone(), source_pause.clone());
-        source_profiles.insert(index, source_config.profile_id.clone());
+        let source_pause = register_pause_flag(&source_pause_flags, &source_config.profile_id);
+        source_profiles.insert(index, SourceIdentity::of(source_config));
 
         let handle = spawn_source(
             index,
@@ -152,6 +203,18 @@ pub(super) async fn run_merge_task(
                         if let Ok(mut channels) = transmit_channels.lock() {
                             channels.remove(&source_idx);
                         }
+                        // An ending nobody asked for is a fault, and has to be
+                        // reported like one — a device pulled mid-session used to
+                        // finish the run as "complete".
+                        if reason.is_fault() {
+                            let device = source_profiles
+                                .get(&source_idx)
+                                .map(|s| s.display_name.clone())
+                                .unwrap_or_else(|| format!("source {}", source_idx));
+                            let error = IoError::DeviceDisconnected { device }.to_string();
+                            last_source_error = Some(error.clone());
+                            emit_session_error(&session_id, error);
+                        }
                         active_sources = active_sources.saturating_sub(1);
                     }
                     Some(SourceMessage::Error(source_idx, error)) => {
@@ -195,7 +258,9 @@ pub(super) async fn run_merge_task(
                         let routable = |ms: &[BusMapping]| -> Vec<(u8, u8)> {
                             ms.iter().filter(|m| m.enabled).map(|m| (m.device_bus, m.output_bus)).collect()
                         };
-                        let Some(profile_id) = source_profiles.get(&source_idx).cloned() else {
+                        let Some(profile_id) =
+                            source_profiles.get(&source_idx).map(|s| s.profile_id.clone())
+                        else {
                             tlog!("[IOBroker] Source {} resolved mappings but is unknown", source_idx);
                             continue;
                         };
@@ -253,9 +318,9 @@ pub(super) async fn run_merge_task(
                         };
                         let source_stop = Arc::new(AtomicBool::new(false));
                         source_stop_flags.insert(source_config.profile_id.clone(), source_stop.clone());
-                        let source_pause = Arc::new(AtomicBool::new(false));
-                        source_pause_flags.insert(source_config.profile_id.clone(), source_pause.clone());
-                        source_profiles.insert(idx, source_config.profile_id.clone());
+                        let source_pause =
+                            register_pause_flag(&source_pause_flags, &source_config.profile_id);
+                        source_profiles.insert(idx, SourceIdentity::of(&source_config));
                         // A re-added source re-reconciles once it connects; drop
                         // the previous answer so a stale one is never served.
                         if let Ok(mut resolved) = resolved_mappings.lock() {
@@ -279,25 +344,20 @@ pub(super) async fn run_merge_task(
                         tlog!("[IOBroker] Hot-added source {} (profile '{}')", idx, source_config.profile_id);
                     }
                     Some(MergeCommand::RemoveSource(profile_id)) => {
-                        if let Some(flag) = source_stop_flags.get(&profile_id) {
+                        if let Some(flag) = source_stop_flags.remove(&profile_id) {
                             flag.store(true, Ordering::SeqCst);
                             tlog!("[IOBroker] Hot-removing source (profile '{}')", profile_id);
                         } else {
                             tlog!("[IOBroker] Hot-remove: profile '{}' not found in stop flags", profile_id);
                         }
+                        forget_pause_flag(&source_pause_flags, &profile_id);
                         // The source reader will send Ended, which decrements active_sources
                     }
                     Some(MergeCommand::PauseSource(profile_id)) => {
-                        if let Some(flag) = source_pause_flags.get(&profile_id) {
-                            flag.store(true, Ordering::Relaxed);
-                            tlog!("[IOBroker] Paused source polling (profile '{}')", profile_id);
-                        }
+                        set_pause_flag(&source_pause_flags, &profile_id, true);
                     }
                     Some(MergeCommand::ResumeSource(profile_id)) => {
-                        if let Some(flag) = source_pause_flags.get(&profile_id) {
-                            flag.store(false, Ordering::Relaxed);
-                            tlog!("[IOBroker] Resumed source polling (profile '{}')", profile_id);
-                        }
+                        set_pause_flag(&source_pause_flags, &profile_id, false);
                     }
                     None => {
                         // Command channel closed — session ending

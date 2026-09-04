@@ -165,11 +165,16 @@ pub fn parse_profile_for_source(
         _ => Parity::None,
     };
 
-    // Framing configuration - prefer session override, fall back to profile settings
-    let profile_framing = conn_str(profile, "framing_encoding").unwrap_or_default();
-    let framing_encoding_str = framing_encoding_override.unwrap_or(&profile_framing);
+    // Session override, then profile, then the kind default — resolved by the
+    // same function the broker uses to decide which captures to create, so the
+    // port and the session cannot disagree about what is on the wire.
+    let (framing_encoding_str, emit_raw_bytes) = crate::io::device_kinds::resolve_serial_framing(
+        profile,
+        framing_encoding_override,
+        emit_raw_bytes_override,
+    );
 
-    let framing_encoding = match framing_encoding_str {
+    let framing_encoding = match framing_encoding_str.as_str() {
         "slip" => FramingEncoding::Slip,
         "modbus_rtu" => {
             let device_address = profile
@@ -274,14 +279,6 @@ pub fn parse_profile_for_source(
                 .map(|n| n as usize)
         })
         .unwrap_or(0);
-
-    // Determine if we should emit raw bytes
-    // For "raw" framing mode, raw bytes are the primary output
-    // For other modes, only emit if explicitly requested
-    let emit_raw_bytes = match framing_encoding_str {
-        "raw" => true,
-        _ => emit_raw_bytes_override.unwrap_or(false),
-    };
 
     Some(SerialSourceConfig {
         port,

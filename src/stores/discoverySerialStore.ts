@@ -223,7 +223,7 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
   },
 
   applyFraming: async (_streamStartTimeUs, sessionId) => {
-    const { backendByteCount, framingConfig, framedCaptureId: previousCaptureId, minFrameLength, frameIdExtractionConfig, sourceExtractionConfig } = get();
+    const { backendByteCount, framingConfig, framedCaptureId: previousCaptureId, filteredCaptureId: previousFilteredCaptureId, minFrameLength, frameIdExtractionConfig, sourceExtractionConfig } = get();
     if (!framingConfig) {
       set({ framedData: [], framedCaptureId: null, backendFrameCount: 0, filteredFrameCount: 0, filteredCaptureId: null, filteredFrames: [] });
       return [];
@@ -256,9 +256,15 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
     };
 
     try {
-      // Call backend to apply framing - this creates a new frame capture
-      // Pass previous capture ID to reuse it (avoids capture proliferation during live framing)
-      const result = await applyFramingToCapture(sessionId ?? '', backendConfig, previousCaptureId);
+      // Call backend to apply framing - this creates a new frame capture.
+      // Both previous capture IDs go back so they are refilled rather than
+      // re-derived; framing runs on every stop, so a capture per run adds up.
+      const result = await applyFramingToCapture(
+        sessionId ?? '',
+        backendConfig,
+        previousCaptureId,
+        previousFilteredCaptureId,
+      );
 
       // Store the capture ID and frame count for FramedDataView
       // Also store filtered frame count and capture ID for the Filtered tab
