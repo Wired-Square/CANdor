@@ -25,7 +25,7 @@ mod linux_impl {
 
     use crate::io::error::IoError;
     use crate::io::gvret::{apply_bus_mapping, BusMapping};
-    use crate::io::types::{SourceMessage, TransmitRequest};
+    use crate::io::types::{EndReason, SourceMessage, TransmitRequest};
     use crate::io::{now_us, CanTransmitFrame, FrameMessage};
 
     // ============================================================================
