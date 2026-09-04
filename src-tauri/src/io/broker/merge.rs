@@ -473,22 +473,7 @@ fn spawn_source(
     let source_stop_clone = source_stop;
     let source_pause_clone = source_pause;
     let tx_clone = tx.clone();
-    let bus_mappings = source_config.bus_mappings.clone();
-    let display_name = source_config.display_name.clone();
-    let framing_encoding = source_config.framing_encoding.clone();
-    let delimiter = source_config.delimiter.clone();
-    let max_frame_length = source_config.max_frame_length;
-    let min_frame_length = source_config.min_frame_length;
-    let emit_raw_bytes = source_config.emit_raw_bytes;
-    let frame_id_start_byte = source_config.frame_id_start_byte;
-    let frame_id_bytes = source_config.frame_id_bytes;
-    let frame_id_big_endian = source_config.frame_id_big_endian;
-    let source_address_start_byte = source_config.source_address_start_byte;
-    let source_address_bytes = source_config.source_address_bytes;
-    let source_address_big_endian = source_config.source_address_big_endian;
-    let modbus_polls = source_config.modbus_polls.clone();
-    let modbus_role = source_config.modbus_role.clone();
-    let max_register_errors = source_config.max_register_errors;
+    let config = source_config.clone();
     let virtual_bus_controls_clone = virtual_bus_controls.clone();
     let profile = profile.clone();
 
@@ -525,22 +510,7 @@ fn spawn_source(
             session_id_clone,
             index,
             profile,
-            bus_mappings,
-            display_name,
-            framing_encoding,
-            delimiter,
-            max_frame_length,
-            min_frame_length,
-            emit_raw_bytes,
-            frame_id_start_byte,
-            frame_id_bytes,
-            frame_id_big_endian,
-            source_address_start_byte,
-            source_address_bytes,
-            source_address_big_endian,
-            modbus_polls,
-            modbus_role,
-            max_register_errors,
+            config,
             combined_stop,
             source_pause_clone,
             tx_clone,

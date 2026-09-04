@@ -8,7 +8,7 @@ use serialport::{DataBits, Parity as SpParity, StopBits};
 use tokio::sync::mpsc;
 
 use super::framer::{FrameIdConfig, FramingEncoding};
-use crate::io::device_kinds::{conn_i64, conn_str};
+use crate::io::device_kinds::{conn_bool, conn_i64, conn_str};
 use crate::io::error::{DevicePresence, IoError};
 use crate::io::types::SourceMessage;
 use crate::settings::IOProfile;
@@ -146,12 +146,13 @@ pub fn framing_from_str(encoding: &str) -> FramingEncoding {
 /// Returns `None` if the port is not specified in the profile.
 pub fn parse_profile_for_source(
     profile: &IOProfile,
-    framing_encoding_override: Option<&str>,
-    delimiter_override: Option<Vec<u8>>,
-    max_frame_length_override: Option<usize>,
-    min_frame_length_override: Option<usize>,
-    emit_raw_bytes_override: Option<bool>,
+    overrides: &crate::io::broker::SerialOverrides,
 ) -> Option<SerialSourceConfig> {
+    let framing_encoding_override = overrides.framing_encoding.as_deref();
+    let delimiter_override = overrides.delimiter.clone();
+    let max_frame_length_override = overrides.max_frame_length;
+    let min_frame_length_override = overrides.min_frame_length;
+    let emit_raw_bytes_override = overrides.emit_raw_bytes;
     let port = conn_str(profile, "port")?;
 
     // Line settings come from `io::device_kinds`, the one declaration the form
@@ -182,10 +183,11 @@ pub fn parse_profile_for_source(
                 .get("modbus_device_address")
                 .and_then(|v| v.as_i64())
                 .map(|n| n as u8);
-            let validate_crc = profile
-                .connection
-                .get("modbus_validate_crc")
-                .and_then(|v| v.as_bool())
+            // Session override first, then the profile, then on — the picker's
+            // "Validate CRC" tick had no way through before and did nothing.
+            let validate_crc = overrides
+                .modbus_validate_crc
+                .or_else(|| conn_bool(profile, "modbus_validate_crc"))
                 .unwrap_or(true);
             FramingEncoding::ModbusRtu {
                 device_address,

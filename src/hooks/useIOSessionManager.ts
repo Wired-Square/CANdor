@@ -19,7 +19,7 @@ import {
   useSessionStore,
   isCaptureProfileId,
   type CreateMultiSourceOptions,
-  type PerInterfaceFramingConfig,
+  type InterfaceFramingConfig,
   type BusSourceInfo,
 } from "../stores/sessionStore";
 
@@ -96,7 +96,7 @@ export interface LoadOptions {
   busOverride?: number;
   busMappings?: Map<string, BusMapping[]>;
   /** Per-interface framing config (for serial profiles in multi-bus mode) */
-  perInterfaceFraming?: Map<string, PerInterfaceFramingConfig>;
+  perInterfaceFraming?: Map<string, InterfaceFramingConfig>;
   /** Override session ID (for ingest mode where we need to set refs before async work) */
   sessionIdOverride?: string;
   /** Modbus TCP poll groups as JSON string (catalog-derived, for modbus_tcp profiles) */

@@ -36,6 +36,7 @@ import {
   type IOCapabilities,
   type IOStateType,
   type IOState,
+  type InterfaceFramingConfig,
   type StreamEndedInfo,
   type SessionSuspendedPayload,
   type SessionSwitchedToCapturePayload,
@@ -2109,12 +2110,15 @@ export type { BusSourceInfo } from "../utils/busFormat";
  * Per-interface framing configuration (simplified for UI).
  * Used when each serial interface in a multi-source session needs different framing.
  */
-export interface PerInterfaceFramingConfig {
-  /** Framing encoding: "raw", "slip", "modbus_rtu", "delimiter" */
-  encoding: FramingEncoding;
-  /** Delimiter hex string for delimiter mode (e.g., "0D0A") */
-  delimiterHex?: string;
-}
+/**
+ * Serial framing chosen per device in the picker.
+ *
+ * Re-exported from `api/io` so there is one declaration. It used to be a second,
+ * narrower copy here carrying only `encoding` and `delimiterHex` — every other
+ * setting the picker offered was dropped on its way to Rust, which is why the
+ * "Capture raw bytes" and "Validate CRC" ticks did nothing.
+ */
+export type { InterfaceFramingConfig } from "../api/io";
 
 /**
  * Options for creating a multi-source session.
@@ -2143,7 +2147,7 @@ export interface CreateMultiSourceOptions {
   /** Whether to emit raw bytes in addition to framed data */
   emitRawBytes?: boolean;
   /** Per-interface framing config (overrides session-level framing for specific profiles) */
-  perInterfaceFraming?: Map<string, PerInterfaceFramingConfig>;
+  perInterfaceFraming?: Map<string, InterfaceFramingConfig>;
   /** Frame ID extraction: start byte position (0-indexed) */
   frameIdStartByte?: number;
   /** Frame ID extraction: number of bytes (1 or 2) */
@@ -2254,14 +2258,21 @@ export async function createAndStartMultiSourceSession(
     // Check for per-interface framing override
     const interfaceFraming = perInterfaceFraming?.get(profileId);
 
-    // Use per-interface framing if specified, otherwise fall back to session-level
+    // Use per-interface framing if specified, otherwise fall back to session-level.
+    // Every field the picker offers per device has to be listed here — anything
+    // omitted falls through to a session-level value the per-device controls
+    // never write, which is how "Capture raw bytes" and "Validate CRC" came to
+    // do nothing at all.
     const sourceFramingEncoding = interfaceFraming?.encoding ?? framingEncoding;
     const sourceDelimiter = interfaceFraming?.delimiterHex
       ? parseHexDelimiter(interfaceFraming.delimiterHex)
       : delimiter;
 
-    // For "raw" framing mode, set emitRawBytes to true
-    const sourceEmitRawBytes = sourceFramingEncoding === "raw" ? true : emitRawBytes;
+    // For "raw" framing mode, raw bytes are the only output, so the tick is moot
+    const sourceEmitRawBytes =
+      sourceFramingEncoding === "raw"
+        ? true
+        : (interfaceFraming?.emitRawBytes ?? emitRawBytes);
 
     return {
       profileId,
@@ -2271,9 +2282,10 @@ export async function createAndStartMultiSourceSession(
       // Serial sources will use these overrides, CAN sources will ignore them
       framingEncoding: sourceFramingEncoding,
       delimiter: sourceDelimiter,
-      maxFrameLength,
+      maxFrameLength: interfaceFraming?.maxFrameLength ?? maxFrameLength,
       minFrameLength,
       emitRawBytes: sourceEmitRawBytes,
+      modbusValidateCrc: interfaceFraming?.validateCrc,
       // Frame ID extraction config (from catalog)
       frameIdStartByte,
       frameIdBytes,

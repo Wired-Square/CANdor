@@ -74,7 +74,7 @@ pub use modbus_tcp::{
 };
 #[cfg(not(target_os = "ios"))]
 pub use gvret::probe_gvret_usb;
-pub use broker::{ModbusRole, IOBroker, SourceConfig};
+pub use broker::{ModbusRole, IOBroker, SerialOverrides, SourceConfig};
 pub use mqtt::{MqttConfig, MqttSource};
 pub use virtual_device::{VirtualDeviceConfig, VirtualSource, VirtualInterfaceConfig, VirtualTrafficType};
 #[cfg(not(target_os = "ios"))]

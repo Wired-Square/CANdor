@@ -214,15 +214,25 @@ one knew about live `set_framing` overrides; both now call
 three that exist (`rx_frames`, `rx_bytes`, `serial_link`) are already computed at
 three different times, which is the open register entry above.
 
-**A serial setting is declared in one place: `sessions::SerialOverrides`.** The
-single-device command takes it whole; `MultiSourceInput` flattens it, so the wire
-shape stays the flat keys the frontend sends; `SerialOverrides::apply` is the one
-copy onto `SourceConfig`. On the frontend the mirror is `api/io.ts::serialPayload`,
-called by all three send sites. Both were previously written out per site — three
-Rust declarations, three TypeScript mappings — and had already drifted:
-`createMultiSourceSession` was omitting `min_frame_length` entirely. **A setting
-enumerated at N sites is a setting silently dropped at the N+1th**, which is the
-same failure as the removed command parameters, one layer up.
+**A serial setting is declared in one place and threaded whole:
+`io::broker::SerialOverrides`.** `SourceConfig` embeds it with `#[serde(flatten)]`,
+so the wire shape stays the flat keys the frontend sends; `MultiSourceInput`
+flattens the same struct; the single-device command takes it as one argument; and
+`run_source_reader` passes the `SourceConfig` down to `parse_profile_for_source`
+rather than exploding it. On the frontend the mirror is one
+`InterfaceFramingConfig` in `api/io.ts` and one `serialPayload()`, used by all
+three send sites and by the picker.
+
+**This was five enumerations of the same list, and every one of them had lost
+something.** Three Rust structs and two thirteen-parameter ladders; three
+TypeScript mappings, of which `createMultiSourceSession` had dropped
+`min_frame_length`; and a second, narrower `PerInterfaceFramingConfig` in the
+store that carried only `encoding` and `delimiterHex` — so the picker's *Capture
+raw bytes* and *Validate CRC* ticks reached nothing at all, on any path. **A
+setting enumerated at N sites is a setting silently dropped at the N+1th**, and
+the compiler cannot help, because every one of those lists was individually
+well-typed. Add a serial setting to `SerialOverrides` and it reaches the reader
+on its own.
 
 **A FrameLink device serves exactly one TCP client**, so `io/framelink/shared.rs`
 pools one connection per device and every consumer — the reader and the ~40

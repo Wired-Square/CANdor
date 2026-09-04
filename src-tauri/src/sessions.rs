@@ -22,7 +22,7 @@ use crate::{
         ModbusRangeSpec, PollGroup,
         MqttConfig, MqttSource,
         VirtualDeviceConfig, VirtualSource, VirtualInterfaceConfig, VirtualTrafficType,
-        ModbusRole, IOBroker, SourceConfig,
+        ModbusRole, IOBroker, SerialOverrides, SourceConfig,
         BackendApiConfig, BackendApiSource, BackendApiSourceOptions,
         CanTransmitFrame, TransmitResult,
         emit_device_probe, DeviceProbePayload,
@@ -322,66 +322,31 @@ fn is_realtime_device(kind: &str) -> bool {
 }
 
 /// Session-level serial settings, as the picker sends them for one source.
-/// Every field is optional: absent means "whatever the device profile says".
-///
-/// Declared once and reached by both session-creation paths — the single-device
-/// command takes it whole, `MultiSourceInput` flattens it — so a twelfth serial
-/// knob is added here rather than in three structs and two field-by-field copies.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-pub struct SerialOverrides {
-    pub framing_encoding: Option<String>,
-    pub delimiter: Option<Vec<u8>>,
-    pub max_frame_length: Option<usize>,
-    pub min_frame_length: Option<usize>,
-    pub emit_raw_bytes: Option<bool>,
-    pub frame_id_start_byte: Option<i32>,
-    pub frame_id_bytes: Option<u8>,
-    pub frame_id_big_endian: Option<bool>,
-    pub source_address_start_byte: Option<i32>,
-    pub source_address_bytes: Option<u8>,
-    pub source_address_big_endian: Option<bool>,
-}
-
-impl SerialOverrides {
-    /// Copy the overrides onto a source, then settle the two fields the broker
-    /// reads before any reader runs.
-    fn apply(self, config: &mut SourceConfig, profile: &IOProfile) {
-        config.framing_encoding = self.framing_encoding;
-        config.delimiter = self.delimiter;
-        config.max_frame_length = self.max_frame_length;
-        config.min_frame_length = self.min_frame_length;
-        config.emit_raw_bytes = self.emit_raw_bytes;
-        config.frame_id_start_byte = self.frame_id_start_byte;
-        config.frame_id_bytes = self.frame_id_bytes;
-        config.frame_id_big_endian = self.frame_id_big_endian;
-        config.source_address_start_byte = self.source_address_start_byte;
-        config.source_address_bytes = self.source_address_bytes;
-        config.source_address_big_endian = self.source_address_big_endian;
-        resolve_serial_fields(config, profile);
-    }
-}
-
-/// Resolve a serial source's framing onto the config, so the broker reads a
-/// settled answer rather than an absence.
+/// Adopt a session's serial overrides, then settle the two fields the broker
+/// reads before any reader runs.
 ///
 /// `IOBroker` decides which captures a session gets, and what `IOCapabilities`
-/// reports, from `SourceConfig.framing_encoding` alone — before any reader has
-/// run. Leaving it `None` meant "raw" to the broker and something else entirely
-/// to the port, and the two disagreeing is what made a framed single-source
-/// session build a bytes capture nothing wrote to, no frames capture at all, and
-/// drop every framed row.
-fn resolve_serial_fields(config: &mut SourceConfig, profile: &IOProfile) {
+/// reports, from `SourceConfig.serial.framing_encoding` alone — before any
+/// reader has run. Leaving it `None` meant "raw" to the broker and something
+/// else entirely to the port, and the two disagreeing is what made a framed
+/// single-source session build a bytes capture nothing wrote to, no frames
+/// capture at all, and drop every framed row.
+fn apply_serial_overrides(
+    config: &mut SourceConfig,
+    profile: &IOProfile,
+    serial: SerialOverrides,
+) {
+    config.serial = serial;
     if config.profile_kind != "serial" {
         return;
     }
     let (framing, emit_raw_bytes) = device_kinds::resolve_serial_framing(
         profile,
-        config.framing_encoding.as_deref(),
-        config.emit_raw_bytes,
+        config.serial.framing_encoding.as_deref(),
+        config.serial.emit_raw_bytes,
     );
-    config.framing_encoding = Some(framing);
-    config.emit_raw_bytes = Some(emit_raw_bytes);
+    config.serial.framing_encoding = Some(framing);
+    config.serial.emit_raw_bytes = Some(emit_raw_bytes);
 }
 
 /// Create a SourceConfig from an IOProfile for use with IOBroker.
@@ -419,7 +384,7 @@ fn create_source_config_from_profile(
         max_register_errors: None,
         ..SourceConfig::default()
     };
-    serial.apply(&mut config, profile);
+    apply_serial_overrides(&mut config, profile, serial);
     Some(config)
 }
 
@@ -2397,7 +2362,7 @@ fn resolve_source_config(
     };
     // A multi-source serial interface the picker left alone arrives with no
     // framing either, and the broker reads this config the same way.
-    input.serial.apply(&mut config, profile);
+    apply_serial_overrides(&mut config, profile, input.serial);
     Ok(config)
 }
 

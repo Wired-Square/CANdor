@@ -8,21 +8,9 @@ import { useTranslation } from "react-i18next";
 import { Loader2, AlertCircle, CheckCircle2, Bus, Layers, Lock } from "lucide-react";
 import { iconMd, iconXs, flexRowGap2 } from "../../styles/spacing";
 import { caption, sectionHeaderText } from "../../styles/typography";
-import type { DeviceProbeResult, FramingEncoding } from "../../api/io";
+import type { DeviceProbeResult, FramingEncoding, InterfaceFramingConfig } from "../../api/io";
 
-/** Simplified framing config for per-interface display */
-export interface InterfaceFramingConfig {
-  /** Framing mode */
-  encoding: FramingEncoding;
-  /** Delimiter hex string for delimiter mode (e.g., "0D0A" for CRLF) */
-  delimiterHex?: string;
-  /** Max frame length for delimiter mode */
-  maxFrameLength?: number;
-  /** Whether to validate CRC-16 for Modbus RTU mode */
-  validateCrc?: boolean;
-  /** Also emit raw bytes in addition to frames */
-  emitRawBytes?: boolean;
-}
+export type { InterfaceFramingConfig } from "../../api/io";
 
 /** Framing mode keys for dropdown */
 const FRAMING_KEYS: { value: FramingEncoding; key: string }[] = [

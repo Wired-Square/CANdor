@@ -16,6 +16,8 @@ All notable changes to WireTAP will be documented in this file.
 
 - **A serial device's framing settings reach a multi-source session too.** The minimum frame length chosen in the picker was dropped when several devices were opened together, so short frames it should have filtered came through.
 
+- **"Capture raw bytes" and "Validate CRC" now do something.** Both ticks in the source picker's per-device serial settings were discarded before reaching the device, on every path — so a framed serial link could never record its raw bytes alongside the frames, and Modbus RTU always checked the CRC whether or not you asked it to. Per-device maximum frame length was dropped the same way. If you had worked around any of these by editing the device in Settings, the picker now overrides that for the session, as it was always meant to.
+
 - **The Modbus poll switch shows the device's real state.** It displayed whatever it had last been asked to do, so two panels on one session could disagree, and reloading the window showed a paused device as polling. The switch now reads the session itself and every panel follows a change immediately. Resuming polling while a discovery sweep holds the same device is now refused rather than quietly contending for it.
 
 - **Re-framing serial bytes no longer leaves a trail of captures.** With a minimum frame length set, every re-frame created another capture for the discarded short frames and never cleaned up the previous one — and framing runs each time the stream stops. The two framing results are now reused in place.

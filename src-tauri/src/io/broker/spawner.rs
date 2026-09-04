@@ -13,7 +13,7 @@ use tokio::time::{Duration, interval};
 use tokio_modbus::client::{self, tcp};
 use tokio_modbus::prelude::*;
 
-use super::types::ModbusRole;
+use super::types::{ModbusRole, SerialOverrides, SourceConfig};
 use crate::io::device_kinds::{
     self, conn_bool, conn_f64, conn_i64, conn_str, req_bool, req_f64, req_i64, req_str,
 };
@@ -38,39 +38,26 @@ use crate::io::socketcan::run_source as run_socketcan_source;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use crate::io::gs_usb::run_source as run_gs_usb_source;
 
-/// Run a single source reader and send frames to the merge task
+/// Run a single source reader and send frames to the merge task.
+///
+/// Takes the whole `SourceConfig` rather than its fields: the serial settings
+/// used to arrive here as thirteen loose parameters, re-exploded from the config
+/// by the caller and re-assembled by `run_serial_reader`, and a setting missing
+/// from any one of those lists was silently dropped rather than rejected.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_source_reader(
     _app: AppHandle,
     _session_id: String,
     source_idx: usize,
     profile: IOProfile,
-    bus_mappings: Vec<BusMapping>,
-    _display_name: String,
-    // Framing config from session options (overrides profile settings for serial)
-    // Note: Prefixed with _ as these are only used on desktop (serial not available on iOS)
-    _framing_encoding_override: Option<String>,
-    _delimiter_override: Option<Vec<u8>>,
-    _max_frame_length_override: Option<usize>,
-    _min_frame_length_override: Option<usize>,
-    _emit_raw_bytes_override: Option<bool>,
-    // Frame ID extraction config from session options (overrides profile settings for serial)
-    _frame_id_start_byte_override: Option<i32>,
-    _frame_id_bytes_override: Option<u8>,
-    _frame_id_big_endian_override: Option<bool>,
-    _source_address_start_byte_override: Option<i32>,
-    _source_address_bytes_override: Option<u8>,
-    _source_address_big_endian_override: Option<bool>,
-    // Modbus-specific config
-    _modbus_polls: Option<Vec<PollGroup>>,
-    _modbus_role: Option<ModbusRole>,
-    _max_register_errors: Option<u32>,
+    config: SourceConfig,
     stop_flag: Arc<AtomicBool>,
     pause_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
     virtual_bus_controls: VirtualBusControls,
     virtual_cmd_rx: Option<mpsc::UnboundedReceiver<VirtualBusCommand>>,
 ) {
+    let bus_mappings = config.bus_mappings.clone();
     let error_tx = tx.clone();
     let outcome = match profile.kind.as_str() {
         "gvret_tcp" => {
@@ -90,25 +77,8 @@ pub(super) async fn run_source_reader(
         }
         #[cfg(not(target_os = "ios"))]
         "serial" => {
-            run_serial_reader(
-                source_idx,
-                &profile,
-                bus_mappings,
-                _framing_encoding_override,
-                _delimiter_override,
-                _max_frame_length_override,
-                _min_frame_length_override,
-                _emit_raw_bytes_override,
-                _frame_id_start_byte_override,
-                _frame_id_bytes_override,
-                _frame_id_big_endian_override,
-                _source_address_start_byte_override,
-                _source_address_bytes_override,
-                _source_address_big_endian_override,
-                stop_flag,
-                tx,
-            )
-            .await
+            run_serial_reader(source_idx, &profile, bus_mappings, &config.serial, stop_flag, tx)
+                .await
         }
         "framelink" => {
             run_framelink_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await
@@ -116,14 +86,14 @@ pub(super) async fn run_source_reader(
         "virtual" => {
             run_virtual_reader(source_idx, &profile, bus_mappings, stop_flag, tx, virtual_bus_controls, virtual_cmd_rx).await
         }
-        "modbus_tcp" => match _modbus_role.unwrap_or(ModbusRole::Client) {
+        "modbus_tcp" => match config.modbus_role.clone().unwrap_or(ModbusRole::Client) {
             ModbusRole::Client => {
                 run_modbus_tcp_client(
                     source_idx,
                     &profile,
                     bus_mappings,
-                    _modbus_polls.unwrap_or_default(),
-                    _max_register_errors.unwrap_or(0),
+                    config.modbus_polls.clone().unwrap_or_default(),
+                    config.max_register_errors.unwrap_or(0),
                     stop_flag,
                     pause_flag,
                     tx,
@@ -285,57 +255,48 @@ async fn run_serial_reader(
     source_idx: usize,
     profile: &IOProfile,
     bus_mappings: Vec<BusMapping>,
-    framing_encoding_override: Option<String>,
-    delimiter_override: Option<Vec<u8>>,
-    max_frame_length_override: Option<usize>,
-    min_frame_length_override: Option<usize>,
-    emit_raw_bytes_override: Option<bool>,
-    frame_id_start_byte_override: Option<i32>,
-    frame_id_bytes_override: Option<u8>,
-    frame_id_big_endian_override: Option<bool>,
-    source_address_start_byte_override: Option<i32>,
-    source_address_bytes_override: Option<u8>,
-    source_address_big_endian_override: Option<bool>,
+    overrides: &SerialOverrides,
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
 ) -> Result<(), String> {
     use crate::io::serial::FrameIdConfig;
 
-    let config = parse_profile_for_source(
-        profile,
-        framing_encoding_override.as_deref(),
-        delimiter_override,
-        max_frame_length_override,
-        min_frame_length_override,
-        emit_raw_bytes_override,
-    )
-    .ok_or("Serial port is required")?;
+    let config = parse_profile_for_source(profile, overrides).ok_or("Serial port is required")?;
 
-    // Build frame_id_config: prefer session overrides, fall back to profile config
-    let frame_id_config = if frame_id_start_byte_override.is_some() {
-        Some(FrameIdConfig {
-            start_byte: frame_id_start_byte_override.unwrap_or(0),
-            num_bytes: frame_id_bytes_override.unwrap_or(1),
-            big_endian: frame_id_big_endian_override.unwrap_or(true),
-        })
-    } else {
-        config.frame_id_config
-    };
+    /// A session's extraction override, or the profile's, or nothing. The two
+    /// differ only in which triple they read, so they are one rule.
+    fn extraction(
+        start: Option<i32>,
+        bytes: Option<u8>,
+        big_endian: Option<bool>,
+        from_profile: Option<FrameIdConfig>,
+    ) -> Option<FrameIdConfig> {
+        match start {
+            Some(start_byte) => Some(FrameIdConfig {
+                start_byte,
+                num_bytes: bytes.unwrap_or(1),
+                big_endian: big_endian.unwrap_or(true),
+            }),
+            None => from_profile,
+        }
+    }
 
-    // Build source_address_config: prefer session overrides, fall back to profile config
-    let source_address_config = if source_address_start_byte_override.is_some() {
-        Some(FrameIdConfig {
-            start_byte: source_address_start_byte_override.unwrap_or(0),
-            num_bytes: source_address_bytes_override.unwrap_or(1),
-            big_endian: source_address_big_endian_override.unwrap_or(true),
-        })
-    } else {
-        config.source_address_config
-    };
+    let frame_id_config = extraction(
+        overrides.frame_id_start_byte,
+        overrides.frame_id_bytes,
+        overrides.frame_id_big_endian,
+        config.frame_id_config,
+    );
+    let source_address_config = extraction(
+        overrides.source_address_start_byte,
+        overrides.source_address_bytes,
+        overrides.source_address_big_endian,
+        config.source_address_config,
+    );
 
     tlog!(
         "[multi_source] Serial source {} using framing: {:?} (override: {:?}), frame_id_config: {:?}",
-        source_idx, config.framing_encoding, framing_encoding_override, frame_id_config
+        source_idx, config.framing_encoding, overrides.framing_encoding, frame_id_config
     );
 
     run_serial_source(

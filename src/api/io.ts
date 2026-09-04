@@ -138,6 +138,29 @@ export function getStateType(state: IOState): IOStateType {
 export type FramingEncoding = "slip" | "modbus_rtu" | "delimiter" | "raw";
 
 /**
+ * Serial framing chosen for one device in the source picker, for one session.
+ *
+ * Declared here rather than in the picker because the store has to carry it to
+ * `MultiSourceInput`, and it was previously declared twice with different fields
+ * — the picker's copy had `emitRawBytes`, `maxFrameLength` and `validateCrc`,
+ * the store's had only `encoding` and `delimiterHex`. Everything the store's
+ * copy lacked was silently dropped on the way to Rust, so the "Capture raw
+ * bytes" and "Validate CRC" ticks did nothing at all.
+ */
+export interface InterfaceFramingConfig {
+  /** Framing mode */
+  encoding: FramingEncoding;
+  /** Delimiter hex string for delimiter mode (e.g., "0D0A" for CRLF) */
+  delimiterHex?: string;
+  /** Max frame length for delimiter mode */
+  maxFrameLength?: number;
+  /** Whether to check the CRC-16 for Modbus RTU mode */
+  validateCrc?: boolean;
+  /** Also emit raw bytes alongside frames */
+  emitRawBytes?: boolean;
+}
+
+/**
  * Options for creating an IO session.
  */
 export interface CreateIOSessionOptions {
@@ -202,13 +225,14 @@ export interface CreateIOSessionOptions {
  * Create a new IO session.
  * Returns the capabilities of the created IO device.
  */
-/** The eleven serial settings a source can carry, in the spelling Rust reads. */
+/** The serial settings a source can carry, mirroring Rust's `SerialOverrides`. */
 interface SerialSettings {
   framingEncoding?: string;
   delimiter?: number[];
   maxFrameLength?: number;
   minFrameLength?: number;
   emitRawBytes?: boolean;
+  modbusValidateCrc?: boolean;
   frameIdStartByte?: number;
   frameIdBytes?: number;
   frameIdBigEndian?: boolean;
@@ -230,6 +254,7 @@ function serialPayload(source: SerialSettings): Record<string, unknown> {
     max_frame_length: source.maxFrameLength,
     min_frame_length: source.minFrameLength,
     emit_raw_bytes: source.emitRawBytes,
+    modbus_validate_crc: source.modbusValidateCrc,
     frame_id_start_byte: source.frameIdStartByte,
     frame_id_bytes: source.frameIdBytes,
     frame_id_big_endian: source.frameIdBigEndian,
@@ -1292,6 +1317,8 @@ export interface MultiSourceInput {
   minFrameLength?: number;
   /** Whether to emit raw bytes in addition to framed data */
   emitRawBytes?: boolean;
+  /** Whether to check the CRC-16 on Modbus RTU framing */
+  modbusValidateCrc?: boolean;
   /** Frame ID extraction: start byte position (0-indexed) */
   frameIdStartByte?: number;
   /** Frame ID extraction: number of bytes (1 or 2) */

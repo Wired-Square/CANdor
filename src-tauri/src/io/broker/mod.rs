@@ -36,7 +36,7 @@ use crate::capture_store::{self, CaptureKind};
 use super::gs_usb::encode_frame as encode_gs_usb_frame;
 
 use merge::run_merge_task;
-pub use types::{ModbusRole, SourceConfig};
+pub use types::{ModbusRole, SerialOverrides, SourceConfig};
 use types::{ControlChannels, SourcePauseFlags, TransmitChannels, TransmitRoute};
 
 // ============================================================================
@@ -277,7 +277,7 @@ impl IOBroker {
         // "raw", so a framed device got a bytes capture nothing wrote to.
         let emits_raw_bytes = sources
             .iter()
-            .any(|s| s.profile_kind == "serial" && s.emit_raw_bytes.unwrap_or(false));
+            .any(|s| s.profile_kind == "serial" && s.serial.emit_raw_bytes.unwrap_or(false));
 
         Ok(Self {
             app,
@@ -425,7 +425,7 @@ impl IOBroker {
                 .as_ref()
                 .and_then(|o| o.get(&idx))
                 .map(String::as_str)
-                .or(s.framing_encoding.as_deref())
+                .or(s.serial.framing_encoding.as_deref())
                 .unwrap_or("raw");
             s.profile_kind != "serial" || framing != "raw"
         })

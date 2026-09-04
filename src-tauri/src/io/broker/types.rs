@@ -19,6 +19,44 @@ pub enum ModbusRole {
     Server,
 }
 
+/// The serial settings a session may override on one source, as the picker sends
+/// them. Every field is optional: absent means "whatever the device profile says".
+///
+/// **One declaration, threaded whole.** These were previously spelled out in
+/// three structs and exploded into thirteen loose parameters twice on the way to
+/// the reader, and the settings that got dropped were the ones somebody forgot to
+/// add to one of those lists — the picker's framing choice, and then its
+/// "capture raw bytes" tick. Add a serial setting here and it reaches the reader
+/// on its own.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SerialOverrides {
+    /// Framing encoding for serial sources (overrides profile settings if provided)
+    pub framing_encoding: Option<String>,
+    /// Delimiter bytes for delimiter-based framing
+    pub delimiter: Option<Vec<u8>>,
+    /// Maximum frame length for delimiter-based framing
+    pub max_frame_length: Option<usize>,
+    /// Minimum frame length - frames shorter than this are discarded
+    pub min_frame_length: Option<usize>,
+    /// Whether to emit raw bytes in addition to framed data
+    pub emit_raw_bytes: Option<bool>,
+    /// Whether to check the CRC-16 on Modbus RTU framing
+    pub modbus_validate_crc: Option<bool>,
+    /// Frame ID extraction: start byte position (0-indexed)
+    pub frame_id_start_byte: Option<i32>,
+    /// Frame ID extraction: number of bytes (1 or 2)
+    pub frame_id_bytes: Option<u8>,
+    /// Frame ID extraction: byte order (true = big endian)
+    pub frame_id_big_endian: Option<bool>,
+    /// Source address extraction: start byte position (0-indexed)
+    pub source_address_start_byte: Option<i32>,
+    /// Source address extraction: number of bytes (1 or 2)
+    pub source_address_bytes: Option<u8>,
+    /// Source address extraction: byte order (true = big endian)
+    pub source_address_big_endian: Option<bool>,
+}
+
 /// Configuration for a single source in a multi-source session
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct SourceConfig {
@@ -30,39 +68,10 @@ pub struct SourceConfig {
     pub display_name: String,
     /// Bus mappings for this source (device bus -> output bus)
     pub bus_mappings: Vec<BusMapping>,
-    /// Framing encoding for serial sources (overrides profile settings if provided)
-    #[serde(default)]
-    pub framing_encoding: Option<String>,
-    /// Delimiter bytes for delimiter-based framing
-    #[serde(default)]
-    pub delimiter: Option<Vec<u8>>,
-    /// Maximum frame length for delimiter-based framing
-    #[serde(default)]
-    pub max_frame_length: Option<usize>,
-    /// Minimum frame length - frames shorter than this are discarded
-    #[serde(default)]
-    pub min_frame_length: Option<usize>,
-    /// Whether to emit raw bytes in addition to framed data
-    #[serde(default)]
-    pub emit_raw_bytes: Option<bool>,
-    /// Frame ID extraction: start byte position (0-indexed)
-    #[serde(default)]
-    pub frame_id_start_byte: Option<i32>,
-    /// Frame ID extraction: number of bytes (1 or 2)
-    #[serde(default)]
-    pub frame_id_bytes: Option<u8>,
-    /// Frame ID extraction: byte order (true = big endian)
-    #[serde(default)]
-    pub frame_id_big_endian: Option<bool>,
-    /// Source address extraction: start byte position (0-indexed)
-    #[serde(default)]
-    pub source_address_start_byte: Option<i32>,
-    /// Source address extraction: number of bytes (1 or 2)
-    #[serde(default)]
-    pub source_address_bytes: Option<u8>,
-    /// Source address extraction: byte order (true = big endian)
-    #[serde(default)]
-    pub source_address_big_endian: Option<bool>,
+    /// Serial settings this session overrides. Flattened, so the wire shape stays
+    /// the flat keys the frontend sends.
+    #[serde(flatten)]
+    pub serial: SerialOverrides,
     /// Modbus poll groups (shared across all Modbus interfaces in a session)
     #[serde(default)]
     pub modbus_polls: Option<Vec<PollGroup>>,
