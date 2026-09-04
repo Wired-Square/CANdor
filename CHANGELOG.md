@@ -2,11 +2,11 @@
 
 All notable changes to WireTAP will be documented in this file.
 
-## [Unreleased]
+## [0.11.2] - 2026-09-04
 
 ### Fixed
 
-- **A serial device you frame in the picker now shows its frames.** Choosing SLIP or Modbus RTU for a single serial device, or ticking *Capture raw bytes*, had no effect: the session ran with whatever framing the device profile had saved, and if that differed the framed messages were discarded as they arrived, leaving an empty Raw Bytes tab and nothing else. The picker's choice is now what the session runs with, and a framed serial link records its frames. Devices opened together as a multi-source session were never affected.
+- **A serial device you frame in the picker now shows its frames.** Choosing SLIP or Modbus RTU for a single serial device had no effect: the session ran with whatever framing the device profile had saved, and if that differed the framed messages were discarded as they arrived, leaving an empty Raw Bytes tab and nothing else. The picker's choice is now what the session runs with, the frames are recorded, and the Framed tab shows them as they arrive. Devices opened together as a multi-source session were never affected.
 
 - **A device unplugged mid-session is reported as an error.** A GVRET adapter or serial port that went away while streaming ended the session as though it had finished normally, so nothing told you the capture had stopped early. Such a session now names the device that disappeared.
 
@@ -14,9 +14,7 @@ All notable changes to WireTAP will be documented in this file.
 
 - **An unreachable MQTT broker or WireTAP backend gives up.** Both waited on the operating system's own connection timeout, so a wrong address or a downed VPN left the session sitting in "connecting" for minutes. They now fail within ten seconds and say why. This covers running a query against the backend as well as streaming from it.
 
-- **A serial device's framing settings reach a multi-source session too.** The minimum frame length chosen in the picker was dropped when several devices were opened together, so short frames it should have filtered came through.
-
-- **"Capture raw bytes" and "Validate CRC" now do something.** Both ticks in the source picker's per-device serial settings were discarded before reaching the device, on every path — so a framed serial link could never record its raw bytes alongside the frames, and Modbus RTU always checked the CRC whether or not you asked it to. Per-device maximum frame length was dropped the same way. If you had worked around any of these by editing the device in Settings, the picker now overrides that for the session, as it was always meant to.
+- **The picker's per-device serial settings reach the device.** *Capture raw bytes*, *Validate CRC*, and the maximum and minimum frame length were all discarded somewhere between the checkbox and the serial port, so a framed link could never record its raw bytes alongside the frames, Modbus RTU always checked the CRC whether or not you asked, and short frames you meant to filter came through. All of them now apply to the session, overriding the saved device for that run — which is what they were always meant to do, so remove any workaround you had made in Settings.
 
 - **The Modbus poll switch shows the device's real state.** It displayed whatever it had last been asked to do, so two panels on one session could disagree, and reloading the window showed a paused device as polling. The switch now reads the session itself and every panel follows a change immediately. Resuming polling while a discovery sweep holds the same device is now refused rather than quietly contending for it.
 
