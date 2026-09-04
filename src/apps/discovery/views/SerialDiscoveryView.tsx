@@ -25,9 +25,16 @@ interface SerialDiscoveryViewProps {
   isRecorded?: boolean;
   /** Whether the session emits raw bytes (from capabilities.data_streams) */
   emitsRawBytes: boolean;
+  /**
+   * The session's own frames capture, for a reader that frames on the wire
+   * (SLIP, Modbus RTU) rather than the user framing stored bytes afterwards.
+   */
+  sessionFramesCaptureId?: string | null;
+  /** Frame count for `sessionFramesCaptureId`. */
+  sessionFramesCount?: number;
 }
 
-export default function SerialDiscoveryView({ isStreaming = false, displayTimeFormat = 'human', isRecorded = false, emitsRawBytes }: SerialDiscoveryViewProps) {
+export default function SerialDiscoveryView({ isStreaming = false, displayTimeFormat = 'human', isRecorded = false, emitsRawBytes, sessionFramesCaptureId = null, sessionFramesCount = 0 }: SerialDiscoveryViewProps) {
   const [showFramingDialog, setShowFramingDialog] = useState(false);
   const [showFilterDialog, setShowFilterDialog] = useState(false);
   const [showRawBytesViewDialog, setShowRawBytesViewDialog] = useState(false);
@@ -252,6 +259,8 @@ export default function SerialDiscoveryView({ isStreaming = false, displayTimeFo
             onClearIdMapping={clearFrameIdMapping}
             onApplySourceMapping={applySourceMapping}
             onClearSourceMapping={clearSourceMapping}
+            sessionFramesCaptureId={sessionFramesCaptureId}
+            sessionFramesCount={sessionFramesCount}
             accepted={framingAccepted}
             framingMode={framingConfig?.mode}
             displayTimeFormat={displayTimeFormat}

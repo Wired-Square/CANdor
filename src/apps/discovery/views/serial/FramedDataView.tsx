@@ -200,9 +200,20 @@ interface FramedDataViewProps {
   framingMode?: string;
   displayTimeFormat?: TimeDisplayFormat;
   isStreaming?: boolean;
+  /**
+   * The session's own frames capture, for a reader that frames for itself.
+   *
+   * Client-side framing derives a capture and puts its id in the serial store;
+   * a SLIP or Modbus RTU reader frames on the wire and writes straight into the
+   * session's capture, deriving nothing. Without this the tab counts frames it
+   * has no way to page.
+   */
+  sessionFramesCaptureId?: string | null;
+  /** Frame count for `sessionFramesCaptureId`; drives the refetch while streaming. */
+  sessionFramesCount?: number;
 }
 
-export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onClearIdMapping, onApplySourceMapping, onClearSourceMapping, accepted, framingMode, displayTimeFormat = 'human', isStreaming = false }: FramedDataViewProps) {
+export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onClearIdMapping, onApplySourceMapping, onClearSourceMapping, accepted, framingMode, displayTimeFormat = 'human', isStreaming = false, sessionFramesCaptureId = null, sessionFramesCount = 0 }: FramedDataViewProps) {
   const { t } = useTranslation("discovery");
   // Column visibility from UI store (shared with CAN views and ByteView)
   const showBusColumn = useDiscoveryUIStore((s) => s.showBusColumn);
@@ -228,8 +239,14 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
   const [backendTimeRange, setBackendTimeRange] = useState<{ min: number; max: number } | null>(null);
   const [isLoadingPage, setIsLoadingPage] = useState(false);
 
+  // The capture this tab pages from, and its count. Client-side framing wins
+  // when it has run; otherwise the session's own capture, which is where a
+  // reader that frames for itself puts its frames.
+  const pagedCaptureId = framedCaptureId ?? sessionFramesCaptureId;
+  const pagedFrameCount = framedCaptureId !== null ? backendFrameCount : sessionFramesCount;
+
   // Determine if we're using backend buffer mode
-  const useBackendBuffer = framedCaptureId !== null;
+  const useBackendBuffer = pagedCaptureId !== null;
 
   // Extraction configurations - read directly from serial store
   const idConfig = useDiscoverySerialStore((s) => s.frameIdExtractionConfig);
@@ -284,7 +301,7 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
 
   // Fetch buffer metadata when backend buffer ID changes (for time range only)
   useEffect(() => {
-    if (!framedCaptureId) {
+    if (!pagedCaptureId) {
       setBackendFrames([]);
       setBackendTimeRange(null);
       return;
@@ -292,7 +309,7 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
 
     const fetchMetadata = async () => {
       try {
-        const metadata = await getCaptureMetadataById(framedCaptureId);
+        const metadata = await getCaptureMetadataById(pagedCaptureId);
         if (metadata) {
           if (metadata.start_time_us !== null && metadata.end_time_us !== null) {
             setBackendTimeRange({ min: metadata.start_time_us, max: metadata.end_time_us });
@@ -305,7 +322,7 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
 
     fetchMetadata();
     setCurrentPage(0); // Reset to first page when buffer changes
-  }, [framedCaptureId]);
+  }, [pagedCaptureId]);
 
   // Filter to complete frames only (for prop-based frames)
   const completeFrames = useMemo(() => {
@@ -315,8 +332,8 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
     return frames.filter(f => !f.incomplete);
   }, [useBackendBuffer, backendFrames, frames]);
 
-  // Total frame count - use store's backendFrameCount for backend mode (updates during streaming)
-  const totalFrames = useBackendBuffer ? backendFrameCount : completeFrames.length;
+  // Total frame count - use the paged capture's count for backend mode (updates during streaming)
+  const totalFrames = useBackendBuffer ? pagedFrameCount : completeFrames.length;
 
   // The one resolved page size in this component — declared above the fetch effect so the
   // effect closes over it rather than resolving a second time from its own arguments.
@@ -326,7 +343,7 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
   useEffect(() => {
     // The null check belongs in the condition, with the size in the deps, so the fetch
     // re-runs when the measurement lands — see docs/capture-flow.md § Auto rows-per-page.
-    if (!useBackendBuffer || !framedCaptureId || backendFrameCount === 0) return;
+    if (!useBackendBuffer || !pagedCaptureId || pagedFrameCount === 0) return;
     if (effectivePageSize === null) return;
 
     const fetchPage = async () => {
@@ -334,10 +351,10 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
       try {
         // During streaming, always show the last page (latest frames)
         const offset = isStreaming
-          ? Math.max(0, backendFrameCount - effectivePageSize)
+          ? Math.max(0, pagedFrameCount - effectivePageSize)
           : currentPage * effectivePageSize;
         // Fetch from the specific frames buffer by ID (not the active buffer)
-        const response = await getCaptureFramesPaginatedById(framedCaptureId, offset, effectivePageSize);
+        const response = await getCaptureFramesPaginatedById(pagedCaptureId, offset, effectivePageSize);
 
         // Convert CaptureFrame to FrameMessage
         const fetchedFrames: FrameMessage[] = response.frames.map((f: CaptureFrame) => ({
@@ -363,7 +380,7 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
     };
 
     fetchPage();
-  }, [useBackendBuffer, framedCaptureId, currentPage, effectivePageSize, backendFrameCount, isStreaming, framedDataTrigger]);
+  }, [useBackendBuffer, pagedCaptureId, currentPage, effectivePageSize, pagedFrameCount, isStreaming, framedDataTrigger]);
 
   // Check if any frame has source_address set
   const hasSourceAddresses = useBackendBuffer
@@ -425,7 +442,7 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
     if (useBackendBuffer) {
       // Use backend binary search to find offset
       try {
-        const offset = await findCaptureOffsetForTimestamp(framedCaptureId!, targetTimeUs, []);
+        const offset = await findCaptureOffsetForTimestamp(pagedCaptureId!, targetTimeUs, []);
         setCurrentPage(pageForOffset(offset, effectivePageSize));
       } catch (error) {
         console.error('Failed to seek to timestamp:', error);
@@ -721,8 +738,8 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
         isOpen={showChecksumDialog}
         onClose={() => setShowChecksumDialog(false)}
         sampleFrames={sampleFrames}
-        captureId={framedCaptureId}
-        captureFrameCount={backendFrameCount}
+        captureId={pagedCaptureId}
+        captureFrameCount={pagedFrameCount}
         initialConfig={checksumConfig}
         headerBoundaries={headerBoundaries}
         onApply={handleApplyChecksumConfig}

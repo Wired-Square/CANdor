@@ -1159,6 +1159,16 @@ function DiscoveryInner() {
             displayTimeFormat={displayTimeFormat}
             isRecorded={isRecorded}
             emitsRawBytes={capabilities?.data_streams.rx_bytes ?? false}
+            // A serial reader that frames on the wire writes into the session's
+            // own capture and derives nothing, so the Framed tab has to be told
+            // where those frames are — the same id the CAN table below uses.
+            sessionFramesCaptureId={
+              captureKind === "bytes" ? null : (captureMetadata?.id ?? sessionCaptureId)
+            }
+            // The same count the CAN table uses below: `captureCount` is the
+            // capture-mode counter and reads 0 on a live session, which would
+            // stop the pager before it fetched anything.
+            sessionFramesCount={isCaptureMode ? captureCount : watchFrameCount}
           />
         ) : (
           <DiscoveryFramesView

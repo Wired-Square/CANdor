@@ -325,8 +325,20 @@ capture_store::finalize_session_captures(&session_id);
 — owned for cleanup, never mistaken for the session's own, and the only kind of
 capture it will clear and refill on a re-frame.
 
-It produces **two** captures when a minimum frame length is set: the framed
-result and the too-short frames the filter set aside. Both are refilled in place
+**The Framed tab reads whichever capture holds the frames.** `FramedDataView`
+pages from `framedCaptureId ?? sessionFramesCaptureId`: client-side framing
+derives a capture and puts its id in the serial store, while a reader that frames
+on the wire (SLIP, Modbus RTU) writes straight into the session's own capture and
+derives nothing. Discovery passes the session capture only when its kind is
+`frames` — a raw serial session's own capture is *bytes*, and handing that to a
+frame pager would be a fresh bug — and passes the **live** count
+(`isCaptureMode ? captureCount : watchFrameCount`), because the pager gives up on
+a zero count and `captureCount` reads 0 while streaming. Getting that wrong is
+invisible in the obvious way: the tab's own count comes from a different source,
+so it increments happily over an empty table.
+
+`apply_framing_to_capture` produces **two** captures when a minimum frame length
+is set: the framed result and the too-short frames the filter set aside. Both are refilled in place
 (`refill_or_derive`), and the caller passes both previous ids back. The filtered
 one used to be created fresh every call and never reused or deleted, so with a
 filter set each re-frame left another session-owned capture behind — and framing
