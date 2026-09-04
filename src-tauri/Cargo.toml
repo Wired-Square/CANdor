@@ -91,7 +91,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # build speaks — p3 = protocol version, r2 = rule format, b1 = BLE advert schema
 # — and tracking a branch made the resolved revision arbitrary, so crate/firmware
 # drift was invisible. Move this and the sibling checkout together.
-framelink = { git = "ssh://git@github.com/Wired-Square/framelink-rs.git", tag = "v0.2.0+p3.r2.b1", features = ["discovery", "ble", "wifi-prov", "smp"] }
+framelink = { git = "ssh://git@github.com/Wired-Square/framelink-rs.git", tag = "v0.2.1+p3.r2.b1", features = ["discovery", "ble", "wifi-prov", "smp"] }
 # Canonical WireTAP catalogue library — parse/validate/decode/encode + DBC for
 # CAN, Serial and Modbus; shared with the ESS add-on. Pinned by tag; a local
 # `.cargo/config.toml` paths override points at a sibling checkout for the dev
