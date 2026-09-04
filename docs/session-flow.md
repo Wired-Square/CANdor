@@ -208,6 +208,22 @@ capture at all**, and every framed row dropped by `append_frames_to_session`. Tw
 consumers deriving the same fact from the same optional field, one of them ahead
 of the value being known, is the shape to watch for.
 
+`has_framing` and `rx_frames` were two statements of the second rule, and only
+one knew about live `set_framing` overrides; both now call
+`IOBroker::emits_frames()`. **Add a new stream fact there, not beside it** — the
+three that exist (`rx_frames`, `rx_bytes`, `serial_link`) are already computed at
+three different times, which is the open register entry above.
+
+**A serial setting is declared in one place: `sessions::SerialOverrides`.** The
+single-device command takes it whole; `MultiSourceInput` flattens it, so the wire
+shape stays the flat keys the frontend sends; `SerialOverrides::apply` is the one
+copy onto `SourceConfig`. On the frontend the mirror is `api/io.ts::serialPayload`,
+called by all three send sites. Both were previously written out per site — three
+Rust declarations, three TypeScript mappings — and had already drifted:
+`createMultiSourceSession` was omitting `min_frame_length` entirely. **A setting
+enumerated at N sites is a setting silently dropped at the N+1th**, which is the
+same failure as the removed command parameters, one layer up.
+
 **A FrameLink device serves exactly one TCP client**, so `io/framelink/shared.rs`
 pools one connection per device and every consumer — the reader and the ~40
 rules/signal commands alike — holds a `ConnectionLease`. The last lease dropping
