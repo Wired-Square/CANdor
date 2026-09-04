@@ -293,7 +293,7 @@ export async function createIOSession(
     // Modbus TCP poll groups (catalog-derived)
     modbus_polls: options.modbusPollsJson,
     // Serial settings chosen for this session, overriding the device profile.
-    // One object rather than eleven loose keys: as loose keys they were dropped
+    // One object rather than loose keys: as loose keys they were dropped
     // silently for months when the Rust side stopped declaring them.
     serial: serialPayload(options),
   });

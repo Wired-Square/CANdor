@@ -332,10 +332,23 @@ on the wire (SLIP, Modbus RTU) writes straight into the session's own capture an
 derives nothing. Discovery passes the session capture only when its kind is
 `frames` — a raw serial session's own capture is *bytes*, and handing that to a
 frame pager would be a fresh bug — and passes the **live** count
-(`isCaptureMode ? captureCount : watchFrameCount`), because the pager gives up on
-a zero count and `captureCount` reads 0 while streaming. Getting that wrong is
-invisible in the obvious way: the tab's own count comes from a different source,
-so it increments happily over an empty table.
+(`liveFrameCount`), because the pager gives up on a zero count and `captureCount`
+reads 0 while streaming.
+
+Getting that wrong is invisible in the obvious way: the tab's own count comes
+from a different source, so it increments happily over an empty table. **That
+split is only half closed** — the tab counts, the min-length filter and the
+Filtered tab still assume client-side framing, so on a reader-framed session the
+filter silently does nothing and the Filtered tab renders no rows. The register
+carries it, along with the shape of the fix: both halves of the pair belong in
+`discoverySerialStore` (as `ByteView` already gets its byte pair), and this
+component's paging belongs in `useCaptureFrameView`, which `DiscoveryFramesView`
+already uses and which owns the tail refetch and its in-flight guard.
+
+Until then this path carries its own copy of that guard: the frame count moves at
+2 Hz (`SIGNAL_INTERVAL_MS`), a tail fetch on a large capture can outlast that, and
+fetches must neither queue on the capture-store mutex nor land out of order and
+overwrite newer rows with older.
 
 `apply_framing_to_capture` produces **two** captures when a minimum frame length
 is set: the framed result and the too-short frames the filter set aside. Both are refilled in place

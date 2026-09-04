@@ -23,7 +23,7 @@ pub enum ModbusRole {
 /// them. Every field is optional: absent means "whatever the device profile says".
 ///
 /// **One declaration, threaded whole.** These were previously spelled out in
-/// three structs and exploded into thirteen loose parameters twice on the way to
+/// three structs and exploded into loose parameters twice on the way to
 /// the reader, and the settings that got dropped were the ones somebody forgot to
 /// add to one of those lists — the picker's framing choice, and then its
 /// "capture raw bytes" tick. Add a serial setting here and it reaches the reader

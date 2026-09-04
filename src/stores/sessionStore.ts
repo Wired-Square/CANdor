@@ -55,6 +55,7 @@ import { reconcileKnownSessions } from "./sessionRoster";
 import type { FrameMessage } from "../types/frame";
 import { tlog } from "../api/settings";
 import { trackAlloc } from "../services/memoryDiag";
+import { hexToBytes } from "../utils/byteUtils";
 import {
   useSessionLogStore,
   type SessionLogEventType,
@@ -2107,10 +2108,6 @@ export type { BusSourceInfo } from "../utils/busFormat";
 // ============================================================================
 
 /**
- * Per-interface framing configuration (simplified for UI).
- * Used when each serial interface in a multi-source session needs different framing.
- */
-/**
  * Serial framing chosen per device in the picker.
  *
  * Re-exported from `api/io` so there is one declaration. It used to be a second,
@@ -2218,17 +2215,6 @@ export interface MultiSourceSessionResult {
  * @param options Configuration for the multi-source session
  * @returns The session result with capabilities
  */
-/**
- * Parse a hex string to byte array (e.g., "0D0A" -> [0x0D, 0x0A]).
- */
-function parseHexDelimiter(hex: string): number[] {
-  const bytes: number[] = [];
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes.push(parseInt(hex.slice(i, i + 2), 16));
-  }
-  return bytes;
-}
-
 export async function createAndStartMultiSourceSession(
   options: CreateMultiSourceOptions
 ): Promise<MultiSourceSessionResult> {
@@ -2265,7 +2251,7 @@ export async function createAndStartMultiSourceSession(
     // do nothing at all.
     const sourceFramingEncoding = interfaceFraming?.encoding ?? framingEncoding;
     const sourceDelimiter = interfaceFraming?.delimiterHex
-      ? parseHexDelimiter(interfaceFraming.delimiterHex)
+      ? hexToBytes(interfaceFraming.delimiterHex)
       : delimiter;
 
     // For "raw" framing mode, raw bytes are the only output, so the tick is moot

@@ -270,7 +270,7 @@ impl IOBroker {
 
         let (tx, rx) = mpsc::channel(SOURCE_CHANNEL_CAPACITY);
 
-        // `sessions::resolve_serial_fields` settles both serial fields against
+        // `sessions::apply_serial_overrides` settles both serial fields against
         // the profile before the config reaches us, so this reads the answer
         // rather than restating the rule. It used to derive it from
         // `framing_encoding`, which single-source sessions left absent — read as

@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 
 use super::framer::{FrameIdConfig, FramingEncoding};
 use crate::io::device_kinds::{conn_bool, conn_i64, conn_str};
+use crate::io::SerialOverrides;
 use crate::io::error::{DevicePresence, IoError};
 use crate::io::types::SourceMessage;
 use crate::settings::IOProfile;
@@ -141,18 +142,41 @@ pub fn framing_from_str(encoding: &str) -> FramingEncoding {
     }
 }
 
+/// Where a frame id or source address is read from within a framed message: the
+/// session's override if it names a start byte, else the profile's own triple,
+/// else nothing.
+///
+/// One function for both, keyed on the field prefix — they were two byte-identical
+/// blocks here *and* a third copy applying the override in the broker's spawner,
+/// so a session override reached the reader only because a caller remembered to
+/// re-apply it after this function had already answered.
+fn extraction(
+    profile: &IOProfile,
+    prefix: &str,
+    start: Option<i32>,
+    bytes: Option<u8>,
+    big_endian: Option<bool>,
+) -> Option<FrameIdConfig> {
+    let field = |suffix: &str| format!("{prefix}_{suffix}");
+    let start_byte = start.or_else(|| conn_i64(profile, &field("start_byte")).map(|n| n as i32))?;
+    Some(FrameIdConfig {
+        start_byte,
+        num_bytes: bytes
+            .or_else(|| conn_i64(profile, &field("bytes")).map(|n| n as u8))
+            .unwrap_or(1),
+        big_endian: big_endian
+            .or_else(|| conn_bool(profile, &field("big_endian")))
+            .unwrap_or(true),
+    })
+}
+
 /// Parse an IOProfile into a SerialSourceConfig, applying session-level overrides.
 ///
 /// Returns `None` if the port is not specified in the profile.
 pub fn parse_profile_for_source(
     profile: &IOProfile,
-    overrides: &crate::io::broker::SerialOverrides,
+    overrides: &SerialOverrides,
 ) -> Option<SerialSourceConfig> {
-    let framing_encoding_override = overrides.framing_encoding.as_deref();
-    let delimiter_override = overrides.delimiter.clone();
-    let max_frame_length_override = overrides.max_frame_length;
-    let min_frame_length_override = overrides.min_frame_length;
-    let emit_raw_bytes_override = overrides.emit_raw_bytes;
     let port = conn_str(profile, "port")?;
 
     // Line settings come from `io::device_kinds`, the one declaration the form
@@ -171,8 +195,8 @@ pub fn parse_profile_for_source(
     // port and the session cannot disagree about what is on the wire.
     let (framing_encoding_str, emit_raw_bytes) = crate::io::device_kinds::resolve_serial_framing(
         profile,
-        framing_encoding_override,
-        emit_raw_bytes_override,
+        overrides.framing_encoding.as_deref(),
+        overrides.emit_raw_bytes,
     );
 
     let framing_encoding = match framing_encoding_str.as_str() {
@@ -195,7 +219,7 @@ pub fn parse_profile_for_source(
             }
         }
         "delimiter" => {
-            let delimiter = delimiter_override.or_else(|| {
+            let delimiter = overrides.delimiter.clone().or_else(|| {
                 profile
                     .connection
                     .get("delimiter")
@@ -207,7 +231,7 @@ pub fn parse_profile_for_source(
                     })
             })
             .unwrap_or_else(|| vec![0x0A]); // Default to newline
-            let max_length = max_frame_length_override
+            let max_length = overrides.max_frame_length
                 .or_else(|| {
                     profile
                         .connection
@@ -230,56 +254,24 @@ pub fn parse_profile_for_source(
         "raw" | _ => FramingEncoding::Raw,
     };
 
-    // Frame ID extraction config
-    let frame_id_config = profile.connection.get("frame_id_start_byte").and_then(|_| {
-        Some(FrameIdConfig {
-            start_byte: profile
-                .connection
-                .get("frame_id_start_byte")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0) as i32,
-            num_bytes: profile
-                .connection
-                .get("frame_id_bytes")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(1) as u8,
-            big_endian: profile
-                .connection
-                .get("frame_id_big_endian")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true),
-        })
-    });
+    let frame_id_config = extraction(
+        profile,
+        "frame_id",
+        overrides.frame_id_start_byte,
+        overrides.frame_id_bytes,
+        overrides.frame_id_big_endian,
+    );
+    let source_address_config = extraction(
+        profile,
+        "source_address",
+        overrides.source_address_start_byte,
+        overrides.source_address_bytes,
+        overrides.source_address_big_endian,
+    );
 
-    // Source address extraction config
-    let source_address_config = profile.connection.get("source_address_start_byte").and_then(|_| {
-        Some(FrameIdConfig {
-            start_byte: profile
-                .connection
-                .get("source_address_start_byte")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0) as i32,
-            num_bytes: profile
-                .connection
-                .get("source_address_bytes")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(1) as u8,
-            big_endian: profile
-                .connection
-                .get("source_address_big_endian")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true),
-        })
-    });
-
-    let min_frame_length = min_frame_length_override
-        .or_else(|| {
-            profile
-                .connection
-                .get("min_frame_length")
-                .and_then(|v| v.as_i64())
-                .map(|n| n as usize)
-        })
+    let min_frame_length = overrides
+        .min_frame_length
+        .or_else(|| conn_i64(profile, "min_frame_length").map(|n| n as usize))
         .unwrap_or(0);
 
     Some(SerialSourceConfig {

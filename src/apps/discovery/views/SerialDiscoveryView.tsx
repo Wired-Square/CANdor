@@ -29,12 +29,12 @@ interface SerialDiscoveryViewProps {
    * The session's own frames capture, for a reader that frames on the wire
    * (SLIP, Modbus RTU) rather than the user framing stored bytes afterwards.
    */
-  sessionFramesCaptureId?: string | null;
+  sessionFramesCaptureId: string | null;
   /** Frame count for `sessionFramesCaptureId`. */
-  sessionFramesCount?: number;
+  sessionFramesCount: number;
 }
 
-export default function SerialDiscoveryView({ isStreaming = false, displayTimeFormat = 'human', isRecorded = false, emitsRawBytes, sessionFramesCaptureId = null, sessionFramesCount = 0 }: SerialDiscoveryViewProps) {
+export default function SerialDiscoveryView({ isStreaming = false, displayTimeFormat = 'human', isRecorded = false, emitsRawBytes, sessionFramesCaptureId, sessionFramesCount }: SerialDiscoveryViewProps) {
   const [showFramingDialog, setShowFramingDialog] = useState(false);
   const [showFilterDialog, setShowFilterDialog] = useState(false);
   const [showRawBytesViewDialog, setShowRawBytesViewDialog] = useState(false);

@@ -41,9 +41,9 @@ use crate::io::gs_usb::run_source as run_gs_usb_source;
 /// Run a single source reader and send frames to the merge task.
 ///
 /// Takes the whole `SourceConfig` rather than its fields: the serial settings
-/// used to arrive here as thirteen loose parameters, re-exploded from the config
-/// by the caller and re-assembled by `run_serial_reader`, and a setting missing
-/// from any one of those lists was silently dropped rather than rejected.
+/// used to arrive here as loose parameters, re-exploded from the config by the
+/// caller and re-assembled by `run_serial_reader`, and a setting missing from any
+/// one of those lists was silently dropped rather than rejected.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_source_reader(
     _app: AppHandle,
@@ -57,7 +57,15 @@ pub(super) async fn run_source_reader(
     virtual_bus_controls: VirtualBusControls,
     virtual_cmd_rx: Option<mpsc::UnboundedReceiver<VirtualBusCommand>>,
 ) {
-    let bus_mappings = config.bus_mappings.clone();
+    // Owned, so take the fields rather than cloning them. Only one arm runs.
+    let SourceConfig {
+        bus_mappings,
+        serial,
+        modbus_polls,
+        modbus_role,
+        max_register_errors,
+        ..
+    } = config;
     let error_tx = tx.clone();
     let outcome = match profile.kind.as_str() {
         "gvret_tcp" => {
@@ -77,7 +85,7 @@ pub(super) async fn run_source_reader(
         }
         #[cfg(not(target_os = "ios"))]
         "serial" => {
-            run_serial_reader(source_idx, &profile, bus_mappings, &config.serial, stop_flag, tx)
+            run_serial_reader(source_idx, &profile, bus_mappings, &serial, stop_flag, tx)
                 .await
         }
         "framelink" => {
@@ -86,14 +94,14 @@ pub(super) async fn run_source_reader(
         "virtual" => {
             run_virtual_reader(source_idx, &profile, bus_mappings, stop_flag, tx, virtual_bus_controls, virtual_cmd_rx).await
         }
-        "modbus_tcp" => match config.modbus_role.clone().unwrap_or(ModbusRole::Client) {
+        "modbus_tcp" => match modbus_role.unwrap_or(ModbusRole::Client) {
             ModbusRole::Client => {
                 run_modbus_tcp_client(
                     source_idx,
                     &profile,
                     bus_mappings,
-                    config.modbus_polls.clone().unwrap_or_default(),
-                    config.max_register_errors.unwrap_or(0),
+                    modbus_polls.unwrap_or_default(),
+                    max_register_errors.unwrap_or(0),
                     stop_flag,
                     pause_flag,
                     tx,
@@ -259,44 +267,12 @@ async fn run_serial_reader(
     stop_flag: Arc<AtomicBool>,
     tx: mpsc::Sender<SourceMessage>,
 ) -> Result<(), String> {
-    use crate::io::serial::FrameIdConfig;
-
+    // Fully resolved — the overrides go in, so nothing is left to re-apply here.
     let config = parse_profile_for_source(profile, overrides).ok_or("Serial port is required")?;
-
-    /// A session's extraction override, or the profile's, or nothing. The two
-    /// differ only in which triple they read, so they are one rule.
-    fn extraction(
-        start: Option<i32>,
-        bytes: Option<u8>,
-        big_endian: Option<bool>,
-        from_profile: Option<FrameIdConfig>,
-    ) -> Option<FrameIdConfig> {
-        match start {
-            Some(start_byte) => Some(FrameIdConfig {
-                start_byte,
-                num_bytes: bytes.unwrap_or(1),
-                big_endian: big_endian.unwrap_or(true),
-            }),
-            None => from_profile,
-        }
-    }
-
-    let frame_id_config = extraction(
-        overrides.frame_id_start_byte,
-        overrides.frame_id_bytes,
-        overrides.frame_id_big_endian,
-        config.frame_id_config,
-    );
-    let source_address_config = extraction(
-        overrides.source_address_start_byte,
-        overrides.source_address_bytes,
-        overrides.source_address_big_endian,
-        config.source_address_config,
-    );
 
     tlog!(
         "[multi_source] Serial source {} using framing: {:?} (override: {:?}), frame_id_config: {:?}",
-        source_idx, config.framing_encoding, overrides.framing_encoding, frame_id_config
+        source_idx, config.framing_encoding, overrides.framing_encoding, config.frame_id_config
     );
 
     run_serial_source(
@@ -307,8 +283,8 @@ async fn run_serial_reader(
         config.stop_bits,
         config.parity,
         config.framing_encoding,
-        frame_id_config,
-        source_address_config,
+        config.frame_id_config,
+        config.source_address_config,
         config.min_frame_length,
         config.emit_raw_bytes,
         bus_mappings,

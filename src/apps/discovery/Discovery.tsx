@@ -784,6 +784,11 @@ function DiscoveryInner() {
   const isRecorded = capabilities?.traits.temporal_mode === "recorded"
     || capabilities?.traits.temporal_mode === "capture";
 
+  /** The capture this app is reading: an opened one, else the session's own. */
+  const activeCaptureId = captureMetadata?.id ?? sessionCaptureId;
+  /** Frames in it. `captureCount` is the capture-mode counter and reads 0 live. */
+  const liveFrameCount = isCaptureMode ? captureCount : watchFrameCount;
+
   // Merged capture metadata using session values for cross-app timeline sync
   const effectiveCaptureMetadata = useEffectiveCaptureMetadata(
     { captureStartTimeUs, captureEndTimeUs, captureCount, captureName: session.captureName, capturePersistent: session.capturePersistent },
@@ -1002,7 +1007,7 @@ function DiscoveryInner() {
     // this used to) reads a Frames capture with a byte query, which returns nothing — an
     // export that promised N bytes and wrote none.
     getCaptureBytesPaginated: (offset, limit) => getCaptureBytesPaginated(storeBytesCaptureId ?? '', offset, limit),
-    getCaptureFramesPaginated: (offset, limit) => getCaptureFramesPaginated((captureMetadata?.id ?? sessionCaptureId)!, offset, limit),
+    getCaptureFramesPaginated: (offset, limit) => getCaptureFramesPaginated(activeCaptureId!, offset, limit),
     getCaptureFramesPaginatedById,
     captureMetadata,
     pickFileToSave,
@@ -1025,7 +1030,7 @@ function DiscoveryInner() {
     } else {
       // Capture-only mode: look up timestamp from capture
       const selection = groupKeysByProtocol(selectedFrames);
-      const frameBufferId = captureMetadata?.id ?? sessionCaptureId;
+      const frameBufferId = activeCaptureId;
       try {
         const response = await getCaptureFramesPaginatedFiltered(frameBufferId!, frameIndex, 1, selection);
         if (response.frames.length > 0) {
@@ -1112,7 +1117,7 @@ function DiscoveryInner() {
           onOpenSpeedPicker={() => dialogs.speedPicker.open()}
           frameCount={frameList.length}
           uniqueFrameCount={isCaptureMode ? frameInfoMap.size : watchUniqueFrameCount}
-          totalFrameCount={isCaptureMode ? captureCount : watchFrameCount}
+          totalFrameCount={liveFrameCount}
           selectedFrameCount={selectedFrames.size}
           onOpenFramePicker={() => dialogs.framePicker.open()}
           isSerialMode={isSerialMode}
@@ -1129,11 +1134,11 @@ function DiscoveryInner() {
           isCaptureMode={isCaptureMode}
           capturePersistent={session.capturePersistent}
           onToggleCapturePin={() => {
-            const bid = captureMetadata?.id ?? sessionCaptureId;
+            const bid = activeCaptureId;
             if (bid) useSessionStore.getState().setSessionCapturePersistent(bid, !session.capturePersistent);
           }}
           onRenameCapture={(newName) => {
-            const bid = captureMetadata?.id ?? sessionCaptureId;
+            const bid = activeCaptureId;
             if (bid) {
               const store = useSessionStore.getState();
               store.renameSessionCapture(bid, newName);
@@ -1161,14 +1166,10 @@ function DiscoveryInner() {
             emitsRawBytes={capabilities?.data_streams.rx_bytes ?? false}
             // A serial reader that frames on the wire writes into the session's
             // own capture and derives nothing, so the Framed tab has to be told
-            // where those frames are — the same id the CAN table below uses.
-            sessionFramesCaptureId={
-              captureKind === "bytes" ? null : (captureMetadata?.id ?? sessionCaptureId)
-            }
-            // The same count the CAN table uses below: `captureCount` is the
-            // capture-mode counter and reads 0 on a live session, which would
-            // stop the pager before it fetched anything.
-            sessionFramesCount={isCaptureMode ? captureCount : watchFrameCount}
+            // where those frames are. A *raw* session's own capture is bytes,
+            // which a frame pager must not be handed.
+            sessionFramesCaptureId={captureKind === "bytes" ? null : activeCaptureId}
+            sessionFramesCount={liveFrameCount}
           />
         ) : (
           <DiscoveryFramesView
@@ -1176,7 +1177,7 @@ function DiscoveryInner() {
             // writes each batch to it before signalling, so the capture is the source of
             // truth from the first frame. Gating this on captureMode was what forced the
             // view to keep two in-memory render paths alongside it.
-            captureId={captureMetadata?.id ?? sessionCaptureId}
+            captureId={activeCaptureId}
             sessionId={sessionId}
             protocol={protocolLabel}
             onCancelScan={handleCancelModbusScan}

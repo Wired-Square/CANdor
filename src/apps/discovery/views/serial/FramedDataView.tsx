@@ -2,7 +2,7 @@
 //
 // Display and configure framed serial data with ID/source/checksum extraction.
 
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDiscoveryStore, type FrameMessage } from '../../../../stores/discoveryStore';
 import { useDiscoverySerialStore } from '../../../../stores/discoverySerialStore';
@@ -208,12 +208,12 @@ interface FramedDataViewProps {
    * session's capture, deriving nothing. Without this the tab counts frames it
    * has no way to page.
    */
-  sessionFramesCaptureId?: string | null;
+  sessionFramesCaptureId: string | null;
   /** Frame count for `sessionFramesCaptureId`; drives the refetch while streaming. */
-  sessionFramesCount?: number;
+  sessionFramesCount: number;
 }
 
-export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onClearIdMapping, onApplySourceMapping, onClearSourceMapping, accepted, framingMode, displayTimeFormat = 'human', isStreaming = false, sessionFramesCaptureId = null, sessionFramesCount = 0 }: FramedDataViewProps) {
+export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onClearIdMapping, onApplySourceMapping, onClearSourceMapping, accepted, framingMode, displayTimeFormat = 'human', isStreaming = false, sessionFramesCaptureId, sessionFramesCount }: FramedDataViewProps) {
   const { t } = useTranslation("discovery");
   // Column visibility from UI store (shared with CAN views and ByteView)
   const showBusColumn = useDiscoveryUIStore((s) => s.showBusColumn);
@@ -235,15 +235,19 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
   const [currentPage, setCurrentPage] = useState(0);
 
   // Backend buffer state
+  const fetchInFlightRef = useRef(false);
+  const missedFetchRef = useRef(false);
   const [backendFrames, setBackendFrames] = useState<FrameMessage[]>([]);
   const [backendTimeRange, setBackendTimeRange] = useState<{ min: number; max: number } | null>(null);
   const [isLoadingPage, setIsLoadingPage] = useState(false);
 
-  // The capture this tab pages from, and its count. Client-side framing wins
-  // when it has run; otherwise the session's own capture, which is where a
-  // reader that frames for itself puts its frames.
-  const pagedCaptureId = framedCaptureId ?? sessionFramesCaptureId;
-  const pagedFrameCount = framedCaptureId !== null ? backendFrameCount : sessionFramesCount;
+  // Client-side framing pages its derived capture; otherwise the session's own,
+  // where a reader that frames on the wire puts its frames. One decision, so the
+  // id and the count cannot come from different sides.
+  const [pagedCaptureId, pagedFrameCount] =
+    framedCaptureId !== null
+      ? ([framedCaptureId, backendFrameCount] as const)
+      : ([sessionFramesCaptureId, sessionFramesCount] as const);
 
   // Determine if we're using backend buffer mode
   const useBackendBuffer = pagedCaptureId !== null;
@@ -346,8 +350,21 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
     if (!useBackendBuffer || !pagedCaptureId || pagedFrameCount === 0) return;
     if (effectivePageSize === null) return;
 
+    // A tail fetch can outlast the 500ms frame-count signal on a large capture.
+    // Skip while one is in flight and run once more on completion, so fetches can
+    // neither queue up on the capture-store mutex nor land out of order and
+    // overwrite newer rows with older ones — the same guard `useCaptureFrameView`
+    // documents for the CAN tail, which this path now shares the cadence of.
+    if (fetchInFlightRef.current) {
+      missedFetchRef.current = true;
+      return;
+    }
+
     const fetchPage = async () => {
-      setIsLoadingPage(true);
+      fetchInFlightRef.current = true;
+      // The pagination toolbar is hidden while streaming, so a spinner there is
+      // two wasted renders per tick.
+      if (!isStreaming) setIsLoadingPage(true);
       try {
         // During streaming, always show the last page (latest frames)
         const offset = isStreaming
@@ -375,7 +392,12 @@ export default function FramedDataView({ frames, onAccept, onApplyIdMapping, onC
         console.error('Failed to fetch frames from backend:', error);
         setBackendFrames([]);
       } finally {
-        setIsLoadingPage(false);
+        fetchInFlightRef.current = false;
+        if (!isStreaming) setIsLoadingPage(false);
+        if (missedFetchRef.current) {
+          missedFetchRef.current = false;
+          fetchPage();
+        }
       }
     };
 
