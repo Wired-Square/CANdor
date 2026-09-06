@@ -469,7 +469,7 @@ fn parse_gvret_probed_bus_count(
         .filter(|c| *c > 0)?
         .min(io::gvret::MAX_BUSES as u64) as u8;
 
-    let mappings = io::gvret::default_bus_mappings(count);
+    let mappings = io::bus_mapping::default_bus_mappings(count);
     Some(match bus_override {
         Some(offset) => offset_bus_mappings(mappings, offset),
         None => mappings,

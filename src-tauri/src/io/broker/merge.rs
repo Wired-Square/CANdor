@@ -15,7 +15,7 @@ use super::{MergeCommand, VirtualBusCommand, VirtualBusControls, VirtualCmdTx};
 use crate::settings;
 use crate::capture_store::{self, TimestampedByte};
 use crate::io::error::IoError;
-use crate::io::gvret::BusMapping;
+use crate::io::bus_mapping::BusMapping;
 use crate::io::types::SourceMessage;
 use crate::io::{emit_device_connected, emit_session_error, emit_stream_ended, signal_bytes_ready, signal_frames_ready, FrameMessage, SignalThrottle};
 

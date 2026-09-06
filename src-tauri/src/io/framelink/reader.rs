@@ -15,7 +15,7 @@ use super::shared;
 use framelink::protocol::types::{IFACE_CAN, IFACE_CANFD, IFACE_RS232, IFACE_RS485};
 
 use crate::io::error::IoError;
-use crate::io::gvret::BusMapping;
+use crate::io::bus_mapping::BusMapping;
 use crate::io::types::{EndReason, SourceMessage, TransmitRequest};
 use crate::io::Protocol;
 

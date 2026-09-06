@@ -20,38 +20,12 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
+use crate::io::bus_mapping::{apply_bus_mapping, BusMapping};
 use crate::io::error::IoError;
-use crate::io::gvret::{apply_bus_mapping, BusMapping};
 use crate::io::serial::utils as serial_utils;
 use crate::io::types::{EndReason, SourceMessage, TransmitRequest};
 use crate::io::{now_us, CanTransmitFrame, FrameMessage};
-
-// ============================================================================
-// Constants
-// ============================================================================
-
-/// slcan bitrate commands (S0-S8)
-const SLCAN_BITRATES: [(u32, &str); 9] = [
-    (10_000, "S0"),     // 10 Kbit/s
-    (20_000, "S1"),     // 20 Kbit/s
-    (50_000, "S2"),     // 50 Kbit/s
-    (100_000, "S3"),    // 100 Kbit/s
-    (125_000, "S4"),    // 125 Kbit/s
-    (250_000, "S5"),    // 250 Kbit/s
-    (500_000, "S6"),    // 500 Kbit/s
-    (750_000, "S7"),    // 750 Kbit/s
-    (1_000_000, "S8"),  // 1 Mbit/s
-];
-
-/// slcan CAN FD data phase bitrate commands (Y0-Y8, ELMUE firmware extension)
-const SLCAN_DATA_BITRATES: [(u32, &str); 6] = [
-    (500_000,   "Y0"),  // 500 Kbit/s
-    (1_000_000, "Y1"),  // 1 Mbit/s
-    (2_000_000, "Y2"),  // 2 Mbit/s
-    (4_000_000, "Y4"),  // 4 Mbit/s
-    (5_000_000, "Y5"),  // 5 Mbit/s
-    (8_000_000, "Y8"),  // 8 Mbit/s
-];
+use wiretap_protocol::slcan;
 
 // ============================================================================
 // Types and Configuration
@@ -97,164 +71,57 @@ pub struct SlcanConfig {
 }
 
 #[allow(dead_code)]
-fn default_data_bits() -> u8 { 8 }
+fn default_data_bits() -> u8 {
+    8
+}
 #[allow(dead_code)]
-fn default_stop_bits() -> u8 { 1 }
+fn default_stop_bits() -> u8 {
+    1
+}
 #[allow(dead_code)]
-fn default_parity() -> String { "none".to_string() }
+fn default_parity() -> String {
+    "none".to_string()
+}
 #[allow(dead_code)]
-fn default_data_bitrate() -> u32 { 2_000_000 }
+fn default_data_bitrate() -> u32 {
+    2_000_000
+}
 
 // ============================================================================
 // Utility Functions
 // ============================================================================
 
-/// Find the slcan bitrate command for a given bitrate
-pub fn find_bitrate_command(bitrate: u32) -> Result<&'static str, IoError> {
-    SLCAN_BITRATES
-        .iter()
-        .find(|(rate, _)| *rate == bitrate)
-        .map(|(_, cmd)| *cmd)
-        .ok_or_else(|| {
-            let valid: Vec<String> = SLCAN_BITRATES.iter().map(|(r, _)| format!("{}", r)).collect();
-            IoError::configuration(format!(
-                "Invalid CAN bitrate {}. Valid bitrates: {}",
-                bitrate,
-                valid.join(", ")
-            ))
-        })
-}
-
-/// Find the slcan data phase bitrate command for a given bitrate (ELMUE FD extension)
-pub fn find_data_bitrate_command(bitrate: u32) -> Result<&'static str, IoError> {
-    SLCAN_DATA_BITRATES
-        .iter()
-        .find(|(rate, _)| *rate == bitrate)
-        .map(|(_, cmd)| *cmd)
-        .ok_or_else(|| {
-            let valid: Vec<String> = SLCAN_DATA_BITRATES.iter().map(|(r, _)| format!("{}", r)).collect();
-            IoError::configuration(format!(
-                "Invalid CAN FD data bitrate {}. Valid bitrates: {}",
-                bitrate,
-                valid.join(", ")
-            ))
-        })
-}
-
-/// CAN FD DLC-to-payload-length mapping (ISO 11898-2:2015).
-const DLC_LEN: [usize; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64];
-
-/// Parse a single slcan frame line (classic CAN or CAN FD).
+/// Name a bitrate as an `S` command, or say which ones this protocol can name.
 ///
-/// Format examples:
-///   t1234AABBCCDD  -> Standard frame, ID=0x123, DLC=4, data=AA BB CC DD
-///   T123456788AABBCCDD112233445566 -> Extended frame, ID=0x12345678, DLC=8
-///   r1230          -> Standard RTR, ID=0x123, DLC=0
-///   d7E09112233445566778899AABBCC -> FD frame, ID=0x7E0, 12 bytes
-///   b7E0F...64 hex bytes... -> FD+BRS frame, ID=0x7E0, 64 bytes
-pub fn parse_slcan_frame(line: &str) -> Option<FrameMessage> {
-    let bytes = line.as_bytes();
-    if bytes.is_empty() {
-        return None;
-    }
-
-    // Determine frame type from first character
-    let (is_extended, is_rtr, is_fd) = match bytes[0] {
-        b't' => (false, false, false),
-        b'T' => (true,  false, false),
-        b'r' => (false, true,  false),
-        b'R' => (true,  true,  false),
-        b'd' => (false, false, true),
-        b'D' => (true,  false, true),
-        b'b' => (false, false, true),
-        b'B' => (true,  false, true),
-        _ => return None, // Not a frame (could be response like 'z', '\r', etc.)
-    };
-
-    let id_len = if is_extended { 8 } else { 3 };
-    let min_len = 1 + id_len + 1; // prefix + ID + DLC
-
-    if bytes.len() < min_len {
-        return None;
-    }
-
-    // Parse frame ID (hex ASCII)
-    let id_str = std::str::from_utf8(&bytes[1..1 + id_len]).ok()?;
-    let frame_id = u32::from_str_radix(id_str, 16).ok()?;
-
-    // Parse DLC (single hex digit: 0-8 classic, 0-F for FD)
-    let dlc_char = bytes[1 + id_len] as char;
-    let dlc_code = dlc_char.to_digit(16)? as u8;
-
-    let max_dlc = if is_fd { 15 } else { 8 };
-    if dlc_code > max_dlc {
-        return None;
-    }
-
-    let data_len = if is_fd {
-        DLC_LEN[dlc_code as usize]
-    } else {
-        dlc_code as usize
-    };
-
-    // Parse data bytes (pairs of hex characters)
-    let mut data = Vec::with_capacity(data_len);
-    if !is_rtr && data_len > 0 {
-        let data_start = 1 + id_len + 1;
-        let expected_len = data_start + (data_len * 2);
-
-        if bytes.len() < expected_len {
-            return None;
-        }
-
-        for i in 0..data_len {
-            let byte_str = std::str::from_utf8(&bytes[data_start + i * 2..data_start + i * 2 + 2]).ok()?;
-            let byte = u8::from_str_radix(byte_str, 16).ok()?;
-            data.push(byte);
-        }
-    }
-
-    Some(FrameMessage {
-        protocol: "can".to_string(),
-        timestamp_us: now_us(),
-        frame_id,
-        bus: 0,
-        dlc: data_len as u8,
-        bytes: data,
-        is_extended,
-        is_fd,
-        source_address: None,
-        incomplete: None,
-        direction: None,
+/// The protocol has no way to ask for a rate outside its table, so an
+/// unsupported one is a configuration error rather than a device failure.
+pub fn find_bitrate_command(bitrate: u32) -> Result<&'static str, IoError> {
+    slcan::bitrate_command(bitrate).ok_or_else(|| {
+        IoError::configuration(format!(
+            "Invalid CAN bitrate {}. Valid bitrates: {}",
+            bitrate,
+            rate_list(&slcan::NOMINAL_BITRATES)
+        ))
     })
 }
 
-/// Encode a CAN frame to slcan format for transmission
-///
-/// Returns the ASCII command string including trailing \r
-#[cfg(test)]
-fn encode_slcan_frame(frame: &FrameMessage) -> String {
-    let mut cmd = String::with_capacity(32);
+/// The same for a CAN FD data-phase bitrate (`Y`).
+pub fn find_data_bitrate_command(bitrate: u32) -> Result<&'static str, IoError> {
+    slcan::data_bitrate_command(bitrate).ok_or_else(|| {
+        IoError::configuration(format!(
+            "Invalid CAN FD data bitrate {}. Valid bitrates: {}",
+            bitrate,
+            rate_list(&slcan::DATA_BITRATES)
+        ))
+    })
+}
 
-    // Frame type prefix
-    if frame.is_extended {
-        cmd.push('T');
-        cmd.push_str(&format!("{:08X}", frame.frame_id));
-    } else {
-        cmd.push('t');
-        cmd.push_str(&format!("{:03X}", frame.frame_id & 0x7FF));
-    }
-
-    // DLC
-    cmd.push_str(&format!("{:X}", frame.dlc.min(8)));
-
-    // Data bytes
-    for byte in &frame.bytes {
-        cmd.push_str(&format!("{:02X}", byte));
-    }
-
-    cmd.push('\r');
-    cmd
+fn rate_list(table: &[(u32, &str)]) -> String {
+    table
+        .iter()
+        .map(|(rate, _)| rate.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 // ============================================================================
@@ -303,7 +170,8 @@ pub fn probe_slcan_device(
     // Convert serial framing parameters with defaults
     let data_bits = serial_utils::to_serialport_data_bits(data_bits.unwrap_or(8));
     let stop_bits = serial_utils::to_serialport_stop_bits(stop_bits.unwrap_or(1));
-    let parity = serial_utils::parity_str_to_serialport(&parity.unwrap_or_else(|| "none".to_string()));
+    let parity =
+        serial_utils::parity_str_to_serialport(&parity.unwrap_or_else(|| "none".to_string()));
 
     let device = format!("slcan({})", port);
 
@@ -335,7 +203,7 @@ pub fn probe_slcan_device(
     let _ = serial_port.clear(serialport::ClearBuffer::All);
 
     // Close any existing channel first (in case device is in open state)
-    let _ = serial_port.write_all(b"C\r");
+    let _ = serial_port.write_all(slcan::CLOSE.as_bytes());
     let _ = serial_port.flush();
     std::thread::sleep(Duration::from_millis(50));
 
@@ -348,88 +216,35 @@ pub fn probe_slcan_device(
     let mut is_elmue_firmware = false;
     let mut got_any_response = false;
 
-    // Query firmware version (V command)
-    // The Elmue CANable 2.5 firmware returns an extended multi-line response:
-    //   V+Board: MultiboardMCU: STM32G431DevID: 1128Firmware: 2490643Slcan: 100Clock: 160Limits: ...
-    // Standard slcan firmware returns a short response: "V1013"
-    if let Some(response) = send_and_read_all(&mut serial_port, b"V\r") {
+    // Firmware version. Two shapes of answer, and the extended one is also the
+    // only evidence a device speaks CAN FD — SLCAN has no capability query.
+    if let Some(response) = send_and_read_all(&mut serial_port, slcan::QUERY_VERSION.as_bytes()) {
         got_any_response = true;
-        let trimmed = response.trim();
-        if !trimmed.is_empty() && trimmed != "\x07" {
-            // Try to parse Elmue extended format (contains "Firmware:" field)
-            // Elmue CANable 2.5 firmware supports CAN FD on STM32G431
-            if let Some(fw_pos) = trimmed.find("Firmware:") {
-                is_elmue_firmware = true;
-                let after_fw = &trimmed[fw_pos + 9..];
-                // Extract digits until next non-digit character
-                let fw_digits: String = after_fw.chars().take_while(|c| c.is_ascii_digit()).collect();
-                if !fw_digits.is_empty() {
-                    version = Some(format_version(&fw_digits));
-                }
-                // Extract board info for hardware_version
-                if let Some(board_pos) = trimmed.find("Board:") {
-                    let after_board = &trimmed[board_pos + 6..];
-                    // Take until "MCU:" or end
-                    let board = if let Some(mcu_pos) = after_board.find("MCU:") {
-                        after_board[..mcu_pos].trim()
-                    } else {
-                        after_board.split_whitespace().next().unwrap_or("")
-                    };
-                    if !board.is_empty() {
-                        // Also grab MCU if present
-                        if let Some(mcu_pos) = trimmed.find("MCU:") {
-                            let after_mcu = &trimmed[mcu_pos + 4..];
-                            let mcu: String = after_mcu.chars().take_while(|c| *c != 'D' && *c != '\r' && *c != '\n').collect();
-                            let mcu = mcu.trim();
-                            if !mcu.is_empty() {
-                                hardware_version = Some(format!("{} {}", board.trim_start_matches('+').trim(), mcu));
-                            } else {
-                                hardware_version = Some(board.trim_start_matches('+').trim().to_string());
-                            }
-                        } else {
-                            hardware_version = Some(board.trim_start_matches('+').trim().to_string());
-                        }
-                    }
-                }
-            } else {
-                // Standard slcan format: "V1013" or "v1013"
-                let raw = if trimmed.starts_with('V') || trimmed.starts_with('v') {
-                    &trimmed[1..]
-                } else {
-                    trimmed
-                };
-                version = Some(format_version(raw));
-            }
+        if let Some(reply) = meaningful(&response) {
+            let v = slcan::parse_version(reply);
+            is_elmue_firmware = v.elmue;
+            version = v.firmware;
+            hardware_version = match (v.board, v.mcu) {
+                (Some(board), Some(mcu)) => Some(format!("{} {}", board, mcu)),
+                (board, mcu) => board.or(mcu),
+            };
         }
     }
 
-    // Query hardware version (v command) - some devices support this
-    // Skip if we already got hardware info from the extended V response
+    // Hardware version, for devices that answer it — skipped when the extended
+    // V reply already said.
     if hardware_version.is_none() {
-        if let Some(response) = send_and_read(&mut serial_port, b"v\r") {
+        if let Some(response) = send_and_read(&mut serial_port, slcan::QUERY_HW_VERSION.as_bytes())
+        {
             got_any_response = true;
-            let trimmed = response.trim();
-            if !trimmed.is_empty() && trimmed != "\x07" {
-                hardware_version = Some(if trimmed.starts_with('v') {
-                    trimmed[1..].to_string()
-                } else {
-                    trimmed.to_string()
-                });
-            }
+            hardware_version = meaningful(&response).map(|r| strip_echo(r, 'v'));
         }
     }
 
-    // Query serial number (N command) - some devices support this
-    if let Some(response) = send_and_read(&mut serial_port, b"N\r") {
+    // Serial number, likewise optional.
+    if let Some(response) = send_and_read(&mut serial_port, slcan::QUERY_SERIAL.as_bytes()) {
         got_any_response = true;
-        let trimmed = response.trim();
-        if !trimmed.is_empty() && trimmed != "\x07" {
-            serial_number = Some(if trimmed.starts_with('N') {
-                trimmed[1..].to_string()
-            } else {
-                trimmed.to_string()
-            });
-        }
+        serial_number = meaningful(&response).map(|r| strip_echo(r, 'N'));
     }
 
     // Detect CAN FD support from firmware identification.
@@ -465,16 +280,15 @@ pub fn probe_slcan_device(
     }
 }
 
-/// Format a version string (e.g., "1013" -> "1.0.13" or keep as-is if format unclear)
-fn format_version(s: &str) -> String {
-    let s = s.trim();
-    // Common CANable format: 4 digits like "1013" -> "1.0.13"
-    if s.len() == 4 && s.chars().all(|c| c.is_ascii_digit()) {
-        let chars: Vec<char> = s.chars().collect();
-        format!("{}.{}.{}{}", chars[0], chars[1], chars[2], chars[3])
-    } else {
-        s.to_string()
-    }
+/// A reply worth reading: neither empty nor the device's bell.
+fn meaningful(response: &str) -> Option<&str> {
+    let t = response.trim();
+    (!t.is_empty() && t.as_bytes() != [slcan::BELL]).then_some(t)
+}
+
+/// Drop the command letter a device echoes back before its answer.
+fn strip_echo(reply: &str, cmd: char) -> String {
+    reply.strip_prefix(cmd).unwrap_or(reply).to_string()
 }
 
 /// Send a command and read the full response (larger buffer, longer wait).
@@ -496,7 +310,7 @@ fn send_and_read_all(port: &mut Box<dyn serialport::SerialPort>, cmd: &[u8]) -> 
         match port.read(&mut buf) {
             Ok(n) if n > 0 => {
                 for &b in &buf[..n] {
-                    if b == 0x07 {
+                    if b == slcan::BELL {
                         return Some("\x07".to_string());
                     }
                     if b.is_ascii() && (b >= 0x20 || b == b'\r' || b == b'\n') {
@@ -508,7 +322,11 @@ fn send_and_read_all(port: &mut Box<dyn serialport::SerialPort>, cmd: &[u8]) -> 
         }
     }
 
-    if response.is_empty() { None } else { Some(response) }
+    if response.is_empty() {
+        None
+    } else {
+        Some(response)
+    }
 }
 
 /// Send a command and read the response
@@ -532,7 +350,7 @@ fn send_and_read(port: &mut Box<dyn serialport::SerialPort>, cmd: &[u8]) -> Opti
             Ok(n) if n > 0 => {
                 // Filter out non-printable characters except CR/LF
                 for &b in &buf[..n] {
-                    if b == 0x07 {
+                    if b == slcan::BELL {
                         // Bell character indicates error
                         return Some("\x07".to_string());
                     }
@@ -561,29 +379,36 @@ fn send_and_read(port: &mut Box<dyn serialport::SerialPort>, cmd: &[u8]) -> Opti
 // Multi-Source Streaming
 // ============================================================================
 
-/// Encode a CAN transmit frame to slcan format for transmission
+/// Turn a decoded SLCAN frame into a `FrameMessage`.
+///
+/// SLCAN carries no timestamp and no bus number, so both come from here: the
+/// host clock, and bus 0 for the session's mapping to renumber. BRS survives
+/// the decode but has nowhere to go — `FrameMessage` has no field for it.
+fn frame_message(f: slcan::Frame) -> FrameMessage {
+    FrameMessage {
+        protocol: "can".to_string(),
+        timestamp_us: now_us(),
+        frame_id: f.arb_id,
+        bus: 0,
+        dlc: f.data.len() as u8,
+        bytes: f.data,
+        is_extended: f.extended,
+        is_fd: f.fd,
+        source_address: None,
+        incomplete: None,
+        direction: None,
+    }
+}
+
+/// Encode a frame as the SLCAN line that transmits it.
 pub fn encode_transmit_frame(frame: &CanTransmitFrame) -> Vec<u8> {
-    let mut cmd = String::with_capacity(32);
-
-    // Frame type prefix
-    if frame.is_extended {
-        cmd.push('T');
-        cmd.push_str(&format!("{:08X}", frame.frame_id));
-    } else {
-        cmd.push('t');
-        cmd.push_str(&format!("{:03X}", frame.frame_id & 0x7FF));
-    }
-
-    // DLC
-    cmd.push_str(&format!("{:X}", frame.data.len().min(8)));
-
-    // Data bytes
-    for byte in &frame.data {
-        cmd.push_str(&format!("{:02X}", byte));
-    }
-
-    cmd.push('\r');
-    cmd.into_bytes()
+    slcan::encode_frame(&slcan::Frame::data(
+        frame.frame_id,
+        frame.is_extended,
+        frame.is_fd,
+        frame.is_brs,
+        frame.data.clone(),
+    ))
 }
 
 /// Run slcan source and send frames to merge task
@@ -637,38 +462,38 @@ pub async fn run_source(
         // Wait for device to be ready
         std::thread::sleep(Duration::from_millis(200));
 
-        // Close any existing channel
-        let _ = port.write_all(b"C\r");
-        let _ = port.flush();
-        std::thread::sleep(Duration::from_millis(50));
-
-        // Set nominal bitrate
-        let bitrate_cmd = find_bitrate_command(bitrate).map_err(String::from)?;
-        port.write_all(format!("{}\r", bitrate_cmd).as_bytes())
-            .map_err(|e| IoError::protocol(&device, format!("set bitrate: {}", e)).to_string())?;
-        let _ = port.flush();
-        std::thread::sleep(Duration::from_millis(50));
-
-        // Set data phase bitrate (ELMUE FD extension) — implicitly enables FD mode
-        if enable_fd {
-            let data_cmd = find_data_bitrate_command(data_bitrate).map_err(String::from)?;
-            port.write_all(format!("{}\r", data_cmd).as_bytes())
-                .map_err(|e| IoError::protocol(&device, format!("set data bitrate: {}", e)).to_string())?;
+        // Each command is answered, and some firmware is unhappy being written
+        // to mid-reply, so every step pauses before the next.
+        let mut send = |what: &str, cmd: &str| -> Result<(), String> {
+            port.write_all(cmd.as_bytes())
+                .map_err(|e| IoError::protocol(&device, format!("{}: {}", what, e)).to_string())?;
             let _ = port.flush();
             std::thread::sleep(Duration::from_millis(50));
+            Ok(())
+        };
+
+        send("close channel", slcan::CLOSE)?;
+        send(
+            "set bitrate",
+            find_bitrate_command(bitrate).map_err(String::from)?,
+        )?;
+        // A data-phase bitrate is what puts the device into FD mode; there is
+        // no separate command for it.
+        if enable_fd {
+            send(
+                "set data bitrate",
+                find_data_bitrate_command(data_bitrate).map_err(String::from)?,
+            )?;
         }
-
-        // Set mode: M0 = normal, M1 = silent
-        let mode_cmd = if silent_mode { "M1" } else { "M0" };
-        port.write_all(format!("{}\r", mode_cmd).as_bytes())
-            .map_err(|e| IoError::protocol(&device, format!("set mode: {}", e)).to_string())?;
-        let _ = port.flush();
-        std::thread::sleep(Duration::from_millis(50));
-
-        // Open channel
-        port.write_all(b"O\r")
-            .map_err(|e| IoError::protocol(&device, format!("open channel: {}", e)).to_string())?;
-        let _ = port.flush();
+        send(
+            "set mode",
+            if silent_mode {
+                slcan::MODE_SILENT
+            } else {
+                slcan::MODE_NORMAL
+            },
+        )?;
+        send("open channel", slcan::OPEN)?;
 
         Ok(())
     })();
@@ -688,13 +513,26 @@ pub async fn run_source(
 
     tlog!(
         "[slcan] Source {} connected to {} (bitrate: {}, silent: {}, fd: {}{})",
-        source_idx, port_path, bitrate, silent_mode, enable_fd,
-        if enable_fd { format!(", data_bitrate: {}", data_bitrate) } else { String::new() }
+        source_idx,
+        port_path,
+        bitrate,
+        silent_mode,
+        enable_fd,
+        if enable_fd {
+            format!(", data_bitrate: {}", data_bitrate)
+        } else {
+            String::new()
+        }
     );
 
     // Emit device-connected event
     let _ = tx
-        .send(SourceMessage::Connected(source_idx, "slcan".to_string(), port_path.clone(), None))
+        .send(SourceMessage::Connected(
+            source_idx,
+            "slcan".to_string(),
+            port_path.clone(),
+            None,
+        ))
         .await;
 
     // Spawn dedicated write thread if we have a cloned port handle.
@@ -733,7 +571,7 @@ pub async fn run_source(
     let port_name = port_path.clone();
 
     let blocking_handle = tokio::task::spawn_blocking(move || {
-        let mut line_buf = String::with_capacity(256);
+        let mut decoder = slcan::LineDecoder::new();
         let mut read_buf = [0u8; 256];
 
         while !stop_flag_clone.load(Ordering::SeqCst) {
@@ -742,30 +580,17 @@ pub async fn run_source(
 
             match read_result {
                 Ok(n) if n > 0 => {
-                    let mut pending_frames: Vec<FrameMessage> = Vec::new();
-
-                    for &byte in &read_buf[..n] {
-                        if byte == b'\r' || byte == b'\n' {
-                            if !line_buf.is_empty() {
-                                if let Some(mut frame) = parse_slcan_frame(&line_buf) {
-                                    // Apply bus mapping
-                                    if apply_bus_mapping(&mut frame, &bus_mappings) {
-                                        pending_frames.push(frame);
-                                    }
-                                }
-                                line_buf.clear();
-                            }
-                        } else if byte == 0x07 {
-                            // Bell = error
-                            line_buf.clear();
-                        } else if byte.is_ascii() && !byte.is_ascii_control() {
-                            line_buf.push(byte as char);
-                            if line_buf.len() > 512 {
-                                tlog!("[slcan] Line buffer exceeded 512 bytes, discarding");
-                                line_buf.clear();
-                            }
-                        }
-                    }
+                    // A device's replies come down the same wire as its frames;
+                    // only the frames are traffic.
+                    let pending_frames: Vec<FrameMessage> = decoder
+                        .feed(&read_buf[..n])
+                        .into_iter()
+                        .filter_map(|line| match line {
+                            slcan::Line::Frame(f) => Some(frame_message(f)),
+                            slcan::Line::Reply(_) => None,
+                        })
+                        .filter_map(|mut f| apply_bus_mapping(&mut f, &bus_mappings).then_some(f))
+                        .collect();
 
                     if !pending_frames.is_empty() {
                         let _ = tx_clone
@@ -787,7 +612,7 @@ pub async fn run_source(
         }
 
         // Close channel
-        let _ = serial_port.write_all(b"C\r");
+        let _ = serial_port.write_all(slcan::CLOSE.as_bytes());
         let _ = serial_port.flush();
 
         let _ = tx_clone.blocking_send(SourceMessage::Ended(source_idx, EndReason::Stopped));
@@ -804,144 +629,100 @@ pub async fn run_source(
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_parse_standard_frame() {
-        let frame = parse_slcan_frame("t1234AABBCCDD").unwrap();
-        assert_eq!(frame.frame_id, 0x123);
-        assert_eq!(frame.dlc, 4);
-        assert_eq!(frame.bytes, vec![0xAA, 0xBB, 0xCC, 0xDD]);
-        assert!(!frame.is_extended);
-        assert!(!frame.is_fd);
-    }
-
-    #[test]
-    fn test_parse_extended_frame() {
-        let frame = parse_slcan_frame("T123456782AABB").unwrap();
-        assert_eq!(frame.frame_id, 0x12345678);
-        assert_eq!(frame.dlc, 2);
-        assert_eq!(frame.bytes, vec![0xAA, 0xBB]);
-        assert!(frame.is_extended);
-    }
-
-    #[test]
-    fn test_parse_standard_frame_zero_dlc() {
-        let frame = parse_slcan_frame("t1230").unwrap();
-        assert_eq!(frame.frame_id, 0x123);
-        assert_eq!(frame.dlc, 0);
-        assert!(frame.bytes.is_empty());
-    }
-
-    #[test]
-    fn test_parse_standard_frame_max_dlc() {
-        let frame = parse_slcan_frame("t1238AABBCCDD11223344").unwrap();
-        assert_eq!(frame.frame_id, 0x123);
-        assert_eq!(frame.dlc, 8);
-        assert_eq!(frame.bytes.len(), 8);
-    }
-
-    #[test]
-    fn test_parse_rtr_frame() {
-        let frame = parse_slcan_frame("r1234").unwrap();
-        assert_eq!(frame.frame_id, 0x123);
-        assert_eq!(frame.dlc, 4);
-        assert!(frame.bytes.is_empty()); // RTR has no data
-    }
-
-    #[test]
-    fn test_parse_extended_rtr() {
-        let frame = parse_slcan_frame("R123456780").unwrap();
-        assert_eq!(frame.frame_id, 0x12345678);
-        assert_eq!(frame.dlc, 0);
-        assert!(frame.is_extended);
-    }
-
-    #[test]
-    fn test_parse_invalid_prefix() {
-        assert!(parse_slcan_frame("x1234AABB").is_none());
-        assert!(parse_slcan_frame("z").is_none());
-        assert!(parse_slcan_frame("").is_none());
-    }
-
-    #[test]
-    fn test_parse_invalid_dlc() {
-        // DLC > 8 is invalid for classic CAN
-        assert!(parse_slcan_frame("t123FAABBCCDD").is_none());
-    }
-
-    #[test]
-    fn test_parse_truncated_frame() {
-        // Not enough data bytes for DLC
-        assert!(parse_slcan_frame("t1234AA").is_none());
-    }
-
-    #[test]
-    fn test_encode_standard_frame() {
-        let frame = FrameMessage {
-            protocol: "can".to_string(),
-            timestamp_us: 0,
-            frame_id: 0x123,
+    fn tx(frame_id: u32, is_extended: bool, is_fd: bool, is_brs: bool, data: Vec<u8>) -> Vec<u8> {
+        encode_transmit_frame(&CanTransmitFrame {
+            frame_id,
+            data,
             bus: 0,
-            dlc: 3,
-            bytes: vec![0x01, 0x02, 0x03],
-            is_extended: false,
-            is_fd: false,
-            source_address: None,
-            incomplete: None,
-            direction: None,
-        };
-        assert_eq!(encode_slcan_frame(&frame), "t1233010203\r");
+            is_extended,
+            is_fd,
+            is_brs,
+            is_rtr: false,
+        })
+    }
+
+    fn line(bytes: Vec<u8>) -> String {
+        String::from_utf8(bytes).expect("ascii")
     }
 
     #[test]
-    fn test_encode_extended_frame() {
-        let frame = FrameMessage {
-            protocol: "can".to_string(),
-            timestamp_us: 0,
-            frame_id: 0x12345678,
-            bus: 0,
-            dlc: 2,
-            bytes: vec![0xAA, 0xBB],
-            is_extended: true,
-            is_fd: false,
-            source_address: None,
-            incomplete: None,
-            direction: None,
-        };
-        assert_eq!(encode_slcan_frame(&frame), "T123456782AABB\r");
+    fn a_classic_transmit_is_a_t_line() {
+        assert_eq!(
+            line(tx(0x123, false, false, false, vec![0xAA, 0xBB])),
+            "t1232AABB\r"
+        );
+        assert_eq!(
+            line(tx(0x12345678, true, false, false, vec![0x11])),
+            "T12345678111\r"
+        );
+    }
+
+    /// The regression this move exists to fix: a CAN FD transmit used to go out
+    /// as `t<id>8<hex>`, which is a classic frame claiming eight bytes and
+    /// carrying twelve — malformed, and silently so.
+    #[test]
+    fn an_fd_transmit_uses_an_fd_prefix_and_a_length_code() {
+        assert_eq!(
+            line(tx(0x7E0, false, true, false, vec![0x11; 12])),
+            format!("d7E09{}\r", "11".repeat(12)),
+            "code 9 is twelve bytes"
+        );
     }
 
     #[test]
-    fn test_encode_decode_roundtrip() {
-        let original = FrameMessage {
-            protocol: "can".to_string(),
-            timestamp_us: 0,
-            frame_id: 0x7FF,
-            bus: 0,
-            dlc: 4,
-            bytes: vec![0xDE, 0xAD, 0xBE, 0xEF],
-            is_extended: false,
-            is_fd: false,
-            source_address: None,
-            incomplete: None,
-            direction: None,
-        };
-
-        let encoded = encode_slcan_frame(&original);
-        // Remove trailing \r for parsing
-        let decoded = parse_slcan_frame(&encoded[..encoded.len() - 1]).unwrap();
-
-        assert_eq!(decoded.frame_id, original.frame_id);
-        assert_eq!(decoded.dlc, original.dlc);
-        assert_eq!(decoded.bytes, original.bytes);
-        assert_eq!(decoded.is_extended, original.is_extended);
+    fn a_bit_rate_switch_changes_the_prefix() {
+        assert!(line(tx(0x7E0, false, true, true, vec![0x22; 8])).starts_with('b'));
+        assert!(line(tx(0x7E0, true, true, true, vec![0x22; 8])).starts_with('B'));
+        assert!(line(tx(0x7E0, false, true, false, vec![0x22; 8])).starts_with('d'));
     }
 
     #[test]
-    fn test_bitrate_mapping() {
-        assert_eq!(find_bitrate_command(500_000).unwrap(), "S6");
-        assert_eq!(find_bitrate_command(125_000).unwrap(), "S4");
-        assert_eq!(find_bitrate_command(1_000_000).unwrap(), "S8");
-        assert_eq!(find_bitrate_command(10_000).unwrap(), "S0");
-        assert!(find_bitrate_command(123_456).is_err());
+    fn a_full_fd_payload_is_the_longest_line() {
+        assert_eq!(tx(0x1FFFFFFF, true, true, true, vec![0; 64]).len(), 139);
+    }
+
+    #[test]
+    fn a_received_frame_becomes_a_frame_message() {
+        let f = slcan::parse_frame("t1234AABBCCDD").expect("a frame");
+        let m = frame_message(f);
+        assert_eq!((m.frame_id, m.bus, m.dlc), (0x123, 0, 4));
+        assert_eq!(m.bytes, vec![0xAA, 0xBB, 0xCC, 0xDD]);
+        assert!(!m.is_extended && !m.is_fd);
+    }
+
+    /// `dlc` on a `FrameMessage` is a byte count, not the code the line carried.
+    #[test]
+    fn an_fd_frame_message_carries_the_length_not_the_code() {
+        let f = slcan::parse_frame(&format!("d7E09{}", "11".repeat(12))).expect("a frame");
+        let m = frame_message(f);
+        assert!(m.is_fd);
+        assert_eq!(m.dlc, 12);
+        assert_eq!(m.bytes.len(), 12);
+    }
+
+    #[test]
+    fn a_bitrate_that_slcan_cannot_name_says_which_ones_it_can() {
+        assert_eq!(find_bitrate_command(500_000).unwrap(), "S6\r");
+        assert_eq!(find_bitrate_command(1_000_000).unwrap(), "S8\r");
+        assert_eq!(find_data_bitrate_command(2_000_000).unwrap(), "Y2\r");
+
+        let err = find_bitrate_command(300_000)
+            .expect_err("not a valid rate")
+            .to_string();
+        assert!(err.contains("300000"), "should name what was asked: {err}");
+        assert!(err.contains("500000"), "and what it could have been: {err}");
+    }
+
+    #[test]
+    fn a_bell_is_not_a_reply() {
+        assert_eq!(meaningful("V1013\r"), Some("V1013"));
+        assert_eq!(meaningful("\x07"), None);
+        assert_eq!(meaningful("  \r\n"), None);
+    }
+
+    #[test]
+    fn an_echoed_command_letter_is_dropped() {
+        assert_eq!(strip_echo("N0012", 'N'), "0012");
+        assert_eq!(strip_echo("0012", 'N'), "0012");
     }
 }

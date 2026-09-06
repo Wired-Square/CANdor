@@ -18,11 +18,12 @@ use tokio::sync::mpsc;
 const SOURCE_CHANNEL_CAPACITY: usize = 1024;
 
 use super::framelink::{encode_framelink_can_tx, encode_framelink_serial_tx};
-use super::gvret::{encode_gvret_frame, validate_gvret_frame, BusMapping};
+use super::bus_mapping::BusMapping;
+use super::gvret::validate_gvret_frame;
 #[cfg(not(target_os = "ios"))]
 use super::slcan::encode_transmit_frame as encode_slcan_frame;
 #[cfg(target_os = "linux")]
-use super::socketcan::{encode_frame as encode_socketcan_frame, EncodedFrame};
+use super::socketcan::encode_frame as encode_socketcan_frame;
 use super::lifecycle::SourceLifecycle;
 use super::traits::validate_session_traits;
 use super::types::{SetFramingRequest, SourceMessage, TransmitRequest};
@@ -518,19 +519,19 @@ impl IOBroker {
                 if let Err(result) = validate_gvret_frame(&routed_frame) {
                     return Ok(result);
                 }
-                encode_gvret_frame(&routed_frame)
+                wiretap_protocol::gvret::encode_transmit(
+                    routed_frame.frame_id,
+                    routed_frame.is_extended,
+                    routed_frame.bus,
+                    &routed_frame.data,
+                )
             }
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             "gs_usb" => encode_gs_usb_frame(&routed_frame, 0).to_vec(),
             #[cfg(not(target_os = "ios"))]
             "slcan" => encode_slcan_frame(&routed_frame),
             #[cfg(target_os = "linux")]
-            "socketcan" => {
-                match encode_socketcan_frame(&routed_frame) {
-                    EncodedFrame::Classic(buf) => buf.to_vec(),
-                    EncodedFrame::Fd(buf) => buf.to_vec(),
-                }
-            }
+            "socketcan" => encode_socketcan_frame(&routed_frame),
             "framelink" => encode_framelink_can_tx(&routed_frame),
             "virtual" => {
                 // Simple binary loopback encoding: frame_id(4 LE) + bus(1) + is_extended(1) + is_fd(1) + dlc(1) + data

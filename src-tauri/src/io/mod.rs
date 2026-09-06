@@ -5,7 +5,6 @@
 // with session-based isolation for multiple concurrent connections.
 
 // Core modules
-pub mod codec; // Frame codec trait and implementations
 pub mod device_kinds; // Per-kind connection defaults and required fields — one declaration
 pub mod ephemeral; // Ad-hoc devices, overlaid onto settings.io_profiles for this run
 pub mod profiles; // Profile lifecycle: reconfigure a device and reconnect it
@@ -24,6 +23,7 @@ mod recorded;
 
 // Real-time drivers
 pub mod gs_usb; // pub for Tauri command access
+pub mod bus_mapping; // Device bus -> session bus, shared by every multi-bus driver
 pub mod gvret; // GVRET TCP/USB driver
 pub mod modbus_tcp; // pub for scanner command access
 pub mod modbus_rtu; // Modbus RTU master over serial
@@ -45,26 +45,12 @@ pub use recorded::{
 };
 pub use recorded::{BackendApiConfig, BackendApiSource, BackendApiSourceOptions};
 
-// Re-export codec types (platform-specific codecs are conditionally exported from codec.rs)
-#[allow(unused_imports)]
-pub use codec::FrameCodec;
-#[allow(unused_imports)]
-pub use gvret::GvretCodec;
-#[cfg(not(target_os = "ios"))]
-#[allow(unused_imports)]
-pub use codec::SlcanCodec;
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-#[allow(unused_imports)]
-pub use codec::GsUsbCodec;
-#[cfg(target_os = "linux")]
-#[allow(unused_imports)]
-pub use codec::{SocketCanCodec, SocketCanEncodedFrame};
-
 // Re-export driver types
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 #[allow(unused_imports)]
 pub use gs_usb::GsUsbConfig;
-pub use gvret::{BusMapping, GvretDeviceInfo, probe_gvret_tcp};
+pub use bus_mapping::BusMapping;
+pub use gvret::{probe_gvret_tcp, GvretDeviceInfo};
 pub use modbus_tcp::{
     build_polls_from_catalog, build_polls_from_ranges, modbus_endpoint, session_modbus_endpoint,
     ModbusRange, ModbusRangeSpec,
@@ -590,7 +576,7 @@ pub trait IOSource: Send + Sync {
 
     /// Update bus mappings for a source in a running multi-source session.
     /// Hot-swaps the source by removing and re-adding it with updated mappings.
-    fn update_source_bus_mappings(&mut self, _profile_id: &str, _bus_mappings: Vec<gvret::BusMapping>) -> Result<(), String> {
+    fn update_source_bus_mappings(&mut self, _profile_id: &str, _bus_mappings: Vec<BusMapping>) -> Result<(), String> {
         Err("This device does not support bus mapping updates".to_string())
     }
 

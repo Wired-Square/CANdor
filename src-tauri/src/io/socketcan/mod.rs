@@ -11,14 +11,13 @@
 // Allow dead code on non-Linux platforms where this module is not functional
 #![allow(dead_code)]
 
-pub mod codec;
 mod reader;
 
 // Re-export reader types (platform-specific)
 #[cfg(target_os = "linux")]
 #[allow(unused_imports)]
-pub use reader::{encode_frame, run_source, EncodedFrame, SocketCanConfig, SocketCanSource};
+pub use reader::{encode_frame, run_source, SocketCanConfig, SocketCanSource};
 
 #[cfg(not(target_os = "linux"))]
 #[allow(unused_imports)]
-pub use reader::{encode_frame, run_source, EncodedFrame, SocketCanConfig};
+pub use reader::{encode_frame, run_source, SocketCanConfig};

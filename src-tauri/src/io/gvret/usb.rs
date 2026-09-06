@@ -12,13 +12,14 @@ use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+use super::common::{
+    absorb_num_buses_reply, decode_mapped, resolve_source_mappings, GvretDeviceInfo,
+    NumBusesOutcome, NUMBUSES_TIMEOUT,
+};
+use crate::io::bus_mapping::{apply_bus_mappings_batch, BusMapping};
 use crate::io::error::IoError;
 use crate::io::types::{EndReason, SourceMessage, TransmitRequest};
-use super::common::{
-    absorb_num_buses_reply, apply_bus_mappings_gvret, parse_gvret_frames, resolve_source_mappings,
-    BusMapping, NumBusesOutcome, BINARY_MODE_ENABLE, DEVICE_INFO_PROBE, GVRET_CMD_NUMBUSES,
-    GvretDeviceInfo, NUMBUSES_TIMEOUT,
-};
+use wiretap_protocol::gvret;
 
 /// A probe may wait longer than a streaming reader: it is a deliberate user
 /// action against a device that may still be booting, and nothing streams until
@@ -59,14 +60,16 @@ fn gvret_usb_device(port: &str) -> String {
 /// Ask a connected device how many buses it has.
 ///
 /// The serial counterpart of the TCP query — same outcomes, and the same reason
-/// for taking `buffer`: a device already streaming interleaves frames with the
-/// reply, and dropping them would lose traffic the session is meant to capture.
+/// for collecting into `pending`: a device already streaming interleaves frames
+/// with the reply, and dropping them would lose traffic the session is meant to
+/// capture.
 fn query_num_buses(
     port: &mut dyn serialport::SerialPort,
-    buffer: &mut Vec<u8>,
+    decoder: &mut gvret::DeviceDecoder,
+    pending: &mut Vec<crate::io::FrameMessage>,
     timeout: Duration,
 ) -> NumBusesOutcome {
-    if let Err(e) = port.write_all(&GVRET_CMD_NUMBUSES) {
+    if let Err(e) = port.write_all(&gvret::REQ_NUM_BUSES) {
         return NumBusesOutcome::Failed(e.to_string());
     }
     let _ = port.flush();
@@ -79,7 +82,7 @@ fn query_num_buses(
             // read here is a real end of stream, not the quiet case.
             Ok(0) => return NumBusesOutcome::Closed,
             Ok(n) => {
-                if let Some(count) = absorb_num_buses_reply(buffer, &read_buf[..n]) {
+                if let Some(count) = absorb_num_buses_reply(decoder, &read_buf[..n], pending) {
                     return NumBusesOutcome::Answered(count);
                 }
             }
@@ -101,7 +104,8 @@ fn query_num_buses(
 pub fn probe_gvret_usb(port: &str, baud_rate: u32) -> Result<GvretDeviceInfo, IoError> {
     tlog!(
         "[probe_gvret_usb] Probing GVRET device at {} (baud: {})",
-        port, baud_rate
+        port,
+        baud_rate
     );
 
     let device = gvret_usb_device(port);
@@ -119,19 +123,25 @@ pub fn probe_gvret_usb(port: &str, baud_rate: u32) -> Result<GvretDeviceInfo, Io
 
     // Enter binary mode
     serial_port
-        .write_all(&BINARY_MODE_ENABLE)
+        .write_all(&gvret::SYNC)
         .map_err(|e| IoError::protocol(&device, format!("enable binary mode: {}", e)))?;
     let _ = serial_port.flush();
 
     // Wait for device to process
     std::thread::sleep(Duration::from_millis(100));
 
-    let mut buffer = Vec::with_capacity(4096);
-    match query_num_buses(&mut *serial_port, &mut buffer, PROBE_NUMBUSES_TIMEOUT) {
+    let mut decoder = gvret::DeviceDecoder::new();
+    match query_num_buses(
+        &mut *serial_port,
+        &mut decoder,
+        &mut Vec::new(),
+        PROBE_NUMBUSES_TIMEOUT,
+    ) {
         NumBusesOutcome::Answered(bus_count) => {
             tlog!(
                 "[probe_gvret_usb] SUCCESS: Device at {} has {} buses available",
-                port, bus_count
+                port,
+                bus_count
             );
             Ok(GvretDeviceInfo { bus_count })
         }
@@ -179,12 +189,13 @@ pub async fn run_source(
 
     // Clear buffers and initialize (do all sync work without awaiting)
     let init_result: Result<(), String> = (|| {
-        let mut port = serial_port.lock()
+        let mut port = serial_port
+            .lock()
             .map_err(|e| format!("Port lock poisoned: {}", e))?;
         let _ = port.clear(serialport::ClearBuffer::All);
 
         // Enable binary mode
-        port.write_all(&BINARY_MODE_ENABLE)
+        port.write_all(&gvret::SYNC)
             .map_err(|e| format!("Failed to enable binary mode: {}", e))?;
         let _ = port.flush();
         Ok(())
@@ -205,17 +216,19 @@ pub async fn run_source(
     let probe_port = serial_port.clone();
     let probe = tokio::task::spawn_blocking(move || match probe_port.lock() {
         Ok(mut port) => {
-            let _ = port.write_all(&DEVICE_INFO_PROBE);
+            let _ = port.write_all(&gvret::REQ_DEV_INFO);
             let _ = port.flush();
-            let mut buffer = Vec::with_capacity(4096);
-            let outcome = query_num_buses(&mut **port, &mut buffer, NUMBUSES_TIMEOUT);
-            Ok((outcome, buffer))
+            let mut decoder = gvret::DeviceDecoder::new();
+            let mut pending = Vec::new();
+            let outcome =
+                query_num_buses(&mut **port, &mut decoder, &mut pending, NUMBUSES_TIMEOUT);
+            Ok((outcome, decoder, pending))
         }
         Err(e) => Err(format!("Port lock poisoned: {}", e)),
     })
     .await;
 
-    let (outcome, read_ahead) = match probe {
+    let (outcome, mut decoder, pending) = match probe {
         Ok(Ok(probe)) => probe,
         Ok(Err(msg)) => {
             let _ = tx.send(SourceMessage::Error(source_idx, msg)).await;
@@ -247,6 +260,12 @@ pub async fn run_source(
         return;
     };
 
+    // Whatever arrived during the exchange above can only be mapped now.
+    let pending = apply_bus_mappings_batch(pending, &bus_mappings);
+    if !pending.is_empty() {
+        let _ = tx.send(SourceMessage::Frames(source_idx, pending)).await;
+    }
+
     // Create transmit channel and send it to the merge task
     let (transmit_tx, transmit_rx) = std_mpsc::sync_channel::<TransmitRequest>(32);
     let _ = tx
@@ -255,12 +274,18 @@ pub async fn run_source(
 
     tlog!(
         "[gvret_usb] Source {} connected to {}, transmit channel ready",
-        source_idx, port
+        source_idx,
+        port
     );
 
     // Emit device-connected event
     let _ = tx
-        .send(SourceMessage::Connected(source_idx, "gvret_usb".to_string(), port.clone(), None))
+        .send(SourceMessage::Connected(
+            source_idx,
+            "gvret_usb".to_string(),
+            port.clone(),
+            None,
+        ))
         .await;
 
     // Read loop (blocking, so we run it in a blocking task)
@@ -271,16 +296,16 @@ pub async fn run_source(
 
     // Spawn blocking task for serial reading
     let blocking_handle = tokio::task::spawn_blocking(move || {
-        // Whatever arrived while we were asking for the bus count is frame
-        // traffic, so the loop starts from it rather than a fresh buffer.
-        let mut buffer = read_ahead;
+        // `decoder` carries over from the enumeration above, so a message that
+        // straddled the end of it is completed rather than re-read.
         let mut read_buf = [0u8; 2048];
 
         while !stop_flag_clone.load(Ordering::SeqCst) {
             // Check for transmit requests (non-blocking)
             while let Ok(req) = transmit_rx.try_recv() {
                 let result = match serial_port_clone.lock() {
-                    Ok(mut port) => port.write_all(&req.data)
+                    Ok(mut port) => port
+                        .write_all(&req.data)
                         .and_then(|_| port.flush())
                         .map_err(|e| format!("Write error: {}", e)),
                     Err(e) => Err(format!("Port lock poisoned: {}", e)),
@@ -306,15 +331,9 @@ pub async fn run_source(
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 Ok(n) => {
-                    buffer.extend_from_slice(&read_buf[..n]);
-
-                    // Parse GVRET frames and apply bus mappings
-                    let frames = parse_gvret_frames(&mut buffer);
-                    let mapped_frames = apply_bus_mappings_gvret(frames, &bus_mappings);
-
-                    if !mapped_frames.is_empty() {
-                        let _ = tx_clone
-                            .blocking_send(SourceMessage::Frames(source_idx, mapped_frames));
+                    let frames = decode_mapped(&mut decoder, &read_buf[..n], &bus_mappings);
+                    if !frames.is_empty() {
+                        let _ = tx_clone.blocking_send(SourceMessage::Frames(source_idx, frames));
                     }
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
@@ -334,167 +353,4 @@ pub async fn run_source(
 
     // Wait for the blocking task
     let _ = blocking_handle.await;
-}
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use crate::io::gvret::{encode_gvret_frame, parse_gvret_frames};
-    use crate::io::CanTransmitFrame;
-
-    #[test]
-    fn test_encode_standard_frame() {
-        let frame = CanTransmitFrame {
-            frame_id: 0x123,
-            data: vec![0x11, 0x22, 0x33, 0x44],
-            bus: 0,
-            is_extended: false,
-            is_fd: false,
-            is_brs: false,
-            is_rtr: false,
-        };
-
-        let encoded = encode_gvret_frame(&frame);
-
-        assert_eq!(encoded[0], 0xF1); // Sync
-        assert_eq!(encoded[1], 0x00); // Command
-        // Frame ID (little-endian): 0x123 = [0x23, 0x01, 0x00, 0x00]
-        assert_eq!(encoded[2], 0x23);
-        assert_eq!(encoded[3], 0x01);
-        assert_eq!(encoded[4], 0x00);
-        assert_eq!(encoded[5], 0x00);
-        assert_eq!(encoded[6], 0x00); // Bus
-        assert_eq!(encoded[7], 0x04); // Length
-        assert_eq!(&encoded[8..], &[0x11, 0x22, 0x33, 0x44]);
-    }
-
-    #[test]
-    fn test_encode_extended_frame() {
-        let frame = CanTransmitFrame {
-            frame_id: 0x12345678,
-            data: vec![0xAA, 0xBB],
-            bus: 1,
-            is_extended: true,
-            is_fd: false,
-            is_brs: false,
-            is_rtr: false,
-        };
-
-        let encoded = encode_gvret_frame(&frame);
-
-        assert_eq!(encoded[0], 0xF1); // Sync
-        assert_eq!(encoded[1], 0x00); // Command
-        // Frame ID with extended flag (bit 31): 0x12345678 | 0x80000000 = 0x92345678
-        // Little-endian: [0x78, 0x56, 0x34, 0x92]
-        assert_eq!(encoded[2], 0x78);
-        assert_eq!(encoded[3], 0x56);
-        assert_eq!(encoded[4], 0x34);
-        assert_eq!(encoded[5], 0x92);
-        assert_eq!(encoded[6], 0x01); // Bus
-        assert_eq!(encoded[7], 0x02); // Length
-        assert_eq!(&encoded[8..], &[0xAA, 0xBB]);
-    }
-
-    #[test]
-    fn test_encode_empty_frame() {
-        let frame = CanTransmitFrame {
-            frame_id: 0x7FF,
-            data: vec![],
-            bus: 0,
-            is_extended: false,
-            is_fd: false,
-            is_brs: false,
-            is_rtr: false,
-        };
-
-        let encoded = encode_gvret_frame(&frame);
-
-        assert_eq!(encoded.len(), 8); // Header only, no data
-        assert_eq!(encoded[0], 0xF1);
-        assert_eq!(encoded[1], 0x00);
-        assert_eq!(encoded[6], 0x00); // Bus
-        assert_eq!(encoded[7], 0x00); // Length = 0
-    }
-
-    #[test]
-    fn test_parse_single_frame() {
-        // F1 00 <ts:4> <id:4> <bus_dlc:1> <data:4>
-        // Timestamp: 0x00000000 (not used for host time)
-        // ID: 0x123 (standard)
-        // Bus+DLC: 0x04 (bus 0, dlc 4)
-        // Data: AA BB CC DD
-        let mut buffer = vec![
-            0xF1, 0x00, // Sync + command
-            0x00, 0x00, 0x00, 0x00, // Timestamp
-            0x23, 0x01, 0x00, 0x00, // ID 0x123 LE
-            0x04, // Bus 0, DLC 4
-            0xAA, 0xBB, 0xCC, 0xDD, // Data
-        ];
-
-        let frames = parse_gvret_frames(&mut buffer);
-
-        assert_eq!(frames.len(), 1);
-        let (frame, _) = &frames[0];
-        assert_eq!(frame.frame_id, 0x123);
-        assert_eq!(frame.dlc, 4);
-        assert_eq!(frame.bytes, vec![0xAA, 0xBB, 0xCC, 0xDD]);
-        assert!(!frame.is_extended);
-        assert!(buffer.is_empty()); // Buffer should be consumed
-    }
-
-    #[test]
-    fn test_parse_extended_frame() {
-        // Extended frame with ID 0x12345678
-        let mut buffer = vec![
-            0xF1, 0x00, // Sync + command
-            0x00, 0x00, 0x00, 0x00, // Timestamp
-            0x78, 0x56, 0x34, 0x92, // ID 0x12345678 | 0x80000000 LE
-            0x02, // Bus 0, DLC 2
-            0x11, 0x22, // Data
-        ];
-
-        let frames = parse_gvret_frames(&mut buffer);
-
-        assert_eq!(frames.len(), 1);
-        let (frame, _) = &frames[0];
-        assert_eq!(frame.frame_id, 0x12345678);
-        assert!(frame.is_extended);
-        assert_eq!(frame.bytes, vec![0x11, 0x22]);
-    }
-
-    #[test]
-    fn test_parse_skips_control_frames() {
-        // Mix of control frames and data frame
-        let mut buffer = vec![
-            0xF1, 0x09, 0xDE, 0xAD, // Keepalive (4 bytes)
-            0xF1, 0x00, // Data frame start
-            0x00, 0x00, 0x00, 0x00, // Timestamp
-            0x7F, 0x00, 0x00, 0x00, // ID 0x7F
-            0x01, // Bus 0, DLC 1
-            0xFF, // Data
-        ];
-
-        let frames = parse_gvret_frames(&mut buffer);
-
-        assert_eq!(frames.len(), 1);
-        let (frame, _) = &frames[0];
-        assert_eq!(frame.frame_id, 0x7F);
-    }
-
-    #[test]
-    fn test_parse_incomplete_frame() {
-        // Incomplete frame - not enough bytes
-        let mut buffer = vec![
-            0xF1, 0x00, // Sync + command
-            0x00, 0x00, // Only 2 timestamp bytes
-        ];
-
-        let frames = parse_gvret_frames(&mut buffer);
-
-        assert!(frames.is_empty());
-        assert_eq!(buffer.len(), 4); // Buffer should be preserved
-    }
 }

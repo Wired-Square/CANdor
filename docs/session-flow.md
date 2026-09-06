@@ -129,7 +129,9 @@ in, on the session-create path (`resolve_source_config`) and the running-session
 hot-swap (`io::update_source_bus_mappings`) alike, so a stale or hand-written
 traits blob cannot claim a capability the protocol beside it does not imply.
 Seven copies of the protocol→traits match had accumulated across `sessions.rs`
-and `gvret/common.rs`; there is now one.
+and the GVRET module; there is now one. (`BusMapping` itself now lives in
+`io/bus_mapping.rs` — it was only ever in the GVRET module because GVRET was the
+first driver to need it.)
 
 The protocol is taken as given rather than checked against the kind.
 `traits::supported_protocols_for_kind` answers per *kind* and is deliberately a

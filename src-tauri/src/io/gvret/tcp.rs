@@ -9,29 +9,32 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
+use super::common::{
+    absorb_num_buses_reply, decode_mapped, resolve_source_mappings, GvretDeviceInfo,
+    NumBusesOutcome, NUMBUSES_TIMEOUT,
+};
+use crate::io::bus_mapping::{apply_bus_mappings_batch, BusMapping};
 use crate::io::error::IoError;
 use crate::io::types::{EndReason, SourceMessage, TransmitRequest};
-use super::common::{
-    absorb_num_buses_reply, apply_bus_mappings_gvret, parse_gvret_frames, resolve_source_mappings,
-    BusMapping, NumBusesOutcome, BINARY_MODE_ENABLE, DEVICE_INFO_PROBE, GVRET_CMD_NUMBUSES,
-    GvretDeviceInfo, NUMBUSES_TIMEOUT,
-};
+use wiretap_protocol::gvret;
 
 /// Ask a connected device how many buses it has.
 ///
-/// Anything read while waiting is appended to `buffer` rather than discarded —
-/// a device that is already streaming will interleave frames with the reply,
-/// and dropping them would lose traffic the session is meant to capture.
+/// Frames read while waiting are collected into `pending` rather than discarded
+/// — a device that is already streaming will interleave them with the reply,
+/// and dropping them would lose traffic the session is meant to capture. They
+/// are still unmapped: this exchange is what decides the mapping.
 ///
 /// Generic over the halves so the probe, which has a borrowed split rather than
 /// an owned one, asks the question the same way the streaming path does.
 async fn query_num_buses<W: AsyncWrite + Unpin, R: AsyncRead + Unpin>(
     write_half: &mut W,
     read_half: &mut R,
-    buffer: &mut Vec<u8>,
+    decoder: &mut gvret::DeviceDecoder,
+    pending: &mut Vec<crate::io::FrameMessage>,
     timeout: Duration,
 ) -> NumBusesOutcome {
-    if let Err(e) = write_half.write_all(&GVRET_CMD_NUMBUSES).await {
+    if let Err(e) = write_half.write_all(&gvret::REQ_NUM_BUSES).await {
         return NumBusesOutcome::Failed(e.to_string());
     }
     let _ = write_half.flush().await;
@@ -43,7 +46,7 @@ async fn query_num_buses<W: AsyncWrite + Unpin, R: AsyncRead + Unpin>(
                 Ok(0) => return NumBusesOutcome::Closed,
                 Err(e) => return NumBusesOutcome::Failed(e.to_string()),
                 Ok(n) => {
-                    if let Some(count) = absorb_num_buses_reply(buffer, &read_buf[..n]) {
+                    if let Some(count) = absorb_num_buses_reply(decoder, &read_buf[..n], pending) {
                         return NumBusesOutcome::Answered(count);
                     }
                 }
@@ -103,7 +106,9 @@ pub async fn probe_gvret_tcp(
 ) -> Result<GvretDeviceInfo, IoError> {
     tlog!(
         "[probe_gvret_tcp] Probing GVRET device at {}:{} (timeout: {}s)",
-        host, port, timeout_sec
+        host,
+        port,
+        timeout_sec
     );
 
     let device = gvret_tcp_device(host, port);
@@ -113,7 +118,7 @@ pub async fn probe_gvret_tcp(
 
     // Enter binary mode
     stream
-        .write_all(&BINARY_MODE_ENABLE)
+        .write_all(&gvret::SYNC)
         .await
         .map_err(|e| IoError::protocol(&device, format!("enable binary mode: {}", e)))?;
 
@@ -122,14 +127,23 @@ pub async fn probe_gvret_tcp(
 
     let read_timeout = Duration::from_millis((timeout_sec * 1000.0) as u64);
     let (mut read_half, mut write_half) = stream.split();
-    let mut buffer = Vec::with_capacity(4096);
-    let outcome = query_num_buses(&mut write_half, &mut read_half, &mut buffer, read_timeout).await;
+    let mut decoder = gvret::DeviceDecoder::new();
+    let outcome = query_num_buses(
+        &mut write_half,
+        &mut read_half,
+        &mut decoder,
+        &mut Vec::new(),
+        read_timeout,
+    )
+    .await;
 
     match outcome {
         NumBusesOutcome::Answered(bus_count) => {
             tlog!(
                 "[probe_gvret_tcp] SUCCESS: Device at {}:{} has {} buses available",
-                host, port, bus_count
+                host,
+                port,
+                bus_count
             );
             Ok(GvretDeviceInfo { bus_count })
         }
@@ -173,7 +187,7 @@ pub async fn run_source(
     let (mut read_half, mut write_half) = stream.into_split();
 
     // Enable binary mode
-    if let Err(e) = write_half.write_all(&BINARY_MODE_ENABLE).await {
+    if let Err(e) = write_half.write_all(&gvret::SYNC).await {
         let _ = tx
             .send(SourceMessage::Error(
                 source_idx,
@@ -187,16 +201,23 @@ pub async fn run_source(
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Send device info probe
-    let _ = write_half.write_all(&DEVICE_INFO_PROBE).await;
+    let _ = write_half.write_all(&gvret::REQ_DEV_INFO).await;
     let _ = write_half.flush().await;
 
     // Ask the device how many buses it has, and keep the answer. The mappings
     // we were handed came off the profile before this connection existed, so
     // they can carry a bus this device does not have — or, expensively, miss
     // one it does. Anything read while waiting is kept: it is frame traffic.
-    let mut buffer = Vec::with_capacity(4096);
-    let outcome =
-        query_num_buses(&mut write_half, &mut read_half, &mut buffer, NUMBUSES_TIMEOUT).await;
+    let mut decoder = gvret::DeviceDecoder::new();
+    let mut pending = Vec::new();
+    let outcome = query_num_buses(
+        &mut write_half,
+        &mut read_half,
+        &mut decoder,
+        &mut pending,
+        NUMBUSES_TIMEOUT,
+    )
+    .await;
     let Some(bus_mappings) = resolve_source_mappings(
         outcome,
         &bus_mappings,
@@ -209,6 +230,12 @@ pub async fn run_source(
         return;
     };
 
+    // Whatever arrived during the exchange above can only be mapped now.
+    let pending = apply_bus_mappings_batch(pending, &bus_mappings);
+    if !pending.is_empty() {
+        let _ = tx.send(SourceMessage::Frames(source_idx, pending)).await;
+    }
+
     // Create transmit channel and send it to the merge task
     let (transmit_tx, transmit_rx) = std_mpsc::sync_channel::<TransmitRequest>(32);
     let _ = tx
@@ -217,13 +244,20 @@ pub async fn run_source(
 
     tlog!(
         "[gvret_tcp] Source {} connected to {}:{}, transmit channel ready",
-        source_idx, host, port
+        source_idx,
+        host,
+        port
     );
 
     // Emit device-connected event
     let address = format!("{}:{}", host, port);
     let _ = tx
-        .send(SourceMessage::Connected(source_idx, "gvret_tcp".to_string(), address, None))
+        .send(SourceMessage::Connected(
+            source_idx,
+            "gvret_tcp".to_string(),
+            address,
+            None,
+        ))
         .await;
 
     // Wrap write_half in Arc<Mutex> so it can be shared with transmit handling
@@ -257,8 +291,9 @@ pub async fn run_source(
         }
     });
 
-    // Read loop - now only handles reading, transmit is handled by separate task
-    // `buffer` already holds whatever arrived during the NUMBUSES exchange.
+    // Read loop - now only handles reading, transmit is handled by separate task.
+    // `decoder` carries over from the NUMBUSES exchange, so a message that
+    // straddled the end of it is completed rather than re-read.
     let mut read_buf = [0u8; 2048];
 
     while !stop_flag.load(Ordering::SeqCst) {
@@ -272,16 +307,9 @@ pub async fn run_source(
                 return;
             }
             Ok(Ok(n)) => {
-                buffer.extend_from_slice(&read_buf[..n]);
-
-                // Parse GVRET frames and apply bus mappings
-                let frames = parse_gvret_frames(&mut buffer);
-                let mapped_frames = apply_bus_mappings_gvret(frames, &bus_mappings);
-
-                if !mapped_frames.is_empty() {
-                    let _ = tx
-                        .send(SourceMessage::Frames(source_idx, mapped_frames))
-                        .await;
+                let frames = decode_mapped(&mut decoder, &read_buf[..n], &bus_mappings);
+                if !frames.is_empty() {
+                    let _ = tx.send(SourceMessage::Frames(source_idx, frames)).await;
                 }
             }
             Ok(Err(e)) => {
@@ -310,7 +338,6 @@ pub async fn run_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::gvret::common::GVRET_SYNC;
     use tokio::net::TcpListener;
 
     /// Serve one connection, handing it to `serve`, and ask the listener what
@@ -329,14 +356,20 @@ mod tests {
 
         let stream = TcpStream::connect(addr).await.expect("connect");
         let (mut read_half, mut write_half) = stream.into_split();
-        let mut buffer = Vec::new();
-        query_num_buses(&mut write_half, &mut read_half, &mut buffer, NUMBUSES_TIMEOUT).await
+        query_num_buses(
+            &mut write_half,
+            &mut read_half,
+            &mut gvret::DeviceDecoder::new(),
+            &mut Vec::new(),
+            NUMBUSES_TIMEOUT,
+        )
+        .await
     }
 
     #[tokio::test]
     async fn a_device_that_answers_reports_its_bus_count() {
         let outcome = outcome_against(|mut sock| async move {
-            let _ = sock.write_all(&[GVRET_SYNC, 0x0C, 0x02]).await;
+            let _ = sock.write_all(&gvret::encode_num_buses(2)).await;
             // Hold the connection open so the reply is not also a close.
             tokio::time::sleep(Duration::from_millis(200)).await;
         })
@@ -359,7 +392,10 @@ mod tests {
     #[tokio::test]
     async fn a_peer_that_vanishes_on_connect_is_not_a_silent_device() {
         let outcome = outcome_against(|sock| async move { drop(sock) }).await;
-        assert!(matches!(outcome, NumBusesOutcome::Failed(_)), "got {outcome:?}");
+        assert!(
+            matches!(outcome, NumBusesOutcome::Failed(_)),
+            "got {outcome:?}"
+        );
     }
 
     /// The same situation where the far end reads before hanging up: a clean
@@ -373,7 +409,10 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(200)).await;
         })
         .await;
-        assert!(matches!(outcome, NumBusesOutcome::Closed), "got {outcome:?}");
+        assert!(
+            matches!(outcome, NumBusesOutcome::Closed),
+            "got {outcome:?}"
+        );
     }
 
     /// A GVRET-compatible bridge that does not implement GET_NUMBUSES holds the
@@ -385,6 +424,9 @@ mod tests {
             drop(sock);
         })
         .await;
-        assert!(matches!(outcome, NumBusesOutcome::Silent), "got {outcome:?}");
+        assert!(
+            matches!(outcome, NumBusesOutcome::Silent),
+            "got {outcome:?}"
+        );
     }
 }

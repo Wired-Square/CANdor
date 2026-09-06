@@ -2,6 +2,16 @@
 
 All notable changes to WireTAP will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Transmitting a CAN FD frame over SLCAN or gs_usb now sends the frame you asked for.** On an SLCAN adapter the frame went out as a classic CAN frame claiming eight bytes while carrying more, which the adapter rejected; on a gs_usb adapter anything longer than eight bytes was sent with the wrong length, so the device padded it out to the next size up. Both now send CAN FD properly, including the bit rate switch. Classic CAN transmission was never affected, and neither was receiving.
+
+### Changed
+
+- **WireTAP and the WireTAP capture server now speak the same code for every wire protocol between them.** GVRET, SLCAN, gs_usb, the SocketCAN frame layouts and the backend ingest format have moved into the shared library both use, so the desktop and the server can no longer disagree about a byte. Nothing about how you connect to a device changes.
+
 ## [0.11.2] - 2026-09-04
 
 ### Fixed

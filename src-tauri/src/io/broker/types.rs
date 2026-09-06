@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::io::gvret::BusMapping;
+use crate::io::bus_mapping::BusMapping;
 use crate::io::modbus_tcp::PollGroup;
 use crate::io::types::{ControlSender, TransmitSender};
 

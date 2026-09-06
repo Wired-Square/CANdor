@@ -11,7 +11,7 @@
 use std::fs;
 use std::path::Path;
 
-use super::{GsUsbDeviceInfo, GS_USB_PIDS, GS_USB_VID};
+use super::{GsUsbDeviceInfo, PIDS, VID};
 
 /// List all gs_usb devices on the system by scanning sysfs.
 ///
@@ -82,7 +82,7 @@ fn get_gs_usb_info_for_interface(iface_name: &str) -> Option<GsUsbDeviceInfo> {
             let vendor = u16::from_str_radix(vendor_str.trim(), 16).ok()?;
             let product = u16::from_str_radix(product_str.trim(), 16).ok()?;
 
-            if vendor == GS_USB_VID && GS_USB_PIDS.contains(&product) {
+            if vendor == VID && PIDS.contains(&product) {
                 // Found a gs_usb device!
                 let busnum = fs::read_to_string(parent.join("busnum"))
                     .ok()
@@ -175,7 +175,7 @@ fn scan_unbound_gs_usb_devices() -> Result<Vec<GsUsbDeviceInfo>, String> {
             Err(_) => continue,
         };
 
-        if vendor == GS_USB_VID && GS_USB_PIDS.contains(&product) {
+        if vendor == VID && PIDS.contains(&product) {
             let busnum = fs::read_to_string(path.join("busnum"))
                 .ok()
                 .and_then(|s| s.trim().parse::<u8>().ok())

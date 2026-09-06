@@ -17,7 +17,8 @@ use super::types::{ModbusRole, SerialOverrides, SourceConfig};
 use crate::io::device_kinds::{
     self, conn_bool, conn_f64, conn_i64, conn_str, req_bool, req_f64, req_i64, req_str,
 };
-use crate::io::gvret::{run_gvret_tcp_source, BusMapping};
+use crate::io::bus_mapping::BusMapping;
+use crate::io::gvret::run_gvret_tcp_source;
 #[cfg(not(target_os = "ios"))]
 use crate::io::gvret::run_gvret_usb_source;
 use crate::io::modbus_tcp::poll::{run_poll_task, FrameSink};

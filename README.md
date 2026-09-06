@@ -87,7 +87,7 @@ A Dockerised TimescaleDB + API gateway that owns the long-term capture database,
 
 - Binary TCP ingest (devices and forward mode) and an HTTP query API (desktop), one database per capture with auto-create
 - A built-in admin UI for API keys, databases, live ingest sessions and activity
-- Optional pgBackRest backups; an [ingest protocol](docs/ingest-protocol.md) for writing MCU firmware
+- Optional pgBackRest backups; an [ingest protocol](https://github.com/Wired-Square/wiretap-lib-rs/blob/main/crates/wiretap-protocol/docs/ingest.md) for writing MCU firmware
 
 See [tools/wiretap-backend/README.md](tools/wiretap-backend/README.md) for setup and the archive-migration runbook.
 

@@ -15,7 +15,9 @@ use tokio::sync::mpsc;
 use crate::io::{self, CanTransmitFrame, FrameMessage, TransmitPayload};
 
 // ============================================================================
-// Protocol constants (see docs/test-pattern-protocol.md)
+// Protocol constants. The contract moved to `wiretap-protocol`'s `testpattern`
+// module, documented at `crates/wiretap-protocol/docs/test-pattern.md`; these
+// are the copy still to be replaced by it.
 // ============================================================================
 
 // Tags (byte 0)

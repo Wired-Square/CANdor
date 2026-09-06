@@ -17,16 +17,30 @@ mod linux_impl {
     };
     use std::sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc as std_mpsc,
-        Arc,
+        mpsc as std_mpsc, Arc,
     };
     use std::time::Duration;
     use tokio::sync::mpsc;
 
+    use wiretap_protocol::socketcan as sc;
+
+    use crate::io::bus_mapping::{apply_bus_mapping, BusMapping};
     use crate::io::error::IoError;
-    use crate::io::gvret::{apply_bus_mapping, BusMapping};
     use crate::io::types::{EndReason, SourceMessage, TransmitRequest};
     use crate::io::{now_us, CanTransmitFrame, FrameMessage};
+
+    /// Turn an arbitration id into the socketcan crate's own id type.
+    fn socketcan_id(arb_id: u32, extended: bool) -> Result<Id, String> {
+        if extended {
+            ExtendedId::new(arb_id)
+                .map(Id::Extended)
+                .ok_or_else(|| format!("Invalid extended ID: 0x{:08X}", arb_id))
+        } else {
+            StandardId::new(arb_id as u16)
+                .map(Id::Standard)
+                .ok_or_else(|| format!("Invalid standard ID: 0x{:03X}", arb_id))
+        }
+    }
 
     // ============================================================================
     // Types and Configuration
@@ -112,14 +126,18 @@ mod linux_impl {
             .output()
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
-                    "pkexec not found. Install polkit or configure the interface manually.".to_string()
+                    "pkexec not found. Install polkit or configure the interface manually."
+                        .to_string()
                 } else {
                     format!("Failed to run pkexec: {}", e)
                 }
             })?;
 
         if output.status.success() {
-            tlog!("[socketcan] Interface {} configured successfully", interface);
+            tlog!(
+                "[socketcan] Interface {} configured successfully",
+                interface
+            );
             Ok(())
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -201,13 +219,18 @@ mod linux_impl {
             // Set read timeout for non-blocking reads
             socket
                 .set_read_timeout(Duration::from_millis(100))
-                .map_err(|e| IoError::protocol(&device, format!("set read timeout: {}", e)).to_string())?;
+                .map_err(|e| {
+                    IoError::protocol(&device, format!("set read timeout: {}", e)).to_string()
+                })?;
 
             Ok(Self { socket })
         }
 
         /// Read a frame with timeout, returns None on timeout
-        pub fn read_frame_timeout(&self, _timeout: Duration) -> Result<Option<FrameMessage>, String> {
+        pub fn read_frame_timeout(
+            &self,
+            _timeout: Duration,
+        ) -> Result<Option<FrameMessage>, String> {
             // Note: timeout is already set in constructor, parameter kept for API compatibility
             match self.socket.read_frame() {
                 Ok(frame) => Ok(convert_any_frame(frame, None)),
@@ -226,74 +249,24 @@ mod linux_impl {
             }
         }
 
-        /// Write a classic CAN frame (16-byte struct can_frame format)
+        /// Write a classic CAN frame from its `struct can_frame` bytes.
         fn write_classic_frame(&self, data: &[u8]) -> Result<(), String> {
-            if data.len() < 16 {
-                return Err("Frame data too short".to_string());
-            }
-
-            // Parse struct can_frame layout: can_id (4), dlc (1), padding (3), data (8)
-            let can_id = u32::from_ne_bytes([data[0], data[1], data[2], data[3]]);
-            let dlc = data[4] as usize;
-            let frame_data = &data[8..8 + dlc.min(8)];
-
-            // Check flags in can_id
-            let is_extended = (can_id & 0x8000_0000) != 0; // CAN_EFF_FLAG
-            let raw_id = can_id & 0x1FFF_FFFF;
-
-            // Build the frame
-            let frame = if is_extended {
-                let id = ExtendedId::new(raw_id)
-                    .ok_or_else(|| format!("Invalid extended ID: 0x{:08X}", raw_id))?;
-                CanDataFrame::new(Id::Extended(id), frame_data)
-                    .ok_or_else(|| "Failed to create extended frame".to_string())?
-            } else {
-                let id = StandardId::new(raw_id as u16)
-                    .ok_or_else(|| format!("Invalid standard ID: 0x{:03X}", raw_id))?;
-                CanDataFrame::new(Id::Standard(id), frame_data)
-                    .ok_or_else(|| "Failed to create standard frame".to_string())?
-            };
-
+            let f = sc::parse_frame(data).ok_or("Frame data too short")?;
+            let frame = CanDataFrame::new(socketcan_id(f.arb_id, f.extended)?, &f.data)
+                .ok_or_else(|| "Failed to create frame".to_string())?;
             self.socket
                 .write_frame(&frame)
-                .map_err(|e| format!("Write error: {}", e))?;
-
-            Ok(())
+                .map_err(|e| format!("Write error: {}", e))
         }
 
-        /// Write a CAN FD frame (72-byte struct canfd_frame format)
+        /// Write a CAN FD frame from its `struct canfd_frame` bytes.
         fn write_fd_frame(&self, data: &[u8]) -> Result<(), String> {
-            if data.len() < 72 {
-                return Err("FD frame data too short".to_string());
-            }
-
-            // Parse struct canfd_frame layout: can_id (4), len (1), flags (1), padding (2), data (64)
-            let can_id = u32::from_ne_bytes([data[0], data[1], data[2], data[3]]);
-            let len = data[4] as usize;
-            let frame_data = &data[8..8 + len.min(64)];
-
-            // Check flags in can_id
-            let is_extended = (can_id & 0x8000_0000) != 0; // CAN_EFF_FLAG
-            let raw_id = can_id & 0x1FFF_FFFF;
-
-            // Build the FD frame
-            let frame = if is_extended {
-                let id = ExtendedId::new(raw_id)
-                    .ok_or_else(|| format!("Invalid extended ID: 0x{:08X}", raw_id))?;
-                CanFdFrame::new(Id::Extended(id), frame_data)
-                    .ok_or_else(|| "Failed to create extended FD frame".to_string())?
-            } else {
-                let id = StandardId::new(raw_id as u16)
-                    .ok_or_else(|| format!("Invalid standard ID: 0x{:03X}", raw_id))?;
-                CanFdFrame::new(Id::Standard(id), frame_data)
-                    .ok_or_else(|| "Failed to create standard FD frame".to_string())?
-            };
-
+            let f = sc::parse_frame(data).ok_or("FD frame data too short")?;
+            let frame = CanFdFrame::new(socketcan_id(f.arb_id, f.extended)?, &f.data)
+                .ok_or_else(|| "Failed to create FD frame".to_string())?;
             self.socket
                 .write_frame(&frame)
-                .map_err(|e| format!("Write error: {}", e))?;
-
-            Ok(())
+                .map_err(|e| format!("Write error: {}", e))
         }
     }
 
@@ -301,69 +274,19 @@ mod linux_impl {
     // Multi-Source Streaming
     // ============================================================================
 
-    /// Encoded frame result - either classic CAN (16 bytes) or CAN FD (72 bytes)
-    pub enum EncodedFrame {
-        Classic([u8; 16]),
-        Fd([u8; 72]),
-    }
-
-    /// Encode a CAN frame for SocketCAN
-    /// Returns Classic (16 bytes) for standard CAN or Fd (72 bytes) for CAN FD
-    pub fn encode_frame(frame: &CanTransmitFrame) -> EncodedFrame {
-        if frame.is_fd {
-            encode_fd_frame(frame)
-        } else {
-            encode_classic_frame(frame)
-        }
-    }
-
-    /// Encode a classic CAN frame (struct can_frame format, 16 bytes)
-    fn encode_classic_frame(frame: &CanTransmitFrame) -> EncodedFrame {
-        let mut buf = [0u8; 16];
-
-        // can_id with flags
-        let mut can_id = frame.frame_id;
-        if frame.is_extended {
-            can_id |= 0x8000_0000; // CAN_EFF_FLAG
-        }
-        if frame.is_rtr {
-            can_id |= 0x4000_0000; // CAN_RTR_FLAG
-        }
-
-        buf[0..4].copy_from_slice(&can_id.to_ne_bytes());
-        buf[4] = frame.data.len().min(8) as u8; // DLC
-        // bytes 5-7 are padding
-
-        // Data (up to 8 bytes)
-        let len = frame.data.len().min(8);
-        buf[8..8 + len].copy_from_slice(&frame.data[..len]);
-
-        EncodedFrame::Classic(buf)
-    }
-
-    /// Encode a CAN FD frame (struct canfd_frame format, 72 bytes)
-    fn encode_fd_frame(frame: &CanTransmitFrame) -> EncodedFrame {
-        let mut buf = [0u8; 72];
-
-        // can_id with flags
-        let mut can_id = frame.frame_id;
-        if frame.is_extended {
-            can_id |= 0x8000_0000; // CAN_EFF_FLAG
-        }
-
-        buf[0..4].copy_from_slice(&can_id.to_ne_bytes());
-        buf[4] = frame.data.len().min(64) as u8; // len
-        // buf[5] = flags (CANFD_BRS, CANFD_ESI) - set BRS if requested
-        if frame.is_brs {
-            buf[5] |= 0x01; // CANFD_BRS
-        }
-        // bytes 6-7 are padding
-
-        // Data (up to 64 bytes)
-        let len = frame.data.len().min(64);
-        buf[8..8 + len].copy_from_slice(&frame.data[..len]);
-
-        EncodedFrame::Fd(buf)
+    /// Encode a CAN frame as the `struct can_frame` or `struct canfd_frame`
+    /// bytes a socket write takes.
+    pub fn encode_frame(frame: &CanTransmitFrame) -> Vec<u8> {
+        sc::encode_frame(&sc::Frame {
+            rtr: frame.is_rtr && !frame.is_fd,
+            ..sc::Frame::data(
+                frame.frame_id,
+                frame.is_extended,
+                frame.is_fd,
+                frame.is_brs,
+                frame.data.clone(),
+            )
+        })
     }
 
     /// Run SocketCAN source and send frames to merge task (supports CAN FD)
@@ -385,9 +308,7 @@ mod linux_impl {
         // Configure interface if bitrate is specified
         if let Some(br) = bitrate {
             if let Err(e) = configure_interface(&interface, br, enable_fd, data_bitrate) {
-                let _ = tx
-                    .send(SourceMessage::Error(source_idx, e))
-                    .await;
+                let _ = tx.send(SourceMessage::Error(source_idx, e)).await;
                 return;
             }
         }
@@ -419,12 +340,18 @@ mod linux_impl {
 
         tlog!(
             "[socketcan] Source {} connected to {} (FD capable)",
-            source_idx, interface
+            source_idx,
+            interface
         );
 
         // Emit device-connected event
         let _ = tx
-            .send(SourceMessage::Connected(source_idx, "socketcan".to_string(), interface.clone(), None))
+            .send(SourceMessage::Connected(
+                source_idx,
+                "socketcan".to_string(),
+                interface.clone(),
+                None,
+            ))
             .await;
 
         // Read loop (blocking)
@@ -444,8 +371,10 @@ mod linux_impl {
                     Ok(frame) => {
                         if let Some(mut frame_msg) = convert_any_frame(frame, None) {
                             if apply_bus_mapping(&mut frame_msg, &bus_mappings) {
-                                let _ = tx_clone
-                                    .blocking_send(SourceMessage::Frames(source_idx, vec![frame_msg]));
+                                let _ = tx_clone.blocking_send(SourceMessage::Frames(
+                                    source_idx,
+                                    vec![frame_msg],
+                                ));
                             }
                         }
                     }
@@ -531,9 +460,7 @@ mod linux_impl {
 
 // Re-export for Linux
 #[cfg(target_os = "linux")]
-pub use linux_impl::{
-    encode_frame, run_source, EncodedFrame, SocketCanConfig, SocketCanSource,
-};
+pub use linux_impl::{encode_frame, run_source, SocketCanConfig, SocketCanSource};
 
 // ============================================================================
 // Non-Linux Stub
@@ -547,7 +474,7 @@ mod stub {
     use std::sync::Arc;
     use tokio::sync::mpsc;
 
-    use crate::io::gvret::BusMapping;
+    use crate::io::bus_mapping::BusMapping;
     use crate::io::types::SourceMessage;
     use crate::io::CanTransmitFrame;
 
@@ -567,12 +494,6 @@ mod stub {
         pub data_bitrate: Option<u32>,
     }
 
-    /// Encoded frame result - either classic CAN (16 bytes) or CAN FD (72 bytes)
-    pub enum EncodedFrame {
-        Classic([u8; 16]),
-        Fd([u8; 72]),
-    }
-
     /// Stub configure_interface for non-Linux
     pub fn configure_interface(
         _interface: &str,
@@ -584,12 +505,8 @@ mod stub {
     }
 
     /// Stub encode_frame for non-Linux (not actually usable)
-    pub fn encode_frame(frame: &CanTransmitFrame) -> EncodedFrame {
-        if frame.is_fd {
-            EncodedFrame::Fd([0u8; 72])
-        } else {
-            EncodedFrame::Classic([0u8; 16])
-        }
+    pub fn encode_frame(_frame: &CanTransmitFrame) -> Vec<u8> {
+        Vec::new()
     }
 
     /// Stub run_source for non-Linux
@@ -614,6 +531,4 @@ mod stub {
 
 #[cfg(not(target_os = "linux"))]
 #[allow(unused_imports)]
-pub use stub::{
-    configure_interface, encode_frame, run_source, EncodedFrame, SocketCanConfig,
-};
+pub use stub::{configure_interface, encode_frame, run_source, SocketCanConfig};

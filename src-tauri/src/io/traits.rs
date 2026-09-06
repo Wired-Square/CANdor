@@ -2,7 +2,7 @@
 //
 // Interface trait validation and session trait inheritance.
 
-use super::gvret::BusMapping;
+use super::bus_mapping::BusMapping;
 use super::{InterfaceTraits, Protocol, TemporalMode};
 
 /// Result of validating multiple interface traits for a session

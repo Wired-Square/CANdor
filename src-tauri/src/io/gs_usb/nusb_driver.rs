@@ -19,17 +19,17 @@ const BULK_TRANSFER_TIMEOUT: Duration = Duration::from_millis(50);
 use tauri::AppHandle;
 
 use super::{
-    can_fd_flags, can_feature, can_id_flags, can_mode, get_bittiming_for_bitrate,
-    GsDeviceBittiming, GsDeviceBtConst, GsDeviceBtConstExtended, GsDeviceConfig, GsDeviceMode,
-    GsHostFrame, GsHostFrameFd,
-    GsUsbBreq, GsUsbConfig, GsUsbDeviceInfo, GsUsbProbeResult, DLC_LEN, GS_USB_HOST_FORMAT,
-    GS_USB_PIDS, GS_USB_VID,
+    bittiming_for_bitrate, calculate_bittiming, can_feature, can_mode, encode_host_frame,
+    Bittiming, BittimingConstraints, Breq, BtConst, BtConstExtended, DeviceConfig, GsUsbConfig,
+    GsUsbDeviceInfo, GsUsbProbeResult, HostFrame, Mode, ECHO_ID_RX, HOST_FORMAT,
+    PERMISSIVE_CONSTRAINTS, PIDS, VID,
 };
+use wiretap_protocol::gs_usb::{CLASSIC_FRAME_BYTES, FD_FRAME_BYTES};
 use tokio::sync::mpsc;
 
 use crate::capture_store::{self, CaptureKind};
 use crate::io::error::IoError;
-use crate::io::gvret::{apply_bus_mapping, BusMapping};
+use crate::io::bus_mapping::{apply_bus_mapping, BusMapping};
 use crate::io::lifecycle::SourceLifecycle;
 use crate::io::types::{EndReason, SourceMessage, TransmitRequest, TransmitSender};
 use crate::io::{
@@ -38,88 +38,34 @@ use crate::io::{
     TransmitResult,
 };
 
-/// Encode a CAN frame into gs_usb format.
-/// Classic CAN: 20 bytes (GsHostFrame)
-/// CAN FD: 76 bytes (GsHostFrameFd)
+/// Bit timing for one phase: what the device says it accepts, falling back to
+/// what a CAN controller can do at all.
+///
+/// Firmware that under-reports its own limits is common enough that refusing on
+/// its word alone loses working devices.
+fn bittiming(
+    fclk: u32,
+    bitrate: u32,
+    sample_point: f32,
+    limits: Option<&BittimingConstraints>,
+) -> Option<Bittiming> {
+    limits
+        .and_then(|c| calculate_bittiming(fclk, bitrate, sample_point, c))
+        .or_else(|| calculate_bittiming(fclk, bitrate, sample_point, &PERMISSIVE_CONSTRAINTS))
+}
+
+/// Encode a CAN frame as the gs_usb host frame that transmits it — 20 bytes
+/// for classic CAN, 76 for CAN FD.
 pub fn encode_frame(frame: &CanTransmitFrame, channel: u8) -> Vec<u8> {
-    if frame.is_fd {
-        encode_fd_frame(frame, channel)
-    } else {
-        encode_classic_frame(frame, channel)
-    }
-}
-
-/// Encode a classic CAN frame (20 bytes)
-fn encode_classic_frame(frame: &CanTransmitFrame, channel: u8) -> Vec<u8> {
-    let mut buf = vec![0u8; GsHostFrame::SIZE];
-
-    // echo_id: non-0xFFFFFFFF for TX (using 0 for simplicity)
-    buf[0..4].copy_from_slice(&0u32.to_le_bytes());
-
-    // can_id with flags
-    let mut can_id = frame.frame_id;
-    if frame.is_extended {
-        can_id |= can_id_flags::EXTENDED;
-    }
-    if frame.is_rtr {
-        can_id |= can_id_flags::RTR;
-    }
-    buf[4..8].copy_from_slice(&can_id.to_le_bytes());
-
-    // can_dlc
-    buf[8] = frame.data.len().min(8) as u8;
-
-    // channel
-    buf[9] = channel;
-
-    // flags (0 for standard CAN)
-    buf[10] = 0;
-
-    // reserved
-    buf[11] = 0;
-
-    // data (up to 8 bytes)
-    let len = frame.data.len().min(8);
-    buf[12..12 + len].copy_from_slice(&frame.data[..len]);
-
-    buf
-}
-
-/// Encode a CAN FD frame (76 bytes)
-fn encode_fd_frame(frame: &CanTransmitFrame, channel: u8) -> Vec<u8> {
-    let mut buf = vec![0u8; GsHostFrameFd::SIZE];
-
-    // echo_id: non-0xFFFFFFFF for TX (using 0 for simplicity)
-    buf[0..4].copy_from_slice(&0u32.to_le_bytes());
-
-    // can_id with flags
-    let mut can_id = frame.frame_id;
-    if frame.is_extended {
-        can_id |= can_id_flags::EXTENDED;
-    }
-    buf[4..8].copy_from_slice(&can_id.to_le_bytes());
-
-    // can_dlc (actual byte count for FD, up to 64)
-    buf[8] = frame.data.len().min(64) as u8;
-
-    // channel
-    buf[9] = channel;
-
-    // flags: FD flag always set, BRS if requested
-    let mut flags = can_fd_flags::FD;
-    if frame.is_brs {
-        flags |= can_fd_flags::BRS;
-    }
-    buf[10] = flags;
-
-    // reserved
-    buf[11] = 0;
-
-    // data (up to 64 bytes)
-    let len = frame.data.len().min(64);
-    buf[12..12 + len].copy_from_slice(&frame.data[..len]);
-
-    buf
+    encode_host_frame(&HostFrame::transmit(
+        frame.frame_id,
+        frame.is_extended,
+        frame.is_rtr && !frame.is_fd,
+        frame.is_fd,
+        frame.is_brs,
+        channel,
+        frame.data.clone(),
+    ))
 }
 
 /// Timeout for USB control transfers
@@ -193,7 +139,7 @@ fn discover_bulk_endpoints(device: &nusb::Device) -> BulkEndpoints {
 /// - serial is None and bus:address matches
 pub fn device_matches(dev: &nusb::DeviceInfo, serial: Option<&str>, bus: u8, address: u8) -> bool {
     // Must be a gs_usb device
-    if dev.vendor_id() != GS_USB_VID || !GS_USB_PIDS.contains(&dev.product_id()) {
+    if dev.vendor_id() != VID || !PIDS.contains(&dev.product_id()) {
         return false;
     }
 
@@ -220,7 +166,7 @@ pub fn list_devices() -> Result<Vec<GsUsbDeviceInfo>, String> {
         .wait()
         .map_err(|e| format!("Failed to list USB devices: {}", e))?
         .filter(|dev| {
-            dev.vendor_id() == GS_USB_VID && GS_USB_PIDS.contains(&dev.product_id())
+            dev.vendor_id() == VID && PIDS.contains(&dev.product_id())
         })
         .map(|dev| {
             // bus_id() returns &str, but for our purposes we use device_address as primary identifier
@@ -294,7 +240,7 @@ fn get_bt_const_sync(interface: &Interface) -> Result<(u32, u32), String> {
         .control_in(ControlIn {
             control_type: ControlType::Vendor,
             recipient: Recipient::Interface,
-            request: GsUsbBreq::BtConst as u8,
+            request: Breq::BtConst as u8,
             value: 0, // channel 0
             index: 0,
             length: 40,
@@ -315,24 +261,24 @@ fn get_bt_const_sync(interface: &Interface) -> Result<(u32, u32), String> {
 }
 
 /// Get device configuration via USB control transfer (sync version)
-fn get_device_config_sync(interface: &Interface) -> Result<GsDeviceConfig, String> {
+fn get_device_config_sync(interface: &Interface) -> Result<DeviceConfig, String> {
     let data = interface
         .control_in(ControlIn {
             control_type: ControlType::Vendor,
             recipient: Recipient::Interface,
-            request: GsUsbBreq::DeviceConfig as u8,
+            request: Breq::DeviceConfig as u8,
             value: 1,
             index: 0,
-            length: GsDeviceConfig::SIZE as u16,
+            length: DeviceConfig::SIZE as u16,
         }, CONTROL_TIMEOUT)
         .wait()
         .map_err(|e| format!("Control transfer failed: {:?}", e))?;
 
-    GsDeviceConfig::from_bytes(&data).ok_or_else(|| {
+    DeviceConfig::from_bytes(&data).ok_or_else(|| {
         format!(
             "Incomplete response: got {} bytes, expected {}",
             data.len(),
-            GsDeviceConfig::SIZE
+            DeviceConfig::SIZE
         )
     })
 }
@@ -664,7 +610,7 @@ async fn run_gs_usb_stream(
     }
 
     // Determine frame stride for multi-frame transfer parsing
-    let frame_size = if config.enable_fd { GsHostFrameFd::SIZE } else { GsHostFrame::SIZE };
+    let frame_size = if config.enable_fd { FD_FRAME_BYTES } else { CLASSIC_FRAME_BYTES };
     let frame_stride = if pad_enabled { buf_size } else { frame_size };
 
     // Diagnostic counters
@@ -811,12 +757,12 @@ async fn run_gs_usb_stream(
 /// Initialize a gs_usb device. Returns whether PAD_PKTS_TO_MAX_PKT_SIZE is enabled.
 pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> Result<bool, String> {
     // 1. Send HOST_FORMAT (byte order negotiation)
-    let host_format = GS_USB_HOST_FORMAT.to_le_bytes();
+    let host_format = HOST_FORMAT.to_le_bytes();
     interface
         .control_out(ControlOut {
             control_type: ControlType::Vendor,
             recipient: Recipient::Interface,
-            request: GsUsbBreq::HostFormat as u8,
+            request: Breq::HostFormat as u8,
             value: 1,
             index: config.channel as u16,
             data: &host_format,
@@ -830,7 +776,7 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
         .control_in(ControlIn {
             control_type: ControlType::Vendor,
             recipient: Recipient::Interface,
-            request: GsUsbBreq::BtConst as u8,
+            request: Breq::BtConst as u8,
             value: config.channel as u16,
             index: 0,
             length: 40,
@@ -839,7 +785,7 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
         .map_err(|e| format!("BT_CONST query failed: {:?}", e))?;
 
     // Parse full BT_CONST to get clock, features, and constraints
-    let bt_const = GsDeviceBtConst::from_bytes(&bt_const_data);
+    let bt_const = BtConst::from_bytes(&bt_const_data);
     let reported_fclk = bt_const.map(|c| c.fclk_can).unwrap_or(48_000_000);
     let fclk_can = config.can_clock_override.unwrap_or(reported_fclk);
     if config.can_clock_override.is_some() {
@@ -848,15 +794,14 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
             fclk_can, reported_fclk
         );
     }
-    let nominal_constraints = bt_const.map(|c| c.constraints());
+    let nominal_constraints = bt_const.map(|c| c.nominal);
 
     if let Some(ref c) = bt_const {
-        let (feat, fclk) = ({ c.feature }, { c.fclk_can });
-        let (t1min, t1max, t2min, t2max) = ({ c.tseg1_min }, { c.tseg1_max }, { c.tseg2_min }, { c.tseg2_max });
-        let (bmin, bmax) = ({ c.brp_min }, { c.brp_max });
+        let n = c.nominal;
         tlog!(
             "[gs_usb] BT_CONST: feature=0x{:X}, fclk={} Hz, tseg1={}-{}, tseg2={}-{}, brp={}-{}",
-            feat, fclk, t1min, t1max, t2min, t2max, bmin, bmax
+            c.feature, c.fclk_can, n.tseg1_min, n.tseg1_max, n.tseg2_min, n.tseg2_max,
+            n.brp_min, n.brp_max
         );
     }
 
@@ -869,36 +814,27 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
     }
 
     // 3. Reset device before configuring bittiming (matches Linux gs_usb driver sequence)
-    let reset_mode = GsDeviceMode {
-        mode: 0, // GS_CAN_MODE_RESET
-        flags: 0,
-    };
-    let reset_mode_bytes = unsafe {
-        std::slice::from_raw_parts(
-            &reset_mode as *const GsDeviceMode as *const u8,
-            GsDeviceMode::SIZE,
-        )
-    };
+    let reset_mode_bytes = Mode::RESET.to_bytes();
     interface
         .control_out(ControlOut {
             control_type: ControlType::Vendor,
             recipient: Recipient::Interface,
-            request: GsUsbBreq::Mode as u8,
+            request: Breq::Mode as u8,
             value: config.channel as u16,
             index: 0,
-            data: reset_mode_bytes,
+            data: &reset_mode_bytes,
         }, CONTROL_TIMEOUT)
         .await
         .map_err(|e| format!("MODE RESET failed: {:?}", e))?;
 
     // 4. Set bit timing - use device constraints when available
-    let timing = if let Some(ref constraints) = nominal_constraints {
-        super::calculate_bittiming_constrained(fclk_can, config.bitrate, config.sample_point, constraints)
-            .or_else(|| super::calculate_bittiming(fclk_can, config.bitrate, config.sample_point))
-    } else {
-        super::calculate_bittiming(fclk_can, config.bitrate, config.sample_point)
-    }
-    .or_else(|| get_bittiming_for_bitrate(config.bitrate))
+    let timing = bittiming(
+        fclk_can,
+        config.bitrate,
+        config.sample_point,
+        nominal_constraints.as_ref(),
+    )
+    .or_else(|| bittiming_for_bitrate(config.bitrate))
     .ok_or_else(|| {
         format!(
             "Unsupported bitrate {} with {}% sample point for {} Hz clock.",
@@ -917,21 +853,16 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
         );
     }
 
-    let timing_bytes = unsafe {
-        std::slice::from_raw_parts(
-            &timing as *const GsDeviceBittiming as *const u8,
-            GsDeviceBittiming::SIZE,
-        )
-    };
+    let timing_bytes = timing.to_bytes();
 
     interface
         .control_out(ControlOut {
             control_type: ControlType::Vendor,
             recipient: Recipient::Interface,
-            request: GsUsbBreq::Bittiming as u8,
+            request: Breq::Bittiming as u8,
             value: config.channel as u16,
             index: 0,
-            data: timing_bytes,
+            data: &timing_bytes,
         }, CONTROL_TIMEOUT)
         .await
         .map_err(|e| format!("BITTIMING failed: {:?}", e))?;
@@ -942,15 +873,15 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
         // Only attempt if the device advertises the BT_CONST_EXT feature flag.
         let has_bt_const_ext = bt_const.map(|c| c.feature & can_feature::BT_CONST_EXT != 0).unwrap_or(false);
         tlog!("[gs_usb] BT_CONST_EXT feature flag: {}", has_bt_const_ext);
-        let bt_const_ext_result: Option<GsDeviceBtConstExtended> = if has_bt_const_ext {
+        let bt_const_ext_result: Option<BtConstExtended> = if has_bt_const_ext {
             let ext_result = interface
                 .control_in(ControlIn {
                     control_type: ControlType::Vendor,
                     recipient: Recipient::Interface,
-                    request: GsUsbBreq::BtConstExt as u8,
+                    request: Breq::BtConstExt as u8,
                     value: config.channel as u16,
                     index: 0,
-                    length: GsDeviceBtConstExtended::SIZE as u16,
+                    length: BtConstExtended::SIZE as u16,
                 }, CONTROL_TIMEOUT)
                 .await;
             match &ext_result {
@@ -964,9 +895,9 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
             ext_result
                 .ok()
                 .and_then(|data| {
-                    let parsed = GsDeviceBtConstExtended::from_bytes(&data);
+                    let parsed = BtConstExtended::from_bytes(&data);
                     if parsed.is_none() {
-                        tlog!("[gs_usb] BT_CONST_EXT: failed to parse {} bytes (need {})", data.len(), GsDeviceBtConstExtended::SIZE);
+                        tlog!("[gs_usb] BT_CONST_EXT: failed to parse {} bytes (need {})", data.len(), BtConstExtended::SIZE);
                     }
                     parsed
                 })
@@ -976,8 +907,7 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
         };
 
         let fclk_data = bt_const_ext_result.map(|c| c.fclk_can).unwrap_or(fclk_can);
-        let data_constraints = bt_const_ext_result.map(|c| c.data_constraints())
-            .or_else(|| nominal_constraints);
+        let data_constraints = bt_const_ext_result.map(|c| c.data).or(nominal_constraints);
 
         if let Some(ref dc) = data_constraints {
             let source = if bt_const_ext_result.is_some() { "BT_CONST_EXT" } else { "BT_CONST (nominal fallback)" };
@@ -991,12 +921,12 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
         }
 
         // Calculate data phase timing using device constraints
-        let data_timing = if let Some(ref constraints) = data_constraints {
-            super::calculate_bittiming_constrained(fclk_data, config.data_bitrate, config.data_sample_point, constraints)
-                .or_else(|| super::calculate_bittiming(fclk_data, config.data_bitrate, config.data_sample_point))
-        } else {
-            super::calculate_bittiming(fclk_data, config.data_bitrate, config.data_sample_point)
-        }
+        let data_timing = bittiming(
+            fclk_data,
+            config.data_bitrate,
+            config.data_sample_point,
+            data_constraints.as_ref(),
+        )
         .ok_or_else(|| {
             if let Some(ref dc) = data_constraints {
                 format!(
@@ -1023,12 +953,7 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
             );
         }
 
-        let data_timing_bytes = unsafe {
-            std::slice::from_raw_parts(
-                &data_timing as *const GsDeviceBittiming as *const u8,
-                GsDeviceBittiming::SIZE,
-            )
-        };
+        let data_timing_bytes = data_timing.to_bytes();
 
         tlog!(
             "[gs_usb] Sending DATA_BITTIMING ({} bytes): {:02X?}",
@@ -1039,10 +964,10 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
             .control_out(ControlOut {
                 control_type: ControlType::Vendor,
                 recipient: Recipient::Interface,
-                request: GsUsbBreq::DataBittiming as u8,
+                request: Breq::DataBittiming as u8,
                 value: config.channel as u16,
                 index: 0,
-                data: data_timing_bytes,
+                data: &data_timing_bytes,
             }, CONTROL_TIMEOUT)
             .await
             .map_err(|e| format!("DATA_BITTIMING failed: {:?} (device may not support CAN FD)", e))?;
@@ -1066,26 +991,16 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
         mode_flags |= can_mode::PAD_PKTS_TO_MAX_PKT_SIZE;
     }
 
-    let mode = GsDeviceMode {
-        mode: 1, // Start
-        flags: mode_flags,
-    };
-
-    let mode_bytes = unsafe {
-        std::slice::from_raw_parts(
-            &mode as *const GsDeviceMode as *const u8,
-            GsDeviceMode::SIZE,
-        )
-    };
+    let mode_bytes = Mode::start(mode_flags).to_bytes();
 
     interface
         .control_out(ControlOut {
             control_type: ControlType::Vendor,
             recipient: Recipient::Interface,
-            request: GsUsbBreq::Mode as u8,
+            request: Breq::Mode as u8,
             value: config.channel as u16,
             index: 0,
-            data: mode_bytes,
+            data: &mode_bytes,
         }, CONTROL_TIMEOUT)
         .await
         .map_err(|e| format!("MODE failed: {:?}", e))?;
@@ -1096,26 +1011,16 @@ pub async fn initialize_device(interface: &Interface, config: &GsUsbConfig) -> R
 /// Stop the gs_usb device
 pub async fn stop_device(interface: &Interface, config: &GsUsbConfig) -> Result<(), String> {
     let channel = config.channel;
-    let mode = GsDeviceMode {
-        mode: 0, // Stop
-        flags: 0,
-    };
-
-    let mode_bytes = unsafe {
-        std::slice::from_raw_parts(
-            &mode as *const GsDeviceMode as *const u8,
-            GsDeviceMode::SIZE,
-        )
-    };
+    let mode_bytes = Mode::RESET.to_bytes();
 
     interface
         .control_out(ControlOut {
             control_type: ControlType::Vendor,
             recipient: Recipient::Interface,
-            request: GsUsbBreq::Mode as u8,
+            request: Breq::Mode as u8,
             value: channel as u16,
             index: 0,
-            data: mode_bytes,
+            data: &mode_bytes,
         }, CONTROL_TIMEOUT)
         .await
         .map_err(|e| format!("MODE stop failed: {:?}", e))?;
@@ -1123,53 +1028,25 @@ pub async fn stop_device(interface: &Interface, config: &GsUsbConfig) -> Result<
     Ok(())
 }
 
-/// Parse a gs_usb host frame from raw bytes (classic CAN or FD).
-/// Returns the frame with direction set: "rx" for received, "tx" for echo responses.
+/// Read a gs_usb host frame as a `FrameMessage`.
+///
+/// `direction` tells a received frame from the device echoing back one this
+/// host transmitted; nothing downstream distinguishes them otherwise.
 pub fn parse_host_frame(data: &[u8]) -> Option<FrameMessage> {
-    if data.len() < GsHostFrame::SIZE {
-        return None;
-    }
-
-    // Check flags byte and DLC to determine if this is an FD frame.
-    // Some firmware versions don't set the FD flag on received frames,
-    // so also detect FD by DLC > 8 (only valid for CAN FD).
-    let has_fd_flag = data.len() >= 12 && (data[10] & can_fd_flags::FD) != 0;
-    let is_fd_frame = has_fd_flag || data[8] > 8;
-
-    if is_fd_frame && data.len() >= GsHostFrameFd::SIZE {
-        let gs_frame = GsHostFrameFd::from_bytes(data)?;
-        let direction = if gs_frame.is_rx() { "rx" } else { "tx" };
-        let actual_len = DLC_LEN[(gs_frame.can_dlc as usize).min(15)];
-        Some(FrameMessage {
-            protocol: "can".to_string(),
-            timestamp_us: now_us(),
-            frame_id: gs_frame.get_can_id(),
-            bus: gs_frame.channel,
-            dlc: actual_len as u8,
-            bytes: gs_frame.get_data().to_vec(),
-            is_extended: gs_frame.is_extended(),
-            is_fd: true,
-            source_address: None,
-            incomplete: None,
-            direction: Some(direction.to_string()),
-        })
-    } else {
-        let gs_frame = GsHostFrame::from_bytes(data)?;
-        let direction = if gs_frame.is_rx() { "rx" } else { "tx" };
-        Some(FrameMessage {
-            protocol: "can".to_string(),
-            timestamp_us: now_us(),
-            frame_id: gs_frame.get_can_id(),
-            bus: gs_frame.channel,
-            dlc: gs_frame.can_dlc,
-            bytes: gs_frame.get_data().to_vec(),
-            is_extended: gs_frame.is_extended(),
-            is_fd: false,
-            source_address: None,
-            incomplete: None,
-            direction: Some(direction.to_string()),
-        })
-    }
+    let f = super::parse_host_frame(data)?;
+    Some(FrameMessage {
+        protocol: "can".to_string(),
+        timestamp_us: now_us(),
+        frame_id: f.arb_id,
+        bus: f.channel,
+        dlc: f.data.len() as u8,
+        bytes: f.data,
+        is_extended: f.extended,
+        is_fd: f.fd,
+        source_address: None,
+        incomplete: None,
+        direction: Some(if f.echo_id == ECHO_ID_RX { "rx" } else { "tx" }.to_string()),
+    })
 }
 
 // ============================================================================
@@ -1343,7 +1220,7 @@ pub async fn run_source(
     let buf_size = endpoints.max_packet_size;
 
     // Determine frame stride for multi-frame transfer parsing
-    let frame_size = if enable_fd { GsHostFrameFd::SIZE } else { GsHostFrame::SIZE };
+    let frame_size = if enable_fd { FD_FRAME_BYTES } else { CLASSIC_FRAME_BYTES };
     let frame_stride = if pad_enabled { buf_size } else { frame_size };
 
     // Pre-submit read requests

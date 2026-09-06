@@ -81,7 +81,7 @@ pub enum SourceMessage {
     /// nothing is listening to. A driver that can enumerate its interfaces sends
     /// this once connected; the broker adopts it for `available_buses` and
     /// transmit routing so receive and transmit agree on the same set.
-    MappingsResolved(usize, Vec<crate::io::gvret::BusMapping>),
+    MappingsResolved(usize, Vec<crate::io::bus_mapping::BusMapping>),
 }
 
 // ============================================================================

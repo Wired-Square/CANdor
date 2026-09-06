@@ -19,7 +19,7 @@ use framelink::protocol::types::{
 };
 use serde::Serialize;
 
-use super::gvret::BusMapping;
+use super::bus_mapping::BusMapping;
 use super::{now_us, FrameMessage};
 use crate::io::CanTransmitFrame;
 

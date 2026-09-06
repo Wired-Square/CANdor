@@ -1,94 +1,122 @@
 // ui/src-tauri/src/io/gvret/common.rs
 //
-// Shared GVRET protocol utilities for TCP and USB readers.
+// The GVRET driver's half of the protocol: everything that is a session
+// concern rather than a wire concern.
 //
-// Protocol reference: https://github.com/collin80/GVRET
-//
-// Frame format (receiving):
-//   [0xF1][0x00][Timestamp-4bytes-LE][FrameID-4bytes-LE][Bus+DLC-1byte][Data...]
-//
-// Frame format (transmitting):
-//   [0xF1][0x00][FrameID-4bytes-LE][Bus-1byte][Length-1byte][Data...]
-//
-// Frame ID encoding:
-//   - Standard (11-bit): Lower 11 bits, bit 31 = 0
-//   - Extended (29-bit): Lower 29 bits, bit 31 = 1 (0x80000000)
+// The wire itself is `wiretap_protocol::gvret`, shared with WireTAP-Server,
+// which speaks the device end of the same protocol. What is left here is bus
+// mapping, the enumeration policy, and the adapter from the codec's scalars to
+// `FrameMessage`.
 
-use hex::ToHex;
 use std::time::Duration;
 
-use crate::io::traits::traits_for_protocol;
+use wiretap_protocol::gvret::{self, DeviceMessage};
+
+use crate::io::bus_mapping::{apply_bus_mapping, gvret_protocols, BusMapping};
 use crate::io::types::SourceMessage;
-use crate::io::{now_us, CanTransmitFrame, FrameMessage, InterfaceTraits, Protocol, TransmitResult};
+use crate::io::{now_us, CanTransmitFrame, FrameMessage, TransmitResult};
 
 // ============================================================================
 // Constants
 // ============================================================================
 
-/// Extended frame flag (bit 31 of frame ID)
-pub const CAN_EFF_FLAG: u32 = 0x8000_0000;
-/// Mask for standard (11-bit) CAN ID
-pub const CAN_SFF_MASK: u32 = 0x0000_07FF;
-/// Mask for extended (29-bit) CAN ID
-pub const CAN_EFF_MASK: u32 = 0x1FFF_FFFF;
-
-/// GVRET sync byte
-pub const GVRET_SYNC: u8 = 0xF1;
-
 /// Most CAN buses a GVRET device reports. The NUMBUSES sanity check and any
 /// bus list synthesised from a bare count share this bound.
 pub const MAX_BUSES: u8 = 5;
 
-/// GVRET command: CAN frame data
-pub const GVRET_CMD_FRAME: u8 = 0x00;
-/// Binary mode enable bytes
-pub const BINARY_MODE_ENABLE: [u8; 2] = [0xE7, 0xE7];
-/// Device info probe command
-pub const DEVICE_INFO_PROBE: [u8; 2] = [0xF1, 0x07];
-/// Number of buses query command
-pub const GVRET_CMD_NUMBUSES: [u8; 2] = [0xF1, 0x0C];
-
-/// DLC to payload length mapping (CAN FD DLC codes)
-pub const DLC_LEN: [usize; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64];
-
 // ============================================================================
-// Device Probing Helpers
+// Codec Adapters
 // ============================================================================
 
-/// Append a read to `buffer` and say whether the NUMBUSES reply is now in it.
+/// Turn a decoded frame into a `FrameMessage`, or `None` for anything else the
+/// device said.
 ///
-/// Scans only what is new, less the reply's own header overlap, so a reply split
-/// across two reads is still found: a busy bus piles up hundreds of KB while the
-/// device stays silent, and rescanning from 0 on every read is quadratic. The
-/// overlap is a fact about [`parse_numbuses_response`]'s pattern, so it lives
-/// here rather than in each transport's read loop.
-pub fn absorb_num_buses_reply(buffer: &mut Vec<u8>, chunk: &[u8]) -> Option<u8> {
-    const HEADER_OVERLAP: usize = 2; // [0xF1][0x0C] before the count byte
-    let scan_from = buffer.len().saturating_sub(HEADER_OVERLAP);
-    buffer.extend_from_slice(chunk);
-    parse_numbuses_response(&buffer[scan_from..])
+/// The device's own timestamp is discarded for the host clock: it counts from
+/// the connection rather than from an epoch and wraps every 71 minutes, so it
+/// cannot be compared with a frame from any other source. The cost is that
+/// inter-frame timing is limited by host scheduling rather than by the adapter.
+///
+/// GVRET has no CAN FD flag, so FD is inferred from the payload length — the
+/// only thing that distinguishes the two.
+pub fn frame_from(msg: DeviceMessage) -> Option<FrameMessage> {
+    let DeviceMessage::Frame {
+        bus,
+        arb_id,
+        extended,
+        data,
+        ..
+    } = msg
+    else {
+        return None;
+    };
+    Some(FrameMessage {
+        protocol: "can".to_string(),
+        timestamp_us: now_us(),
+        frame_id: arb_id,
+        bus,
+        dlc: data.len() as u8,
+        is_fd: data.len() > 8,
+        bytes: data,
+        is_extended: extended,
+        source_address: None,
+        incomplete: None,
+        direction: None, // Received frames don't have direction set
+    })
 }
 
-/// Parse NUMBUSES response from a buffer.
+/// What to believe about a bus count a device reported.
 ///
-/// Searches for the pattern `[0xF1][0x0C][bus_count]` in the buffer.
-/// Returns the validated bus count (1-5), or None if no valid response found.
+/// The protocol puts no bound on the field, and a bridge that does not really
+/// implement `GET_NUMBUSES` can answer with anything. An implausible count is
+/// read as "as many as a GVRET device has" rather than as a fact, which is the
+/// same answer as before and is policy rather than protocol.
+pub fn clamp_bus_count(reported: u8) -> u8 {
+    if reported == 0 || reported > MAX_BUSES {
+        MAX_BUSES
+    } else {
+        reported
+    }
+}
+
+/// Feed a read into `decoder` while enumerating, appending every frame it
+/// completed to `pending` and answering with the bus count if the reply was
+/// among them.
 ///
-/// Used by both TCP and USB probe functions to extract device capabilities.
-pub fn parse_numbuses_response(buffer: &[u8]) -> Option<u8> {
-    // Look for NUMBUSES response: [0xF1][0x0C][bus_count]
-    for i in 0..buffer.len().saturating_sub(2) {
-        if buffer[i] == GVRET_SYNC && buffer[i + 1] == 0x0C && i + 2 < buffer.len() {
-            let bus_count = buffer[i + 2];
-            // Sanity check: GVRET devices have 1..=MAX_BUSES buses
-            return Some(if bus_count == 0 || bus_count > MAX_BUSES {
-                MAX_BUSES // Default to the maximum if the response is invalid
-            } else {
-                bus_count
-            });
+/// Frames are kept rather than discarded: a device that is already streaming
+/// interleaves them with the reply, and dropping them would lose traffic the
+/// session is meant to capture. They stay unmapped because the enumeration is
+/// what decides the mapping — the caller maps `pending` once it has one.
+///
+/// Both transports enumerate through the decoder they go on to stream with, so
+/// a message straddling the end of the probe is not seen twice or lost.
+pub fn absorb_num_buses_reply(
+    decoder: &mut gvret::DeviceDecoder,
+    chunk: &[u8],
+    pending: &mut Vec<FrameMessage>,
+) -> Option<u8> {
+    let mut count = None;
+    for msg in decoder.feed(chunk) {
+        match msg {
+            DeviceMessage::NumBuses(n) => count = count.or(Some(clamp_bus_count(n))),
+            other => pending.extend(frame_from(other)),
         }
     }
-    None
+    count
+}
+
+/// Decode a read and apply the session's bus mappings — the streaming loop of
+/// both transports, so they cannot drift in what they do with a frame.
+pub fn decode_mapped(
+    decoder: &mut gvret::DeviceDecoder,
+    chunk: &[u8],
+    mappings: &[BusMapping],
+) -> Vec<FrameMessage> {
+    decoder
+        .feed(chunk)
+        .into_iter()
+        .filter_map(frame_from)
+        .filter_map(|mut f| apply_bus_mapping(&mut f, mappings).then_some(f))
+        .collect()
 }
 
 // ============================================================================
@@ -100,92 +128,6 @@ pub fn parse_numbuses_response(buffer: &[u8]) -> Option<u8> {
 pub struct GvretDeviceInfo {
     /// Number of CAN buses available on this device (1-5)
     pub bus_count: u8,
-}
-
-/// Configuration for mapping device buses to output buses
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct BusMapping {
-    /// Bus number as reported by the device (0-4)
-    pub device_bus: u8,
-    /// Whether to capture frames from this bus
-    pub enabled: bool,
-    /// Bus number to use in emitted frames (0-255)
-    pub output_bus: u8,
-    /// Human-readable interface identifier (e.g., "can0", "serial1")
-    #[serde(default)]
-    pub interface_id: String,
-    /// The protocol this bus carries — the *input*. Set from the profile, and
-    /// overridable per session by the source picker's protocol dropdown.
-    #[serde(default)]
-    pub protocol: Protocol,
-    /// What this bus may be set to, for the picker to render. Advisory *output*:
-    /// Rust answers it from the profile kind, the frontend never sends it.
-    #[serde(default, skip_deserializing)]
-    pub supported_protocols: Vec<Protocol>,
-    /// Traits for this specific interface. Derived *output* — always
-    /// `traits_for_protocol(protocol)`, never what a caller supplied.
-    #[serde(default)]
-    pub traits: Option<InterfaceTraits>,
-}
-
-impl BusMapping {
-    /// Set the protocol and re-derive the traits that follow from it. The only
-    /// way `protocol` and `traits` are allowed to move, so they cannot drift.
-    pub fn with_protocol(mut self, protocol: Protocol) -> Self {
-        self.protocol = protocol;
-        self.traits = Some(traits_for_protocol(protocol));
-        self
-    }
-
-    /// This bus's traits.
-    ///
-    /// Derived at the point of use rather than read out of `traits`, so the
-    /// field's promise — always `traits_for_protocol(protocol)` — holds by
-    /// construction instead of by every writer remembering. Every producer
-    /// already sets exactly this; the only thing the stored value can add is a
-    /// blob a caller sent, which is the thing it must not be able to add.
-    pub fn effective_traits(&self) -> InterfaceTraits {
-        traits_for_protocol(self.protocol)
-    }
-}
-
-impl Default for BusMapping {
-    fn default() -> Self {
-        Self {
-            device_bus: 0,
-            enabled: true,
-            output_bus: 0,
-            interface_id: "can0".to_string(),
-            protocol: Protocol::Can,
-            supported_protocols: Vec::new(),
-            traits: Some(traits_for_protocol(Protocol::Can)),
-        }
-    }
-}
-
-/// Create default bus mappings for a device with the given bus count.
-///
-/// Every bus is classic CAN — the same answer a bus configured in Settings gets
-/// when its protocol is unset. These two used to disagree, so a GVRET that had
-/// been probed but never configured advertised CAN FD while the same device
-/// *with* a saved bus list advertised plain CAN. The picker's protocol dropdown
-/// is now how a bus is told it carries FD.
-pub fn default_bus_mappings(bus_count: u8) -> Vec<BusMapping> {
-    (0..bus_count)
-        .map(|i| BusMapping {
-            device_bus: i,
-            enabled: true,
-            output_bus: i,
-            interface_id: format!("can{}", i),
-            supported_protocols: gvret_protocols(),
-            ..BusMapping::default().with_protocol(Protocol::Can)
-        })
-        .collect()
-}
-
-/// What a GVRET bus may be set to, from the one per-kind table.
-fn gvret_protocols() -> Vec<Protocol> {
-    crate::io::traits::supported_protocols_for_kind("gvret_tcp").to_vec()
 }
 
 /// Build the bus mappings a session actually streams, from the bus count the
@@ -315,233 +257,6 @@ pub async fn resolve_source_mappings(
     }
 }
 
-/// Apply bus mappings to a frame, returning None if the bus is disabled
-pub fn apply_bus_mapping(frame: &mut FrameMessage, mappings: &[BusMapping]) -> bool {
-    // Find mapping for this device bus
-    if let Some(mapping) = mappings.iter().find(|m| m.device_bus == frame.bus) {
-        if mapping.enabled {
-            frame.bus = mapping.output_bus;
-            true
-        } else {
-            false // Bus is disabled, skip frame
-        }
-    } else {
-        // No mapping found, pass through unchanged
-        true
-    }
-}
-
-// ============================================================================
-// Frame Batch Helpers
-// ============================================================================
-
-/// Apply bus mappings to a batch of frames, filtering out disabled buses.
-///
-/// This consolidates the common pattern used by real-time drivers:
-/// ```ignore
-/// frames.into_iter()
-///     .filter_map(|mut frame| {
-///         if apply_bus_mapping(&mut frame, &mappings) { Some(frame) } else { None }
-///     })
-///     .collect()
-/// ```
-///
-/// Available for drivers that produce `Vec<FrameMessage>` directly.
-/// For GVRET drivers, use `apply_bus_mappings_gvret` instead.
-#[allow(dead_code)]
-pub fn apply_bus_mappings_batch(
-    frames: Vec<FrameMessage>,
-    mappings: &[BusMapping],
-) -> Vec<FrameMessage> {
-    frames
-        .into_iter()
-        .filter_map(|mut frame| {
-            if apply_bus_mapping(&mut frame, mappings) {
-                Some(frame)
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-/// Apply bus mappings to GVRET frames (which include raw hex strings).
-/// Returns only the FrameMessage portion, discarding the raw strings.
-///
-/// Used by gvret_tcp and gvret_usb after calling `parse_gvret_frames`.
-pub fn apply_bus_mappings_gvret(
-    frames: Vec<(FrameMessage, String)>,
-    mappings: &[BusMapping],
-) -> Vec<FrameMessage> {
-    frames
-        .into_iter()
-        .filter_map(|(mut frame, _raw)| {
-            if apply_bus_mapping(&mut frame, mappings) {
-                Some(frame)
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-// ============================================================================
-// Frame Parsing
-// ============================================================================
-
-/// Parse GVRET binary frames from a buffer
-///
-/// Returns a list of (FrameMessage, raw_hex_string) tuples.
-/// Consumes parsed bytes from the buffer.
-pub fn parse_gvret_frames(buffer: &mut Vec<u8>) -> Vec<(FrameMessage, String)> {
-    let mut out = Vec::new();
-
-    loop {
-        // Find sync byte 0xF1
-        let pos = match buffer.iter().position(|b| *b == GVRET_SYNC) {
-            Some(i) => i,
-            None => {
-                // Keep buffer bounded if sync is lost
-                if buffer.len() > 1024 {
-                    buffer.clear();
-                }
-                break;
-            }
-        };
-
-        // Discard bytes before sync
-        if pos > 0 {
-            buffer.drain(0..pos);
-        }
-
-        // Need at least 2 bytes to check opcode
-        if buffer.len() < 2 {
-            break;
-        }
-
-        let op = buffer[1];
-
-        // Control replies we ignore/skip
-        let ctrl_len = match op {
-            0x01 => Some(6),  // TIMEBASE: F1 01 <4>
-            0x09 => Some(4),  // KEEPALIVE: F1 09 <2>
-            0x06 => Some(12), // CANPARAMS: F1 06 <10>
-            0x07 => Some(7),  // DEVINFO: F1 07 <5>
-            0x0C => Some(3),  // NUMBUSES: F1 0C <1>
-            _ => None,
-        };
-
-        if let Some(len) = ctrl_len {
-            if buffer.len() < len {
-                break;
-            }
-            buffer.drain(0..len);
-            continue;
-        }
-
-        // Not a frame command - resync
-        if op != GVRET_CMD_FRAME {
-            buffer.drain(0..1);
-            continue;
-        }
-
-        // Frame: F1 00 <ts:4 LE> <id:4 LE> <bus_dlc:1> <data:dlc>
-        const HEADER_LEN: usize = 2 + 4 + 4 + 1;
-        if buffer.len() < HEADER_LEN {
-            break;
-        }
-
-        let bus_dlc = buffer[10];
-        let dlc_nibble = (bus_dlc & 0x0F) as usize;
-        if dlc_nibble > 0x0F {
-            buffer.drain(0..1);
-            continue;
-        }
-
-        let payload_len = DLC_LEN[dlc_nibble];
-        let total_len = HEADER_LEN + payload_len;
-
-        if buffer.len() < total_len {
-            break;
-        }
-
-        // Parse frame ID (little-endian)
-        let can_id = u32::from_le_bytes(buffer[6..10].try_into().unwrap_or([0; 4]));
-        let data = if payload_len > 0 {
-            buffer[11..11 + payload_len].to_vec()
-        } else {
-            Vec::new()
-        };
-
-        let is_ext = (can_id & CAN_EFF_FLAG) != 0;
-        let arb_id = can_id & if is_ext { CAN_EFF_MASK } else { CAN_SFF_MASK };
-        let is_fd = payload_len > 8;
-        let bus = (bus_dlc >> 4) & 0x0F;
-
-        // Raw hex for debugging
-        let frame_bytes = buffer[..total_len].to_vec().encode_hex::<String>();
-
-        // Use host UNIX time in microseconds
-        let ts_us = now_us();
-
-        out.push((
-            FrameMessage {
-                protocol: "can".to_string(),
-                timestamp_us: ts_us,
-                frame_id: arb_id,
-                bus,
-                dlc: payload_len as u8,
-                bytes: data,
-                is_extended: is_ext,
-                is_fd,
-                source_address: None,
-                incomplete: None,
-                direction: None, // Received frames don't have direction set
-            },
-            frame_bytes,
-        ));
-
-        buffer.drain(0..total_len);
-    }
-
-    out
-}
-
-// ============================================================================
-// Frame Encoding
-// ============================================================================
-
-/// Encode a CAN frame to GVRET binary format for transmission
-///
-/// Format: [0xF1][0x00][FrameID-4bytes-LE][Bus-1byte][Length-1byte][Data...]
-pub fn encode_gvret_frame(frame: &CanTransmitFrame) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(8 + frame.data.len());
-
-    // Sync byte and command
-    buf.push(GVRET_SYNC);
-    buf.push(GVRET_CMD_FRAME);
-
-    // Frame ID (4 bytes, little-endian)
-    // Set bit 31 for extended ID
-    let frame_id = if frame.is_extended {
-        frame.frame_id | CAN_EFF_FLAG
-    } else {
-        frame.frame_id & CAN_SFF_MASK // Mask to 11 bits for standard
-    };
-    buf.extend_from_slice(&frame_id.to_le_bytes());
-
-    // Bus number
-    buf.push(frame.bus);
-
-    // Data length
-    buf.push(frame.data.len() as u8);
-
-    // Data bytes
-    buf.extend_from_slice(&frame.data);
-
-    buf
-}
-
 // ============================================================================
 // Frame Validation
 // ============================================================================
@@ -585,160 +300,6 @@ pub fn validate_gvret_frame(frame: &CanTransmitFrame) -> Result<(), TransmitResu
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_encode_standard_frame() {
-        let frame = CanTransmitFrame {
-            frame_id: 0x123,
-            data: vec![0x11, 0x22, 0x33, 0x44],
-            bus: 0,
-            is_extended: false,
-            is_fd: false,
-            is_brs: false,
-            is_rtr: false,
-        };
-
-        let encoded = encode_gvret_frame(&frame);
-
-        assert_eq!(encoded[0], 0xF1); // Sync
-        assert_eq!(encoded[1], 0x00); // Command
-        // Frame ID (little-endian): 0x123 = [0x23, 0x01, 0x00, 0x00]
-        assert_eq!(encoded[2], 0x23);
-        assert_eq!(encoded[3], 0x01);
-        assert_eq!(encoded[4], 0x00);
-        assert_eq!(encoded[5], 0x00);
-        assert_eq!(encoded[6], 0x00); // Bus
-        assert_eq!(encoded[7], 0x04); // Length
-        assert_eq!(&encoded[8..], &[0x11, 0x22, 0x33, 0x44]);
-    }
-
-    #[test]
-    fn test_encode_extended_frame() {
-        let frame = CanTransmitFrame {
-            frame_id: 0x12345678,
-            data: vec![0xAA, 0xBB],
-            bus: 1,
-            is_extended: true,
-            is_fd: false,
-            is_brs: false,
-            is_rtr: false,
-        };
-
-        let encoded = encode_gvret_frame(&frame);
-
-        assert_eq!(encoded[0], 0xF1); // Sync
-        assert_eq!(encoded[1], 0x00); // Command
-        // Frame ID with extended flag (bit 31): 0x12345678 | 0x80000000 = 0x92345678
-        // Little-endian: [0x78, 0x56, 0x34, 0x92]
-        assert_eq!(encoded[2], 0x78);
-        assert_eq!(encoded[3], 0x56);
-        assert_eq!(encoded[4], 0x34);
-        assert_eq!(encoded[5], 0x92);
-        assert_eq!(encoded[6], 0x01); // Bus
-        assert_eq!(encoded[7], 0x02); // Length
-        assert_eq!(&encoded[8..], &[0xAA, 0xBB]);
-    }
-
-    #[test]
-    fn test_encode_empty_frame() {
-        let frame = CanTransmitFrame {
-            frame_id: 0x7FF,
-            data: vec![],
-            bus: 0,
-            is_extended: false,
-            is_fd: false,
-            is_brs: false,
-            is_rtr: false,
-        };
-
-        let encoded = encode_gvret_frame(&frame);
-
-        assert_eq!(encoded.len(), 8); // Header only, no data
-        assert_eq!(encoded[0], 0xF1);
-        assert_eq!(encoded[1], 0x00);
-        assert_eq!(encoded[6], 0x00); // Bus
-        assert_eq!(encoded[7], 0x00); // Length = 0
-    }
-
-    #[test]
-    fn test_parse_single_frame() {
-        // F1 00 <ts:4> <id:4> <bus_dlc:1> <data:4>
-        // Timestamp: 0x00000000 (not used for host time)
-        // ID: 0x123 (standard)
-        // Bus+DLC: 0x04 (bus 0, dlc 4)
-        // Data: AA BB CC DD
-        let mut buffer = vec![
-            0xF1, 0x00, // Sync + command
-            0x00, 0x00, 0x00, 0x00, // Timestamp
-            0x23, 0x01, 0x00, 0x00, // ID 0x123 LE
-            0x04, // Bus 0, DLC 4
-            0xAA, 0xBB, 0xCC, 0xDD, // Data
-        ];
-
-        let frames = parse_gvret_frames(&mut buffer);
-
-        assert_eq!(frames.len(), 1);
-        let (frame, _) = &frames[0];
-        assert_eq!(frame.frame_id, 0x123);
-        assert_eq!(frame.dlc, 4);
-        assert_eq!(frame.bytes, vec![0xAA, 0xBB, 0xCC, 0xDD]);
-        assert!(!frame.is_extended);
-        assert!(buffer.is_empty()); // Buffer should be consumed
-    }
-
-    #[test]
-    fn test_parse_extended_frame() {
-        // Extended frame with ID 0x12345678
-        let mut buffer = vec![
-            0xF1, 0x00, // Sync + command
-            0x00, 0x00, 0x00, 0x00, // Timestamp
-            0x78, 0x56, 0x34, 0x92, // ID 0x12345678 | 0x80000000 LE
-            0x02, // Bus 0, DLC 2
-            0x11, 0x22, // Data
-        ];
-
-        let frames = parse_gvret_frames(&mut buffer);
-
-        assert_eq!(frames.len(), 1);
-        let (frame, _) = &frames[0];
-        assert_eq!(frame.frame_id, 0x12345678);
-        assert!(frame.is_extended);
-        assert_eq!(frame.bytes, vec![0x11, 0x22]);
-    }
-
-    #[test]
-    fn test_parse_skips_control_frames() {
-        // Mix of control frames and data frame
-        let mut buffer = vec![
-            0xF1, 0x09, 0xDE, 0xAD, // Keepalive (4 bytes)
-            0xF1, 0x00, // Data frame start
-            0x00, 0x00, 0x00, 0x00, // Timestamp
-            0x7F, 0x00, 0x00, 0x00, // ID 0x7F
-            0x01, // Bus 0, DLC 1
-            0xFF, // Data
-        ];
-
-        let frames = parse_gvret_frames(&mut buffer);
-
-        assert_eq!(frames.len(), 1);
-        let (frame, _) = &frames[0];
-        assert_eq!(frame.frame_id, 0x7F);
-    }
-
-    #[test]
-    fn test_parse_incomplete_frame() {
-        // Incomplete frame - not enough bytes
-        let mut buffer = vec![
-            0xF1, 0x00, // Sync + command
-            0x00, 0x00, // Only 2 timestamp bytes
-        ];
-
-        let frames = parse_gvret_frames(&mut buffer);
-
-        assert!(frames.is_empty());
-        assert_eq!(buffer.len(), 4); // Buffer should be preserved
-    }
-
     #[test]
     fn test_validate_classic_can_too_long() {
         let frame = CanTransmitFrame {
@@ -827,8 +388,13 @@ mod tests {
 
     #[test]
     fn the_profile_still_decides_enabled_and_output_bus() {
-        let mappings =
-            reconcile_to_bus_count(&[reconcile_mapping(0, false, 7), reconcile_mapping(1, true, 9)], 2);
+        let mappings = reconcile_to_bus_count(
+            &[
+                reconcile_mapping(0, false, 7),
+                reconcile_mapping(1, true, 9),
+            ],
+            2,
+        );
         assert!(!mappings[0].enabled, "a muted bus stays muted");
         assert_eq!(mappings[0].output_bus, 7);
         assert_eq!(mappings[1].output_bus, 9);
@@ -836,8 +402,10 @@ mod tests {
 
     #[test]
     fn a_bus_the_device_does_not_have_is_dropped() {
-        let mappings =
-            reconcile_to_bus_count(&[reconcile_mapping(0, true, 0), reconcile_mapping(3, true, 3)], 1);
+        let mappings = reconcile_to_bus_count(
+            &[reconcile_mapping(0, true, 0), reconcile_mapping(3, true, 3)],
+            1,
+        );
         assert_eq!(mappings.len(), 1);
         assert_eq!(mappings[0].device_bus, 0);
     }
@@ -882,46 +450,104 @@ mod tests {
             .expect_err("should fail the source");
         assert!(err.contains("connection reset by peer"), "got: {err}");
     }
+    // --- codec adapters ----------------------------------------------------
 
-    #[test]
-    fn test_parse_numbuses_response_valid() {
-        // Valid response: [0xF1][0x0C][3] = 3 buses
-        let buffer = vec![0xF1, 0x0C, 0x03];
-        assert_eq!(parse_numbuses_response(&buffer), Some(3));
+    fn wire(arb: u32, extended: bool, bus: u8, data: &[u8], fd: bool) -> Vec<u8> {
+        gvret::encode_frame(0x1234, arb, extended, bus, data, fd)
     }
 
     #[test]
-    fn test_parse_numbuses_response_with_prefix() {
-        // Response with garbage before it
-        let buffer = vec![0xAA, 0xBB, 0xF1, 0x0C, 0x02];
-        assert_eq!(parse_numbuses_response(&buffer), Some(2));
+    fn a_decoded_frame_becomes_a_frame_message() {
+        let msgs = gvret::DeviceDecoder::new().feed(&wire(0x123, false, 2, &[1, 2, 3, 4], false));
+        let f = frame_from(msgs.into_iter().next().expect("a message")).expect("a frame");
+        assert_eq!((f.frame_id, f.bus, f.dlc), (0x123, 2, 4));
+        assert_eq!(f.bytes, vec![1, 2, 3, 4]);
+        assert!(!f.is_extended && !f.is_fd);
+        assert_eq!(f.protocol, "can");
     }
 
     #[test]
-    fn test_parse_numbuses_response_invalid_count_zero() {
-        // Invalid bus count 0 should default to 5
-        let buffer = vec![0xF1, 0x0C, 0x00];
-        assert_eq!(parse_numbuses_response(&buffer), Some(5));
+    fn an_extended_frame_keeps_its_id_without_the_flag_bit() {
+        let msgs = gvret::DeviceDecoder::new().feed(&wire(0x12345678, true, 0, &[0xAA], false));
+        let f = frame_from(msgs.into_iter().next().unwrap()).expect("a frame");
+        assert_eq!(f.frame_id, 0x12345678);
+        assert!(f.is_extended);
+    }
+
+    /// GVRET carries no FD flag, so the payload length is the only evidence —
+    /// and `dlc` here is the length, not the code the wire carried.
+    #[test]
+    fn fd_is_inferred_from_the_payload_length() {
+        let msgs = gvret::DeviceDecoder::new().feed(&wire(0x100, false, 0, &[0xAB; 32], true));
+        let f = frame_from(msgs.into_iter().next().unwrap()).expect("a frame");
+        assert!(f.is_fd);
+        assert_eq!(f.dlc, 32, "the length, not code 13");
+        assert_eq!(f.bytes.len(), 32);
     }
 
     #[test]
-    fn test_parse_numbuses_response_invalid_count_high() {
-        // Invalid bus count >5 should default to 5
-        let buffer = vec![0xF1, 0x0C, 0x10];
-        assert_eq!(parse_numbuses_response(&buffer), Some(5));
+    fn a_control_reply_is_not_a_frame() {
+        for msg in gvret::DeviceDecoder::new().feed(&gvret::encode_keepalive()) {
+            assert!(frame_from(msg).is_none());
+        }
     }
 
     #[test]
-    fn test_parse_numbuses_response_not_found() {
-        // No valid response in buffer
-        let buffer = vec![0xF1, 0x00, 0x03, 0x04];
-        assert_eq!(parse_numbuses_response(&buffer), None);
+    fn a_reported_bus_count_is_clamped_to_what_a_device_can_have() {
+        assert_eq!(clamp_bus_count(3), 3);
+        assert_eq!(clamp_bus_count(0), MAX_BUSES);
+        assert_eq!(clamp_bus_count(16), MAX_BUSES);
+    }
+
+    /// Frames that arrive while the device is being enumerated are traffic the
+    /// session is meant to capture, not noise to drop on the way past.
+    #[test]
+    fn enumeration_keeps_the_frames_that_arrive_with_the_reply() {
+        let mut wire_bytes = wire(0x123, false, 0, &[1], false);
+        wire_bytes.extend(gvret::encode_num_buses(2));
+        wire_bytes.extend(wire(0x124, false, 0, &[2], false));
+
+        let mut decoder = gvret::DeviceDecoder::new();
+        let mut pending = Vec::new();
+        assert_eq!(
+            absorb_num_buses_reply(&mut decoder, &wire_bytes, &mut pending),
+            Some(2)
+        );
+        assert_eq!(pending.len(), 2, "both frames, either side of the reply");
+        assert_eq!(pending[1].frame_id, 0x124);
+    }
+
+    /// The decoder carries over from enumeration into streaming, so a message
+    /// split across that boundary is neither lost nor seen twice.
+    #[test]
+    fn a_message_straddling_the_end_of_the_probe_survives_it() {
+        let bytes = wire(0x321, false, 0, &[9], false);
+        let (first, rest) = bytes.split_at(5);
+
+        let mut decoder = gvret::DeviceDecoder::new();
+        let mut pending = Vec::new();
+        assert_eq!(
+            absorb_num_buses_reply(&mut decoder, first, &mut pending),
+            None
+        );
+        assert!(pending.is_empty());
+
+        let frames = decode_mapped(&mut decoder, rest, &[]);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].frame_id, 0x321);
     }
 
     #[test]
-    fn test_parse_numbuses_response_incomplete() {
-        // Incomplete response (only 2 bytes)
-        let buffer = vec![0xF1, 0x0C];
-        assert_eq!(parse_numbuses_response(&buffer), None);
+    fn streaming_applies_the_bus_mappings() {
+        let mappings = [
+            reconcile_mapping(0, true, 7),
+            reconcile_mapping(1, false, 1),
+        ];
+        let mut bytes = wire(0x100, false, 0, &[1], false);
+        bytes.extend(wire(0x200, false, 1, &[2], false));
+
+        let frames = decode_mapped(&mut gvret::DeviceDecoder::new(), &bytes, &mappings);
+        assert_eq!(frames.len(), 1, "the muted bus is dropped");
+        assert_eq!(frames[0].bus, 7, "and the other is renumbered");
     }
 }

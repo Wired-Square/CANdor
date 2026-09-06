@@ -549,10 +549,8 @@ pub async fn fetch_frame_payloads(
 // Capture import — push a local SQLite capture to the backend
 // ---------------------------------------------------------------------------
 
-const IMPORT_ID_EXTENDED: u32 = 1 << 29;
-const IMPORT_ID_FD: u32 = 1 << 30;
-const IMPORT_ID_TX: u32 = 1 << 31;
-const IMPORT_ID_ARB_MASK: u32 = 0x1FFF_FFFF;
+use wiretap_protocol::ingest::{ID_ARB_MASK, ID_EXTENDED, ID_FD, ID_TX};
+
 const IMPORT_PAGE: usize = 50_000;
 
 #[derive(serde::Serialize, Clone)]
@@ -571,15 +569,15 @@ struct ImportResp {
 /// Encode one frame in the backend's flat import record format:
 /// `ts_us u64 LE, id_flags u32 LE, bus u8, len u8, payload`.
 fn encode_import_record(buf: &mut Vec<u8>, f: &crate::io::FrameMessage) {
-    let mut id_flags = f.frame_id & IMPORT_ID_ARB_MASK;
+    let mut id_flags = f.frame_id & ID_ARB_MASK;
     if f.is_extended {
-        id_flags |= IMPORT_ID_EXTENDED;
+        id_flags |= ID_EXTENDED;
     }
     if f.is_fd {
-        id_flags |= IMPORT_ID_FD;
+        id_flags |= ID_FD;
     }
     if f.direction.as_deref() == Some("tx") {
-        id_flags |= IMPORT_ID_TX;
+        id_flags |= ID_TX;
     }
     let payload = if f.bytes.len() > 64 { &f.bytes[..64] } else { &f.bytes[..] };
     buf.extend_from_slice(&(f.timestamp_us as i64).to_le_bytes());
