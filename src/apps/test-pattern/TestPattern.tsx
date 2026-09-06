@@ -11,13 +11,16 @@ import {
   textPrimary,
   textSecondary,
   textDanger,
+  bgPrimary,
   bgSurface,
+  borderDefault,
   borderDataView,
   monoBody,
   textDataGreen,
   textDataOrange,
   textDataSecondary,
 } from "../../styles";
+import { resultCell, resultHeaderCell } from "../../styles/tableStyles";
 import {
   emptyStateContainer,
   emptyStateText,
@@ -33,7 +36,14 @@ import { useDialogManager } from "../../hooks/useDialogManager";
 import { useSettings } from "../../hooks/useSettings";
 import { useAllIOProfiles } from "../../hooks/useAllIOProfiles";
 import { ioTestStart, ioTestStop } from "../../api/testPattern";
-import type { TestConfig, IOTestState, AutoPhaseResult } from "../../api/testPattern";
+import type {
+  TestConfig,
+  IOTestState,
+  AutoPhaseResult,
+  PeerInfo,
+  SweepRow,
+  TestStatus,
+} from "../../api/testPattern";
 import { wsTransport } from "../../services/wsTransport";
 import { MsgType, HEADER_SIZE } from "../../services/wsProtocol";
 import AppLayout from "../../components/AppLayout";
@@ -316,9 +326,15 @@ export default function TestPattern() {
               )}
             </div>
 
-            {/* Results */}
+            {/* Results — Auto and Sweep have their own displays */}
             {testState ? (
-              <TestResults state={testState} />
+              testState.mode === "auto" ? (
+                <AutoResults state={testState} />
+              ) : testState.mode === "sweep" ? (
+                <SweepResults state={testState} />
+              ) : (
+                <TestResults state={testState} />
+              )
             ) : (
               <div className={`flex-1 flex items-center justify-center ${textSecondary} text-sm`}>
                 {t("states.selectMode")}
@@ -453,31 +469,151 @@ function Gauge({
 // Results display
 // ============================================================================
 
-function TestResults({ state }: { state: IOTestState }) {
-  // Auto mode has its own display
-  if (state.mode === "auto") {
-    return <AutoResults state={state} />;
-  }
+/**
+ * What a status says about the run. `settled` means the backend will not move
+ * off it; `hasVerdict` means it reached a pass or a fail — a run stopped by
+ * hand is settled without either.
+ */
+function verdict(status: TestStatus) {
+  const passed = status === "completed";
+  const failed = status === "failed";
+  return { passed, hasVerdict: passed || failed, settled: passed || failed || status === "stopped" };
+}
 
+/**
+ * The status bar every result view shares. The backend derives the status from
+ * its own pass predicate, so PASS/FAIL is read off it rather than recomputed
+ * here — the two could disagree.
+ */
+function StatusBar({
+  status,
+  detail,
+  elapsedSec,
+  passLabel = "PASS",
+}: {
+  status: TestStatus;
+  detail: string;
+  elapsedSec: number;
+  passLabel?: string;
+}) {
+  const { passed, hasVerdict } = verdict(status);
+  const colour = passed ? textDataGreen : status === "failed" ? textDanger : textPrimary;
+  return (
+    <div className="flex items-center gap-3">
+      <span className={`text-sm font-semibold uppercase ${colour}`}>{status}</span>
+      <span className={`text-xs ${textSecondary}`}>
+        {detail} — {elapsedSec.toFixed(1)}s
+      </span>
+      {hasVerdict && (
+        <span className={`text-xs font-semibold ${passed ? textDataGreen : textDanger}`}>
+          {passed ? passLabel : "FAIL"}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** What the Hello handshake found, before any traffic went out. */
+function PeerSummary({ peer }: { peer: PeerInfo | null }) {
+  if (!peer) {
+    return (
+      <div className={`text-xs ${textDataOrange}`}>
+        No peer answered Hello — start a responder on the other endpoint.
+      </div>
+    );
+  }
+  return (
+    <div className={`text-xs ${textSecondary}`}>
+      Peer answered on bus {peer.bus} — CAN FD {peer.fd ? "yes" : "no"}, extended IDs{" "}
+      {peer.extended ? "yes" : "no"}.
+    </div>
+  );
+}
+
+/**
+ * Per-length-code results. A failure names the byte count that broke, which is
+ * the whole reason the sweep exists: every other message is 8 bytes, and 8 is
+ * where a payload length and a data length code are the same number.
+ */
+function SweepTable({ rows }: { rows: SweepRow[] }) {
+  return (
+    <div className={`border ${borderDefault} rounded overflow-x-auto`}>
+      <table className={`w-full text-xs ${monoBody}`}>
+        <thead>
+          <tr className={bgPrimary}>
+            <th className={resultHeaderCell}>Code</th>
+            <th className={`${resultHeaderCell} text-right`}>Expected</th>
+            <th className={`${resultHeaderCell} text-right`}>Received</th>
+            <th className={resultHeaderCell}>Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.code} className={`border-t ${borderDefault}`}>
+              <td className={resultCell("")}>{r.code}</td>
+              <td className={`${resultCell("")} text-right`}>{r.expected_len} B</td>
+              <td className={`${resultCell(r.passed ? "" : textDanger)} text-right`}>
+                {r.received_len === null ? "—" : `${r.received_len} B`}
+              </td>
+              <td className={`${resultCell(r.passed ? textDataGreen : textDanger)} font-semibold`}>
+                {r.passed ? "PASS" : r.received_len === null ? "NO ECHO" : "MISMATCH"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function SweepResults({ state }: { state: IOTestState }) {
+  const rows = state.sweep ?? [];
+  const failures = rows.filter((r) => !r.passed);
+  return (
+    <div className="flex flex-col gap-3 flex-1">
+      <StatusBar
+        status={state.status}
+        detail={`sweep / ${state.role} — ${rows.length} length codes`}
+        elapsedSec={state.elapsed_sec}
+      />
+      <PeerSummary peer={state.peer} />
+      {rows.length > 0 && <SweepTable rows={rows} />}
+      {verdict(state.status).settled && (
+        <div className={`text-sm ${textSecondary} border-t border-[color:var(--border-default)] pt-2 mt-1`}>
+          {failures.length === 0 && rows.length > 0 ? (
+            <p>
+              Every length code round-tripped at exactly the length it names
+              {rows.length > 9
+                ? ", including the CAN FD codes 9–15 (12–64 bytes) that a silent downgrade to classic CAN cannot carry."
+                : " (0–8 bytes, classic CAN)."}
+            </p>
+          ) : (
+            <p>
+              {failures.length} of {rows.length} length codes failed:{" "}
+              {failures
+                .map((f) =>
+                  f.received_len === null
+                    ? `code ${f.code} (${f.expected_len} B) never echoed`
+                    : `code ${f.code} expected ${f.expected_len} B, got ${f.received_len} B`,
+                )
+                .join("; ")}
+              .
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TestResults({ state }: { state: IOTestState }) {
   const expectedTxCount = useTestPatternStore((s) => s.expectedTxCount);
 
   const isThroughput = state.mode === "throughput";
   // Detect loopback echo — if we received frames during throughput, the
   // interface echoes transmitted frames and we can show bus delivery metrics.
   const hasLoopback = isThroughput && state.rx_count > 0;
-  const passed = state.status === "completed"
-    && state.tx_count > 0
-    && state.errors.length === 0
-    && (isThroughput || (state.drops === 0 && state.duplicates === 0));
-  const failed = state.status === "completed" && !passed;
-
-  const statusColour = passed
-    ? textDataGreen
-    : failed || state.status === "failed"
-      ? textDanger
-      : state.status === "completed"
-        ? textDataOrange
-        : textPrimary;
+  const passed = state.status === "completed";
 
   const fpsMax = Math.max(100, nearestRound(state.frames_per_sec * 1.2));
   // Use pre-calculated expected TX count for gauge scale (fixed at test start).
@@ -492,20 +628,14 @@ function TestResults({ state }: { state: IOTestState }) {
 
   return (
     <div className="flex flex-col gap-3 flex-1">
-      {/* Status bar */}
-      <div className="flex items-center gap-3">
-        <span className={`text-sm font-semibold uppercase ${statusColour}`}>
-          {state.status}
-        </span>
-        <span className={`text-xs ${textSecondary}`}>
-          {state.mode} / {state.role} — {state.elapsed_sec.toFixed(1)}s
-        </span>
-        {state.status === "completed" && (
-          <span className={`text-xs font-semibold ${passed ? textDataGreen : textDanger}`}>
-            {passed ? "PASS" : "FAIL"}
-          </span>
-        )}
-      </div>
+      <StatusBar
+        status={state.status}
+        detail={`${state.mode} / ${state.role}`}
+        elapsedSec={state.elapsed_sec}
+      />
+      {state.role === "initiator" && state.mode !== "loopback" && (
+        <PeerSummary peer={state.peer} />
+      )}
 
       {/* Gauge row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -631,16 +761,16 @@ function TestResults({ state }: { state: IOTestState }) {
       {/* Sequence gaps */}
       {!isThroughput && state.sequence_gaps.length > 0 && (
         <div>
+          {/* The backend sends the first hundred, not all of them — a run
+              losing frames fast enough accumulates more than anyone can read.
+              Drops is the authoritative count. */}
           <div className={`text-xs mb-1 ${textSecondary}`}>
-            Sequence gaps ({state.sequence_gaps.length})
+            Sequence gaps (first {Math.min(state.sequence_gaps.length, 20)} of {state.drops} drops)
           </div>
           <div className={`text-xs ${monoBody} max-h-24 overflow-y-auto`}>
             {state.sequence_gaps.slice(0, 20).map(([expected, got], i) => (
               <div key={i}>expected {expected}, got {got}</div>
             ))}
-            {state.sequence_gaps.length > 20 && (
-              <div className={textSecondary}>... and {state.sequence_gaps.length - 20} more</div>
-            )}
           </div>
         </div>
       )}
@@ -675,7 +805,7 @@ function TestResults({ state }: { state: IOTestState }) {
       )}
 
       {/* Plain English summary */}
-      {state.status !== "running" && (
+      {verdict(state.status).settled && (
         <div className={`text-sm ${textSecondary} border-t border-[color:var(--border-default)] pt-2 mt-1`}>
           <TestSummary state={state} passed={passed} />
         </div>
@@ -690,36 +820,17 @@ function TestResults({ state }: { state: IOTestState }) {
 
 function AutoResults({ state }: { state: IOTestState }) {
   const results = state.auto_results ?? [];
-  const allPassed = results.length > 0 && results.every((r) => r.passed);
-  const isRunning = state.status === "running";
-
-  const statusColour = isRunning
-    ? textPrimary
-    : allPassed
-      ? textDataGreen
-      : textDanger;
+  const settled = verdict(state.status).settled;
 
   return (
     <div className="flex flex-col gap-3 flex-1">
-      {/* Status */}
-      <div className="flex items-center gap-3">
-        <span className={`text-sm font-semibold uppercase ${statusColour}`}>
-          {state.status}
-        </span>
-        {state.auto_phase && (
-          <span className={`text-xs ${textSecondary}`}>
-            {state.auto_phase}
-          </span>
-        )}
-        {!isRunning && (
-          <span className={`text-xs font-semibold ${allPassed ? textDataGreen : textDanger}`}>
-            {allPassed ? "ALL PASS" : "FAIL"}
-          </span>
-        )}
-        <span className={`text-xs ${textSecondary}`}>
-          {state.elapsed_sec.toFixed(1)}s
-        </span>
-      </div>
+      <StatusBar
+        status={state.status}
+        detail={state.auto_phase ?? "full suite"}
+        elapsedSec={state.elapsed_sec}
+        passLabel="ALL PASS"
+      />
+      <PeerSummary peer={state.peer} />
 
       {/* Phase results table */}
       {results.length > 0 && (
@@ -761,6 +872,14 @@ function AutoResults({ state }: { state: IOTestState }) {
         </div>
       )}
 
+      {/* Per-length-code detail, so a sweep failure names the byte count */}
+      {!!state.sweep?.length && (
+        <div>
+          <div className={`text-xs mb-1 ${textSecondary}`}>Sweep — payload length by code</div>
+          <SweepTable rows={state.sweep} />
+        </div>
+      )}
+
       {/* Remote stats from last phase that has them */}
       {(() => {
         const remotePhase = [...results].reverse().find((r) => r.remote);
@@ -780,7 +899,7 @@ function AutoResults({ state }: { state: IOTestState }) {
       })()}
 
       {/* Plain English summary */}
-      {!isRunning && results.length > 0 && (
+      {settled && results.length > 0 && (
         <div className={`text-sm ${textSecondary} border-t border-[color:var(--border-default)] pt-2 mt-1`}>
           <AutoSummary results={results} elapsed={state.elapsed_sec} />
         </div>
@@ -804,6 +923,15 @@ function AutoSummary({ results, elapsed }: { results: AutoPhaseResult[]; elapsed
     parts.push(echoResult.passed
       ? `Echo: ${echoResult.frames_per_sec.toFixed(0)} fps, zero drops.`
       : `Echo: FAILED (${echoResult.drops} drops, ${echoResult.errors.length} errors).`);
+  }
+
+  const sweepResult = results.find((r) => r.phase === "Sweep");
+  if (sweepResult) {
+    const rows = sweepResult.sweep ?? [];
+    const bad = rows.filter((r) => !r.passed);
+    parts.push(sweepResult.passed
+      ? `Sweep: all ${rows.length} length codes carried their full payload.`
+      : `Sweep: FAILED at ${bad.map((r) => `${r.expected_len} B`).join(", ")}.`);
   }
 
   if (latResult?.latency_us) {

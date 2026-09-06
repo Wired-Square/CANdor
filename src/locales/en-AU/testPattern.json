@@ -1,9 +1,11 @@
 {
   "modes": {
     "echo": "Echo",
+    "sweep": "Sweep",
     "throughput": "Throughput",
     "latency": "Latency",
     "reliability": "Reliability",
+    "loopback": "Loopback",
     "auto": "Auto"
   },
   "roles": {

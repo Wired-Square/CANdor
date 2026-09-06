@@ -914,21 +914,13 @@ pub fn send_attach_to_panel(panel: &str, session_id: &str) {
 }
 
 /// Send Test Pattern state update (global, channel 0).
-pub fn send_io_test_state(test_id: &str) {
-    let server = match ws_server() {
-        Some(s) => s,
-        None => return,
-    };
-    let state = match crate::io_test::get_io_test_state(test_id.to_string()) {
-        Some(s) => s,
-        None => return,
-    };
-    let payload = match serde_json::to_vec(&state) {
-        Ok(p) => p,
-        Err(_) => return,
-    };
-    let msg = protocol::encode_message(MsgType::TestPatternState, 0, &payload);
-    server.send_global(msg);
+///
+/// Takes the state rather than an id: the caller is about to store this very
+/// value, so reading it back out of the map would copy the whole thing again.
+pub fn send_io_test_state(state: &crate::io_test::IOTestState) {
+    let Some(server) = ws_server() else { return };
+    let Ok(payload) = serde_json::to_vec(state) else { return };
+    server.send_global(protocol::encode_message(MsgType::TestPatternState, 0, &payload));
 }
 
 /// Send a JSON-payload message on a session's own channel.

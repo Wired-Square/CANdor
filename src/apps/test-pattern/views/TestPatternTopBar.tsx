@@ -8,7 +8,7 @@ import { FlaskConical } from "lucide-react";
 import { ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { iconSm } from "../../../styles/spacing";
-import { bgSurface, borderDefault, textPrimary, textSecondary } from "../../../styles";
+import { bgSurface, borderDefault, textMuted, textPrimary, textSecondary } from "../../../styles";
 import { badgeColorClass } from "../../../styles/buttonStyles";
 import type { IOProfile } from "../../../types/common";
 import type { TestMode, TestRole } from "../../../api/testPattern";
@@ -17,6 +17,7 @@ import AppTopBar from "../../../components/AppTopBar";
 const TEST_MODE_KEYS: { value: TestMode; i18nKey: string }[] = [
   { value: "auto", i18nKey: "auto" },
   { value: "echo", i18nKey: "echo" },
+  { value: "sweep", i18nKey: "sweep" },
   { value: "throughput", i18nKey: "throughput" },
   { value: "latency", i18nKey: "latency" },
   { value: "reliability", i18nKey: "reliability" },
@@ -111,6 +112,14 @@ export default function TestPatternTopBar({
   const selectClass = `h-7 rounded border px-1.5 text-xs ${bgSurface} ${textPrimary} ${borderDefault}`;
   const inputClass = `h-7 w-16 rounded border px-1.5 text-xs ${bgSurface} ${textPrimary} ${borderDefault}`;
 
+  // A responder runs until it is stopped: it adopts whatever run an initiator
+  // starts, so it has no duration or rate of its own. Auto sets both itself,
+  // and the sweep is lock-step — one frame per length code, no rate to pick.
+  const isResponder = role === "responder";
+  const showRate = !isResponder && mode !== "throughput" && mode !== "sweep" && mode !== "auto";
+  const showDuration = !isResponder && mode !== "auto" && mode !== "sweep";
+  const showFrameOptions = mode !== "auto";
+
   return (
     <AppTopBar
       icon={FlaskConical}
@@ -177,8 +186,7 @@ export default function TestPatternTopBar({
             ))}
           </select>
 
-          {/* Rate (only for non-throughput initiator, hidden for auto) */}
-          {role === "initiator" && mode !== "throughput" && mode !== "auto" && (
+          {showRate && (
             <div className="flex items-center gap-1">
               <span className={`text-xs ${textSecondary}`}>{t("topBar.rate")}</span>
               <NumericInput
@@ -193,21 +201,24 @@ export default function TestPatternTopBar({
             </div>
           )}
 
-          {/* Duration, Bus, FD, Ext — hidden for Auto (uses fixed params) */}
-          {mode !== "auto" && (
+          {showDuration && (
+            <div className="flex items-center gap-1">
+              <span className={`text-xs ${textSecondary}`}>{t("topBar.duration")}</span>
+              <NumericInput
+                className={inputClass}
+                value={durationSec}
+                onChange={onDurationChange}
+                disabled={isRunning}
+                min={1}
+                max={86400}
+                title={t("topBar.durationSeconds")}
+              />
+            </div>
+          )}
+
+          {/* Bus, FD, Ext — hidden for Auto, which uses fixed parameters */}
+          {showFrameOptions && (
             <>
-              <div className="flex items-center gap-1">
-                <span className={`text-xs ${textSecondary}`}>{t("topBar.duration")}</span>
-                <NumericInput
-                  className={inputClass}
-                  value={durationSec}
-                  onChange={onDurationChange}
-                  disabled={isRunning}
-                  min={1}
-                  max={86400}
-                  title={t("topBar.durationSeconds")}
-                />
-              </div>
               <div className="flex items-center gap-1">
                 <span className={`text-xs ${textSecondary}`}>{t("topBar.bus")}</span>
                 <NumericInput
@@ -220,36 +231,57 @@ export default function TestPatternTopBar({
                   title={t("topBar.busNumber")}
                 />
               </div>
-              <button
-                className={`text-xs px-2 py-0.5 rounded ${
-                  useFd
-                    ? badgeColorClass('green')
-                    : "bg-[var(--bg-surface)] text-[color:var(--text-muted)] border border-[color:var(--border-default)]"
-                }`}
-                onClick={() => onFdChange(!useFd)}
+              <ToggleBadge
+                label="FD"
+                on={useFd}
+                colour="green"
+                onToggle={() => onFdChange(!useFd)}
                 disabled={isRunning}
                 title={t("topBar.fdMode")}
-              >
-                FD
-              </button>
-              <button
-                className={`text-xs px-2 py-0.5 rounded ${
-                  useExtended
-                    ? badgeColorClass('amber')
-                    : "bg-[var(--bg-surface)] text-[color:var(--text-muted)] border border-[color:var(--border-default)]"
-                }`}
-                onClick={() => onExtendedChange(!useExtended)}
+              />
+              <ToggleBadge
+                label="Ext"
+                on={useExtended}
+                colour="amber"
+                onToggle={() => onExtendedChange(!useExtended)}
                 disabled={isRunning}
                 title={t("topBar.extendedIds")}
-              >
-                Ext
-              </button>
+              />
             </>
           )}
 
         </>
       )}
     </AppTopBar>
+  );
+}
+
+/** An on/off badge for a frame option — lit in its colour, or muted when off. */
+function ToggleBadge({
+  label,
+  on,
+  colour,
+  onToggle,
+  disabled,
+  title,
+}: {
+  label: string;
+  on: boolean;
+  colour: "green" | "amber";
+  onToggle: () => void;
+  disabled?: boolean;
+  title?: string;
+}) {
+  const off = `${bgSurface} ${textMuted} border ${borderDefault}`;
+  return (
+    <button
+      className={`text-xs px-2 py-0.5 rounded ${on ? badgeColorClass(colour) : off}`}
+      onClick={onToggle}
+      disabled={disabled}
+      title={title}
+    >
+      {label}
+    </button>
   );
 }
 

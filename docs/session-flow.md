@@ -1235,7 +1235,7 @@ Global (channel 0):
 | `SessionLifecycle`  | 0x08 | Created / destroyed (broadcast to all clients) |
 | `TransmitUpdated`   | 0x0B | Transmit queue changes |
 | `ReplayState`       | 0x0C | Replay controller state |
-| `TestPatternState`  | 0x0D | Test pattern generator state |
+| `TestPatternState`  | 0x0D | Test Pattern run state (counters, sweep rows, peer) — payload is the whole `IOTestState` |
 | `OpenAppsChanged`   | 0x17 | Open-app roster changed; clients re-fetch `list_open_apps` (see [§ The open-app registry](#the-open-app-registry--subscribers--the-cross-window-roster)) |
 | `CatalogListChanged`| 0x18 | Decoder-catalogue list changed (mutation, decoder-dir change, or filesystem watcher); clients re-fetch `list_catalogs` from the warm backend cache (see [§ Catalogue list cache](#catalogue-list-cache)) |
 

@@ -8,8 +8,18 @@ import { invoke } from "@tauri-apps/api/core";
 // Types
 // ============================================================================
 
-export type TestMode = "echo" | "throughput" | "latency" | "reliability" | "loopback" | "auto";
+export type TestMode =
+  | "echo"
+  | "sweep"
+  | "throughput"
+  | "latency"
+  | "reliability"
+  | "loopback"
+  | "auto";
 export type TestRole = "initiator" | "responder";
+
+/** A responder with no run bound yet is "listening"; everything else is terminal. */
+export type TestStatus = "running" | "listening" | "completed" | "stopped" | "failed";
 
 export interface TestConfig {
   mode: TestMode;
@@ -38,6 +48,24 @@ export interface RemoteStats {
   fps: number;
 }
 
+/** What the Hello handshake found on the bus, before any traffic started. */
+export interface PeerInfo {
+  fd: boolean;
+  extended: boolean;
+  bus: number;
+}
+
+/**
+ * One length code's sweep result. `received_len` is null when nothing came
+ * back; a row fails when the echo is not exactly the length its code names.
+ */
+export interface SweepRow {
+  code: number;
+  expected_len: number;
+  received_len: number | null;
+  passed: boolean;
+}
+
 export interface AutoPhaseResult {
   phase: string;
   passed: boolean;
@@ -48,12 +76,13 @@ export interface AutoPhaseResult {
   elapsed_sec: number;
   latency_us: LatencyStats | null;
   remote: RemoteStats | null;
+  sweep: SweepRow[] | null;
   errors: string[];
 }
 
 export interface IOTestState {
   test_id: string;
-  status: "running" | "completed" | "stopped" | "failed";
+  status: TestStatus;
   mode: string;
   role: string;
   tx_count: number;
@@ -67,6 +96,8 @@ export interface IOTestState {
   frames_per_sec: number;
   errors: string[];
   remote: RemoteStats | null;
+  peer: PeerInfo | null;
+  sweep: SweepRow[] | null;
   auto_results: AutoPhaseResult[] | null;
   auto_phase: string | null;
 }
