@@ -294,7 +294,12 @@ export interface DecodedTunnelMessage {
   /** Start register. Null when a read response had no request to inherit from. */
   register?: number | null;
   quantity?: number | null;
+  /** Register values. Empty for a coil bank and for a vendor code — neither has
+   *  registers, and reading one as `u16`s is how coil bytes get mangled. */
   values: number[];
+  /** The body between the header and the CRC. The only route to the payload of
+   *  a function code nothing models. */
+  data: number[];
   exception?: number | null;
   exceptionLabel?: string | null;
   /** Catalogue register frame the values decoded through, if one matched. */

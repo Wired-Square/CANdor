@@ -42,6 +42,27 @@ type SharedMirrorTracker = Arc<Mutex<wiretap_catalog::MirrorTracker>>;
 static MIRROR_TRACKERS: Lazy<RwLock<HashMap<String, SharedMirrorTracker>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
+/// How a session's serial port is RTU-framed, for the `interpret` path below.
+///
+/// The framer's device-address filter needs no repeating here — it already
+/// rejected what it rejected. The vendor list does: `interpret` refuses an
+/// unmodelled function code outright, so without the same declaration a vendor
+/// message would be framed on the wire and then dropped before the Modbus tab.
+/// One filter is subtractive, the other additive.
+static SERIAL_RTU_OPTIONS: Lazy<RwLock<HashMap<String, crate::io::ModbusRtuOptions>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
+/// Publish how a serial session is framed. Called when the source resolves its
+/// framing, which may be before or after the catalogue is attached.
+pub fn set_serial_rtu_options(session_id: &str, mut options: crate::io::ModbusRtuOptions) {
+    // Dropped on the way in, so the invariant holds by construction rather than
+    // being restored at every read.
+    options.device_address = None;
+    if let Ok(mut m) = SERIAL_RTU_OPTIONS.write() {
+        m.insert(session_id.to_string(), options);
+    }
+}
+
 /// Reassembly state for the tunnel frames a session's catalogue declares. A
 /// tunnel's payloads concatenate into a byte stream, so unlike every other
 /// decode this one is order-dependent and cannot be re-run over frames it has
@@ -167,6 +188,9 @@ pub fn detach_catalog(session_id: &str) {
     if let Ok(mut m) = TUNNEL_DECODERS.write() {
         m.remove(session_id);
     }
+    if let Ok(mut m) = SERIAL_RTU_OPTIONS.write() {
+        m.remove(session_id);
+    }
 }
 
 fn attached_catalog(session_id: &str) -> Option<Arc<wiretap_catalog::Catalog>> {
@@ -241,6 +265,7 @@ fn mirror_verdicts(session_id: &str, frames: &[FrameMessage]) -> Option<MirrorVe
 /// taken as given rather than searched for.
 fn feed_tunnels(
     tunnels: Option<&SharedTunnels>,
+    session_id: &str,
     frame: &FrameMessage,
     masked_id: u32,
 ) -> Vec<wiretap_catalog::ModbusRtuMessage> {
@@ -254,13 +279,19 @@ fn feed_tunnels(
         let Ok(mut streams) = serial.lock() else {
             return Vec::new();
         };
-        // No declared device address: whatever filtering the profile asked for
-        // was already applied by the framer that produced this frame, so
-        // repeating it here would only need the profile plumbed in to reject
-        // messages that cannot arrive.
+        // The device address is left open: whatever filtering the profile asked
+        // for was already applied by the framer that produced this frame. The
+        // vendor codes are not — see `SERIAL_RTU_OPTIONS`.
         return streams
             .entry(frame.bus)
-            .or_insert_with(|| wiretap_catalog::ModbusRtuStream::for_address(None))
+            .or_insert_with(|| {
+                SERIAL_RTU_OPTIONS
+                    .read()
+                    .ok()
+                    .and_then(|m| m.get(session_id).cloned())
+                    .unwrap_or_default()
+                    .stream()
+            })
             .interpret(&frame.bytes)
             .into_iter()
             .collect();
@@ -302,6 +333,7 @@ const MAX_RENDERED_TUNNEL_MESSAGES: usize = 500;
 /// payload (one entry per frame that has a matching catalogue frame). Returns
 /// an empty vec when nothing decoded, so the caller can skip the send.
 fn encode_decoded_batch(
+    session_id: &str,
     frames: &[FrameMessage],
     catalog: &wiretap_catalog::Catalog,
     verdicts: Option<&MirrorVerdicts>,
@@ -319,7 +351,7 @@ fn encode_decoded_batch(
     if tunnels.is_some() {
         for (i, f) in frames.iter().enumerate() {
             let masked_id = mask.map_or(f.frame_id, |m| f.frame_id & m);
-            for msg in feed_tunnels(tunnels, f, masked_id) {
+            for msg in feed_tunnels(tunnels, session_id, f, masked_id) {
                 if completed.len() == MAX_RENDERED_TUNNEL_MESSAGES {
                     completed.pop_front();
                 }
@@ -464,7 +496,7 @@ pub fn send_new_frames(session_id: &str) {
     if let Some(catalog) = attached_catalog(session_id) {
         let verdicts = mirror_verdicts(session_id, &frames);
         let tunnels = tunnel_decoders(session_id);
-        let decoded = encode_decoded_batch(&frames, &catalog, verdicts.as_ref(), tunnels.as_ref());
+        let decoded = encode_decoded_batch(session_id, &frames, &catalog, verdicts.as_ref(), tunnels.as_ref());
         if !decoded.is_empty() {
             let dmsg = protocol::encode_message(MsgType::DecodedSignals, channel, &decoded);
             server.send_to_channel(channel, dmsg);
@@ -577,7 +609,7 @@ pub fn redecode_delivered(session_id: &str) {
     // reset keeps that true for any future caller.
     reset_tunnels(session_id);
     let tunnels = tunnel_decoders(session_id);
-    let decoded = encode_decoded_batch(&frames, &catalog, verdicts.as_ref(), tunnels.as_ref());
+    let decoded = encode_decoded_batch(session_id, &frames, &catalog, verdicts.as_ref(), tunnels.as_ref());
     if !decoded.is_empty() {
         let dmsg = protocol::encode_message(MsgType::DecodedSignals, channel, &decoded);
         server.send_to_channel(channel, dmsg);
@@ -1055,14 +1087,14 @@ mod tests {
             0x01, 0x03, 0x06, 0x02, 0x2B, 0x00, 0x00, 0x00, 0x64,
         ]));
 
-        let out = feed_tunnels(Some(&tunnels), &request, 0);
+        let out = feed_tunnels(Some(&tunnels), "test", &request, 0);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].direction, wiretap_catalog::Direction::Request);
         assert_eq!(out[0].start_register, Some(0x6B));
         assert_eq!(out[0].quantity, Some(3));
         assert!(out[0].crc_valid);
 
-        let out = feed_tunnels(Some(&tunnels), &response, 0);
+        let out = feed_tunnels(Some(&tunnels), "test", &response, 0);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].direction, wiretap_catalog::Direction::Response);
         // Carried over from the request: a read response has no address of its own.
@@ -1078,7 +1110,7 @@ mod tests {
         let mut bytes = rtu(&[0x01, 0x03, 0x00, 0x6B, 0x00, 0x03]);
         *bytes.last_mut().expect("crc appended") ^= 0xFF;
 
-        let out = feed_tunnels(Some(&tunnels), &serial_frame(bytes), 0);
+        let out = feed_tunnels(Some(&tunnels), "test", &serial_frame(bytes), 0);
         assert_eq!(out.len(), 1);
         assert!(!out[0].crc_valid);
     }
@@ -1093,7 +1125,7 @@ mod tests {
             serial: None,
         });
         let frame = serial_frame(rtu(&[0x01, 0x03, 0x00, 0x6B, 0x00, 0x03]));
-        assert!(feed_tunnels(Some(&tunnels), &frame, 0).is_empty());
+        assert!(feed_tunnels(Some(&tunnels), "test", &frame, 0).is_empty());
     }
 
     /// Serial bytes that are not a whole RTU message yield nothing rather than
@@ -1102,7 +1134,7 @@ mod tests {
     fn a_frame_that_is_not_a_whole_message_yields_nothing() {
         let tunnels = Arc::new(modbus_session());
         for bytes in [vec![0x01, 0x03], vec![0x01, 0x03, 0x00, 0x6B, 0x00]] {
-            assert!(feed_tunnels(Some(&tunnels), &serial_frame(bytes), 0).is_empty());
+            assert!(feed_tunnels(Some(&tunnels), "test", &serial_frame(bytes), 0).is_empty());
         }
     }
 }

@@ -4,7 +4,21 @@ All notable changes to WireTAP will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **A Modbus RTU line that isn't stock Modbus can now be read.** Real RS-485 buses carry vendor function codes the Modbus spec never defined, and masters that broadcast to address 0 — on one Sungrow logger that is 90% of the traffic, and WireTAP framed none of it. The serial framing options now take a list of vendor function codes and a broadcast tick, and a catalogue can declare the same two for a tunnelled line; set in both places, they combine. Both are off by default, so a stock Modbus line is unchanged.
+
+- **Discovery's Serial Framing tool names the vendor codes it couldn't frame.** Point it at a capture and it reports the function codes standing between you and a readable line, so you can paste them straight into the framing options instead of having to know them already.
+
+### Changed
+
+- **Framing detection now runs against the real framer.** It used to be a separate implementation that guessed message boundaries by checksum alone, so it could disagree with what you actually got when you applied that framing. It now runs the same framer the port does, which also means frame counts and coverage figures reflect reality — expect them to differ from before, downward where the old scan was inventing messages.
+
+- **Two Modbus exception names now match the current spec** — "Server Device Failure" and "Gateway Target Device Failed To Respond", where the Decoder's Modbus tab previously said "Slave".
+
 ### Fixed
+
+- **Coils no longer show mangled values.** The Decoder's Modbus tab read coil and discrete-input responses as 16-bit registers, pairing up coil bytes and dropping the last byte of an odd-length block; a single-coil write showed its raw flag word. Each coil now reads as one signal, 0 or 1, counted by the quantity the request asked for. Any message the catalogue doesn't model shows its raw body rather than nothing.
 
 - **Transmitting a CAN FD frame over SLCAN or gs_usb now sends the frame you asked for.** On an SLCAN adapter the frame went out as a classic CAN frame claiming eight bytes while carrying more, which the adapter rejected; on a gs_usb adapter anything longer than eight bytes was sent with the wrong length, so the device padded it out to the next size up. Both now send CAN FD properly, including the bit rate switch. Classic CAN transmission was never affected, and neither was receiving.
 

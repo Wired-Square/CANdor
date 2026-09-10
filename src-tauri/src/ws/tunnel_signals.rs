@@ -20,53 +20,27 @@
 //! function code.
 
 use wiretap_catalog::decode::Decoded;
+use wiretap_catalog::modbus::{coils_to_bytes, exception_name, function_name};
 use wiretap_catalog::{Catalog, Direction, ModbusRtuMessage, RegisterType, SignalFormat};
 
-/// The Modbus function codes a tunnel can carry, for display.
+/// The code and its name; the crate owns the tables, this owns the presentation.
 fn function_label(function: u8) -> String {
-    if function & 0x80 != 0 {
-        return format!("0x{function:02X} Exception");
-    }
-    let name = match function {
-        0x01 => "Read Coils",
-        0x02 => "Read Discrete Inputs",
-        0x03 => "Read Holding Registers",
-        0x04 => "Read Input Registers",
-        0x05 => "Write Single Coil",
-        0x06 => "Write Single Register",
-        0x0F => "Write Multiple Coils",
-        0x10 => "Write Multiple Registers",
-        _ => "Unknown",
+    let name = if function & 0x80 != 0 {
+        "Exception"
+    } else {
+        function_name(function).unwrap_or("Unknown")
     };
     format!("0x{function:02X} {name}")
 }
 
-/// Modbus exception codes worth naming; the rest show as a bare number.
 fn exception_label(code: u8) -> String {
-    let name = match code {
-        0x01 => "Illegal Function",
-        0x02 => "Illegal Data Address",
-        0x03 => "Illegal Data Value",
-        0x04 => "Slave Device Failure",
-        0x05 => "Acknowledge",
-        0x06 => "Slave Device Busy",
-        0x08 => "Memory Parity Error",
-        0x0A => "Gateway Path Unavailable",
-        0x0B => "Gateway Target Failed To Respond",
-        _ => "Unknown",
-    };
-    format!("0x{code:02X} {name}")
+    format!("0x{code:02X} {}", exception_name(code).unwrap_or("Unknown"))
 }
 
-/// Which register bank a function code reads or writes. Needed to look the
-/// register up: the same number means different things across banks.
-fn register_type(function: u8) -> RegisterType {
-    match function & 0x7F {
-        0x01 | 0x05 | 0x0F => RegisterType::Coil,
-        0x02 => RegisterType::Discrete,
-        0x04 => RegisterType::Input,
-        _ => RegisterType::Holding,
-    }
+/// Which bank a function code speaks to. Unmodelled codes fall to holding, which
+/// is what the catalogue lookup below assumes when nothing else is known.
+fn register_bank(function: u8) -> RegisterType {
+    RegisterType::from_function_code(function).unwrap_or(RegisterType::Holding)
 }
 
 fn signal(name: String, value: f64, display: String, format: Option<SignalFormat>) -> Decoded {
@@ -113,7 +87,12 @@ fn header_signals(msg: &ModbusRtuMessage, function_label: &str) -> Vec<Decoded> 
         ));
     }
     if let Some(qty) = msg.quantity {
-        out.push(signal(name("Quantity"), f64::from(qty), qty.to_string(), None));
+        out.push(signal(
+            name("Quantity"),
+            f64::from(qty),
+            qty.to_string(),
+            None,
+        ));
     }
     if let Some(code) = msg.exception {
         out.push(signal(
@@ -128,40 +107,68 @@ fn header_signals(msg: &ModbusRtuMessage, function_label: &str) -> Vec<Decoded> 
 
 /// Decode a message's register block against the catalogue, falling back to raw
 /// values. Returns the signals and the name of the register frame that matched.
-fn register_signals(msg: &ModbusRtuMessage, catalog: &Catalog) -> (Vec<Decoded>, Option<String>) {
-    if msg.registers.is_empty() {
+fn register_signals(
+    msg: &ModbusRtuMessage,
+    catalog: &Catalog,
+    bank: RegisterType,
+    coils: &[bool],
+) -> (Vec<Decoded>, Option<String>) {
+    // The crate decides which kind of body this is: `registers` and `coils()` are
+    // each empty for the other's banks. Coils are re-packed rather than taken
+    // from `data_block()`, which for a single-coil write is the register address
+    // followed by a flag word rather than a block — decoding that against a
+    // catalogue entry would read the address as data.
+    let bytes = if coils.is_empty() {
+        msg.register_bytes()
+    } else {
+        coils_to_bytes(coils)
+    };
+    if bytes.is_empty() {
         return (Vec::new(), None);
     }
-    let matched = msg.start_register.and_then(|reg| {
-        catalog.modbus_register_frame(reg, register_type(msg.function), msg.device_address)
-    });
+    let matched = msg
+        .start_register
+        .and_then(|reg| catalog.modbus_register_frame(reg, bank, msg.device_address));
 
     if let Some(frame) = matched {
-        let decoded = wiretap_catalog::decode::decode_frame(catalog, frame, &msg.register_bytes());
+        let decoded = wiretap_catalog::decode::decode_frame(catalog, frame, &bytes);
         if !decoded.signals.is_empty() {
             return (decoded.signals, Some(frame.key.clone()));
         }
     }
 
-    // No catalogue entry, or one that decodes nothing — show the registers
+    // No catalogue entry, or one that decodes nothing — show the values
     // themselves so the tunnel is still readable.
     let side = match msg.direction {
         Direction::Request => "Request",
         Direction::Response => "Response",
     };
-    let signals = msg
-        .registers
-        .iter()
-        .enumerate()
-        .map(|(i, &r)| {
-            signal(
-                format!("Modbus_{side}_Value_{i}"),
-                f64::from(r),
-                format!("0x{r:04X}"),
-                Some(SignalFormat::Hex),
-            )
-        })
-        .collect();
+    let name = |i: usize| format!("Modbus_{side}_Value_{i}");
+    let signals = if coils.is_empty() {
+        msg.registers
+            .iter()
+            .enumerate()
+            .map(|(i, &r)| {
+                signal(
+                    name(i),
+                    f64::from(r),
+                    format!("0x{r:04X}"),
+                    Some(SignalFormat::Hex),
+                )
+            })
+            .collect()
+    } else {
+        coils
+            .iter()
+            .enumerate()
+            // Displayed as 0/1 rather than false/true, to match the numeric value
+            // beside it and every other signal in the table.
+            .map(|(i, &on)| {
+                let bit = u8::from(on);
+                signal(name(i), f64::from(bit), bit.to_string(), None)
+            })
+            .collect()
+    };
     (signals, None)
 }
 
@@ -175,10 +182,16 @@ pub struct DecodedTunnelMessage {
 /// Render one reassembled message for the WS payload.
 pub fn decode_message(msg: &ModbusRtuMessage, catalog: &Catalog) -> DecodedTunnelMessage {
     let label = function_label(msg.function);
+    let coils = msg.coils();
+
     let mut signals = header_signals(msg, &label);
-    let (register_signals, matched_frame) = register_signals(msg, catalog);
+    let (register_signals, matched_frame) =
+        register_signals(msg, catalog, register_bank(msg.function), &coils);
     signals.extend(register_signals);
 
+    // `registers` is register banks only, so it is already empty for a coil frame
+    // and for a vendor code. `data` is the body either way, and the only route to
+    // the payload of a function code nothing models.
     let transaction = serde_json::json!({
         "protocol": "modbus_rtu",
         "direction": msg.direction.as_str(),
@@ -188,6 +201,7 @@ pub fn decode_message(msg: &ModbusRtuMessage, catalog: &Catalog) -> DecodedTunne
         "register": msg.start_register,
         "quantity": msg.quantity,
         "values": msg.registers,
+        "data": msg.data_block(),
         "exception": msg.exception,
         "exceptionLabel": msg.exception.map(exception_label),
         "frame": matched_frame,
@@ -254,6 +268,130 @@ unit = "A"
             }
         }
         out
+    }
+
+    fn hex_bytes(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// A message with its CRC appended, framed on its own.
+    fn framed(hex: &str) -> Vec<u8> {
+        let mut out: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        out.extend(wiretap_checksum::algorithms::crc16_modbus_checksum(&out).to_le_bytes());
+        out
+    }
+
+    /// `exchange` appends no CRC, so build the pair here and feed them whole.
+    fn messages(bodies: &[&str]) -> Vec<ModbusRtuMessage> {
+        let mut t = ModbusRtuStream::for_address(Some(1));
+        bodies
+            .iter()
+            .flat_map(|b| t.push_bytes(&framed(b)))
+            .collect()
+    }
+
+    #[test]
+    fn a_coil_response_reads_as_coils_not_registers() {
+        // FC01: read 10 coils from 0. Two bytes, the second only partly used —
+        // `registers` would pair them into one u16 and call it a register.
+        let msgs = messages(&["0101000A000A", "010102D502"]);
+        let response = msgs.last().unwrap();
+        assert_eq!(response.function, 0x01);
+
+        let out = decode_message(response, &catalog());
+        let bit = |i: usize| display_of(&out.signals, &format!("Modbus_Response_Value_{i}"));
+        // 0xD5 = 1010 1011 LSB-first, 0x02 = 0100 0000 LSB-first.
+        assert_eq!(bit(0), "1");
+        assert_eq!(bit(1), "0");
+        assert_eq!(bit(2), "1");
+        assert_eq!(bit(9), "1");
+        // Bounded by the quantity the request asked for, not the byte count.
+        assert!(!out
+            .signals
+            .iter()
+            .any(|s| s.name == "Modbus_Response_Value_10"));
+        // And not offered as registers, which is what they are not.
+        assert_eq!(out.transaction["values"].as_array().unwrap().len(), 0);
+        assert_eq!(out.transaction["data"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_coil_request_carries_no_coils() {
+        // The regression this guards: a request's address and quantity bytes are
+        // not a coil block, however much `data_block()` will hand them over.
+        let msgs = messages(&["0101000A000A"]);
+        let out = decode_message(&msgs[0], &catalog());
+        assert!(!out.signals.iter().any(|s| s.name.contains("Value_")));
+        assert_eq!(out.transaction["values"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn a_coil_frame_decodes_against_the_packed_block() {
+        // The bytes handed to the catalogue are the coils re-packed, not
+        // `data_block()`: for FC05 that block opens with the register address, so
+        // decoding it directly would read the address as the coil data.
+        let msgs = messages(&["0105001AFF00"]);
+        let coils = msgs[0].coils();
+        assert_eq!(coils, vec![true]);
+        assert_eq!(
+            wiretap_catalog::modbus::coils_to_bytes(&coils),
+            vec![0x01],
+            "one coil packs to one byte"
+        );
+        assert_eq!(
+            msgs[0].data_block(),
+            &hex_bytes("001AFF00")[..],
+            "whereas the data block still carries the address"
+        );
+    }
+
+    #[test]
+    fn a_single_coil_write_is_one_coil() {
+        // FC05 sets one coil with a flag word: 0xFF00 on, 0x0000 off. One coil,
+        // not sixteen bits of a packed block and not a register.
+        for (body, expected) in [("0105001AFF00", "1"), ("0105001A0000", "0")] {
+            let msgs = messages(&[body]);
+            let out = decode_message(&msgs[0], &catalog());
+            assert_eq!(display_of(&out.signals, "Modbus_Request_Value_0"), expected);
+            assert!(!out.signals.iter().any(|s| s.name.ends_with("_Value_1")));
+            assert_eq!(out.transaction["values"].as_array().unwrap().len(), 0);
+        }
+    }
+
+    #[test]
+    fn a_register_read_is_unchanged() {
+        let msgs = messages(&["01044DE20002", "010404012C0000"]);
+        let out = decode_message(msgs.last().unwrap(), &catalog());
+        // Decodes through the catalogue entry, factor and all.
+        assert_eq!(display_of(&out.signals, "Charge_Current_Limit"), "30");
+        assert_eq!(out.transaction["values"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_vendor_message_reaches_the_tab_through_its_data_block() {
+        let mut t = ModbusRtuStream::for_address(Some(1)).with_vendor_functions(&[0x20]);
+        let msgs = t.push_bytes(&framed("012001C803111A0002"));
+        assert_eq!(msgs.len(), 1);
+
+        let out = decode_message(&msgs[0], &catalog());
+        // Nothing models the body, so there are no values and no register signals.
+        assert!(msgs[0].registers.is_empty());
+        assert_eq!(out.transaction["values"].as_array().unwrap().len(), 0);
+        // The body is still reachable, which is the whole point.
+        let data: Vec<u64> = out.transaction["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .collect();
+        assert_eq!(data, vec![0x01, 0xC8, 0x03, 0x11, 0x1A, 0x00, 0x02]);
+        assert_eq!(out.transaction["functionLabel"], "0x20 Unknown");
     }
 
     fn display_of(signals: &[Decoded], name: &str) -> String {

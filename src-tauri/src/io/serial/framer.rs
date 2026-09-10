@@ -5,7 +5,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use wiretap_catalog::{CrcPolicy, ModbusRtuMessage, ModbusRtuStream};
+use wiretap_catalog::{ModbusRtuMessage, ModbusRtuStream};
+
+use crate::io::types::ModbusRtuOptions;
 
 // =============================================================================
 // SLIP Constants (RFC 1055)
@@ -21,8 +23,7 @@ const SLIP_ESC_ESC: u8 = 0xDD;
 // =============================================================================
 
 /// Framing encoding types
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq)]
 pub enum FramingEncoding {
     /// Delimiter-based framing
     Delimiter {
@@ -36,13 +37,7 @@ pub enum FramingEncoding {
     /// SLIP framing (RFC 1055)
     Slip,
     /// Modbus RTU framing
-    ModbusRtu {
-        /// Optional device address filter (1-247)
-        device_address: Option<u8>,
-        /// Whether a message has to pass its CRC to be framed. `false` is a
-        /// lenient mode, not "no framing" — see [`CrcPolicy::Lenient`].
-        validate_crc: bool,
-    },
+    ModbusRtu(ModbusRtuOptions),
     /// Raw mode - no framing, emit bytes as read
     Raw,
 }
@@ -299,19 +294,6 @@ struct ModbusRtuFramer {
     tunnel: ModbusRtuStream,
 }
 
-impl ModbusRtuFramer {
-    fn new(device_address: Option<u8>, validate_crc: bool) -> Self {
-        let policy = if validate_crc {
-            CrcPolicy::Strict
-        } else {
-            CrcPolicy::Lenient
-        };
-        ModbusRtuFramer {
-            tunnel: ModbusRtuStream::with_crc_policy(device_address, policy),
-        }
-    }
-}
-
 /// One reassembled message as a frame. The CRC verdict rides along: under a
 /// lenient policy it is the only thing distinguishing a recovered message from a
 /// guessed one.
@@ -422,10 +404,9 @@ impl SerialFramer {
                 *include_delimiter,
             )),
             FramingEncoding::Slip => Box::new(SlipFramer::new()),
-            FramingEncoding::ModbusRtu {
-                device_address,
-                validate_crc,
-            } => Box::new(ModbusRtuFramer::new(*device_address, *validate_crc)),
+            FramingEncoding::ModbusRtu(opts) => Box::new(ModbusRtuFramer {
+                tunnel: opts.stream(),
+            }),
             FramingEncoding::Raw => Box::new(RawFramer::new()),
         };
 

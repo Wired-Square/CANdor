@@ -8,7 +8,8 @@ import type { FrameMessage } from '../types/frame';
 import type { MessageOrderResult } from '../utils/analysis/messageOrderAnalysis';
 import type { PayloadAnalysisResult, MirrorGroup, TimestampedPayload } from '../utils/analysis/payloadAnalysis';
 import type { SerialFrameAnalysisResult } from '../utils/analysis/serialFrameAnalysis';
-import type { FramingDetectionResult } from '../utils/analysis/framingDetection';
+import { detectSerialFraming, type FramingDetectionResult } from '../api/framingDetection';
+import type { ModbusRtuOptions } from '../api/capture';
 import type {
   ChecksumDiscoveryOptions,
   ChecksumDiscoveryResult,
@@ -273,7 +274,8 @@ interface DiscoveryToolboxState {
   ) => Promise<ChangesResult>;
 
   runSerialFramingAnalysis: (
-    rawBytes: number[]
+    bytesCaptureId: string,
+    modbus?: ModbusRtuOptions
   ) => Promise<SerialFramingResult>;
 
   runSerialPayloadAnalysis: (
@@ -678,14 +680,12 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
     return changesResults;
   },
 
-  runSerialFramingAnalysis: async (rawBytes) => {
+  runSerialFramingAnalysis: async (bytesCaptureId, modbus) => {
     set((state) => ({ toolbox: { ...state.toolbox, isRunning: true } }));
 
-    await new Promise(resolve => setTimeout(resolve, ANALYSIS_YIELD_MS));
-
-    const { detectFraming } = await import('../utils/analysis/framingDetection');
-
-    const framingResult = detectFraming([...rawBytes]);
+    // Rust reads the bytes out of the capture store itself, so nothing is
+    // copied to the frontend to be analysed.
+    const framingResult = await detectSerialFraming(bytesCaptureId, modbus);
     const serialFramingResults: SerialFramingResult = {
       tool: 'serial-framing',
       framingResult,

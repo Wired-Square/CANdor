@@ -20,6 +20,7 @@ mod device_scan;
 #[cfg(not(target_os = "ios"))]
 mod flashers;
 mod framing;
+mod framing_detect;
 pub mod io;
 mod profile_tracker;
 mod sessions;
@@ -1341,6 +1342,7 @@ pub fn run() {
             captures::list_orphaned_captures,
             // Backend framing
             framing::apply_framing_to_capture,
+            framing_detect::detect_serial_framing,
             // Serial port API (platform-aware: real on desktop, stub on iOS)
             platform_list_serial_ports,
             // slcan device probing (platform-aware: real on desktop, stub on iOS)

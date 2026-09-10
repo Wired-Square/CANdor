@@ -1,7 +1,8 @@
 // ui/src/utils/analysis/serialFrameAnalysis.ts
 // Serial frame structure analysis - identifies candidate ID bytes, source addresses, and checksum positions
 //
-// For framing detection (SLIP, Modbus RTU, delimiter-based), see framingDetection.ts
+// For framing detection (SLIP, Modbus RTU, delimiter-based), see api/framingDetection.ts;
+// that analysis runs in Rust, against the framer that would actually read the line.
 
 import { detectChecksum, type ChecksumCandidate } from '../../api/checksums';
 

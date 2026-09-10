@@ -109,8 +109,16 @@ const TransactionRow = memo(function TransactionRow({
       {t.exceptionLabel && (
         <div className={`${textDanger} text-xs`}>{t.exceptionLabel}</div>
       )}
-      {t.values.length > 0 && (
+      {t.values.length > 0 ? (
         <div className={`${textDataPrimary} text-xs`}>{registerList(t)}</div>
+      ) : (
+        // A coil bank and a vendor code both carry a body with no registers to
+        // name, and for a vendor code this is the only view of its payload.
+        t.data.length > 0 && (
+          <div className={`${textDataPrimary} text-xs break-all`}>
+            {t.data.map(byteToHex).join(" ")}
+          </div>
+        )
       )}
       {/* The reassembled message, CRC included. */}
       <div className={`${textMuted} text-xs break-all`}>

@@ -285,9 +285,11 @@ pub async fn io_set_framing(
     source_address_bytes: Option<u8>,
     source_address_big_endian: Option<bool>,
     min_frame_length: Option<usize>,
+    modbus: Option<crate::io::ModbusRtuOptions>,
 ) -> Result<IOCapabilities, String> {
     let req = crate::io::types::SetFramingRequest {
         encoding,
+        modbus,
         frame_id_start_byte,
         frame_id_bytes,
         frame_id_big_endian: frame_id_big_endian.unwrap_or(true),

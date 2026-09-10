@@ -10,7 +10,7 @@
 
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { hexToBytes, bytesToHex } from "../utils/byteUtils";
+import { hexToBytes, bytesToHex, byteToHex } from "../utils/byteUtils";
 import { toggleCardClass, toggleChipClass, bgDataInput, borderDataView, textDataPrimary, textDataSecondary, caption, captionMuted, bgSurface } from "../styles";
 
 // Re-export for backwards compatibility (used by other components)
@@ -19,18 +19,130 @@ export { hexToBytes, bytesToHex };
 /** Framing mode/encoding type */
 export type FramingMode = "raw" | "slip" | "delimiter" | "modbus_rtu";
 
+/**
+ * The Modbus RTU settings, declared once. `FramingPanelConfig` and the picker's
+ * and Discovery's own framing configs all carry exactly these four, and had
+ * started to spell them separately.
+ */
+export interface ModbusFramingSettings {
+  /** Whether a message must pass its CRC to be framed */
+  validateCrc?: boolean;
+  /** Slave address to sync on; absent means any valid address */
+  deviceAddress?: number;
+  /** Function codes the RTU length rules do not model but this line carries */
+  vendorFunctions?: number[];
+  /** Let address 0 start a message, for a broadcasting master */
+  allowBroadcast?: boolean;
+}
+
 /** Framing configuration */
-export interface FramingPanelConfig {
+export interface FramingPanelConfig extends ModbusFramingSettings {
   /** Framing mode */
   mode: FramingMode;
   /** Delimiter bytes as hex string (e.g., "0A" or "0D0A") */
   delimiterHex?: string;
   /** Maximum frame length for delimiter-based framing */
   maxFrameLength?: number;
-  /** Validate CRC for Modbus RTU */
-  validateCrc?: boolean;
   /** Also emit raw bytes (for capture mode) */
   emitRawBytes?: boolean;
+}
+
+/** Function codes as the field shows them, and back. */
+function formatFunctionCodes(codes?: number[]): string {
+  return (codes ?? []).map((c) => `0x${byteToHex(c)}`).join(" ");
+}
+
+function parseFunctionCodes(text: string): number[] {
+  return text
+    .split(/[\s,]+/)
+    .map((token) => parseInt(token.replace(/^0[xX]/, ""), 16))
+    .filter((n) => Number.isInteger(n) && n >= 1 && n <= 127);
+}
+
+/**
+ * The Modbus RTU settings, wherever framing is configured.
+ *
+ * Its own component because the source picker's single-bus row builds its
+ * framing controls by hand rather than rendering the panel below — so a control
+ * added only there would be unreachable for a live serial device, which is the
+ * case these two opt-ins exist for.
+ */
+export function ModbusRtuFields({
+  config,
+  onChange,
+  disabled = false,
+}: {
+  config: ModbusFramingSettings;
+  onChange: (patch: ModbusFramingSettings) => void;
+  disabled?: boolean;
+}) {
+  const { t } = useTranslation("common");
+  // The field keeps its own text so a half-typed code is not thrown away by the
+  // parse; the config only ever holds codes that parsed.
+  const [vendorText, setVendorText] = useState(() => formatFunctionCodes(config.vendorFunctions));
+
+  const fieldClass = `w-full px-2 py-1.5 text-xs rounded border border-[color:var(--border-default)] ${bgSurface} ${textDataSecondary} disabled:opacity-50`;
+  const tick = (label: string, checked: boolean, onToggle: (value: boolean) => void) => (
+    <label className={`flex items-center gap-2 text-xs ${textDataSecondary} cursor-pointer`}>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onToggle(e.target.checked)}
+        disabled={disabled}
+        className="rounded border-[color:var(--border-default)]"
+      />
+      <span>{label}</span>
+    </label>
+  );
+
+  return (
+    <div className="space-y-2">
+      {tick(t("framingOptions.validateCrc"), config.validateCrc ?? true, (v) =>
+        onChange({ validateCrc: v }),
+      )}
+      {tick(t("framingOptions.allowBroadcast"), config.allowBroadcast ?? false, (v) =>
+        onChange({ allowBroadcast: v }),
+      )}
+      <div>
+        <label className={`block ${caption} mb-1`}>
+          {t("framingOptions.deviceAddressLabel")}
+        </label>
+        <input
+          type="number"
+          min="1"
+          max="247"
+          value={config.deviceAddress ?? ""}
+          onChange={(e) =>
+            onChange({
+              deviceAddress: e.target.value === "" ? undefined : Number(e.target.value),
+            })
+          }
+          disabled={disabled}
+          placeholder={t("framingOptions.deviceAddressPlaceholder")}
+          className={fieldClass}
+        />
+      </div>
+      <div>
+        <label className={`block ${caption} mb-1`}>
+          {t("framingOptions.vendorFunctionsLabel")}
+        </label>
+        <input
+          type="text"
+          value={vendorText}
+          onChange={(e) => {
+            setVendorText(e.target.value);
+            onChange({ vendorFunctions: parseFunctionCodes(e.target.value) });
+          }}
+          disabled={disabled}
+          placeholder={t("framingOptions.vendorFunctionsPlaceholder")}
+          className={fieldClass}
+        />
+        <div className={`${captionMuted} mt-0.5`}>
+          {t("framingOptions.vendorFunctionsHint")}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 interface Props {
@@ -117,14 +229,16 @@ export default function FramingOptionsPanel({
     }
   };
 
-  const handleValidateCrcChange = (checked: boolean) => {
-    if (currentMode === "modbus_rtu") {
-      onChange({
-        mode: "modbus_rtu",
-        validateCrc: checked,
-        emitRawBytes: showEmitRawBytes ? emitRawBytes : undefined,
-      });
-    }
+  /// Patch one Modbus setting, keeping the rest — replacing the config wholesale
+  /// is how the CRC tick used to drop everything set beside it.
+  const patchModbus = (patch: Partial<FramingPanelConfig>) => {
+    if (currentMode !== "modbus_rtu") return;
+    onChange({
+      ...config,
+      mode: "modbus_rtu",
+      emitRawBytes: showEmitRawBytes ? emitRawBytes : undefined,
+      ...patch,
+    });
   };
 
   const handleEmitRawBytesChange = (checked: boolean) => {
@@ -135,6 +249,10 @@ export default function FramingOptionsPanel({
       });
     }
   };
+
+  const modbusFields = (
+    <ModbusRtuFields config={config ?? {}} onChange={patchModbus} disabled={disabled} />
+  );
 
   // Card variant - full button cards with descriptions (for dialogs)
   if (variant === "card") {
@@ -198,18 +316,7 @@ export default function FramingOptionsPanel({
           <div className={`text-xs ${textDataSecondary} mt-0.5`}>{t("framingOptions.modbusRtuDescription")}</div>
         </button>
         {currentMode === "modbus_rtu" && (
-          <div className="ml-4 pl-4 border-l-2 border-blue-600 py-2">
-            <label className={`flex items-center gap-2 text-sm ${textDataSecondary}`}>
-              <input
-                type="checkbox"
-                checked={validateCrc}
-                onChange={(e) => handleValidateCrcChange(e.target.checked)}
-                disabled={disabled}
-                className="rounded"
-              />
-              {t("framingOptions.validateCrc")}
-            </label>
-          </div>
+          <div className="ml-4 pl-4 border-l-2 border-blue-600 py-2">{modbusFields}</div>
         )}
 
         {/* Emit raw bytes toggle */}
@@ -312,16 +419,7 @@ export default function FramingOptionsPanel({
       {/* Modbus RTU options */}
       {currentMode === "modbus_rtu" && (
         <div className="pl-2 border-l-2 border-[color:var(--accent-primary)]">
-          <label className="flex items-center gap-2 text-xs text-[color:var(--text-secondary)] cursor-pointer">
-            <input
-              type="checkbox"
-              checked={validateCrc}
-              onChange={(e) => handleValidateCrcChange(e.target.checked)}
-              disabled={disabled}
-              className="rounded border-[color:var(--border-default)]"
-            />
-            <span>{t("framingOptions.validateCrc")}</span>
-          </label>
+          {modbusFields}
         </div>
       )}
 

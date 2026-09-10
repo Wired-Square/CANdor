@@ -103,6 +103,60 @@ pub type TransmitSender = std_mpsc::SyncSender<TransmitRequest>;
 // Control Types (live framing changes)
 // ============================================================================
 
+/// Everything a `ModbusRtuStream` needs, in one place.
+///
+/// Threaded whole for the reason [`crate::io::SerialOverrides`] gives: these were
+/// four loose values built at five sites, three of which had quietly settled on
+/// `device_address: None`. It lives here rather than beside the serial framer
+/// because the CAN tunnel wants it too, and because `SetFramingRequest` below
+/// must stay buildable on a platform with no serial port.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModbusRtuOptions {
+    /// Device address filter (1-247). `None` syncs on any valid address.
+    pub device_address: Option<u8>,
+    /// Whether a message has to pass its CRC to be framed. `false` is a lenient
+    /// mode, not "no framing" — see `CrcPolicy::Lenient`.
+    pub validate_crc: bool,
+    /// Function codes the RTU length rules do not model but this line carries.
+    /// Framed by CRC search instead; empty leaves stock Modbus untouched.
+    pub vendor_functions: Vec<u8>,
+    /// Whether address 0 may start a message, for a master that broadcasts.
+    pub allow_broadcast: bool,
+}
+
+/// Stock Modbus: CRC enforced, no vendor codes, no broadcast. Guessing at any of
+/// the three is how a framer invents messages out of noise.
+impl Default for ModbusRtuOptions {
+    fn default() -> Self {
+        Self {
+            device_address: None,
+            validate_crc: true,
+            vendor_functions: Vec::new(),
+            allow_broadcast: false,
+        }
+    }
+}
+
+impl ModbusRtuOptions {
+    /// A stream configured for this line. Both opt-ins union with whatever a
+    /// catalogue declares, which is the crate's contract for them.
+    pub fn stream(&self) -> wiretap_catalog::ModbusRtuStream {
+        let policy = if self.validate_crc {
+            wiretap_catalog::CrcPolicy::Strict
+        } else {
+            wiretap_catalog::CrcPolicy::Lenient
+        };
+        let stream = wiretap_catalog::ModbusRtuStream::with_crc_policy(self.device_address, policy)
+            .with_vendor_functions(&self.vendor_functions);
+        if self.allow_broadcast {
+            stream.allow_broadcast()
+        } else {
+            stream
+        }
+    }
+}
+
 /// A live framing change for a running serial source. Carries primitives only
 /// (no serial-only types) so the shared broker can hold/dispatch it on every
 /// platform; the serial reader rebuilds the `FramingEncoding`/`FrameIdConfig`.
@@ -119,6 +173,9 @@ pub struct SetFramingRequest {
     pub source_address_big_endian: bool,
     pub min_frame_length: usize,
     pub emit_raw_bytes: bool,
+    /// Modbus RTU settings, when `encoding` names that framer. `None` keeps the
+    /// stock defaults.
+    pub modbus: Option<ModbusRtuOptions>,
 }
 
 /// Sender type for control requests (sync-safe), mirroring `TransmitSender`.

@@ -93,6 +93,11 @@ export interface LoadOptions {
   delimiter?: number[];
   maxFrameLength?: number;
   emitRawBytes?: boolean;
+  /** Modbus RTU framing settings, when framingEncoding is "modbus_rtu" */
+  modbusValidateCrc?: boolean;
+  modbusDeviceAddress?: number;
+  modbusVendorFunctions?: number[];
+  modbusAllowBroadcast?: boolean;
   busOverride?: number;
   busMappings?: Map<string, BusMapping[]>;
   /** Per-interface framing config (for serial profiles in multi-bus mode) */
@@ -918,6 +923,10 @@ export function useIOSessionManager(
         framingEncoding: opts.framingEncoding,
         delimiter: opts.delimiter,
         maxFrameLength: opts.maxFrameLength,
+        modbusValidateCrc: opts.modbusValidateCrc,
+        modbusDeviceAddress: opts.modbusDeviceAddress,
+        modbusVendorFunctions: opts.modbusVendorFunctions,
+        modbusAllowBroadcast: opts.modbusAllowBroadcast,
         frameIdStartByte: opts.frameIdStartByte,
         frameIdBytes: opts.frameIdBytes,
         frameIdBigEndian: opts.frameIdStartByte !== undefined ? true : undefined,
@@ -1033,6 +1042,10 @@ export function useIOSessionManager(
           framingEncoding: opts.framingEncoding,
           delimiter: opts.delimiter,
           maxFrameLength: opts.maxFrameLength,
+          modbusValidateCrc: opts.modbusValidateCrc,
+          modbusDeviceAddress: opts.modbusDeviceAddress,
+          modbusVendorFunctions: opts.modbusVendorFunctions,
+          modbusAllowBroadcast: opts.modbusAllowBroadcast,
           frameIdStartByte: opts.frameIdStartByte,
           frameIdBytes: opts.frameIdBytes,
           frameIdBigEndian: opts.frameIdStartByte !== undefined ? true : undefined,
@@ -1221,6 +1234,10 @@ export function useIOSessionManager(
           framingEncoding: opts?.framingEncoding,
           delimiter: opts?.delimiter,
           maxFrameLength: opts?.maxFrameLength,
+          modbusValidateCrc: opts?.modbusValidateCrc,
+          modbusDeviceAddress: opts?.modbusDeviceAddress,
+          modbusVendorFunctions: opts?.modbusVendorFunctions,
+          modbusAllowBroadcast: opts?.modbusAllowBroadcast,
           frameIdStartByte: opts?.frameIdStartByte,
           frameIdBytes: opts?.frameIdBytes,
           frameIdBigEndian: opts?.frameIdStartByte !== undefined ? true : undefined,

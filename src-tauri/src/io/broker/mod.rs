@@ -37,7 +37,7 @@ use crate::capture_store::{self, CaptureKind};
 use super::gs_usb::encode_frame as encode_gs_usb_frame;
 
 use merge::run_merge_task;
-pub use types::{ModbusRole, SerialOverrides, SourceConfig};
+pub use types::{SerialOverrides, SourceConfig};
 use types::{ControlChannels, SourcePauseFlags, TransmitChannels, TransmitRoute};
 
 // ============================================================================

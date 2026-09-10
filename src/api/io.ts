@@ -8,6 +8,7 @@ import type { ProtocolFrames } from "../utils/frameKey";
 import type { CaptureKind } from "./capture";
 import type { ModbusPollGroup } from "./catalog";
 import type { SerialFrameConfig } from "../utils/frameExport";
+import type { ModbusFramingSettings } from "../components/FramingOptionsPanel";
 
 // ============================================================================
 // Interface Traits
@@ -147,15 +148,13 @@ export type FramingEncoding = "slip" | "modbus_rtu" | "delimiter" | "raw";
  * copy lacked was silently dropped on the way to Rust, so the "Capture raw
  * bytes" and "Validate CRC" ticks did nothing at all.
  */
-export interface InterfaceFramingConfig {
+export interface InterfaceFramingConfig extends ModbusFramingSettings {
   /** Framing mode */
   encoding: FramingEncoding;
   /** Delimiter hex string for delimiter mode (e.g., "0D0A" for CRLF) */
   delimiterHex?: string;
   /** Max frame length for delimiter mode */
   maxFrameLength?: number;
-  /** Whether to check the CRC-16 for Modbus RTU mode */
-  validateCrc?: boolean;
   /** Also emit raw bytes alongside frames */
   emitRawBytes?: boolean;
 }
@@ -188,6 +187,11 @@ export interface CreateIOSessionOptions {
   delimiter?: number[];
   /** Maximum frame length for delimiter-based framing (default: 256) */
   maxFrameLength?: number;
+  /** Modbus RTU framing settings, when framingEncoding is "modbus_rtu" */
+  modbusValidateCrc?: boolean;
+  modbusDeviceAddress?: number;
+  modbusVendorFunctions?: number[];
+  modbusAllowBroadcast?: boolean;
 
   // Frame ID extraction configuration
   /** Frame ID extraction: start byte position (supports negative indexing from end) */
@@ -233,6 +237,9 @@ interface SerialSettings {
   minFrameLength?: number;
   emitRawBytes?: boolean;
   modbusValidateCrc?: boolean;
+  modbusDeviceAddress?: number;
+  modbusVendorFunctions?: number[];
+  modbusAllowBroadcast?: boolean;
   frameIdStartByte?: number;
   frameIdBytes?: number;
   frameIdBigEndian?: boolean;
@@ -255,6 +262,9 @@ function serialPayload(source: SerialSettings): Record<string, unknown> {
     min_frame_length: source.minFrameLength,
     emit_raw_bytes: source.emitRawBytes,
     modbus_validate_crc: source.modbusValidateCrc,
+    modbus_device_address: source.modbusDeviceAddress,
+    modbus_vendor_functions: source.modbusVendorFunctions,
+    modbus_allow_broadcast: source.modbusAllowBroadcast,
     frame_id_start_byte: source.frameIdStartByte,
     frame_id_bytes: source.frameIdBytes,
     frame_id_big_endian: source.frameIdBigEndian,
@@ -1317,8 +1327,11 @@ export interface MultiSourceInput {
   minFrameLength?: number;
   /** Whether to emit raw bytes in addition to framed data */
   emitRawBytes?: boolean;
-  /** Whether to check the CRC-16 on Modbus RTU framing */
+  /** Modbus RTU framing settings, when framingEncoding is "modbus_rtu" */
   modbusValidateCrc?: boolean;
+  modbusDeviceAddress?: number;
+  modbusVendorFunctions?: number[];
+  modbusAllowBroadcast?: boolean;
   /** Frame ID extraction: start byte position (0-indexed) */
   frameIdStartByte?: number;
   /** Frame ID extraction: number of bytes (1 or 2) */
@@ -1331,8 +1344,6 @@ export interface MultiSourceInput {
   sourceAddressBytes?: number;
   /** Source address extraction: byte order (true = big endian) */
   sourceAddressBigEndian?: boolean;
-  /** Modbus interface role (client or server) */
-  modbusRole?: "client" | "server";
 }
 
 /**
@@ -1375,7 +1386,6 @@ export async function createMultiSourceSession(
       profile_id: source.profileId,
       display_name: source.displayName,
       bus_mappings: source.busMappings.map(encodeBusMapping),
-      modbus_role: source.modbusRole,
       ...serialPayload(source),
     })),
     subscriber_id: options.subscriberId,

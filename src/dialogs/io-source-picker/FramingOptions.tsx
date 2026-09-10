@@ -13,9 +13,10 @@ import FramingOptionsPanel, {
 } from "../../components/FramingOptionsPanel";
 import { sectionHeader } from "../../styles/typography";
 import { borderDivider } from "../../styles";
+import type { ModbusFramingSettings } from "../../components/FramingOptionsPanel";
 
 /** Framing configuration for the reader session */
-export interface FramingConfig {
+export interface FramingConfig extends ModbusFramingSettings {
   /** Framing encoding: "slip", "modbus_rtu", "delimiter", or "raw" (no framing) */
   encoding: FramingEncoding;
   /** Delimiter bytes for delimiter-based framing (e.g., [0x0A] for LF) */
@@ -60,6 +61,10 @@ function toPanelConfig(config: FramingConfig | null): FramingPanelConfig | null 
       : undefined,
     maxFrameLength: config.maxFrameLength,
     emitRawBytes: config.emitRawBytes,
+    validateCrc: config.validateCrc,
+    deviceAddress: config.deviceAddress,
+    vendorFunctions: config.vendorFunctions,
+    allowBroadcast: config.allowBroadcast,
   };
 }
 
@@ -75,6 +80,13 @@ function toFramingConfig(panelConfig: FramingPanelConfig | null): FramingConfig 
   if (panelConfig.mode === "delimiter") {
     config.delimiter = panelConfig.delimiterHex ? hexToBytes(panelConfig.delimiterHex) : [0x0a];
     config.maxFrameLength = panelConfig.maxFrameLength || 256;
+  }
+
+  if (panelConfig.mode === "modbus_rtu") {
+    config.validateCrc = panelConfig.validateCrc ?? true;
+    config.deviceAddress = panelConfig.deviceAddress;
+    config.vendorFunctions = panelConfig.vendorFunctions;
+    config.allowBroadcast = panelConfig.allowBroadcast;
   }
 
   return config;

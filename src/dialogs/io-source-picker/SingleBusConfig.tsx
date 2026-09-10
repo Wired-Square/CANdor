@@ -9,6 +9,7 @@ import { Loader2, AlertCircle, CheckCircle2, Bus, Layers, Lock } from "lucide-re
 import { iconMd, iconXs, flexRowGap2 } from "../../styles/spacing";
 import { caption, sectionHeaderText } from "../../styles/typography";
 import type { DeviceProbeResult, FramingEncoding, InterfaceFramingConfig } from "../../api/io";
+import { ModbusRtuFields } from "../../components/FramingOptionsPanel";
 
 export type { InterfaceFramingConfig } from "../../api/io";
 
@@ -228,16 +229,15 @@ export default function SingleBusConfig({
 
             {/* Modbus RTU options */}
             {showModbusOptions && (
-              <label className={`flex items-center gap-1 ${configLocked ? "text-[color:var(--text-muted)] cursor-not-allowed" : "cursor-pointer"}`}>
-                <input
-                  type="checkbox"
-                  checked={framingConfig?.validateCrc ?? true}
-                  onChange={(e) => onFramingChange({ ...framingConfig, encoding: effectiveFraming, validateCrc: e.target.checked })}
+              <div className="w-full max-w-xs">
+                <ModbusRtuFields
+                  config={framingConfig ?? {}}
+                  onChange={(patch) =>
+                    onFramingChange({ ...framingConfig, encoding: effectiveFraming, ...patch })
+                  }
                   disabled={configLocked}
-                  className="w-3 h-3 rounded border-[color:var(--border-default)] text-cyan-500 focus:ring-cyan-500 disabled:cursor-not-allowed"
                 />
-                <span>{t("ioSourcePicker.singleBusConfig.validateCrc")}</span>
-              </label>
+              </div>
             )}
 
             {/* Raw bytes option (for any framing mode except raw) */}
@@ -382,16 +382,15 @@ export default function SingleBusConfig({
 
               {/* Modbus RTU options */}
               {showModbusOptionsFull && (
-                <label className={`flex items-center gap-1.5 ${configLocked ? "cursor-not-allowed" : "cursor-pointer"}`}>
-                  <input
-                    type="checkbox"
-                    checked={framingConfig?.validateCrc ?? true}
-                    onChange={(e) => onFramingChange({ ...framingConfig, encoding: effectiveFraming, validateCrc: e.target.checked })}
+                <div className="w-full max-w-xs">
+                  <ModbusRtuFields
+                    config={framingConfig ?? {}}
+                    onChange={(patch) =>
+                      onFramingChange({ ...framingConfig, encoding: effectiveFraming, ...patch })
+                    }
                     disabled={configLocked}
-                    className="w-4 h-4 rounded border-[color:var(--border-default)] text-cyan-500 focus:ring-cyan-500 disabled:cursor-not-allowed"
                   />
-                  <span>{t("ioSourcePicker.singleBusConfig.validateCrc")}</span>
-                </label>
+                </div>
               )}
 
               {/* Raw bytes option (for any framing mode except raw) */}

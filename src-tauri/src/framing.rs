@@ -10,43 +10,15 @@
 
 #[cfg(target_os = "ios")]
 mod ios_stub {
-    /// Result from backend framing operation (iOS stub)
-    #[derive(Clone, serde::Serialize)]
-    pub struct FramingResult {
-        pub frame_count: usize,
-        pub capture_id: String,
-        pub filtered_count: usize,
-        pub filtered_capture_id: Option<String>,
-    }
-
-    /// Configuration for backend framing (iOS stub)
-    /// Fields are parsed by serde but not read (stub returns error immediately)
-    #[derive(Clone, serde::Deserialize)]
-    #[allow(dead_code)]
-    pub struct BackendFramingConfig {
-        pub mode: String,
-        #[serde(default)]
-        pub delimiter: Option<String>,
-        #[serde(default)]
-        pub max_length: Option<usize>,
-        #[serde(default)]
-        pub validate_crc: Option<bool>,
-        #[serde(default)]
-        pub min_length: Option<usize>,
-        #[serde(default)]
-        pub frame_id_config: Option<serde_json::Value>,
-        #[serde(default)]
-        pub source_address_config: Option<serde_json::Value>,
-        #[serde(default)]
-        pub per_interface: Option<std::collections::HashMap<u8, serde_json::Value>>,
-    }
-
+    /// Untyped, deliberately: the command only ever errors here, and stub structs
+    /// mirroring the desktop shapes are two more things to keep in step — which
+    /// they were not, having missed the last two fields added opposite.
     #[tauri::command(rename_all = "snake_case")]
     pub async fn apply_framing_to_capture(
-        _config: BackendFramingConfig,
+        _config: serde_json::Value,
         _reuse_capture_id: Option<String>,
         _reuse_filtered_capture_id: Option<String>,
-    ) -> Result<FramingResult, String> {
+    ) -> Result<serde_json::Value, String> {
         Err("Framing is not available on iOS".to_string())
     }
 }
@@ -75,21 +47,19 @@ mod desktop {
         pub delimiter: Option<String>,
         /// For raw mode: max frame length before forced split
         pub max_length: Option<usize>,
-        /// For modbus_rtu mode: whether to validate CRC
-        pub validate_crc: Option<bool>,
+        /// For modbus_rtu mode: the RTU settings. Re-framing has to agree with
+        /// the live framer or the Framed tab changes on stop.
+        #[serde(default)]
+        pub modbus: Option<crate::io::ModbusRtuOptions>,
     }
 
     /// Configuration for backend framing
     #[derive(Clone, serde::Deserialize)]
     pub struct BackendFramingConfig {
-        /// Default framing mode: "raw", "slip", "modbus_rtu"
-        pub mode: String,
-        /// For raw mode: delimiter bytes as hex string (e.g., "0D0A")
-        pub delimiter: Option<String>,
-        /// For raw mode: max frame length before forced split
-        pub max_length: Option<usize>,
-        /// For modbus_rtu mode: whether to validate CRC
-        pub validate_crc: Option<bool>,
+        /// The default framing, in the same shape a per-interface override takes.
+        /// Flattened, so the wire stays the flat keys the frontend has always sent.
+        #[serde(flatten)]
+        pub framing: InterfaceFramingConfig,
         /// Minimum frame length to accept (frames shorter are discarded)
         pub min_length: Option<usize>,
         /// Frame ID extraction config
@@ -129,31 +99,24 @@ mod desktop {
     }
 
     /// Build framing encoding from mode and options
-    fn build_encoding(
-        mode: &str,
-        delimiter: Option<&String>,
-        max_length: Option<usize>,
-        validate_crc: Option<bool>,
-    ) -> Result<FramingEncoding, String> {
-        match mode {
+    fn build_encoding(cfg: &InterfaceFramingConfig) -> Result<FramingEncoding, String> {
+        match cfg.mode.as_str() {
             "slip" => Ok(FramingEncoding::Slip),
-            "modbus_rtu" => Ok(FramingEncoding::ModbusRtu {
-                device_address: None,
-                validate_crc: validate_crc.unwrap_or(true),
-            }),
+            "modbus_rtu" => Ok(FramingEncoding::ModbusRtu(
+                cfg.modbus.clone().unwrap_or_default(),
+            )),
             "raw" => {
-                let delimiter_bytes = if let Some(hex) = delimiter {
-                    parse_hex_delimiter(hex)?
-                } else {
-                    vec![0x0A] // Default LF
+                let delimiter = match cfg.delimiter.as_deref() {
+                    Some(hex) => parse_hex_delimiter(hex)?,
+                    None => vec![0x0A], // Default LF
                 };
                 Ok(FramingEncoding::Delimiter {
-                    delimiter: delimiter_bytes,
-                    max_length: max_length.unwrap_or(1024),
+                    delimiter,
+                    max_length: cfg.max_length.unwrap_or(1024),
                     include_delimiter: false,
                 })
             }
-            _ => Err(format!("Unknown framing mode: {}", mode)),
+            mode => Err(format!("Unknown framing mode: {}", mode)),
         }
     }
 
@@ -225,12 +188,7 @@ mod desktop {
         }
 
         // Build default framing encoding from config
-        let default_encoding = build_encoding(
-            &config.mode,
-            config.delimiter.as_ref(),
-            config.max_length,
-            config.validate_crc,
-        )?;
+        let default_encoding = build_encoding(&config.framing)?;
 
         // Group bytes by bus/interface for per-interface framing
         // This prevents bytes from different interfaces from being mixed during framing
@@ -248,23 +206,10 @@ mod desktop {
         let mut frame_data: Vec<(Vec<u8>, usize, bool, Option<bool>, u8)> = Vec::new(); // (bytes, start_idx, incomplete, crc_valid, bus)
 
         for (bus, bus_bytes) in bytes_by_bus.iter() {
-            // Check for per-interface framing override
-            let encoding = if let Some(ref per_interface) = config.per_interface {
-                if let Some(interface_config) = per_interface.get(bus) {
-                    // Use per-interface config
-                    build_encoding(
-                        &interface_config.mode,
-                        interface_config.delimiter.as_ref(),
-                        interface_config.max_length,
-                        interface_config.validate_crc,
-                    )?
-                } else {
-                    // Fall back to default
-                    default_encoding.clone()
-                }
-            } else {
-                // No per-interface configs, use default
-                default_encoding.clone()
+            // A per-interface override for this bus, else the session default.
+            let encoding = match config.per_interface.as_ref().and_then(|m| m.get(bus)) {
+                Some(interface_config) => build_encoding(interface_config)?,
+                None => default_encoding.clone(),
             };
 
             let mut framer = SerialFramer::new(encoding);

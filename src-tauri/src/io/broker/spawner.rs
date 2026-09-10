@@ -13,7 +13,7 @@ use tokio::time::{Duration, interval};
 use tokio_modbus::client::{self, tcp};
 use tokio_modbus::prelude::*;
 
-use super::types::{ModbusRole, SerialOverrides, SourceConfig};
+use super::types::{SerialOverrides, SourceConfig};
 use crate::io::device_kinds::{
     self, conn_bool, conn_f64, conn_i64, conn_str, req_bool, req_f64, req_i64, req_str,
 };
@@ -48,7 +48,7 @@ use crate::io::gs_usb::run_source as run_gs_usb_source;
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_source_reader(
     _app: AppHandle,
-    _session_id: String,
+    session_id: String,
     source_idx: usize,
     profile: IOProfile,
     config: SourceConfig,
@@ -63,7 +63,6 @@ pub(super) async fn run_source_reader(
         bus_mappings,
         serial,
         modbus_polls,
-        modbus_role,
         max_register_errors,
         ..
     } = config;
@@ -86,8 +85,16 @@ pub(super) async fn run_source_reader(
         }
         #[cfg(not(target_os = "ios"))]
         "serial" => {
-            run_serial_reader(source_idx, &profile, bus_mappings, &serial, stop_flag, tx)
-                .await
+            run_serial_reader(
+                source_idx,
+                &session_id,
+                &profile,
+                bus_mappings,
+                &serial,
+                stop_flag,
+                tx,
+            )
+            .await
         }
         "framelink" => {
             run_framelink_reader(source_idx, &profile, bus_mappings, stop_flag, tx).await
@@ -95,24 +102,19 @@ pub(super) async fn run_source_reader(
         "virtual" => {
             run_virtual_reader(source_idx, &profile, bus_mappings, stop_flag, tx, virtual_bus_controls, virtual_cmd_rx).await
         }
-        "modbus_tcp" => match modbus_role.unwrap_or(ModbusRole::Client) {
-            ModbusRole::Client => {
-                run_modbus_tcp_client(
-                    source_idx,
-                    &profile,
-                    bus_mappings,
-                    modbus_polls.unwrap_or_default(),
-                    max_register_errors.unwrap_or(0),
-                    stop_flag,
-                    pause_flag,
-                    tx,
-                )
-                .await
-            }
-            ModbusRole::Server => {
-                run_modbus_tcp_server(source_idx, &profile, bus_mappings, stop_flag, tx).await
-            }
-        },
+        "modbus_tcp" => {
+            run_modbus_tcp_client(
+                source_idx,
+                &profile,
+                bus_mappings,
+                modbus_polls.unwrap_or_default(),
+                max_register_errors.unwrap_or(0),
+                stop_flag,
+                pause_flag,
+                tx,
+            )
+            .await
+        }
         kind => Err(format!("Unsupported source type for multi-bus: {}", kind)),
     };
 
@@ -262,6 +264,7 @@ async fn run_socketcan_reader(
 #[cfg(not(target_os = "ios"))]
 async fn run_serial_reader(
     source_idx: usize,
+    session_id: &str,
     profile: &IOProfile,
     bus_mappings: Vec<BusMapping>,
     overrides: &SerialOverrides,
@@ -270,6 +273,12 @@ async fn run_serial_reader(
 ) -> Result<(), String> {
     // Fully resolved — the overrides go in, so nothing is left to re-apply here.
     let config = parse_profile_for_source(profile, overrides).ok_or("Serial port is required")?;
+
+    // The WS decode path frames these messages a second time, and has to be told
+    // the same vendor codes or it discards what the port framed.
+    if let crate::io::serial::FramingEncoding::ModbusRtu(opts) = &config.framing_encoding {
+        crate::ws::dispatch::set_serial_rtu_options(session_id, opts.clone());
+    }
 
     tlog!(
         "[multi_source] Serial source {} using framing: {:?} (override: {:?}), frame_id_config: {:?}",
@@ -816,183 +825,4 @@ async fn run_modbus_tcp_client(
         .send(SourceMessage::Ended(source_idx, EndReason::Stopped))
         .await;
     Ok(())
-}
-
-// ============================================================================
-// Modbus TCP Server Source (MITM)
-// ============================================================================
-
-/// Modbus TCP server source: listens for incoming Modbus TCP connections and logs requests.
-/// This enables MITM scenarios where WireTAP sits between a Modbus master and slave.
-///
-/// Its `host`/`port` are an address to *listen* on, where every other reader's
-/// are one to *dial* — the same two keys carrying two meanings off `modbus_role`.
-/// It is left out of the `device_kinds` table for that reason, and nothing sets
-/// `modbus_role: server` today.
-async fn run_modbus_tcp_server(
-    source_idx: usize,
-    profile: &IOProfile,
-    bus_mappings: Vec<BusMapping>,
-    stop_flag: Arc<AtomicBool>,
-    tx: mpsc::Sender<SourceMessage>,
-) -> Result<(), String> {
-    let host = profile
-        .connection
-        .get("host")
-        .and_then(|v| v.as_str())
-        .unwrap_or("0.0.0.0")
-        .to_string();
-    let port = profile
-        .connection
-        .get("port")
-        .and_then(|v| {
-            v.as_str()
-                .and_then(|s| s.parse().ok())
-                .or_else(|| v.as_i64().map(|n| n as u16))
-        })
-        .unwrap_or(5020); // Default to 5020 to avoid conflict with real Modbus on 502
-
-    let output_bus = bus_mappings
-        .first()
-        .map(|m| m.output_bus)
-        .unwrap_or(0);
-
-    let bind_addr = format!("{}:{}", host, port);
-
-    let listener = tokio::net::TcpListener::bind(&bind_addr)
-        .await
-        .map_err(|e| format!("Failed to bind Modbus TCP server on {}: {}", bind_addr, e))?;
-
-    let _ = tx
-        .send(SourceMessage::Connected(
-            source_idx,
-            "modbus_tcp_server".to_string(),
-            bind_addr.clone(),
-            None,
-        ))
-        .await;
-
-    tlog!(
-        "[multi_source] Modbus TCP server source {} listening on {}, output_bus={}",
-        source_idx, bind_addr, output_bus
-    );
-
-    // Accept connections until stopped
-    loop {
-        if stop_flag.load(Ordering::Relaxed) {
-            break;
-        }
-
-        // Accept with timeout so we can check stop_flag
-        match tokio::time::timeout(Duration::from_millis(500), listener.accept()).await {
-            Ok(Ok((stream, peer_addr))) => {
-                tlog!(
-                    "[multi_source] Modbus TCP server source {} accepted connection from {}",
-                    source_idx, peer_addr
-                );
-
-                let tx_clone = tx.clone();
-                let stop_clone = stop_flag.clone();
-
-                // Handle connection in a separate task
-                tokio::spawn(async move {
-                    handle_modbus_server_connection(
-                        source_idx,
-                        output_bus,
-                        stream,
-                        peer_addr,
-                        stop_clone,
-                        tx_clone,
-                    )
-                    .await;
-                });
-            }
-            Ok(Err(e)) => {
-                tlog!(
-                    "[multi_source] Modbus TCP server source {} accept error: {}",
-                    source_idx, e
-                );
-            }
-            Err(_) => {
-                // Timeout - check stop_flag and continue
-            }
-        }
-    }
-
-    let _ = tx
-        .send(SourceMessage::Ended(source_idx, EndReason::Stopped))
-        .await;
-    Ok(())
-}
-
-/// Handle a single Modbus TCP server connection, parsing MBAP frames and logging requests.
-async fn handle_modbus_server_connection(
-    source_idx: usize,
-    output_bus: u8,
-    mut stream: tokio::net::TcpStream,
-    peer_addr: SocketAddr,
-    stop_flag: Arc<AtomicBool>,
-    tx: mpsc::Sender<SourceMessage>,
-) {
-    use tokio::io::AsyncReadExt;
-
-    let mut buf = [0u8; 512];
-
-    loop {
-        if stop_flag.load(Ordering::Relaxed) {
-            break;
-        }
-
-        match tokio::time::timeout(Duration::from_millis(500), stream.read(&mut buf)).await {
-            Ok(Ok(0)) => {
-                tlog!(
-                    "[multi_source] Modbus TCP server source {} client {} disconnected",
-                    source_idx, peer_addr
-                );
-                break;
-            }
-            Ok(Ok(n)) => {
-                // Parse MBAP header (7 bytes): transaction_id(2) + protocol_id(2) + length(2) + unit_id(1)
-                if n >= 8 {
-                    let function_code = buf[7];
-                    // Use function code as frame_id for logging
-                    let frame_id = function_code as u32;
-
-                    // Extract the PDU (everything after MBAP header)
-                    let pdu_bytes = buf[6..n].to_vec(); // unit_id + function_code + data
-
-                    let frame = FrameMessage {
-                        protocol: "modbus".to_string(),
-                        timestamp_us: now_us(),
-                        frame_id,
-                        bus: output_bus,
-                        dlc: pdu_bytes.len() as u8,
-                        bytes: pdu_bytes,
-                        is_extended: false,
-                        is_fd: false,
-                        source_address: None,
-                        incomplete: None,
-                        direction: Some("rx".to_string()),
-                    };
-
-                    let _ = tx
-                        .send(SourceMessage::Frames(source_idx, vec![frame]))
-                        .await;
-                }
-
-                // For now, don't send any response (logging only).
-                // Future: relay to paired client interface for full MITM.
-            }
-            Ok(Err(e)) => {
-                tlog!(
-                    "[multi_source] Modbus TCP server source {} read error from {}: {}",
-                    source_idx, peer_addr, e
-                );
-                break;
-            }
-            Err(_) => {
-                // Timeout - check stop_flag and continue
-            }
-        }
-    }
 }

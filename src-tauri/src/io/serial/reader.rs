@@ -200,7 +200,8 @@ pub async fn run_source(
             // place — the old framer's partial buffer is dropped; the device
             // re-syncs on the next boundary in the new encoding.
             while let Ok(req) = control_rx.try_recv() {
-                let new_framing = super::utils::framing_from_str(&req.encoding);
+                let new_framing =
+                    super::utils::framing_from_str(&req.encoding, req.modbus.as_ref());
                 has_framing = !matches!(new_framing, FramingEncoding::Raw);
                 framer = SerialFramer::new(new_framing);
                 let mk_cfg = |start: Option<i32>, bytes: Option<u8>, big_endian: bool| {
