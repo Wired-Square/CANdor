@@ -80,6 +80,14 @@ export interface FrameTunnel {
   protocol: TunnelProtocol;
   /** Modbus slave address to sync on; absent means any valid address. */
   deviceAddress?: number;
+  /**
+   * Function codes the RTU length rules do not model but this line carries.
+   * Unioned with whatever the session declares, so a catalogue says what the
+   * device carries and a picker adds what this run wants framed.
+   */
+  vendorFunctions?: number[];
+  /** Whether this line's master broadcasts to address 0. */
+  allowBroadcast?: boolean;
   notes?: string[];
 }
 

@@ -22,7 +22,8 @@ use tokio::sync::Mutex;
 use tokio_modbus::client;
 use tokio_modbus::prelude::*;
 
-use super::reader::{coils_to_bytes, registers_to_bytes, PollEmitMode, PollGroup, RegisterType};
+use super::reader::{PollEmitMode, PollGroup, RegisterType};
+use wiretap_catalog::modbus::{coils_to_bytes, registers_to_bytes};
 use crate::capture_store;
 use crate::io::periodic::Cadence;
 use crate::io::types::SourceMessage;

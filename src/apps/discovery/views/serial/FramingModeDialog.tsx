@@ -32,6 +32,9 @@ function toPanelConfig(config: FramingConfig | null): FramingPanelConfig | null 
     delimiterHex: config.delimiter,
     maxFrameLength: config.maxLength,
     validateCrc: config.validateCrc,
+    deviceAddress: config.deviceAddress,
+    vendorFunctions: config.vendorFunctions,
+    allowBroadcast: config.allowBroadcast,
   };
 }
 
@@ -54,6 +57,9 @@ function toStoreConfig(panelConfig: FramingPanelConfig | null): FramingConfig | 
       return {
         mode: 'modbus_rtu',
         validateCrc: panelConfig.validateCrc ?? true,
+        deviceAddress: panelConfig.deviceAddress,
+        vendorFunctions: panelConfig.vendorFunctions,
+        allowBroadcast: panelConfig.allowBroadcast,
       };
     case 'slip':
       return { mode: 'slip' };

@@ -1296,7 +1296,9 @@ A catalogue declares it on the frame:
 ```toml
 [frame.can."0x1E0".tunnel]
 protocol = "modbus_rtu"
-device_address = 1        # optional; absent = sync on any address 1..=247
+device_address = 1                    # optional; absent = sync on any address 1..=247
+vendor_functions = [0x20, 0x60, 0x65] # optional; codes the RTU length rules do not model
+allow_broadcast = true                # optional; lets address 0 start a message
 ```
 
 Reassembly is `wiretap_catalog::modbus_rtu_stream::ModbusRtuStream`, held in
@@ -1313,6 +1315,29 @@ recovered from a tunnelled CAN id are framed by identical rules. Three entry
 points, one set of rules — `push` counts frames (a CAN payload is a slice of the
 stream), `push_bytes` does not (a serial line has no frames to count), and
 `interpret` takes a boundary somebody else already found.
+
+The last copy of that brute-force scan lived on in the frontend, behind
+Discovery's Serial Framing tool, until it too was replaced —
+`framing_detect.rs` now scores every mode by running the framer that would
+actually read it, off the capture store rather than a 100 KB copy shipped to the
+frontend. It also reports the function codes it could *not* frame, which is what
+makes the two opt-ins below usable without knowing the answer first.
+
+**A line is not obliged to be stock Modbus.** `ModbusRtuOptions`
+(`io/types.rs`) carries the whole RTU configuration — device address, CRC
+policy, vendor function codes, broadcast — and builds the stream from it. Vendor
+codes and broadcast are opt-in from two independent places that **union**: the
+catalogue's `[…tunnel]` table above says what the *device* carries, and the
+picker's framing options say what *this session* wants framed. Both default off,
+because guessing at either is how a framer invents messages out of noise.
+
+A serial session publishes its resolved options to `ws/dispatch.rs` via
+`set_serial_rtu_options`, keyed by session and cleared in `detach_catalog`. That
+is not optional: `interpret` rejects an unmodelled function code outright, so
+without the same declaration a vendor message would be framed correctly on the
+wire and then dropped before it reached the Modbus tab. The device-address
+filter is *not* re-applied there — that one is subtractive and the framer has
+already applied it, where the vendor list is additive.
 
 **A serial port reaches the Modbus tab too**, through that third entry point.
 The reader has already framed the port, so each frame is one whole message and

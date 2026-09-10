@@ -8,7 +8,8 @@ use serialport::{DataBits, Parity as SpParity, StopBits};
 use tokio::sync::mpsc;
 
 use super::framer::{FrameIdConfig, FramingEncoding};
-use crate::io::device_kinds::{conn_bool, conn_i64, conn_str};
+use crate::io::types::ModbusRtuOptions;
+use crate::io::device_kinds::{conn_bool, conn_i64, conn_str, conn_u8_list};
 use crate::io::SerialOverrides;
 use crate::io::error::{DevicePresence, IoError};
 use crate::io::types::SourceMessage;
@@ -126,13 +127,10 @@ pub struct SerialSourceConfig {
 /// Build a [`FramingEncoding`] from an encoding name using defaults, for live
 /// framing changes that carry no profile context. Mirrors the `match` in
 /// [`parse_profile_for_source`] (anything that isn't a real framer → `Raw`).
-pub fn framing_from_str(encoding: &str) -> FramingEncoding {
+pub fn framing_from_str(encoding: &str, modbus: Option<&ModbusRtuOptions>) -> FramingEncoding {
     match encoding {
         "slip" => FramingEncoding::Slip,
-        "modbus_rtu" => FramingEncoding::ModbusRtu {
-            device_address: None,
-            validate_crc: true,
-        },
+        "modbus_rtu" => FramingEncoding::ModbusRtu(modbus.cloned().unwrap_or_default()),
         "delimiter" => FramingEncoding::Delimiter {
             delimiter: vec![0x0A],
             max_length: 1024,
@@ -201,50 +199,37 @@ pub fn parse_profile_for_source(
 
     let framing_encoding = match framing_encoding_str.as_str() {
         "slip" => FramingEncoding::Slip,
-        "modbus_rtu" => {
-            let device_address = profile
-                .connection
-                .get("modbus_device_address")
-                .and_then(|v| v.as_i64())
-                .map(|n| n as u8);
-            // Session override first, then the profile, then on — the picker's
-            // "Validate CRC" tick had no way through before and did nothing.
-            let validate_crc = overrides
+        // Session override first, then the profile, then the default — the
+        // picker's "Validate CRC" tick had no way through before and did nothing.
+        "modbus_rtu" => FramingEncoding::ModbusRtu(ModbusRtuOptions {
+            device_address: overrides
+                .modbus_device_address
+                .or_else(|| conn_i64(profile, "modbus_device_address").map(|n| n as u8)),
+            validate_crc: overrides
                 .modbus_validate_crc
                 .or_else(|| conn_bool(profile, "modbus_validate_crc"))
-                .unwrap_or(true);
-            FramingEncoding::ModbusRtu {
-                device_address,
-                validate_crc,
-            }
-        }
+                .unwrap_or(true),
+            vendor_functions: overrides
+                .modbus_vendor_functions
+                .clone()
+                .or_else(|| conn_u8_list(profile, "modbus_vendor_functions"))
+                .unwrap_or_default(),
+            allow_broadcast: overrides
+                .modbus_allow_broadcast
+                .or_else(|| conn_bool(profile, "modbus_allow_broadcast"))
+                .unwrap_or(false),
+        }),
         "delimiter" => {
-            let delimiter = overrides.delimiter.clone().or_else(|| {
-                profile
-                    .connection
-                    .get("delimiter")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_i64().map(|n| n as u8))
-                            .collect()
-                    })
-            })
-            .unwrap_or_else(|| vec![0x0A]); // Default to newline
-            let max_length = overrides.max_frame_length
-                .or_else(|| {
-                    profile
-                        .connection
-                        .get("max_frame_length")
-                        .and_then(|v| v.as_i64())
-                        .map(|n| n as usize)
-                })
+            let delimiter = overrides
+                .delimiter
+                .clone()
+                .or_else(|| conn_u8_list(profile, "delimiter"))
+                .unwrap_or_else(|| vec![0x0A]); // Default to newline
+            let max_length = overrides
+                .max_frame_length
+                .or_else(|| conn_i64(profile, "max_frame_length").map(|n| n as usize))
                 .unwrap_or(1024);
-            let include_delimiter = profile
-                .connection
-                .get("include_delimiter")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            let include_delimiter = conn_bool(profile, "include_delimiter").unwrap_or(false);
             FramingEncoding::Delimiter {
                 delimiter,
                 max_length,

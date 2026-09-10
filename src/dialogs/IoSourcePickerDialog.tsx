@@ -117,6 +117,11 @@ export interface LoadOptions {
   delimiter?: number[];
   /** Maximum frame length for delimiter-based framing */
   maxFrameLength?: number;
+  /** Modbus RTU framing settings, when framingEncoding is "modbus_rtu" */
+  modbusValidateCrc?: boolean;
+  modbusDeviceAddress?: number;
+  modbusVendorFunctions?: number[];
+  modbusAllowBroadcast?: boolean;
   /** Also emit raw bytes in addition to frames */
   emitRawBytes?: boolean;
   /** Bus mappings per profile (for multi-bus mode) - map from profile ID to bus mappings */
@@ -1196,6 +1201,10 @@ export default function IoSourcePickerDialog({
       opts.delimiter = framingConfig.delimiter;
       opts.maxFrameLength = framingConfig.maxFrameLength;
       opts.emitRawBytes = framingConfig.emitRawBytes;
+      opts.modbusValidateCrc = framingConfig.validateCrc;
+      opts.modbusDeviceAddress = framingConfig.deviceAddress;
+      opts.modbusVendorFunctions = framingConfig.vendorFunctions;
+      opts.modbusAllowBroadcast = framingConfig.allowBroadcast;
     }
 
     // Add filter configuration for serial sources

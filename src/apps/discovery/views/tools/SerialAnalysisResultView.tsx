@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useDiscoveryStore, type FramingConfig } from "../../../../stores/discoveryStore";
 import type { CandidateChecksum, CandidateSourceAddress } from "../../../../utils/analysis/serialFrameAnalysis";
-import type { FramingCandidate } from "../../../../utils/analysis/framingDetection";
+import type { FramingCandidate } from "../../../../api/framingDetection";
 import ChecksumCandidateList from "../../components/ChecksumCandidateList";
 import { configFromCandidate, serialChecksumFromConfig } from "../serial/checksumConfig";
 import { Hash, Shield, Info, CheckCircle2, AlertCircle, Check, Layers, Radio, MapPin, X } from "lucide-react";

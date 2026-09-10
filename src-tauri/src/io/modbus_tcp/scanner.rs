@@ -22,7 +22,8 @@ use tokio::time::{sleep, Duration};
 
 use super::conn::{ReadOutcome, ScanConn};
 use super::poll::{modbus_frame, per_register_frames, register_type_name, FrameSink, ReadData};
-use super::reader::{coils_to_bytes, registers_to_bytes, RegisterType};
+use super::reader::RegisterType;
+use wiretap_catalog::modbus::{coils_to_bytes, registers_to_bytes};
 use crate::io::SignalThrottle;
 
 /// Device identification info discovered via FC43 (Read Device Identification)

@@ -26,7 +26,6 @@ pub mod gs_usb; // pub for Tauri command access
 pub mod bus_mapping; // Device bus -> session bus, shared by every multi-bus driver
 pub mod gvret; // GVRET TCP/USB driver
 pub mod modbus_tcp; // pub for scanner command access
-pub mod modbus_rtu; // Modbus RTU master over serial
 mod mqtt;
 mod broker;
 mod virtual_device;
@@ -60,7 +59,8 @@ pub use modbus_tcp::{
 };
 #[cfg(not(target_os = "ios"))]
 pub use gvret::probe_gvret_usb;
-pub use broker::{ModbusRole, IOBroker, SerialOverrides, SourceConfig};
+pub use broker::{IOBroker, SerialOverrides, SourceConfig};
+pub use types::ModbusRtuOptions;
 pub use mqtt::{MqttConfig, MqttSource};
 pub use virtual_device::{VirtualDeviceConfig, VirtualSource, VirtualInterfaceConfig, VirtualTrafficType};
 #[cfg(not(target_os = "ios"))]
@@ -2882,6 +2882,10 @@ pub async fn set_framing(
     session_id: &str,
     req: types::SetFramingRequest,
 ) -> Result<IOCapabilities, String> {
+    // Keep the WS decode path in step with the port; see `SERIAL_RTU_OPTIONS`.
+    if let Some(options) = req.modbus.clone() {
+        crate::ws::dispatch::set_serial_rtu_options(session_id, options);
+    }
     let sessions = IO_SESSIONS.lock().await;
     let session = sessions
         .get(session_id)

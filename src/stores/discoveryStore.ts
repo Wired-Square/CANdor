@@ -14,16 +14,11 @@ import { useDiscoveryUIStore, type FrameMetadata, type PlaybackSpeed } from './d
 import { useDiscoverySerialStore } from './discoverySerialStore';
 import { useDiscoveryToolboxStore } from './discoveryToolboxStore';
 import type { CaptureFrameInfo } from '../api/capture';
-import { getCaptureBytesTail } from '../api/io';
 import type { FrameMessage } from '../types/frame';
 import { keyOf, groupKeysByProtocol } from '../utils/frameKey';
 import type { PageSize } from '../utils/pageSize';
 import { selectionSetKeys, type SelectionSet } from '../utils/selectionSets';
 import { tlog } from '../api/settings';
-
-/** Bytes the framing detector samples. Matches the old in-memory buffer cap, so the
- *  detector sees the same window it always did. */
-const SERIAL_FRAMING_SAMPLE_BYTES = 100000;
 
 // Re-export types for backward compatibility
 export type { FrameMessage } from '../types/frame';
@@ -483,14 +478,16 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
       // Handle serial framing analysis separately - only needs raw bytes
       if (toolbox.activeView === 'serial-framing') {
         if (backendByteCount === 0 || !bytesCaptureId) return;
-        // Detection reads the tail of the byte capture rather than a frontend copy of the
-        // stream. Same window it used to analyse, but it no longer depends on the view
-        // having been open while the bytes arrived.
-        const { bytes } = await getCaptureBytesTail(bytesCaptureId, SERIAL_FRAMING_SAMPLE_BYTES);
-        if (bytes.length === 0) return;
         // Clear payload results so framing results are shown
         toolboxStore.setSerialPayloadResults(null);
-        await toolboxStore.runSerialFramingAnalysis(bytes.map((b) => b.byte));
+        // Scored against whatever this session is framing with, so what the tool
+        // reports is what the framer would actually do.
+        await toolboxStore.runSerialFramingAnalysis(bytesCaptureId, {
+          device_address: serialStore.framingConfig?.deviceAddress,
+          validate_crc: serialStore.framingConfig?.validateCrc,
+          vendor_functions: serialStore.framingConfig?.vendorFunctions,
+          allow_broadcast: serialStore.framingConfig?.allowBroadcast,
+        });
         return;
       }
 

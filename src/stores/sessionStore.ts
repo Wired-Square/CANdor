@@ -295,6 +295,11 @@ export interface CreateSessionOptions {
   maxFrameLength?: number;
   /** Also emit raw bytes in addition to frames */
   emitRawBytes?: boolean;
+  /** Modbus RTU framing settings, when framingEncoding is "modbus_rtu" */
+  modbusValidateCrc?: boolean;
+  modbusDeviceAddress?: number;
+  modbusVendorFunctions?: number[];
+  modbusAllowBroadcast?: boolean;
   /** Minimum frame length to accept */
   minFrameLength?: number;
   /** Bus number override for single-bus devices (0-7) */
@@ -963,6 +968,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         delimiter: options.delimiter,
         maxFrameLength: options.maxFrameLength,
         emitRawBytes: options.emitRawBytes,
+        modbusValidateCrc: options.modbusValidateCrc,
+        modbusDeviceAddress: options.modbusDeviceAddress,
+        modbusVendorFunctions: options.modbusVendorFunctions,
+        modbusAllowBroadcast: options.modbusAllowBroadcast,
         minFrameLength: options.minFrameLength,
         busOverride: options.busOverride,
         subscriberId, // For session logging
@@ -2272,6 +2281,9 @@ export async function createAndStartMultiSourceSession(
       minFrameLength,
       emitRawBytes: sourceEmitRawBytes,
       modbusValidateCrc: interfaceFraming?.validateCrc,
+      modbusDeviceAddress: interfaceFraming?.deviceAddress,
+      modbusVendorFunctions: interfaceFraming?.vendorFunctions,
+      modbusAllowBroadcast: interfaceFraming?.allowBroadcast,
       // Frame ID extraction config (from catalog)
       frameIdStartByte,
       frameIdBytes,

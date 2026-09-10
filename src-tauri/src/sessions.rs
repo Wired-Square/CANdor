@@ -22,7 +22,7 @@ use crate::{
         ModbusRangeSpec, PollGroup,
         MqttConfig, MqttSource,
         VirtualDeviceConfig, VirtualSource, VirtualInterfaceConfig, VirtualTrafficType,
-        ModbusRole, IOBroker, SerialOverrides, SourceConfig,
+        IOBroker, SerialOverrides, SourceConfig,
         BackendApiConfig, BackendApiSource, BackendApiSourceOptions,
         CanTransmitFrame, TransmitResult,
         emit_device_probe, DeviceProbePayload,
@@ -380,7 +380,6 @@ fn create_source_config_from_profile(
         bus_mappings,
         // Modbus fields - populated later by create_multi_source_session
         modbus_polls: None,
-        modbus_role: None,
         max_register_errors: None,
         ..SourceConfig::default()
     };
@@ -2315,9 +2314,6 @@ pub struct MultiSourceInput {
     /// so the wire shape stays the flat keys the frontend has always sent.
     #[serde(flatten)]
     pub serial: SerialOverrides,
-    /// Modbus interface role (client or server)
-    #[serde(default)]
-    pub modbus_role: Option<ModbusRole>,
 }
 
 /// Convert a MultiSourceInput to a SourceConfig, resolving profile name and kind from settings.
@@ -2356,7 +2352,6 @@ fn resolve_source_config(
         display_name,
         bus_mappings,
         modbus_polls: None,    // Injected by create_multi_source_session
-        modbus_role: input.modbus_role,
         max_register_errors: None, // Injected by create_multi_source_session
         ..SourceConfig::default()
     };

@@ -644,6 +644,18 @@ export interface FrameIdConfig {
 }
 
 /**
+ * Everything a Modbus RTU stream needs beyond the mode itself, mirroring Rust's
+ * `ModbusRtuOptions`. `vendor_functions` unions with whatever the catalogue
+ * declares; both opt-ins are off by default, which is stock Modbus.
+ */
+export interface ModbusRtuOptions {
+  device_address?: number;
+  validate_crc?: boolean;
+  vendor_functions?: number[];
+  allow_broadcast?: boolean;
+}
+
+/**
  * Per-interface framing configuration (overrides default for specific bus).
  */
 export interface InterfaceFramingConfig {
@@ -653,8 +665,8 @@ export interface InterfaceFramingConfig {
   delimiter?: string;
   /** For raw mode: max frame length before forced split */
   max_length?: number;
-  /** For modbus_rtu mode: whether to validate CRC */
-  validate_crc?: boolean;
+  /** For modbus_rtu mode: the RTU settings */
+  modbus?: ModbusRtuOptions;
 }
 
 /**
@@ -667,8 +679,8 @@ export interface BackendFramingConfig {
   delimiter?: string;
   /** For raw mode: max frame length before forced split */
   max_length?: number;
-  /** For modbus_rtu mode: whether to validate CRC */
-  validate_crc?: boolean;
+  /** For modbus_rtu mode: the RTU settings */
+  modbus?: ModbusRtuOptions;
   /** Minimum frame length to accept (frames shorter are discarded) */
   min_length?: number;
   /** Frame ID extraction config */

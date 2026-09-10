@@ -294,6 +294,11 @@ export interface UseIOSessionResult {
       framingEncoding?: "slip" | "modbus_rtu" | "delimiter" | "raw";
       delimiter?: number[];
       maxFrameLength?: number;
+      // Modbus RTU framing settings, when framingEncoding is "modbus_rtu"
+      modbusValidateCrc?: boolean;
+      modbusDeviceAddress?: number;
+      modbusVendorFunctions?: number[];
+      modbusAllowBroadcast?: boolean;
       // Frame ID extraction
       frameIdStartByte?: number;
       frameIdBytes?: number;

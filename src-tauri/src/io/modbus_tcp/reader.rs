@@ -293,30 +293,3 @@ impl IOSource for ModbusTcpSource {
     }
 }
 
-// ============================================================================
-// Data Conversion Helpers
-// ============================================================================
-
-/// Convert Modbus register values (u16) to bytes in big-endian order.
-/// Each register becomes 2 bytes (MSB first), matching standard Modbus byte order.
-pub fn registers_to_bytes(registers: &[u16]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(registers.len() * 2);
-    for &reg in registers {
-        bytes.push((reg >> 8) as u8); // MSB
-        bytes.push((reg & 0xFF) as u8); // LSB
-    }
-    bytes
-}
-
-/// Convert coil/discrete input values (bool) to packed bytes.
-/// 8 coils per byte, LSB first within each byte (Modbus convention).
-pub fn coils_to_bytes(coils: &[bool]) -> Vec<u8> {
-    let byte_count = (coils.len() + 7) / 8;
-    let mut bytes = vec![0u8; byte_count];
-    for (i, &coil) in coils.iter().enumerate() {
-        if coil {
-            bytes[i / 8] |= 1 << (i % 8);
-        }
-    }
-    bytes
-}

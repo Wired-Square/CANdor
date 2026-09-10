@@ -9,16 +9,6 @@ use crate::io::bus_mapping::BusMapping;
 use crate::io::modbus_tcp::PollGroup;
 use crate::io::types::{ControlSender, TransmitSender};
 
-/// Modbus interface role in a multi-source session
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ModbusRole {
-    /// Client role: connect to a Modbus TCP server and poll registers
-    Client,
-    /// Server role: accept incoming Modbus TCP connections (for MITM)
-    Server,
-}
-
 /// The serial settings a session may override on one source, as the picker sends
 /// them. Every field is optional: absent means "whatever the device profile says".
 ///
@@ -43,6 +33,12 @@ pub struct SerialOverrides {
     pub emit_raw_bytes: Option<bool>,
     /// Whether to check the CRC-16 on Modbus RTU framing
     pub modbus_validate_crc: Option<bool>,
+    /// Modbus RTU slave address to sync on; absent means any valid address
+    pub modbus_device_address: Option<u8>,
+    /// Function codes the RTU length rules do not model but this line carries
+    pub modbus_vendor_functions: Option<Vec<u8>>,
+    /// Whether address 0 may start a Modbus RTU message
+    pub modbus_allow_broadcast: Option<bool>,
     /// Frame ID extraction: start byte position (0-indexed)
     pub frame_id_start_byte: Option<i32>,
     /// Frame ID extraction: number of bytes (1 or 2)
@@ -75,9 +71,6 @@ pub struct SourceConfig {
     /// Modbus poll groups (shared across all Modbus interfaces in a session)
     #[serde(default)]
     pub modbus_polls: Option<Vec<PollGroup>>,
-    /// Modbus interface role (client or server)
-    #[serde(default)]
-    pub modbus_role: Option<ModbusRole>,
     /// Modbus max consecutive register errors before stopping (0 = never stop)
     #[serde(default)]
     pub max_register_errors: Option<u32>,
