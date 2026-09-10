@@ -1101,6 +1101,14 @@ impl WireTapTools {
         let appended = entries.len();
         crate::capture_store::append_raw_bytes_to_capture(&capture_id, entries);
         crate::ws::dispatch::send_capture_changed(&capture_id);
+        // If a session is showing this capture right now, its byte total just
+        // changed. `send_new_bytes` is keyed by session, so find the one holding
+        // it — appending to a capture somebody is watching should move its view.
+        if let Some(session_id) = crate::capture_store::get_capture_metadata(&capture_id)
+            .and_then(|m| m.owning_session_id)
+        {
+            crate::ws::dispatch::send_new_bytes(&session_id);
+        }
 
         ok_json(json!({
             "capture_id": capture_id,
