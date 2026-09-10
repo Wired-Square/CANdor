@@ -319,6 +319,12 @@ async fn connection_manager_task(
                                     map.insert(session_id.clone(), *ch);
                                 }
                                 crate::ws::dispatch::reset_frame_offset(&session_id);
+                                // A byte capture that already holds bytes pushes no
+                                // count of its own — `send_new_bytes` runs off arriving
+                                // data. Without this a session opened on an existing
+                                // byte capture reports zero bytes forever and the serial
+                                // view waits for data that is already there.
+                                crate::ws::dispatch::send_new_bytes(&session_id);
                                 tlog!("[ws] Connection {conn_id} subscribed to session '{session_id}' on channel {ch}");
                             }
                             Err(e) => {

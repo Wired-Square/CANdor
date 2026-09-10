@@ -163,6 +163,28 @@ pub struct RepeatTransmitStopParams {
     pub queue_id: String,
 }
 
+/// Bytes to put into a byte capture, as a serial port would have produced them.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct IngestBytesParams {
+    /// The bytes, as hex. Whitespace, commas and `0x` prefixes are ignored, so
+    /// `01 04 4D E2` and `01044de2` are the same input.
+    pub bytes: String,
+    /// Name for the capture, shown in the picker. Defaults to "Ingested bytes".
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Interface number to record the bytes against (default 0).
+    #[serde(default)]
+    pub bus: Option<u8>,
+    /// Microseconds between consecutive bytes (default 1). Only affects the
+    /// timestamps in the hex dump — framing is byte-order driven, never timing.
+    #[serde(default)]
+    pub interval_us: Option<u64>,
+    /// Append to this existing byte capture instead of creating one, so a line
+    /// can be built up across several calls.
+    #[serde(default)]
+    pub capture_id: Option<String>,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReplayCaptureParams {
     /// Session ID to replay through (must be transmit-capable).
