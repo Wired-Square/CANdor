@@ -167,6 +167,25 @@ nobody published. Use them in this order:
   settings. Binds an existing catalogue to a profile so `open_session` decodes that
   profile (and, for Modbus, builds its poll groups) without a human opening Settings.
 
+### Handing WireTAP data
+
+- **`ingest_bytes { bytes, name?, bus?, interval_us?, capture_id? }`** — puts raw
+  bytes into a byte capture, as though a serial port had produced them. `bytes` is
+  hex; separators and `0x` prefixes are ignored, and an odd digit count is rejected
+  rather than silently shifted. Pass the returned `capture_id` back to append, so a
+  line can be built up across calls — timestamps continue from where the capture
+  left off rather than restarting at *now*, which would show the gaps between calls
+  as gaps on the wire.
+
+  The result is an ordinary byte capture, owned by no session and **pinned** (it
+  survives a restart, because ingested data cannot be recaptured by reconnecting).
+  Open it in Discovery to frame it, run the Serial Framing tool over it, or hand its
+  id to any capture-taking tool. Timestamps only shape the hex dump: every framer
+  works off byte order, never gaps.
+
+  `scripts/modbus_rtu_feeder.py` generates a synthetic Modbus RTU line in exactly
+  this format, for exercising the framer with no hardware.
+
 `open_session` also takes **`register_ranges`** for Modbus profiles: poll an address
 range directly instead of a catalogue's registers, so a device with no decoder can
 still be watched live. An explicit range wins over a present `preferred_catalog`.

@@ -10,6 +10,8 @@ All notable changes to WireTAP will be documented in this file.
 
 - **Discovery's Serial Framing tool names the vendor codes it couldn't frame.** Point it at a capture and it reports the function codes standing between you and a readable line, so you can paste them straight into the framing options instead of having to know them already.
 
+- **An agent can hand WireTAP a stream of bytes to work on.** The new `ingest_bytes` MCP tool puts raw bytes into a byte capture as though a serial port had produced them, so a recorded line, a hand-built message or a protocol you are still working out can be framed and analysed with no device attached. The capture behaves like any other and is pinned, so it survives a restart. Requires the session-control MCP permission.
+
 ### Changed
 
 - **Framing detection now runs against the real framer.** It used to be a separate implementation that guessed message boundaries by checksum alone, so it could disagree with what you actually got when you applied that framing. It now runs the same framer the port does, which also means frame counts and coverage figures reflect reality — expect them to differ from before, downward where the old scan was inventing messages.

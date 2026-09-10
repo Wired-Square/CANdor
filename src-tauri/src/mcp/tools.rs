@@ -1029,6 +1029,88 @@ impl WireTapTools {
     }
 
     #[tool(
+        description = "Put raw bytes into a byte capture, as though a serial port had produced them. \
+                       The capture is then an ordinary byte capture: open it in Discovery to frame it \
+                       (SLIP, delimiter, Modbus RTU), run the Serial Framing tool over it, or hand its \
+                       id to any capture-taking tool. Use it to exercise a wire format with no device \
+                       attached — a recorded line, a hand-built message, a protocol you are still \
+                       working out. Call again with the returned capture_id to append. \
+                       Returns { capture_id, appended, total }.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
+    )]
+    async fn ingest_bytes(
+        &self,
+        Parameters(p): Parameters<IngestBytesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let hex: String = p.bytes.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+        // `0x` prefixes survive the filter as a stray `0`, so reject anything that
+        // did not come out as whole bytes rather than silently shifting.
+        if hex.is_empty() || !hex.len().is_multiple_of(2) {
+            return Err(err(
+                "bytes must be an even number of hex digits, e.g. \"01 04 4D E2\"".to_string(),
+            ));
+        }
+        let data: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
+            .collect::<Result<_, _>>()
+            .map_err(|e| err(format!("bytes is not valid hex: {e}")))?;
+
+        let capture_id = match p.capture_id {
+            Some(id) => {
+                if crate::capture_store::get_capture_kind(&id)
+                    != Some(crate::capture_store::CaptureKind::Bytes)
+                {
+                    return Err(err(format!("Capture '{id}' is not a byte capture")));
+                }
+                id
+            }
+            None => {
+                let id = crate::capture_store::create_standalone_capture(
+                    crate::capture_store::CaptureKind::Bytes,
+                    p.name.unwrap_or_else(|| "Ingested bytes".to_string()),
+                );
+                // Ingested data survives a restart. It is not stream residue that can
+                // be recaptured by reconnecting — it came from outside, and clearing
+                // it on start would throw away the only copy.
+                let _ = crate::capture_store::set_capture_persistent(&id, true);
+                id
+            }
+        };
+
+        // Timestamps only shape the hex dump — every framer here works off byte order,
+        // never gaps — but they must advance, or the dump cannot be read. An append
+        // continues from where the capture left off rather than from now, so a line
+        // built up over several calls does not show the gaps between them as gaps on
+        // the wire.
+        let step = p.interval_us.unwrap_or(1).max(1);
+        let bus = p.bus.unwrap_or(0);
+        let start = crate::capture_store::get_capture_metadata(&capture_id)
+            .and_then(|m| m.end_time_us)
+            .map_or_else(crate::io::now_us, |last| last + step);
+        let entries: Vec<crate::capture_store::TimestampedByte> = data
+            .iter()
+            .enumerate()
+            .map(|(i, &byte)| crate::capture_store::TimestampedByte {
+                byte,
+                timestamp_us: start + (i as u64 * step),
+                bus,
+            })
+            .collect();
+
+        let appended = entries.len();
+        crate::capture_store::append_raw_bytes_to_capture(&capture_id, entries);
+        crate::ws::dispatch::send_capture_changed(&capture_id);
+
+        ok_json(json!({
+            "capture_id": capture_id,
+            "appended": appended,
+            "total": crate::capture_store::get_capture_count(&capture_id),
+            "hint": "Open it in Discovery: source picker > Captures > this capture, then set framing.",
+        }))
+    }
+
+    #[tool(
         description = "Stop (and destroy) a running IO session.",
         annotations(read_only_hint = false, destructive_hint = true,  idempotent_hint = true)
     )]

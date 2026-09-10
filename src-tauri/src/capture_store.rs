@@ -285,6 +285,13 @@ pub fn create_derived_capture(session_id: &str, kind: CaptureKind, name: String)
     create_capture_internal(kind, name, false, Some((session_id, CaptureRole::Derived)))
 }
 
+/// Create a capture owned by no session — data that arrived from outside any
+/// source, such as bytes handed in over MCP. Nothing streams into it and no
+/// session's lifecycle takes it away; it is deleted explicitly or not at all.
+pub fn create_standalone_capture(kind: CaptureKind, name: String) -> String {
+    create_capture_internal(kind, name, false, None)
+}
+
 /// Generate a random 6-character lowercase alphanumeric capture ID.
 /// Retries on collision (astronomically unlikely with 36^6 ≈ 2.2 billion possibilities).
 fn generate_capture_id(registry: &CaptureRegistry) -> String {
@@ -1391,6 +1398,19 @@ mod tests {
             .iter()
             .map(|(protocol, ids)| (protocol.to_string(), ids.iter().copied().collect()))
             .collect()
+    }
+
+    /// A capture with no owning session — what MCP ingest creates — is owned by
+    /// nothing, so no session's lifecycle can take it away. (The byte round-trip
+    /// itself is `capture_db`'s; the store holds only metadata.)
+    #[test]
+    fn a_standalone_capture_is_owned_by_no_session() {
+        let id = create_standalone_capture(CaptureKind::Bytes, "ingest test".to_string());
+        assert_eq!(get_capture_kind(&id), Some(CaptureKind::Bytes));
+        let listed = list_captures();
+        let entry = listed.iter().find(|c| c.id == id).expect("capture is listed");
+        assert!(entry.owning_session_id.is_none());
+        assert!(!entry.is_streaming, "nothing streams into an ingested capture");
     }
 
     /// Empty means "select everything" at every call site, so a group carrying no ids must
