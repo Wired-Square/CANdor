@@ -1280,6 +1280,9 @@ re-decodes every frame. Two surfaces, both over this WebSocket:
   Discovery/Analysis/raw-hex/Calculator. **Decoder and Graph** both
   consume the decoded stream — there is no longer a TypeScript decode engine.
   Attachments auto-detach on final unsubscribe.
+  The decode forks by register bank: a Modbus coil or discrete frame's block
+  is packed bits, so the catalogue's byte and word order do not apply to it
+  and neither does a signal's override of them.
 
 ### Tunnelled protocols
 
