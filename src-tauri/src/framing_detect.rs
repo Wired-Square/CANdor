@@ -86,6 +86,8 @@ mod desktop {
         /// Function codes the Modbus arm could not frame, commonest first.
         /// Declaring these as vendor codes is what makes such a line readable.
         pub unframed_functions: Vec<u8>,
+        /// Address-0 messages it could not frame because broadcast was not allowed.
+        pub unframed_broadcasts: usize,
     }
 
     /// Frame lengths → the shape every candidate reports.
@@ -198,12 +200,13 @@ mod desktop {
     // Modbus RTU
     // ========================================================================
 
-    /// Score a Modbus RTU line from what the framer recovered. `unframed` is
-    /// reported in the notes, and is what tells you the line needs declaring.
+    /// Score a Modbus RTU line from what the framer recovered. What it could not
+    /// frame is reported in the notes, and is what tells you the line needs declaring.
     fn test_modbus_rtu(
         bytes: &[u8],
         messages: &[Vec<u8>],
-        unframed: &[u8],
+        unframed_functions: &[u8],
+        unframed_broadcasts: usize,
     ) -> Option<FramingCandidate> {
         let lengths: Vec<usize> = messages.iter().map(Vec::len).collect();
         let stats = Stats::of(&lengths).filter(|s| s.count >= 2)?;
@@ -230,19 +233,27 @@ mod desktop {
             notes.push(format!("{} unique device address{plural}", addresses.len()));
         }
         notes.push(format!("{} valid CRC frames found", stats.count));
-        if !unframed.is_empty() {
-            let codes: Vec<String> = unframed.iter().map(|f| format!("0x{f:02X}")).collect();
+        if !unframed_functions.is_empty() {
+            let codes: Vec<String> = unframed_functions
+                .iter()
+                .map(|f| format!("0x{f:02X}"))
+                .collect();
             notes.push(format!(
                 "Unframed function codes: {} — declare them as vendor codes",
                 codes.join(", ")
+            ));
+        }
+        if unframed_broadcasts > 0 {
+            notes.push(format!(
+                "{unframed_broadcasts} unframed broadcast messages (address 0) — allow broadcast"
             ));
         }
 
         (confidence >= 30).then(|| candidate("modbus_rtu", confidence, notes, &stats))
     }
 
-    /// The function codes carried by messages the framer could not frame,
-    /// commonest first.
+    /// What the framer could not frame: the function codes those messages
+    /// carried, commonest first, and how many of them were broadcasts.
     ///
     /// Only the runs of bytes the framer skipped are searched, and there by CRC
     /// alone — shortest match wins, as the crate's own vendor search does. An
@@ -251,39 +262,45 @@ mod desktop {
     /// invent messages. Here it only ranks a suggestion, so a stray hit costs a
     /// code that appears once against real ones appearing dozens of times, and
     /// the threshold below is what separates them.
-    fn unframed_functions(
+    ///
+    /// The search admits address 0 whether or not the options do: a hint that
+    /// cannot see a broadcast can never say to allow one. Codes already declared
+    /// are not re-reported — an undeclared broadcast swallows the messages behind
+    /// it, declared or not.
+    fn unframed(
         bytes: &[u8],
         messages: &[Vec<u8>],
         options: &ModbusRtuOptions,
-    ) -> Vec<u8> {
+    ) -> (Vec<u8>, usize) {
         // Nothing framed means this is not a Modbus line at all, and the Modbus
         // candidate is discarded either way — searching every byte of a text or
         // SLIP stream for a coincidental CRC would be the whole cost of the file
         // spent on a suggestion nobody sees.
         if messages.len() < 2 {
-            return Vec::new();
+            return (Vec::new(), 0);
         }
 
         /// Could these two bytes open a message? Two compares reject most of a
         /// stream before any CRC work, which is what keeps the search below to
         /// the runs that plausibly hold one.
-        fn opens_message(head: &[u8], options: &ModbusRtuOptions) -> bool {
+        fn opens_message(head: &[u8], device_address: Option<u8>) -> bool {
             let Some(&[address, function]) = head.get(..2) else {
                 return false;
             };
-            let addressed = match options.device_address {
-                Some(want) => address == want,
-                None => (1..=247).contains(&address) || (options.allow_broadcast && address == 0),
+            let addressed = match device_address {
+                Some(want) => address == want || address == 0,
+                None => (0..=247).contains(&address),
             };
             addressed && function & 0x80 == 0
         }
 
         let mut tally: std::collections::BTreeMap<u8, usize> = std::collections::BTreeMap::new();
+        let mut broadcasts = 0usize;
         let mut cursor = 0usize;
         let mut search_gap = |gap: &[u8]| {
             let mut i = 0usize;
             while i + MIN_RTU_LEN <= gap.len() {
-                if !opens_message(&gap[i..], options) {
+                if !opens_message(&gap[i..], options.device_address) {
                     i += 1;
                     continue;
                 }
@@ -291,8 +308,13 @@ mod desktop {
                 let hit = (MIN_RTU_LEN..=limit).find(|&n| crc16_modbus_valid(&gap[i..i + n]));
                 match hit {
                     Some(n) => {
-                        let func = gap[i + 1];
-                        if wiretap_catalog::modbus::function_name(func).is_none() {
+                        let (address, func) = (gap[i], gap[i + 1]);
+                        if address == 0 && !options.allow_broadcast {
+                            broadcasts += 1;
+                        }
+                        if wiretap_catalog::modbus::function_name(func).is_none()
+                            && !options.vendor_functions.contains(&func)
+                        {
                             *tally.entry(func).or_default() += 1;
                         }
                         i += n;
@@ -321,7 +343,8 @@ mod desktop {
 
         let mut ranked: Vec<(u8, usize)> = tally.into_iter().filter(|&(_, n)| n >= 3).collect();
         ranked.sort_by_key(|&(func, n)| (std::cmp::Reverse(n), func));
-        ranked.into_iter().take(4).map(|(f, _)| f).collect()
+        let functions = ranked.into_iter().take(4).map(|(f, _)| f).collect();
+        (functions, if broadcasts >= 3 { broadcasts } else { 0 })
     }
 
     // ========================================================================
@@ -396,16 +419,22 @@ mod desktop {
                 best_candidate: None,
                 notes: vec!["No bytes to analyse".to_string()],
                 unframed_functions: Vec::new(),
+                unframed_broadcasts: 0,
             };
         }
 
         let mut notes = vec![format!("Analysing {} bytes", bytes.len())];
         let messages = frames_for(bytes, FramingEncoding::ModbusRtu(modbus.clone()));
-        let unframed_functions = unframed_functions(bytes, &messages, modbus);
+        let (unframed_functions, unframed_broadcasts) = unframed(bytes, &messages, modbus);
 
         let mut candidates: Vec<FramingCandidate> = test_slip(bytes)
             .into_iter()
-            .chain(test_modbus_rtu(bytes, &messages, &unframed_functions))
+            .chain(test_modbus_rtu(
+                bytes,
+                &messages,
+                &unframed_functions,
+                unframed_broadcasts,
+            ))
             .chain(
                 DELIMITERS
                     .iter()
@@ -433,6 +462,7 @@ mod desktop {
             candidates,
             notes,
             unframed_functions,
+            unframed_broadcasts,
         }
     }
 
@@ -664,6 +694,17 @@ mod tests {
         };
         assert_eq!(framed(&with_vendor), 4, "address 0 cannot start a message");
         assert_eq!(framed(&sungrow()), 10);
+
+        // The hint has to say so, or the line stays unreadable with every code
+        // declared. Allowed, the broadcasts frame and the hint goes quiet.
+        let hint = detect(&bytes, &with_vendor);
+        assert_eq!(hint.unframed_broadcasts, 6);
+        assert!(
+            hint.unframed_functions.is_empty(),
+            "{:?}",
+            hint.unframed_functions
+        );
+        assert_eq!(detect(&bytes, &sungrow()).unframed_broadcasts, 0);
     }
 
     #[test]
@@ -726,9 +767,19 @@ mod feeder_check {
         assert_eq!(framed(&stock), 14);
         assert_eq!(framed(&declared), 41);
 
-        // And the tool names a code standing in the way.
-        let hint = detect(&bytes(), &stock).unframed_functions;
-        assert!(hint.contains(&0x65), "{hint:?}");
+        // And the tool names everything standing in the way, first time —
+        // including the broadcast it cannot itself frame — and, once the user has
+        // declared what it said, does not name those again.
+        let hint = detect(&bytes(), &stock);
+        assert_eq!(hint.unframed_functions, vec![0x20, 0x60, 0x65]);
+        assert_eq!(hint.unframed_broadcasts, 4);
+        let partial = ModbusRtuOptions {
+            vendor_functions: vec![0x20, 0x65],
+            ..Default::default()
+        };
+        assert_eq!(framed(&partial), 17);
+        let hint = detect(&bytes(), &partial);
+        assert_eq!(hint.unframed_functions, vec![0x60]);
+        assert_eq!(hint.unframed_broadcasts, 4);
     }
 }
-

@@ -7,12 +7,13 @@ occasional exception — and three function codes the Modbus spec never defined,
 one of them broadcast from address 0.
 
 Undeclared, the vendor messages do not merely fail to frame: the bytes they
-leave behind swallow the legitimate messages after them. Over 24 cycles that is
-14 messages framed out of 41. Declaring 0x20, 0x60 and 0x65 and allowing
-broadcast recovers all 41 — which is the thing worth seeing in the app.
+leave behind swallow the legitimate messages after them. Over the four cycles
+`framing_detect::feeder_check` pins (`--start 8 --cycles 4`, 41 messages) that
+is 14 framed out of 41. Declaring 0x20, 0x60 and 0x65 and allowing broadcast
+recovers all 41 — which is the thing worth seeing in the app.
 
     python3 scripts/modbus_rtu_feeder.py            # 24 cycles of hex
-    python3 scripts/modbus_rtu_feeder.py --cycles 4
+    python3 scripts/modbus_rtu_feeder.py --start 8 --cycles 4   # the pinned 14/41 stream
     python3 scripts/modbus_rtu_feeder.py --stock    # no vendor traffic
     python3 scripts/modbus_rtu_feeder.py --annotate # one message per line, labelled
 

@@ -30,6 +30,7 @@ export default function SerialAnalysisResultView({ mode, onClose }: Props) {
   const clearFrameIdMapping = useDiscoveryStore((s) => s.clearFrameIdMapping);
   const applySourceMapping = useDiscoveryStore((s) => s.applySourceMapping);
   const clearSourceMapping = useDiscoveryStore((s) => s.clearSourceMapping);
+  const framingConfig = useDiscoveryStore((s) => s.framingConfig);
   const setFramingConfig = useDiscoveryStore((s) => s.setFramingConfig);
   const setMinFrameLength = useDiscoveryStore((s) => s.setMinFrameLength);
   const resetFraming = useDiscoveryStore((s) => s.resetFraming);
@@ -126,10 +127,20 @@ export default function SerialAnalysisResultView({ mode, onClose }: Props) {
           config = { mode: 'slip' };
           suggestedMinLength = Math.max(4, candidate.minFrameLength);
           break;
-        case 'modbus_rtu':
-          config = { mode: 'modbus_rtu', validateCrc: true };
+        case 'modbus_rtu': {
+          // The hint was scored against what is declared now, so it adds to it:
+          // applying carries the codes and the broadcast the card just named.
+          const hint = framingResults?.framingResult;
+          config = {
+            mode: 'modbus_rtu',
+            validateCrc: true,
+            deviceAddress: framingConfig?.deviceAddress,
+            vendorFunctions: [...new Set([...(framingConfig?.vendorFunctions ?? []), ...(hint?.unframedFunctions ?? [])])],
+            allowBroadcast: !!framingConfig?.allowBroadcast || (hint?.unframedBroadcasts ?? 0) > 0,
+          };
           suggestedMinLength = 4;
           break;
+        }
         case 'delimiter':
           config = {
             mode: 'raw',

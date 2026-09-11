@@ -35,6 +35,8 @@ export interface FramingDetectionResult {
    * readable — otherwise you would have to know them already.
    */
   unframedFunctions: number[];
+  /** Address-0 messages it could not frame because broadcast was not allowed. */
+  unframedBroadcasts: number;
 }
 
 /**
