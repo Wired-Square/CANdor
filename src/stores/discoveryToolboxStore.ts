@@ -9,6 +9,8 @@ import type { MessageOrderResult } from '../utils/analysis/messageOrderAnalysis'
 import type { PayloadAnalysisResult, MirrorGroup, TimestampedPayload } from '../utils/analysis/payloadAnalysis';
 import type { SerialFrameAnalysisResult } from '../utils/analysis/serialFrameAnalysis';
 import { detectSerialFraming, type FramingDetectionResult } from '../api/framingDetection';
+import { tlog } from '../api/settings';
+import { byteToHex } from '../utils/byteUtils';
 import type { ModbusRtuOptions } from '../api/capture';
 import type {
   ChecksumDiscoveryOptions,
@@ -686,6 +688,9 @@ export const useDiscoveryToolboxStore = create<DiscoveryToolboxState>((set, get)
     // Rust reads the bytes out of the capture store itself, so nothing is
     // copied to the frontend to be analysed.
     const framingResult = await detectSerialFraming(bytesCaptureId, modbus);
+    const ranked = framingResult.candidates.map((c) => `${c.mode}=${c.confidence} (${c.estimatedFrameCount} frames)`);
+    tlog.info(`[discoveryToolboxStore] Serial framing over ${framingResult.byteCount} bytes: ${ranked.join(', ')}; `
+      + `unframed codes [${framingResult.unframedFunctions.map(byteToHex).join(' ')}], ${framingResult.unframedBroadcasts} broadcasts`);
     const serialFramingResults: SerialFramingResult = {
       tool: 'serial-framing',
       framingResult,

@@ -8,7 +8,7 @@ All notable changes to WireTAP will be documented in this file.
 
 - **A Modbus RTU line that isn't stock Modbus can now be read.** Real RS-485 buses carry vendor function codes the Modbus spec never defined, and masters that broadcast to address 0 — on one Sungrow logger that is 90% of the traffic, and WireTAP framed none of it. The serial framing options now take a list of vendor function codes and a broadcast tick, and a catalogue can declare the same two for a tunnelled line; set in both places, they combine. Both are off by default, so a stock Modbus line is unchanged.
 
-- **Discovery's Serial Framing tool names the vendor codes it couldn't frame.** Point it at a capture and it reports the function codes standing between you and a readable line, so you can paste them straight into the framing options instead of having to know them already.
+- **Discovery's Serial Framing tool names the vendor codes it couldn't frame.** Point it at a capture and it reports the function codes standing between you and a readable line, and *Apply* on that result declares them for you. It also counts the broadcasts it couldn't frame and allows them on the same click — an undeclared broadcast swallows the messages behind it, so declaring the codes alone leaves most of such a line unread. Codes you have already declared are not reported again.
 
 - **An agent can hand WireTAP a stream of bytes to work on.** The new `ingest_bytes` MCP tool puts raw bytes into a byte capture as though a serial port had produced them, so a recorded line, a hand-built message or a protocol you are still working out can be framed and analysed with no device attached. The capture behaves like any other and is pinned, so it survives a restart. Requires the session-control MCP permission.
 

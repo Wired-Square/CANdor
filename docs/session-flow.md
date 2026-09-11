@@ -1320,8 +1320,12 @@ The last copy of that brute-force scan lived on in the frontend, behind
 Discovery's Serial Framing tool, until it too was replaced —
 `framing_detect.rs` now scores every mode by running the framer that would
 actually read it, off the capture store rather than a 100 KB copy shipped to the
-frontend. It also reports the function codes it could *not* frame, which is what
-makes the two opt-ins below usable without knowing the answer first.
+frontend. It also reports what it could *not* frame — the function codes, and
+how many address-0 messages — which is what makes the two opt-ins below usable
+without knowing the answer first, and *Apply* on that result declares them. The
+hint's gap search admits address 0 even when the framer does not: an undeclared
+broadcast swallows the messages behind it, so a hint that could not see one
+would tell you to declare the codes and leave you with half the line.
 
 **A line is not obliged to be stock Modbus.** `ModbusRtuOptions`
 (`io/types.rs`) carries the whole RTU configuration — device address, CRC
