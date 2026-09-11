@@ -391,4 +391,56 @@ mod tests {
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].bytes, vec![0b0000_0101]);
     }
+
+    /// A block-mode coil read decodes as the coils that were read. Pinned
+    /// against the catalogue crate: before v0.16.4 a coil frame took the Modbus
+    /// default byte order, big, whose bit numbering reads coil 7 − n for coil n.
+    /// The catalogue here sets no order at all — the stock case was the broken
+    /// one — and coil 7 is off so the mirror cannot pass by luck.
+    #[test]
+    fn block_coils_decode_as_the_coils_that_were_read() {
+        use wiretap_catalog::{decode::decode_by_id, model::Catalog};
+        let catalog = Catalog::parse(
+            r#"
+[meta]
+name = "relay"
+[meta.modbus]
+register_base = 0
+[frame.modbus.13007]
+register_type = "coil"
+length = 24
+[[frame.modbus.13007.signals]]
+name = "Coil0"
+start_bit = 0
+bit_length = 1
+[[frame.modbus.13007.signals]]
+name = "Coil3"
+start_bit = 3
+bit_length = 1
+[[frame.modbus.13007.signals]]
+name = "Coil17"
+start_bit = 17
+bit_length = 1
+[[frame.modbus.13007.signals]]
+name = "Wide"
+start_bit = 0
+bit_length = 20
+"#,
+        )
+        .unwrap();
+        let mut coils = vec![false; 24];
+        for i in [0, 3, 8, 17] {
+            coils[i] = true;
+        }
+        let p = poll(RegisterType::Coil, 13007, 24, PollEmitMode::Block);
+        let frames = frames_for_read(&p, ReadData::Coils(coils));
+        assert_eq!(frames[0].bytes, vec![0x09, 0x01, 0x02]);
+
+        let d = decode_by_id(&catalog, frames[0].frame_id, &frames[0].bytes).unwrap();
+        let value = |n: &str| d.signals.iter().find(|s| s.name == n).unwrap().scaled;
+        assert_eq!(value("Coil0"), 1.0);
+        assert_eq!(value("Coil3"), 1.0);
+        assert_eq!(value("Coil17"), 1.0);
+        assert_eq!(value("Wide"), 131_337.0); // 0x020109, coils 0·3·8·17
+    }
 }
