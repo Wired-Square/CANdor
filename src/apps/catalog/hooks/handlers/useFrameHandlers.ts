@@ -364,18 +364,19 @@ export function useFrameHandlers({
     }
 
     try {
-      // For new Modbus frames, create a default signal spanning all registers
+      // For new Modbus frames, create a default signal spanning the whole block:
+      // 16 bits per register, one per coil — and a coil block has no byte order.
       let initialSignals: Array<{ name: string; start_bit: number; bit_length: number; signed?: boolean; endianness?: "big" | "little" }> | undefined;
       if (frameFields.protocol === "modbus" && !editingFrameOriginalKey) {
-        const numRegisters = frameFields.base.length || 1;
-        const bitLength = numRegisters * 16;
+        const length = frameFields.base.length || 1;
+        const isRegisterBank = cfg.register_type !== "coil" && cfg.register_type !== "discrete";
         const signalName = frameFields.modbusFrameKey?.trim() || "value";
         initialSignals = [{
           name: signalName,
           start_bit: 0,
-          bit_length: bitLength,
+          bit_length: isRegisterBank ? length * 16 : length,
           signed: false,
-          endianness: "big",
+          ...(isRegisterBank ? { endianness: "big" as const } : {}),
         }];
       }
 
