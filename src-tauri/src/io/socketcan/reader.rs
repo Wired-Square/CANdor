@@ -277,16 +277,14 @@ mod linux_impl {
     /// Encode a CAN frame as the `struct can_frame` or `struct canfd_frame`
     /// bytes a socket write takes.
     pub fn encode_frame(frame: &CanTransmitFrame) -> Vec<u8> {
-        sc::encode_frame(&sc::Frame {
-            rtr: frame.is_rtr && !frame.is_fd,
-            ..sc::Frame::data(
-                frame.frame_id,
-                frame.is_extended,
-                frame.is_fd,
-                frame.is_brs,
-                frame.data.clone(),
-            )
-        })
+        sc::encode_frame(&sc::Frame::new(
+            frame.frame_id,
+            frame.is_extended,
+            frame.is_rtr && !frame.is_fd,
+            frame.is_fd,
+            frame.is_brs,
+            frame.data.clone(),
+        ))
     }
 
     /// Run SocketCAN source and send frames to merge task (supports CAN FD)

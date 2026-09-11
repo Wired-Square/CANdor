@@ -7,7 +7,7 @@ use wiretap_lib::io::gs_usb::nusb_driver::{
     encode_frame, initialize_device, list_devices, probe_device, stop_device,
 };
 use wiretap_lib::io::gs_usb::{
-    can_feature, GsDeviceBtConst, GsHostFrame, GsUsbBreq, GsUsbConfig, GS_USB_ECHO_ID_RX,
+    can_feature, parse_host_frame, Breq, BtConst, GsUsbConfig, CLASSIC_FRAME_BYTES, ECHO_ID_RX,
 };
 use wiretap_lib::io::CanTransmitFrame;
 
@@ -130,17 +130,17 @@ pub async fn cmd_receive(
             nusb::transfer::ControlIn {
                 control_type: nusb::transfer::ControlType::Vendor,
                 recipient: nusb::transfer::Recipient::Interface,
-                request: GsUsbBreq::BtConst as u8,
+                request: Breq::BtConst as u8,
                 value: channel as u16,
                 index: 0,
-                length: GsDeviceBtConst::SIZE as u16,
+                length: BtConst::SIZE as u16,
             },
             std::time::Duration::from_millis(1000),
         )
         .await
         .map_err(|e| format!("BT_CONST query failed: {:?}", e))?;
 
-    let bt_const = GsDeviceBtConst::from_bytes(&bt_const_data);
+    let bt_const = BtConst::from_bytes(&bt_const_data);
     let pad_enabled = bt_const
         .map(|c| c.feature & can_feature::PAD_PKTS_TO_MAX_PKT_SIZE != 0)
         .unwrap_or(false);
@@ -238,7 +238,7 @@ pub async fn cmd_receive(
                         let data = &completion.buffer[..actual_len];
 
                         // Detect multi-frame transfers
-                        let frame_size = GsHostFrame::SIZE;
+                        let frame_size = CLASSIC_FRAME_BYTES;
                         let padded_size = endpoints.max_packet_size;
                         let frame_count = if pad_enabled && actual_len > padded_size {
                             multi_frame_transfers += 1;
@@ -284,17 +284,17 @@ pub async fn cmd_receive(
                                 frame_data[3],
                             ]);
 
-                            let is_rx = echo_id == GS_USB_ECHO_ID_RX;
+                            let is_rx = echo_id == ECHO_ID_RX;
 
-                            if is_rx && frame_len >= GsHostFrame::SIZE {
+                            if is_rx && frame_len >= CLASSIC_FRAME_BYTES {
                                 rx_frames += 1;
 
-                                if let Some(gs_frame) = GsHostFrame::from_bytes(frame_data) {
-                                    let can_id = gs_frame.get_can_id();
+                                if let Some(gs_frame) = parse_host_frame(frame_data) {
+                                    let can_id = gs_frame.arb_id;
                                     let ch = gs_frame.channel;
-                                    let dlc = gs_frame.can_dlc;
-                                    let is_ext = gs_frame.is_extended();
-                                    let payload = gs_frame.get_data();
+                                    let dlc = gs_frame.dlc;
+                                    let is_ext = gs_frame.extended;
+                                    let payload = &gs_frame.data;
                                     let hex_data: String = payload
                                         .iter()
                                         .map(|b| format!("{:02X}", b))
@@ -338,7 +338,7 @@ pub async fn cmd_receive(
                                     completion_num,
                                     actual_len,
                                     frame_len,
-                                    GsHostFrame::SIZE,
+                                    CLASSIC_FRAME_BYTES,
                                     delta_ms,
                                 );
                             }
