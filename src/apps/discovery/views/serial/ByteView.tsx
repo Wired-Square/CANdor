@@ -31,6 +31,9 @@ interface ByteViewProps {
   displayTimeFormat?: 'delta-last' | 'delta-start' | 'timestamp' | 'human';
   /** Whether we're currently streaming data */
   isStreaming?: boolean;
+  /** The session's byte capture and its total, as Rust pushes them (ByteCounts 0x19). */
+  bytesCaptureId: string | null;
+  byteCount: number;
 }
 
 /** Chunk bytes by time gap - bytes within gapUs of each other are grouped */
@@ -70,7 +73,7 @@ function chunkBytesByGap(entries: SerialBytesEntry[], gapUs: number): ByteChunk[
   return chunks;
 }
 
-export default function ByteView({ viewConfig, autoScroll = true, displayTimeFormat = 'human', isStreaming = false }: ByteViewProps) {
+export default function ByteView({ viewConfig, autoScroll = true, displayTimeFormat = 'human', isStreaming = false, bytesCaptureId, byteCount }: ByteViewProps) {
   const { t } = useTranslation("discovery");
   const containerRef = useRef<HTMLDivElement>(null);
   const wasAtBottom = useRef(true);
@@ -79,9 +82,6 @@ export default function ByteView({ viewConfig, autoScroll = true, displayTimeFor
   const showBusColumn = useDiscoveryUIStore((s) => s.showBusColumn);
   const showAsciiColumn = useDiscoveryUIStore((s) => s.showAsciiColumn);
 
-  // Backend buffer state from store
-  const backendByteCount = useDiscoverySerialStore((s) => s.backendByteCount);
-  const bytesCaptureId = useDiscoverySerialStore((s) => s.bytesCaptureId);
   const rawBytesPageSize = useDiscoverySerialStore((s) => s.rawBytesPageSize);
   const setRawBytesPageSize = useDiscoverySerialStore((s) => s.setRawBytesPageSize);
 
@@ -94,10 +94,10 @@ export default function ByteView({ viewConfig, autoScroll = true, displayTimeFor
   const [timeRange, setTimeRange] = useState<{ min: number; max: number } | null>(null);
 
   // Every byte lives in the capture, so this is simply whether there is anything to show.
-  const hasBytes = backendByteCount > 0;
+  const hasBytes = byteCount > 0;
 
   const pageSize = rawBytesPageSize;
-  const totalPages = pageCount(backendByteCount, pageSize);
+  const totalPages = pageCount(byteCount, pageSize);
 
   // When streaming stops, jump to the last page
   const prevIsStreamingRef = useRef(isStreaming);
@@ -134,16 +134,17 @@ export default function ByteView({ viewConfig, autoScroll = true, displayTimeFor
     };
 
     fetchMetadata();
-  }, [hasBytes, bytesCaptureId, isStreaming, backendByteCount]);
+  }, [hasBytes, bytesCaptureId, isStreaming, byteCount]);
 
   // Rows always come from the byte capture — live tail and a stopped page are the same
   // query at different offsets. Rust writes bytes before it signals and owns the count it
   // pushes, so refetching whenever that count moves keeps this in step with the backend at
   // the backend's own 2 Hz throttle, with no timer here.
   //
-  // The count is read by subscription rather than through the dependency array on purpose:
+  // The count reaches the fetch through a ref rather than the dependency array on purpose:
   // in the deps it would tear down and rebuild this effect twice a second, so the
   // coalescing flags below would reset each time and never actually coalesce anything.
+  const refetchRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (!hasBytes || !bytesCaptureId) {
       setBackendBytes([]);
@@ -185,15 +186,19 @@ export default function ByteView({ viewConfig, autoScroll = true, displayTimeFor
     };
 
     void fetchBytes();
-
-    const unsubscribe = useDiscoverySerialStore.subscribe((state, prevState) => {
-      if (state.backendByteCount !== prevState.backendByteCount) void fetchBytes();
-    });
+    refetchRef.current = () => void fetchBytes();
     return () => {
       isMounted = false;
-      unsubscribe();
+      refetchRef.current = null;
     };
   }, [hasBytes, bytesCaptureId, isStreaming, currentPage, pageSize]);
+
+  const prevByteCountRef = useRef(byteCount);
+  useEffect(() => {
+    if (byteCount === prevByteCountRef.current) return;
+    prevByteCountRef.current = byteCount;
+    refetchRef.current?.();
+  }, [byteCount]);
 
   const displayEntries = backendBytes;
 
@@ -307,7 +312,7 @@ export default function ByteView({ viewConfig, autoScroll = true, displayTimeFor
   // Byte count info for toolbar
   const byteCountInfo = (
     <span className={`text-xs ${textDataSecondary}`}>
-      {t("serial.byteCount", { count: backendByteCount.toLocaleString() })}
+      {t("serial.byteCount", { count: byteCount.toLocaleString() })}
       {isStreaming && (
         <span className={`ml-2 ${textDataGreen} bg-green-900/30 px-1.5 py-0.5 rounded font-medium`}>
           {t("serial.live")}

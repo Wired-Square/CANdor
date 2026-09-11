@@ -94,7 +94,6 @@ type CombinedDiscoveryState = {
   rawBytesViewConfig: import('./discoverySerialStore').RawBytesViewConfig;
   serialViewConfig: import('./discoverySerialStore').SerialViewConfig;
   serialActiveTab: import('./discoverySerialStore').SerialTabId;
-  backendByteCount: number;
   backendFrameCount: number;
   framedPageSize: PageSize;
   rawBytesPageSize: number;
@@ -154,8 +153,6 @@ type CombinedDiscoveryState = {
   setSerialViewConfig: (config: import('./discoverySerialStore').SerialViewConfig) => void;
   toggleShowAscii: () => void;
   setSerialActiveTab: (tab: import('./discoverySerialStore').SerialTabId) => void;
-  setBytesCaptureId: (id: string | null) => void;
-  setBackendByteCount: (count: number) => void;
   setBackendFrameCount: (count: number) => void;
   incrementBackendFrameCount: (delta: number) => void;
   setFramedPageSize: (size: PageSize) => void;
@@ -173,7 +170,8 @@ type CombinedDiscoveryState = {
   resetKnowledge: () => void;
   clearAnalysisResults: () => void;
   clearToolResult: (toolTabId: string) => void;
-  runAnalysis: () => Promise<void>;
+  /** `bytesCaptureId` is the session's byte capture — only the Serial Framing tool reads it. */
+  runAnalysis: (bytesCaptureId?: string | null) => Promise<void>;
 };
 
 /**
@@ -228,7 +226,6 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     rawBytesViewConfig: serialStore.rawBytesViewConfig,
     serialViewConfig: serialStore.serialViewConfig,
     serialActiveTab: serialStore.activeTab,
-    backendByteCount: serialStore.backendByteCount,
     backendFrameCount: serialStore.backendFrameCount,
     framedPageSize: serialStore.framedPageSize,
     rawBytesPageSize: serialStore.rawBytesPageSize,
@@ -445,8 +442,6 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     setSerialViewConfig: serialStore.setSerialViewConfig,
     toggleShowAscii: serialStore.toggleShowAscii,
     setSerialActiveTab: serialStore.setActiveTab,
-    setBytesCaptureId: serialStore.setBytesCaptureId,
-    setBackendByteCount: serialStore.setBackendByteCount,
     setBackendFrameCount: serialStore.setBackendFrameCount,
     incrementBackendFrameCount: serialStore.incrementBackendFrameCount,
     setFramedPageSize: serialStore.setFramedPageSize,
@@ -466,18 +461,18 @@ export function useDiscoveryStore<T>(selector: (state: CombinedDiscoveryState) =
     clearToolResult: toolboxStore.clearToolResult,
 
     // Combined runAnalysis that coordinates between stores
-    runAnalysis: async () => {
+    runAnalysis: async (bytesCaptureId) => {
       const { toolbox } = toolboxStore;
       const { selectedFrames, captureMode, frameInfoMap } = frameStore;
       const frames = getDiscoveryFrameBuffer();
-      const { framedData, isSerialMode, backendByteCount, bytesCaptureId } = serialStore;
+      const { framedData, isSerialMode } = serialStore;
       // Framing applied on the client wins over the raw buffer; before any is
       // applied the buffer is all there is.
       const serialFrames: FrameMessage[] = framedData.length > 0 ? framedData : frames;
 
       // Handle serial framing analysis separately - only needs raw bytes
       if (toolbox.activeView === 'serial-framing') {
-        if (backendByteCount === 0 || !bytesCaptureId) return;
+        if (!bytesCaptureId) return;
         // Clear payload results so framing results are shown
         toolboxStore.setSerialPayloadResults(null);
         // Scored against whatever this session is framing with, so what the tool

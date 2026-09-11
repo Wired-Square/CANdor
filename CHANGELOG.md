@@ -20,6 +20,8 @@ All notable changes to WireTAP will be documented in this file.
 
 ### Fixed
 
+- **Selecting a byte capture in Discovery now shows its bytes.** It used to sit at "Waiting for serial data…" and 0/0 — the byte total was only reported while bytes were streaming in, so a capture that already held them never got one, and what did arrive could be cleared while Discovery worked out the source was serial.
+
 - **Coils no longer show mangled values.** The Decoder's Modbus tab read coil and discrete-input responses as 16-bit registers, pairing up coil bytes and dropping the last byte of an odd-length block; a single-coil write showed its raw flag word. Each coil now reads as one signal, 0 or 1, counted by the quantity the request asked for. Any message the catalogue doesn't model shows its raw body rather than nothing.
 
 - **Transmitting a CAN FD frame over SLCAN or gs_usb now sends the frame you asked for.** On an SLCAN adapter the frame went out as a classic CAN frame claiming eight bytes while carrying more, which the adapter rejected; on a gs_usb adapter anything longer than eight bytes was sent with the wrong length, so the device padded it out to the next size up. Both now send CAN FD properly, including the bit rate switch. Classic CAN transmission was never affected, and neither was receiving.

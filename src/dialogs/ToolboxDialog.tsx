@@ -76,6 +76,8 @@ type Props = {
   serialFrameCount?: number;
   /** Number of raw serial bytes available (before framing) */
   serialBytesCount?: number;
+  /** The session's byte capture — what the Serial Framing tool scores */
+  serialBytesCaptureId?: string | null;
   /** A source is selected — lists the Modbus tools but withholds them (see SessionShape) */
   hasSource?: boolean;
   /** Called when a modbus register scan should start */
@@ -115,6 +117,7 @@ export default function ToolboxDialog({
   isFilteredView = false,
   serialFrameCount = 0,
   serialBytesCount = 0,
+  serialBytesCaptureId = null,
   hasSource = false,
   onStartModbusScan,
   onStartModbusUnitIdScan,
@@ -197,7 +200,7 @@ export default function ToolboxDialog({
 
   const handleRunAnalysis = async () => {
     if (effectiveSelectedCount === 0 || isRunning || !effectiveTool) return;
-    await runAnalysis();
+    await runAnalysis(serialBytesCaptureId);
     onClose();
     if (effectiveTool === "serial-framing" || effectiveTool === "serial-payload") {
       const config = TOOL_TAB_CONFIG[effectiveTool];

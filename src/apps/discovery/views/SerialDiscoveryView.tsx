@@ -32,9 +32,12 @@ interface SerialDiscoveryViewProps {
   sessionFramesCaptureId: string | null;
   /** Frame count for `sessionFramesCaptureId`. */
   sessionFramesCount: number;
+  /** The session's byte capture and its total, as Rust pushes them (ByteCounts 0x19). */
+  bytesCaptureId: string | null;
+  byteCount: number;
 }
 
-export default function SerialDiscoveryView({ isStreaming = false, displayTimeFormat = 'human', isRecorded = false, emitsRawBytes, sessionFramesCaptureId, sessionFramesCount }: SerialDiscoveryViewProps) {
+export default function SerialDiscoveryView({ isStreaming = false, displayTimeFormat = 'human', isRecorded = false, emitsRawBytes, sessionFramesCaptureId, sessionFramesCount, bytesCaptureId, byteCount }: SerialDiscoveryViewProps) {
   const [showFramingDialog, setShowFramingDialog] = useState(false);
   const [showFilterDialog, setShowFilterDialog] = useState(false);
   const [showRawBytesViewDialog, setShowRawBytesViewDialog] = useState(false);
@@ -58,7 +61,6 @@ export default function SerialDiscoveryView({ isStreaming = false, displayTimeFo
   const applySourceMapping = useDiscoverySerialStore((s) => s.applySourceMapping);
   const clearSourceMapping = useDiscoverySerialStore((s) => s.clearSourceMapping);
   const setRawBytesViewConfig = useDiscoverySerialStore((s) => s.setRawBytesViewConfig);
-  const backendByteCount = useDiscoverySerialStore((s) => s.backendByteCount);
   const framedCaptureId = useDiscoverySerialStore((s) => s.framedCaptureId);
   const backendFrameCount = useDiscoverySerialStore((s) => s.backendFrameCount);
   const minFrameLength = useDiscoverySerialStore((s) => s.minFrameLength);
@@ -122,19 +124,19 @@ export default function SerialDiscoveryView({ isStreaming = false, displayTimeFo
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const configChanged = JSON.stringify(framingConfig) !== JSON.stringify(prevFramingConfigRef.current);
-    const bytesChanged = !isStreaming && backendByteCount !== prevByteCountRef.current;
+    const bytesChanged = !isStreaming && byteCount !== prevByteCountRef.current;
     const filterChanged = minFrameLength !== prevMinFrameLengthRef.current;
     const frameIdConfigChanged = JSON.stringify(frameIdExtractionConfig) !== JSON.stringify(prevFrameIdConfigRef.current);
     const sourceConfigChanged = JSON.stringify(sourceExtractionConfig) !== JSON.stringify(prevSourceConfigRef.current);
 
     prevFramingConfigRef.current = framingConfig;
-    if (bytesChanged) prevByteCountRef.current = backendByteCount;
+    if (bytesChanged) prevByteCountRef.current = byteCount;
     prevMinFrameLengthRef.current = minFrameLength;
     prevFrameIdConfigRef.current = frameIdExtractionConfig;
     prevSourceConfigRef.current = sourceExtractionConfig;
 
     // Apply framing if we have a config and any relevant setting changed or new bytes arrived
-    if (framingConfig && backendByteCount > 0 && (configChanged || bytesChanged || filterChanged || frameIdConfigChanged || sourceConfigChanged)) {
+    if (framingConfig && byteCount > 0 && (configChanged || bytesChanged || filterChanged || frameIdConfigChanged || sourceConfigChanged)) {
       // Serialize framing calls to avoid race conditions
       // If a framing operation is already in progress, queue this one
       if (pendingFramingRef.current) {
@@ -156,7 +158,7 @@ export default function SerialDiscoveryView({ isStreaming = false, displayTimeFo
 
       runFraming();
     }
-  }, [framingConfig, backendByteCount, isStreaming, minFrameLength, frameIdExtractionConfig, sourceExtractionConfig]); // Intentionally omit applyFraming - it's unstable
+  }, [framingConfig, byteCount, isStreaming, minFrameLength, frameIdExtractionConfig, sourceExtractionConfig]); // Intentionally omit applyFraming - it's unstable
 
   // Track if we've already auto-switched to framed tab
   const hasAutoSwitchedRef = useRef(false);
@@ -230,7 +232,7 @@ export default function SerialDiscoveryView({ isStreaming = false, displayTimeFo
             ? filteredStreamingFrames.length
             : (framedCaptureId ? backendFrameCount : (backendFrameCount > 0 ? backendFrameCount : completeFrames.length))
         }
-        byteCount={backendByteCount}
+        byteCount={byteCount}
         filteredCount={effectiveFilteredCount}
         framingConfig={framingConfig}
         minFrameLength={minFrameLength}
@@ -249,7 +251,7 @@ export default function SerialDiscoveryView({ isStreaming = false, displayTimeFo
       {/* Tab Content */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {activeTab === 'raw' && (
-          <ByteView viewConfig={rawBytesViewConfig} displayTimeFormat={displayTimeFormat} isStreaming={isStreaming} />
+          <ByteView viewConfig={rawBytesViewConfig} displayTimeFormat={displayTimeFormat} isStreaming={isStreaming} bytesCaptureId={bytesCaptureId} byteCount={byteCount} />
         )}
         {activeTab === 'framed' && (
           <FramedDataView
