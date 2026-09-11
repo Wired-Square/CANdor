@@ -3,9 +3,7 @@
 use nusb::descriptors::TransferType;
 use nusb::transfer::{ControlIn, ControlType, Direction, Recipient};
 use nusb::{Device, DeviceInfo, Interface, MaybeFuture};
-use wiretap_lib::io::gs_usb::{
-    can_feature, GsDeviceBtConst, GsDeviceConfig, GsUsbBreq, GS_USB_PIDS, GS_USB_VID,
-};
+use wiretap_lib::io::gs_usb::{can_feature, Breq, BtConst, DeviceConfig, PIDS, VID};
 
 const CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1000);
 
@@ -24,7 +22,7 @@ pub fn find_device(bus: u8, address: u8, serial: Option<&str>) -> Result<DeviceI
 
     devices
         .find(|dev| {
-            if dev.vendor_id() != GS_USB_VID || !GS_USB_PIDS.contains(&dev.product_id()) {
+            if dev.vendor_id() != VID || !PIDS.contains(&dev.product_id()) {
                 return false;
             }
             if let Some(target_serial) = serial {
@@ -210,10 +208,10 @@ pub fn print_topology(device_info: &DeviceInfo) -> Result<(), String> {
                 "    CAN clock: {} Hz ({:.1} MHz)",
                 fclk, fclk as f64 / 1_000_000.0
             );
-            let (t1min, t1max) = (bt.tseg1_min, bt.tseg1_max);
-            let (t2min, t2max) = (bt.tseg2_min, bt.tseg2_max);
-            let sjw = bt.sjw_max;
-            let (bmin, bmax, binc) = (bt.brp_min, bt.brp_max, bt.brp_inc);
+            let (t1min, t1max) = (bt.nominal.tseg1_min, bt.nominal.tseg1_max);
+            let (t2min, t2max) = (bt.nominal.tseg2_min, bt.nominal.tseg2_max);
+            let sjw = bt.nominal.sjw_max;
+            let (bmin, bmax, binc) = (bt.nominal.brp_min, bt.nominal.brp_max, bt.nominal.brp_inc);
             println!(
                 "    TSEG1: {}-{}, TSEG2: {}-{}, SJW max: {}",
                 t1min, t1max, t2min, t2max, sjw
@@ -260,52 +258,52 @@ fn print_feature_flags(feature: u32) {
     }
 }
 
-fn query_device_config(interface: &Interface) -> Result<GsDeviceConfig, String> {
+fn query_device_config(interface: &Interface) -> Result<DeviceConfig, String> {
     let data = interface
         .control_in(
             ControlIn {
                 control_type: ControlType::Vendor,
                 recipient: Recipient::Interface,
-                request: GsUsbBreq::DeviceConfig as u8,
+                request: Breq::DeviceConfig as u8,
                 value: 1,
                 index: 0,
-                length: GsDeviceConfig::SIZE as u16,
+                length: DeviceConfig::SIZE as u16,
             },
             CONTROL_TIMEOUT,
         )
         .wait()
         .map_err(|e| format!("DeviceConfig query failed: {:?}", e))?;
 
-    GsDeviceConfig::from_bytes(&data).ok_or_else(|| {
+    DeviceConfig::from_bytes(&data).ok_or_else(|| {
         format!(
             "Incomplete DeviceConfig: got {} bytes, expected {}",
             data.len(),
-            GsDeviceConfig::SIZE
+            DeviceConfig::SIZE
         )
     })
 }
 
-fn query_bt_const(interface: &Interface) -> Result<GsDeviceBtConst, String> {
+fn query_bt_const(interface: &Interface) -> Result<BtConst, String> {
     let data = interface
         .control_in(
             ControlIn {
                 control_type: ControlType::Vendor,
                 recipient: Recipient::Interface,
-                request: GsUsbBreq::BtConst as u8,
+                request: Breq::BtConst as u8,
                 value: 0,
                 index: 0,
-                length: GsDeviceBtConst::SIZE as u16,
+                length: BtConst::SIZE as u16,
             },
             CONTROL_TIMEOUT,
         )
         .wait()
         .map_err(|e| format!("BT_CONST query failed: {:?}", e))?;
 
-    GsDeviceBtConst::from_bytes(&data).ok_or_else(|| {
+    BtConst::from_bytes(&data).ok_or_else(|| {
         format!(
             "Incomplete BT_CONST: got {} bytes, expected {}",
             data.len(),
-            GsDeviceBtConst::SIZE
+            BtConst::SIZE
         )
     })
 }

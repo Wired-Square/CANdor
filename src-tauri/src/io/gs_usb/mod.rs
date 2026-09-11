@@ -43,7 +43,8 @@ pub use nusb_driver::{encode_frame, run_source};
 pub use wiretap_protocol::gs_usb::{
     bittiming_for_bitrate, calculate_bittiming, can_feature, can_mode, encode_host_frame,
     parse_host_frame, Bittiming, BittimingConstraints, Breq, BtConst, BtConstExtended,
-    DeviceConfig, HostFrame, Mode, ECHO_ID_RX, HOST_FORMAT, PERMISSIVE_CONSTRAINTS, PIDS, VID,
+    DeviceConfig, HostFrame, Mode, CLASSIC_FRAME_BYTES, ECHO_ID_RX, HOST_FORMAT,
+    PERMISSIVE_CONSTRAINTS, PIDS, VID,
 };
 
 // ============================================================================
