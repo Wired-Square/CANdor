@@ -126,13 +126,11 @@ function DiscoveryInner() {
   const setSelectionSetDirty = useDiscoveryUIStore((s) => s.setSelectionSetDirty);
 
   // ── Serial store ──
-  const { isSerialMode, framedData, framingAccepted,
-    backendByteCount, backendFrameCount, framedCaptureId } =
+  const { isSerialMode, framedData, framingAccepted, backendFrameCount, framedCaptureId } =
     useDiscoverySerialStore(useShallow((s) => ({
       isSerialMode: s.isSerialMode,
       framedData: s.framedData,
       framingAccepted: s.framingAccepted,
-      backendByteCount: s.backendByteCount,
       backendFrameCount: s.backendFrameCount,
       framedCaptureId: s.framedCaptureId,
     })));
@@ -141,9 +139,6 @@ function DiscoveryInner() {
   const clearSerialBytes = useDiscoverySerialStore((s) => s.clearSerialBytes);
   const resetFraming = useDiscoverySerialStore((s) => s.resetFraming);
   const undoAcceptFraming = useDiscoverySerialStore((s) => s.undoAcceptFraming);
-  const setBytesCaptureId = useDiscoverySerialStore((s) => s.setBytesCaptureId);
-  const storeBytesCaptureId = useDiscoverySerialStore((s) => s.bytesCaptureId);
-  const setBackendByteCount = useDiscoverySerialStore((s) => s.setBackendByteCount);
   const incrementBackendFrameCount = useDiscoverySerialStore((s) => s.incrementBackendFrameCount);
   const setBackendFrameCount = useDiscoverySerialStore((s) => s.setBackendFrameCount);
   const setFramingConfig = useDiscoverySerialStore((s) => s.setFramingConfig);
@@ -354,8 +349,6 @@ function DiscoveryInner() {
         console.log(`[Discovery] Loading ${payload.count} bytes from capture into serial view`);
         clearSerialBytes();
         resetFraming();
-        setBytesCaptureId(meta.id);
-        setBackendByteCount(meta.count);
       } else {
         // Always enable capture mode so playback controls appear
         // (Session is now in capture replay mode after ingest)
@@ -379,7 +372,6 @@ function DiscoveryInner() {
     }
   }, [
     dialogs.ioSessionPicker,
-    setBytesCaptureId,
     enableCaptureMode,
     setFrameInfoFromCapture,
   ]);
@@ -415,13 +407,12 @@ function DiscoveryInner() {
     setCaptureMetadata(null); // Clear stale metadata so effectiveStartTimeUs doesn't use old values
     clearSerialBytes();
     resetFraming();
-    setBackendByteCount(0);
     setBackendFrameCount(0);
     // Reset refs checked by handleFrames — prevents stale values from a previous
     // session (e.g., capture mode after stop) from silently dropping frames
     isPausedRef.current = false;
     inCaptureModeRef.current = false;
-  }, [clearAll, clearAnalysisResults, disableCaptureMode, clearSerialBytes, resetFraming, setBackendByteCount, setBackendFrameCount]);
+  }, [clearAll, clearAnalysisResults, disableCaptureMode, clearSerialBytes, resetFraming, setBackendFrameCount]);
 
   // Handle session destroyed — switch to orphaned capture if available
   const handleSessionDestroyed = useCallback(async (orphanedCaptureIds: string[]) => {
@@ -583,18 +574,6 @@ function DiscoveryInner() {
   const hasSource = Boolean(sessionId) && !onScanSession;
 
   // Note: isStreaming, isPaused, isStopped, isRealtime are now provided by useIOSessionManager
-
-  // Mirror the Rust-authoritative byte total and byte capture id onto the serial store,
-  // which is what the byte view, the framing trigger, the Tools gating and export all
-  // read. Rust owns both — it pushes them together (ByteCounts 0x19) as bytes land in the
-  // capture, so nothing here counts bytes itself. The ingest path writes the same two
-  // fields for a loaded file, hence the guard: don't clobber a loaded capture with a live
-  // session's zero.
-  useEffect(() => {
-    if (!sessionBytesCaptureId) return;
-    setBytesCaptureId(sessionBytesCaptureId);
-    setBackendByteCount(watchByteCount);
-  }, [sessionBytesCaptureId, watchByteCount, setBytesCaptureId, setBackendByteCount]);
 
   // Fetch capture metadata and frame info when:
   // - Joining a session already in capture mode (another app stopped)
@@ -807,13 +786,13 @@ function DiscoveryInner() {
 
   const exportItemCount = useMemo(() => {
     if (exportDataMode === "bytes") {
-      return backendByteCount;
+      return watchByteCount;
     }
     if (captureMode.enabled) return captureMode.totalFrames;
     if (isSerialMode && framedCaptureId && backendFrameCount > 0) return backendFrameCount;
     if (isSerialMode && framedData.length > 0) return framedData.length;
     return frames.length;
-  }, [exportDataMode, backendByteCount, captureMode, isSerialMode, framedCaptureId, backendFrameCount, framedData.length, frames.length]);
+  }, [exportDataMode, watchByteCount, captureMode, isSerialMode, framedCaptureId, backendFrameCount, framedData.length, frames.length]);
 
   const exportDefaultFilename = useMemo(() => {
     // Not "can": this fires only when nothing said what the frames are, and naming
@@ -938,7 +917,7 @@ function DiscoveryInner() {
 
     // Serial state
     isSerialMode,
-    backendByteCount,
+    backendByteCount: watchByteCount,
     backendFrameCount,
 
     // Time state
@@ -1006,7 +985,7 @@ function DiscoveryInner() {
     // Bytes live in their own capture. Falling back to the session's frames capture (as
     // this used to) reads a Frames capture with a byte query, which returns nothing — an
     // export that promised N bytes and wrote none.
-    getCaptureBytesPaginated: (offset, limit) => getCaptureBytesPaginated(storeBytesCaptureId ?? '', offset, limit),
+    getCaptureBytesPaginated: (offset, limit) => getCaptureBytesPaginated(sessionBytesCaptureId ?? '', offset, limit),
     getCaptureFramesPaginated: (offset, limit) => getCaptureFramesPaginated(activeCaptureId!, offset, limit),
     getCaptureFramesPaginatedById,
     captureMetadata,
@@ -1121,7 +1100,7 @@ function DiscoveryInner() {
           selectedFrameCount={selectedFrames.size}
           onOpenFramePicker={() => dialogs.framePicker.open()}
           isSerialMode={isSerialMode}
-          serialBytesCount={backendByteCount}
+          serialBytesCount={watchByteCount}
           framingAccepted={framingAccepted}
           serialActiveTab={serialActiveTab}
           onUndoFraming={undoAcceptFraming}
@@ -1150,7 +1129,7 @@ function DiscoveryInner() {
           }}
           onOpenIoSessionPicker={() => dialogs.ioSessionPicker.open()}
           onClearCapture={handlers.handleClearDiscoveredFrames}
-          hasData={frameList.length > 0 || (isSerialMode && backendByteCount > 0)}
+          hasData={frameList.length > 0 || (isSerialMode && watchByteCount > 0)}
           onSave={openSaveDialog}
           onExport={() => dialogs.export.open()}
           onInfo={openInfoView}
@@ -1170,6 +1149,8 @@ function DiscoveryInner() {
             // which a frame pager must not be handed.
             sessionFramesCaptureId={captureKind === "bytes" ? null : activeCaptureId}
             sessionFramesCount={liveFrameCount}
+            bytesCaptureId={sessionBytesCaptureId}
+            byteCount={watchByteCount}
           />
         ) : (
           <DiscoveryFramesView
@@ -1343,7 +1324,8 @@ function DiscoveryInner() {
         isSerialProtocol={capabilities?.traits?.protocols?.includes("serial") ?? false}
         isFilteredView={framesViewActiveTab === 'filtered'}
         serialFrameCount={backendFrameCount > 0 ? backendFrameCount : (framedData.length + frames.length)}
-        serialBytesCount={backendByteCount}
+        serialBytesCount={watchByteCount}
+        serialBytesCaptureId={sessionBytesCaptureId}
         hasSource={hasSource}
         onStartModbusScan={handleStartModbusScan}
         onStartModbusUnitIdScan={handleStartModbusUnitIdScan}

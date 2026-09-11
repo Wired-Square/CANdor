@@ -1658,6 +1658,10 @@ ws::dispatch::send_new_bytes(session_id)
    streaming, get_capture_bytes_paginated when stopped
 ```
 
+`send_new_bytes` also runs on WS subscribe and when `ingest_bytes` appends under
+a watching session — a capture that already holds its bytes never signals, so
+without the subscribe push a session opened on one reported zero forever.
+
 **Only the count crosses the wire.** One small message twice a second, whatever
 the baud rate; the rows are read from the capture on demand. Streaming the bytes
 themselves would tie WS traffic to link speed (a `FrameEnvelope` caps at 255
@@ -1675,6 +1679,12 @@ Two consequences worth knowing:
   so the byte view skips while one is in flight and runs once more on completion
   rather than queuing on the DB mutex ([ByteView.tsx](../src/apps/discovery/views/serial/ByteView.tsx),
   mirroring `useCaptureFrameView`).
+- **The session is the only copy.** Discovery reads `byteCount` and
+  `bytesCaptureId` off the session through `useIOSessionManager` and passes them
+  down as props. `discoverySerialStore` used to mirror them and its own
+  serial-mode reset wiped the mirror after the session had been written — a
+  byte capture opened as a source showed "Waiting for serial data…" with the
+  count sitting in the session store. Don't reintroduce a copy.
 
 ### Frame counts
 

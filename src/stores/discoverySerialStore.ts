@@ -72,13 +72,10 @@ interface DiscoverySerialState {
   // Pagination state for framed data view
   framedPageSize: PageSize;
 
-  // Backend capture mode state
-  /** Total byte count in backend capture (updated during streaming) */
-  backendByteCount: number;
+  // Backend capture mode state. The byte capture's id and count are the session's
+  // (sessionStore, pushed by Rust) — only what is derived from it lives here.
   /** Rows per page for the raw bytes view. A plain count — ByteView offers no Auto. */
   rawBytesPageSize: number;
-  /** ID of the active bytes capture (null = no bytes capture loaded) */
-  bytesCaptureId: string | null;
   /** ID of the frame capture created by backend framing (null = no framing applied) */
   framedCaptureId: string | null;
   /** Frame count from backend framing (updated each time framing is applied) */
@@ -115,9 +112,6 @@ interface DiscoverySerialState {
   toggleShowAscii: () => void;
   setActiveTab: (tab: SerialTabId) => void;
   setFramedPageSize: (size: PageSize) => void;
-  // Backend buffer actions
-  setBytesCaptureId: (id: string | null) => void;
-  setBackendByteCount: (count: number) => void;
   setRawBytesPageSize: (size: number) => void;
   // Filter actions
   setMinFrameLength: (length: number) => void;
@@ -141,8 +135,6 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
   },
   activeTab: 'raw',
   framedPageSize: "auto", // Default page size for framed data
-  backendByteCount: 0, // Total bytes in backend capture
-  bytesCaptureId: null, // ID of active bytes capture
   rawBytesPageSize: 1000, // Default page size for raw bytes view
   framedCaptureId: null, // ID of backend frame capture
   backendFrameCount: 0, // Frame count from backend framing
@@ -167,8 +159,6 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
       framedData: [],
       framingAccepted: false,
       activeTab: 'raw',
-      backendByteCount: 0,
-      bytesCaptureId: null,
       framedCaptureId: null,
       backendFrameCount: 0,
       minFrameLength: 0,
@@ -181,14 +171,11 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
   },
 
   clearSerialBytes: () => {
-    // Point this view away from whatever capture it was showing and drop the framing
-    // derived from it. The captures themselves are Rust's to keep or delete — this only
-    // clears what the frontend is pointing at.
+    // Drop the framing derived from whatever capture this view was showing. The
+    // captures themselves are Rust's to keep or delete.
     set({
       framedData: [],
       framingAccepted: false,
-      backendByteCount: 0,
-      bytesCaptureId: null,
       framedCaptureId: null,
       backendFrameCount: 0,
       minFrameLength: 0,
@@ -222,13 +209,8 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
   },
 
   applyFraming: async (_streamStartTimeUs, sessionId) => {
-    const { backendByteCount, framingConfig, framedCaptureId: previousCaptureId, filteredCaptureId: previousFilteredCaptureId, minFrameLength, frameIdExtractionConfig, sourceExtractionConfig } = get();
+    const { framingConfig, framedCaptureId: previousCaptureId, filteredCaptureId: previousFilteredCaptureId, minFrameLength, frameIdExtractionConfig, sourceExtractionConfig } = get();
     if (!framingConfig) {
-      set({ framedData: [], framedCaptureId: null, backendFrameCount: 0, filteredFrameCount: 0, filteredCaptureId: null, filteredFrames: [] });
-      return [];
-    }
-
-    if (backendByteCount === 0) {
       set({ framedData: [], framedCaptureId: null, backendFrameCount: 0, filteredFrameCount: 0, filteredCaptureId: null, filteredFrames: [] });
       return [];
     }
@@ -269,6 +251,8 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
         previousCaptureId,
         previousFilteredCaptureId,
       );
+
+      tlog.info(`[discoverySerialStore] Framed ${framingConfig.mode}: ${result.frame_count} frames, ${result.filtered_count} filtered`);
 
       // Store the capture ID and frame count for FramedDataView
       // Also store filtered frame count and capture ID for the Filtered tab
@@ -451,13 +435,7 @@ export const useDiscoverySerialStore = create<DiscoverySerialState>((set, get) =
 
   setFramedPageSize: (size) => set({ framedPageSize: size }),
 
-  // Backend buffer actions
-  setBytesCaptureId: (id) => set({ bytesCaptureId: id }),
-
-  setBackendByteCount: (count) => set({ backendByteCount: count }),
-
   setRawBytesPageSize: (size) => set({ rawBytesPageSize: size }),
-
 
   setMinFrameLength: (length) => set({ minFrameLength: length }),
 
